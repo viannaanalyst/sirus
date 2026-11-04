@@ -25,3 +25,7 @@ Agents become far more useful when they can reach the services a project lives o
 - Connect once, on the Mac; every supported agent of the right projects then has the service.
 - Sign-in needs the Mac app: the redirect comes back to the machine's loopback. A headless host accepts token connectors and the list; signing in there is for later.
 - A Claude connector tool verified end to end with Context7 (`mcp__context7__resolve-library-id`), and Codex with the same `-c` overrides and a bearer variable.
+
+## Amendment, 2026-11-04: Cloudflare moved
+
+The catalog's Cloudflare entry pointed at `bindings.mcp.cloudflare.com`, which Cloudflare marked as deprecated; it only reaches Workers bindings, so an agent could not add a domain or change DNS. It now points at `mcp.cloudflare.com/mcp`, which covers the whole API through `search` and `execute`. At startup, `connectors::start` moves catalog connectors still on the old address, saves, and only then drops their old tokens, so the person signs in once more. Custom connectors keep the address they were given. That server's consent page starts at the minimal scopes: to change anything, choose the access on that page, or the agent can only read.

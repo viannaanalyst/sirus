@@ -31,7 +31,7 @@ export const CONNECTOR_CATALOG: readonly CatalogConnector[] = [
   { id: "stripe", name: "Stripe", url: "https://mcp.stripe.com", category: "popular", auth: "oauth" },
   { id: "vercel", name: "Vercel", url: "https://mcp.vercel.com", category: "popular", auth: "oauth" },
   { id: "sentry", name: "Sentry", url: "https://mcp.sentry.dev/mcp", category: "popular", auth: "oauth" },
-  { id: "cloudflare", name: "Cloudflare", url: "https://bindings.mcp.cloudflare.com/mcp", category: "developer", auth: "oauth" },
+  { id: "cloudflare", name: "Cloudflare", url: "https://mcp.cloudflare.com/mcp", category: "developer", auth: "oauth" },
   { id: "neon", name: "Neon", url: "https://mcp.neon.tech/mcp", category: "developer", auth: "oauth" },
   { id: "posthog", name: "PostHog", url: "https://mcp.posthog.com/mcp", category: "developer", auth: "oauth" },
   { id: "netlify", name: "Netlify", url: "https://netlify-mcp.netlify.app/mcp", category: "developer", auth: "oauth" },

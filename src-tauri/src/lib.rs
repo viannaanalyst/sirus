@@ -283,11 +283,11 @@ pub fn run() {
             devices::init(app.handle().clone(), &app_dir);
             let worktree_root = app_dir.join("worktrees");
             std::fs::create_dir_all(&worktree_root)?;
-            let data = persist::load_or_create(&data_path)?;
+            let mut data = persist::load_or_create(&data_path)?;
             sirus_tools::set_enabled(data.settings.agents_manage_sessions);
             browser_mcp::set_agent_access(data.settings.agent_browser_access);
             agent_pool::set_limit(data.settings.keep_idle_agents as usize);
-            connectors::init(&app_dir, &data.settings.connectors);
+            connectors::start(&app_dir, &data_path, &mut data);
             computer_mcp::init(
                 app.handle().clone(),
                 app_dir.clone(),

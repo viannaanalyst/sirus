@@ -156,6 +156,42 @@ pub fn set(list: &[Connector]) {
     *config().write() = list.to_vec();
 }
 
+/// Catalog services that moved: (catalog id, old address, new address). Cloudflare retired its
+/// Workers bindings server for one that covers the whole API, DNS and zones included.
+const MOVED: &[(&str, &str, &str)] = &[(
+    "cloudflare",
+    "https://bindings.mcp.cloudflare.com/mcp",
+    "https://mcp.cloudflare.com/mcp",
+)];
+
+/// Points connectors at the new address of a moved service. Returns the ids that changed.
+fn move_retired(list: &mut [Connector]) -> Vec<String> {
+    let mut moved = Vec::new();
+    for connector in list.iter_mut() {
+        let target = MOVED.iter().find(|(catalog, old, _)| {
+            connector.catalog_id.as_deref() == Some(*catalog) && connector.url == *old
+        });
+        if let Some((_, _, new)) = target {
+            connector.url = (*new).to_owned();
+            moved.push(connector.id.clone());
+        }
+    }
+    moved
+}
+
+/// `init`, for startup: first moves retired connectors and saves that. Their tokens belong to the
+/// old server, so they go only once the new address is saved; otherwise the next launch, still
+/// seeing the old address, would erase the sign-in made in between.
+pub fn start(data_dir: &Path, state_path: &Path, data: &mut crate::models::AppData) {
+    let moved = move_retired(&mut data.settings.connectors);
+    init(data_dir, &data.settings.connectors);
+    if !moved.is_empty() && crate::persist::save(state_path, data).is_ok() {
+        for id in &moved {
+            vault::delete(id);
+        }
+    }
+}
+
 // ---- Token vault ----
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1160,6 +1196,37 @@ mod tests {
     }
 
     #[test]
+    fn retired_catalog_addresses_move_and_others_stay() {
+        let connector = |id: &str, catalog: Option<&str>, url: &str| Connector {
+            id: id.to_owned(),
+            catalog_id: catalog.map(str::to_owned),
+            name: id.to_owned(),
+            url: url.to_owned(),
+            project_id: None,
+            agents: Vec::new(),
+            enabled: true,
+            auth: ConnectorAuth::default(),
+        };
+        const OLD: &str = "https://bindings.mcp.cloudflare.com/mcp";
+        let mut list = vec![
+            connector("a", Some("cloudflare"), OLD),
+            connector("b", Some("cloudflare"), "https://mcp.cloudflare.com/mcp"),
+            connector("c", None, OLD),
+            connector("d", Some("supabase"), "https://mcp.supabase.com/mcp"),
+        ];
+        assert_eq!(move_retired(&mut list), vec!["a".to_string()]);
+        assert_eq!(list[0].url, "https://mcp.cloudflare.com/mcp");
+        assert_eq!(
+            list[2].url, OLD,
+            "a custom connector keeps the address it was given"
+        );
+        assert!(
+            move_retired(&mut list).is_empty(),
+            "running it again changes nothing"
+        );
+    }
+
+    #[test]
     fn form_bodies_are_encoded() {
         assert_eq!(
             form(&[("a", "b c"), ("r", "https://x/y?z=1")]),
@@ -1184,7 +1251,7 @@ mod tests {
             "https://mcp.figma.com/mcp",
             "https://mcp.prisma.io/mcp",
             "https://netlify-mcp.netlify.app/mcp",
-            "https://bindings.mcp.cloudflare.com/mcp",
+            "https://mcp.cloudflare.com/mcp",
             "https://ai.todoist.net/mcp",
             "https://mcp.asana.com/mcp",
             "https://mcp.asana.com/sse",

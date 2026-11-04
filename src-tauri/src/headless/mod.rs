@@ -328,11 +328,11 @@ fn start(dir: &Path) -> crate::error::Result<AppHandle> {
     crate::secrets::init(dir);
     let worktree_root = dir.join("worktrees");
     std::fs::create_dir_all(&worktree_root)?;
-    let data = crate::persist::load_or_create(&data_path)?;
+    let mut data = crate::persist::load_or_create(&data_path)?;
     crate::sirus_tools::set_enabled(data.settings.agents_manage_sessions);
     crate::browser_mcp::set_agent_access(data.settings.agent_browser_access);
     crate::agent_pool::set_limit(data.settings.keep_idle_agents as usize);
-    crate::connectors::init(dir, &data.settings.connectors);
+    crate::connectors::start(dir, &data_path, &mut data);
     // Computer use drives the Mac's own apps; it never runs on a server.
     crate::computer_mcp::init(app.clone(), dir.to_path_buf(), false);
     app.manage(Arc::new(AppState::new(data_path, worktree_root, data)));

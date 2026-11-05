@@ -223,6 +223,10 @@ pub struct MessageVisual {
     pub id: String,
     pub title: String,
     pub html: String,
+    /// A native visual's JavaScript program (`visual_show`), drawn by Sirus Native; `html` then
+    /// only holds a placeholder for the web app.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
     pub created_at: String,
     #[serde(default)]
     pub revision: u32,

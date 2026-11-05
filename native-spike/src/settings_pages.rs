@@ -1,0 +1,3627 @@
+//! Settings pages, ported from Sirus's `components/settings/*.tsx`. Each page is a table of rows
+//! bound to AppSettings keys or to backend commands (`loads` names what a page reads). The text is
+//! the Portuguese of `src/i18n`. Text fields (`Ctl::Field`) start editing through `edit`; the main
+//! app types into the edited text and, on Enter, calls `commit` and saves or runs what it returns.
+//! Pairing and folder choices are run as `native_pair` and `native_pick_folder`. GitHub accounts,
+//! opening folders and the two-click confirmations run as the `native_*` commands of
+//! `native_actions`; the rest goes to the host as the backend commands the Tauri build uses
+//! (`connector_action`, `worktree_cleanup_action`, `delete_session`). Destructive buttons ask first
+//! through `native_confirm`, which opens the shell's confirmation popup.
+
+use crate::i18n::{t, tf};
+use crate::theme::{accent, content, on_accent};
+use chrono::{DateTime, Local};
+use gpui::{AnyElement, Context, FontWeight, Hsla, div, prelude::*, px, rgb};
+use serde_json::{Value, json};
+use std::collections::{BTreeSet, HashMap};
+use std::sync::Mutex;
+
+/// Shown in place of a page's rows while its backend data is still on its way.
+const LOADING: &str = "Carregando…";
+/// The row shown by a page that has no port yet.
+const SOON: &str = "Esta parte entra em seguida.";
+
+/// Runs a backend command by name with JSON args; the main app refreshes `data` afterward.
+pub type Run<V> = fn(&mut V, &'static str, Value, &mut Context<V>);
+/// Saves one top-level key of AppSettings; `value` is the whole key, nested objects included.
+pub type Save<V> = fn(&mut V, &'static str, Value, &mut Context<V>);
+/// Starts editing the text field `key`, with its current text. The main app then routes typing
+/// into that text until Enter (`commit`) or Escape.
+pub type Edit<V> = fn(&mut V, &'static str, String, &mut Context<V>);
+
+/// The change a finished text edit makes: a save of a top-level key, or a backend command.
+pub enum Commit {
+    Save { key: &'static str, value: Value },
+    Run { cmd: &'static str, args: Value },
+}
+
+/// What a page's views share: the text being edited and the callbacks each control fires.
+struct Ui<'a, V> {
+    ids: usize,
+    editing: Option<(&'a str, &'a str)>,
+    save: Save<V>,
+    edit: Edit<V>,
+    run: Run<V>,
+}
+
+/// What a click does: save a top-level key of AppSettings, or run a backend command.
+#[derive(Clone)]
+enum Act {
+    Save { key: &'static str, value: Value },
+    Run { cmd: &'static str, args: Value },
+}
+
+/// A destructive action asks first: the shell's confirmation popup runs it.
+fn ask<V: 'static>(view: &mut V, label: &'static str, act: &Act, run: Run<V>, cx: &mut Context<V>) {
+    let then = match act {
+        Act::Save { key, value } => json!({ "kind": "save", "key": key, "value": value }),
+        Act::Run { cmd, args } => json!({ "kind": "run", "cmd": cmd, "args": args }),
+    };
+    run(
+        view,
+        "native_confirm",
+        json!({ "label": label, "then": then }),
+        cx,
+    );
+}
+
+/// A setting: top-level (`obj` is None) or a field of an object setting such as `notifications`.
+#[derive(Clone, Copy)]
+struct Field {
+    obj: Option<&'static str>,
+    key: &'static str,
+}
+
+const fn top(key: &'static str) -> Field {
+    Field { obj: None, key }
+}
+
+const fn inner(obj: &'static str, key: &'static str) -> Field {
+    Field {
+        obj: Some(obj),
+        key,
+    }
+}
+
+struct Opt {
+    label: &'static str,
+    chosen: bool,
+    change: Act,
+}
+
+enum Ctl {
+    /// A switch. `change` is None when the switch is fixed or waits on another setting.
+    Switch { on: bool, change: Option<Act> },
+    /// A segmented control over a short enum (two-way booleans use "true" and "false").
+    Pick(Vec<Opt>),
+    /// Read-only text: a value the React page edits with a richer widget, or a hint.
+    Read(String),
+    /// A button; dimmed and inert when `enabled` is false.
+    Button {
+        label: &'static str,
+        act: Act,
+        enabled: bool,
+        danger: bool,
+    },
+    /// A text field of `width` px showing `text`; a click (or the `button` label) starts editing `key`.
+    Field {
+        key: &'static str,
+        text: String,
+        width: f32,
+        button: Option<&'static str>,
+    },
+    /// A sample line set in a font family and size, for the typography groups.
+    Sample { family: &'static str, size: f32 },
+    /// A secret typed into a masked field: `label` starts it; while typing, only dots show.
+    Secret {
+        key: &'static str,
+        label: &'static str,
+    },
+}
+
+struct Row {
+    title: String,
+    about: String,
+    controls: Vec<Ctl>,
+}
+
+struct Group {
+    /// Empty for a card without a heading.
+    title: String,
+    rows: Vec<Row>,
+}
+
+struct Page {
+    title: String,
+    about: String,
+    /// Buttons at the top right of the header.
+    actions: Vec<Ctl>,
+    groups: Vec<Group>,
+}
+
+/// A switch row described by (title, description, setting).
+type SwitchRow = (&'static str, &'static str, Field);
+
+/// What a page reads from the backend: (key in `data`, command, args). Called when the page opens.
+pub fn loads(page: &str) -> Vec<(&'static str, &'static str, Value)> {
+    match page {
+        "Provedores" => vec![("agents", "detect_agents", json!({}))],
+        "Agent skills" => vec![("skills", "skill_action", skills_catalog())],
+        "Conectores" => vec![
+            (
+                "connectors",
+                "connector_action",
+                json!({"action": {"type": "status"}}),
+            ),
+            ("host", "host_info", json!({})),
+            ("agents", "detect_agents", json!({})),
+        ],
+        "Computador" => vec![(
+            "computer",
+            "computer_action",
+            json!({"action": {"type": "status"}}),
+        )],
+        "Conexões" => vec![(
+            "remote",
+            "remote_action",
+            json!({"action": {"type": "status"}}),
+        )],
+        "Git" => vec![
+            ("host", "host_info", json!({})),
+            ("github", "native_github_list", json!({})),
+        ],
+        "Worktrees" => vec![
+            ("host", "host_info", json!({})),
+            ("appState", "load_state", json!({})),
+            (
+                "worktreeScan",
+                "worktree_cleanup_action",
+                json!({"action": {"type": "scan"}}),
+            ),
+        ],
+        "Terminal" | "Avançado" => vec![("host", "host_info", json!({}))],
+        _ => Vec::new(),
+    }
+}
+
+/// Renders the page `page` (its Portuguese menu name) from the backend's AppSettings JSON and the
+/// data its `loads` brought. `editing` is the text field being edited (its key and its text). Each
+/// control calls `save` with a top-level key, `edit` to start a text field, or `run` with a command.
+pub fn page<V: 'static>(
+    page: &str,
+    settings: &Value,
+    data: &std::collections::HashMap<&'static str, Value>,
+    editing: Option<(&str, &str)>,
+    save: Save<V>,
+    edit: Edit<V>,
+    run: Run<V>,
+    cx: &mut Context<V>,
+) -> AnyElement {
+    let mut shown = build(page, settings, data);
+    if loads(page)
+        .iter()
+        .any(|(key, _, _)| !data.contains_key(key))
+    {
+        shown.groups = vec![note(t(LOADING))];
+    }
+    let mut ui = Ui {
+        ids: 0,
+        editing,
+        save,
+        edit,
+        run,
+    };
+    let mut actions = Vec::new();
+    for ctl in shown.actions {
+        actions.push(control_view(ctl, &mut ui, cx));
+    }
+    let mut body = Vec::new();
+    for group in shown.groups {
+        body.push(group_view(group, &mut ui, cx));
+    }
+    let mut heading = div().flex().flex_col().min_w_0().child(
+        div()
+            .text_size(px(19.))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(content(1.))
+            .child(shown.title),
+    );
+    if !shown.about.is_empty() {
+        heading = heading.child(
+            div()
+                .mt(px(6.))
+                .text_size(px(13.))
+                .text_color(content(0.5))
+                .child(shown.about),
+        );
+    }
+    let mut head = div()
+        .flex()
+        .items_start()
+        .justify_between()
+        .gap(px(16.))
+        .mb(px(28.))
+        .child(heading);
+    if !actions.is_empty() {
+        head = head.child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .flex_shrink_0()
+                .children(actions),
+        );
+    }
+    div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .child(head)
+        .children(body)
+        .into_any_element()
+}
+
+/// The page's title, description, header buttons and rows, from the settings and loaded data.
+fn build(page: &str, s: &Value, d: &HashMap<&'static str, Value>) -> Page {
+    match page {
+        "Geral" => page_of(
+            t("Geral"),
+            t("Escolha os padrões para novas sessões, navegação e o painel Ambiente."),
+            general(s),
+        ),
+        "Comportamento do chat" => page_of(
+            t("Comportamento do chat"),
+            t(
+                "Controle mensagens durante a resposta, ditado, turnos terminados, revisão e confirmações de segurança.",
+            ),
+            chat(s),
+        ),
+        "Notificações" => page_of(
+            t("Notificações"),
+            t(
+                "Escolha como o Sirus Code avisa quando o trabalho termina ou precisa da sua atenção.",
+            ),
+            notifications(s),
+        ),
+        "Atalhos" => page_of(
+            t("Atalhos"),
+            t("Personalize os comandos de teclado que você usa no aplicativo."),
+            keybindings(s),
+        ),
+        "Git" => page_of("Git", "", git(s, d)),
+        "Worktrees" => page_of("Worktrees", "", worktrees(s, d)),
+        "Terminal" => page_of("Terminal", "", terminal(s, d)),
+        "Avançado" => page_of(t("Avançado"), "", advanced(s, d)),
+        "Provedores" => Page {
+            actions: vec![Ctl::Button {
+                label: t("Detectar novamente"),
+                act: Act::Run {
+                    cmd: "detect_agents",
+                    args: json!({}),
+                },
+                enabled: true,
+                danger: false,
+            }],
+            ..page_of(
+                t("Provedores"),
+                t("Integrações que disponibilizam modelos para sessões."),
+                providers(s, d),
+            )
+        },
+        "Agent skills" => {
+            let any_disabled = !strings(&s["disabledSkills"]).is_empty();
+            Page {
+                actions: vec![
+                    Ctl::Button {
+                        label: t("Atualizar skills"),
+                        act: Act::Run {
+                            cmd: "skill_action",
+                            args: skills_catalog(),
+                        },
+                        enabled: true,
+                        danger: false,
+                    },
+                    Ctl::Button {
+                        label: t("Restaurar padrões"),
+                        act: Act::Save {
+                            key: "disabledSkills",
+                            value: json!([]),
+                        },
+                        enabled: any_disabled,
+                        danger: false,
+                    },
+                ],
+                ..page_of(
+                    t("Skills dos agentes"),
+                    t("Fluxos reutilizáveis encontrados nos provedores e no workspace atual."),
+                    skills(s, d),
+                )
+            }
+        }
+        "Conectores" => page_of(
+            t("Conectores"),
+            t(
+                "Conecte Supabase, Linear, Notion e outros serviços uma vez; Claude, Codex, OpenCode e os outros agentes ACP passam a usá-los.",
+            ),
+            connectors(s, d),
+        ),
+        "Computador" => {
+            if get_data(d, "computer")["supported"].as_bool() == Some(false) {
+                page_of(
+                    t("Computador"),
+                    t("O uso do computador só está disponível no macOS."),
+                    Vec::new(),
+                )
+            } else {
+                page_of(
+                    t("Computador"),
+                    t(
+                        "Deixe o Codex, o Claude Code e o OpenCode verem e usarem apps do Mac que você aprovar, em segundo plano.",
+                    ),
+                    computer(s, d),
+                )
+            }
+        }
+        "Conexões" => page_of(
+            t("Conexões"),
+            t(
+                "Use o Sirus Code pelo celular ou por outro computador. O trabalho continua rodando neste Mac; o outro aparelho só controla, pela sua rede privada da Tailscale.",
+            ),
+            connections(d),
+        ),
+        other => page_of(other, "", soon()),
+    }
+}
+
+// Building blocks.
+
+fn page_of(title: &str, about: &str, groups: Vec<Group>) -> Page {
+    Page {
+        title: title.to_string(),
+        about: about.to_string(),
+        actions: Vec::new(),
+        groups,
+    }
+}
+
+fn group(title: impl Into<String>, rows: Vec<Row>) -> Group {
+    Group {
+        title: title.into(),
+        rows,
+    }
+}
+
+fn row(title: impl Into<String>, about: impl Into<String>, controls: Vec<Ctl>) -> Row {
+    Row {
+        title: title.into(),
+        about: about.into(),
+        controls,
+    }
+}
+
+/// A card without a heading whose only content is a muted line.
+fn note(text: impl Into<String>) -> Group {
+    group("", vec![row("", text, Vec::new())])
+}
+
+fn placeholder() -> Row {
+    row(t(SOON), "", Vec::new())
+}
+
+fn soon() -> Vec<Group> {
+    vec![group("", vec![placeholder()])]
+}
+
+fn get(settings: &Value, field: Field) -> Option<&Value> {
+    match field.obj {
+        Some(obj) => settings.get(obj)?.get(field.key),
+        None => settings.get(field.key),
+    }
+}
+
+fn flag(settings: &Value, field: Field) -> bool {
+    get(settings, field)
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// The setting as text: booleans as "true"/"false", numbers and strings as they are.
+fn current(settings: &Value, field: Field) -> String {
+    match get(settings, field) {
+        Some(Value::Bool(b)) => b.to_string(),
+        Some(Value::Number(n)) => n.to_string(),
+        Some(Value::String(s)) => s.clone(),
+        _ => String::new(),
+    }
+}
+
+/// A value from a table: "true"/"false" are booleans, whole numbers are numbers.
+fn json_of(value: &str) -> Value {
+    match value {
+        "true" => json!(true),
+        "false" => json!(false),
+        _ => value
+            .parse::<i64>()
+            .map_or_else(|_| json!(value), |n| json!(n)),
+    }
+}
+
+/// The save that sets `field` to `value`. A nested setting is saved whole, with one field changed.
+fn change(settings: &Value, field: Field, value: Value) -> Act {
+    match field.obj {
+        None => Act::Save {
+            key: field.key,
+            value,
+        },
+        Some(obj) => {
+            let mut whole = settings.get(obj).cloned().unwrap_or_else(|| json!({}));
+            whole[field.key] = value;
+            Act::Save {
+                key: obj,
+                value: whole,
+            }
+        }
+    }
+}
+
+fn switch_of(settings: &Value, field: Field) -> Ctl {
+    let on = flag(settings, field);
+    Ctl::Switch {
+        on,
+        change: Some(change(settings, field, json!(!on))),
+    }
+}
+
+/// A switch that cannot be changed here: fixed by the app, or waiting on another setting.
+fn fixed(on: bool) -> Ctl {
+    Ctl::Switch { on, change: None }
+}
+
+fn pick(settings: &Value, field: Field, options: &[(&'static str, &'static str)]) -> Ctl {
+    let now = current(settings, field);
+    Ctl::Pick(
+        options
+            .iter()
+            .map(|&(value, label)| Opt {
+                label,
+                chosen: now == value,
+                change: change(settings, field, json_of(value)),
+            })
+            .collect(),
+    )
+}
+
+/// Rows of switches from a table of (title, description, setting).
+fn switches(settings: &Value, table: &[SwitchRow]) -> Vec<Row> {
+    table
+        .iter()
+        .map(|&(title, about, field)| row(title, about, vec![switch_of(settings, field)]))
+        .collect()
+}
+
+/// One row with one switch, for the pages that build their rows by hand.
+fn switch_row(s: &Value, title: &'static str, about: &str, field: Field) -> Row {
+    row(title, about, vec![switch_of(s, field)])
+}
+
+fn yes(value: &Value) -> bool {
+    value.as_bool() == Some(true)
+}
+
+/// The string items of a JSON array (`disabledSkills`, `connectors`' ids and similar).
+fn strings(value: &Value) -> Vec<String> {
+    value
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn has(list: &[String], item: &str) -> bool {
+    list.iter().any(|entry| entry == item)
+}
+
+/// `list` without `item`.
+fn without(list: &[String], item: &str) -> Vec<String> {
+    list.iter()
+        .filter(|entry| entry.as_str() != item)
+        .cloned()
+        .collect()
+}
+
+/// `list` with `item` added once.
+fn with(list: &[String], item: &str) -> Vec<String> {
+    let mut next = list.to_vec();
+    if !has(list, item) {
+        next.push(item.to_string());
+    }
+    next
+}
+
+/// The loaded value under `key`, or null while it is still on its way.
+fn get_data<'a>(data: &'a HashMap<&'static str, Value>, key: &str) -> &'a Value {
+    static NULL: Value = Value::Null;
+    data.get(key).unwrap_or(&NULL)
+}
+
+fn act_run(cmd: &'static str, args: Value) -> Act {
+    Act::Run { cmd, args }
+}
+
+/// A `remote_action` call; `action` is the closed RemoteAction JSON.
+fn remote_act(action: Value) -> Act {
+    act_run("remote_action", json!({"action": action}))
+}
+
+/// A `computer_action` call; `action` is the closed ComputerAction JSON.
+fn computer_act(action: Value) -> Act {
+    act_run("computer_action", json!({"action": action}))
+}
+
+/// The skills catalog for no particular project or session.
+fn skills_catalog() -> Value {
+    json!({"action": {"type": "catalog", "owner": {"projectId": null, "sessionId": null}}})
+}
+
+/// A date and time as the local clock shows it, from an RFC 3339 stamp; the raw text if it does not parse.
+fn local_when(stamp: &str, style: &str) -> String {
+    DateTime::parse_from_rfc3339(stamp).map_or_else(
+        |_| stamp.to_string(),
+        |when| when.with_timezone(&Local).format(style).to_string(),
+    )
+}
+
+// Views.
+
+fn group_view<V: 'static>(group: Group, ui: &mut Ui<'_, V>, cx: &mut Context<V>) -> AnyElement {
+    let mut rows = Vec::new();
+    for item in group.rows {
+        rows.push(row_view(item, ui, cx));
+    }
+    let mut block = div().mb(px(32.));
+    if !group.title.is_empty() {
+        block = block.child(
+            div()
+                .mb(px(4.))
+                .text_size(px(12.5))
+                .text_color(content(0.5))
+                .child(group.title),
+        );
+    }
+    block
+        .child(
+            div()
+                .rounded(px(12.))
+                .border_1()
+                .border_color(content(0.09))
+                .bg(content(0.02))
+                .overflow_hidden()
+                .children(rows),
+        )
+        .into_any_element()
+}
+
+fn row_view<V: 'static>(item: Row, ui: &mut Ui<'_, V>, cx: &mut Context<V>) -> AnyElement {
+    let mut controls = Vec::new();
+    for ctl in item.controls {
+        controls.push(control_view(ctl, ui, cx));
+    }
+    let mut text = div().flex_1().min_w_0().flex().flex_col().gap(px(2.));
+    if !item.title.is_empty() {
+        text = text.child(
+            div()
+                .text_size(px(13.))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(content(0.95))
+                .child(item.title),
+        );
+    }
+    if !item.about.is_empty() {
+        text = text.child(
+            div()
+                .text_size(px(12.))
+                .text_color(content(0.5))
+                .child(item.about),
+        );
+    }
+    div()
+        .px(px(16.))
+        .py(px(14.))
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap(px(20.))
+        .border_b_1()
+        .border_color(content(0.07))
+        .child(text)
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .flex_shrink_0()
+                .children(controls),
+        )
+        .into_any_element()
+}
+
+fn next_id(ids: &mut usize) -> usize {
+    *ids += 1;
+    *ids
+}
+
+/// Runs what a click does: the page's `save` for a setting, its `run` for a backend command.
+fn fire<V: 'static>(view: &mut V, act: &Act, save: Save<V>, run: Run<V>, cx: &mut Context<V>) {
+    match act {
+        Act::Save { key, value } => save(view, key, value.clone(), cx),
+        Act::Run { cmd, args } => run(view, cmd, args.clone(), cx),
+    }
+}
+
+/// A text field: while `key` is being edited it shows the typed text with a caret; otherwise its
+/// text (or the `button` label), and a click starts editing it.
+fn field_view<V: 'static>(
+    key: &'static str,
+    text: String,
+    width: f32,
+    button: Option<&'static str>,
+    ui: &mut Ui<'_, V>,
+    cx: &mut Context<V>,
+) -> AnyElement {
+    let edit = ui.edit;
+    let typing = ui
+        .editing
+        .and_then(|(known, typed)| (known == key).then(|| typed.to_string()));
+    let id = next_id(&mut ui.ids);
+    if let (None, Some(label)) = (&typing, button) {
+        return div()
+            .id(("setting", id))
+            .h(px(28.))
+            .px(px(10.))
+            .rounded(px(6.))
+            .border_1()
+            .border_color(content(0.12))
+            .flex()
+            .items_center()
+            .text_size(px(12.5))
+            .text_color(content(0.85))
+            .cursor_pointer()
+            .hover(|style| style.bg(content(0.08)))
+            .on_click(cx.listener(move |this, _, _, cx| edit(this, key, text.clone(), cx)))
+            .child(label)
+            .into_any_element();
+    }
+    let field = div()
+        .id(("setting", id))
+        .h(px(28.))
+        .w(px(width))
+        .px(px(8.))
+        .rounded(px(6.))
+        .border_1()
+        .flex()
+        .items_center()
+        .gap(px(1.))
+        .text_size(px(12.5))
+        .whitespace_nowrap()
+        .overflow_hidden();
+    match typing {
+        Some(typed) => field
+            .border_color(accent())
+            .text_color(content(0.95))
+            .child(typed)
+            .child(div().w(px(1.5)).h(px(14.)).bg(accent()))
+            .into_any_element(),
+        None => {
+            let empty = text.is_empty();
+            let shown = if empty {
+                "—".to_string()
+            } else {
+                text.clone()
+            };
+            field
+                .border_color(content(0.12))
+                .text_color(content(if empty { 0.4 } else { 0.85 }))
+                .hover(|style| style.border_color(content(0.25)))
+                .on_click(cx.listener(move |this, _, _, cx| edit(this, key, text.clone(), cx)))
+                .child(shown)
+                .into_any_element()
+        }
+    }
+}
+
+fn control_view<V: 'static>(ctl: Ctl, ui: &mut Ui<'_, V>, cx: &mut Context<V>) -> AnyElement {
+    let (save, run) = (ui.save, ui.run);
+    match ctl {
+        Ctl::Read(value) => div()
+            .text_size(px(12.5))
+            .text_color(content(0.6))
+            .child(value)
+            .into_any_element(),
+        Ctl::Secret { key, label } => {
+            let edit = ui.edit;
+            // Only the dots of the typed text show: the secret itself is never drawn.
+            let typing = ui
+                .editing
+                .and_then(|(known, typed)| (known == key).then(|| typed.chars().count()));
+            let id = next_id(&mut ui.ids);
+            match typing {
+                Some(count) => div()
+                    .id(("setting", id))
+                    .h(px(28.))
+                    .w(px(220.))
+                    .px(px(8.))
+                    .rounded(px(6.))
+                    .border_1()
+                    .border_color(accent())
+                    .flex()
+                    .items_center()
+                    .gap(px(1.))
+                    .text_size(px(12.5))
+                    .text_color(content(0.95))
+                    .overflow_hidden()
+                    .child("•".repeat(count))
+                    .child(div().w(px(1.5)).h(px(14.)).bg(accent()))
+                    .into_any_element(),
+                None => div()
+                    .id(("setting", id))
+                    .h(px(28.))
+                    .px(px(10.))
+                    .rounded(px(6.))
+                    .border_1()
+                    .border_color(content(0.12))
+                    .flex()
+                    .items_center()
+                    .text_size(px(12.5))
+                    .text_color(content(0.85))
+                    .cursor_pointer()
+                    .hover(|style| style.bg(content(0.08)))
+                    .on_click(cx.listener(move |this, _, _, cx| edit(this, key, String::new(), cx)))
+                    .child(label)
+                    .into_any_element(),
+            }
+        }
+        Ctl::Sample { family, size } => div()
+            .max_w(px(260.))
+            .px(px(10.))
+            .py(px(6.))
+            .rounded(px(8.))
+            .border_1()
+            .border_color(content(0.1))
+            .bg(content(0.03))
+            .overflow_hidden()
+            .whitespace_nowrap()
+            .font_family(family)
+            .text_size(px(size))
+            .text_color(content(0.8))
+            .child("const ok = (0O, il1) => {[]};")
+            .into_any_element(),
+        Ctl::Field {
+            key,
+            text,
+            width,
+            button,
+        } => field_view(key, text, width, button, ui, cx),
+        Ctl::Button {
+            label,
+            act,
+            enabled,
+            danger,
+        } => {
+            let button = div()
+                .id(("setting", next_id(&mut ui.ids)))
+                .h(px(28.))
+                .px(px(10.))
+                .rounded(px(6.))
+                .border_1()
+                .border_color(content(0.12))
+                .flex()
+                .items_center()
+                .text_size(px(12.5))
+                .text_color(if danger {
+                    Hsla::from(rgb(0xe08a8a))
+                } else {
+                    content(0.85)
+                })
+                .child(label);
+            if enabled {
+                button
+                    .cursor_pointer()
+                    .hover(|style| style.bg(content(0.08)))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if danger {
+                            ask(this, label, &act, run, cx);
+                        } else {
+                            fire(this, &act, save, run, cx);
+                        }
+                    }))
+                    .into_any_element()
+            } else {
+                button.opacity(0.45).into_any_element()
+            }
+        }
+        Ctl::Switch { on, change } => {
+            let live = change.is_some();
+            let track = div()
+                .id(("setting", next_id(&mut ui.ids)))
+                .w(px(40.))
+                .h(px(22.))
+                .p(px(2.))
+                .rounded_full()
+                .flex()
+                .items_center()
+                .bg(if on { accent() } else { content(0.16) })
+                .when(on, |d| d.justify_end())
+                .when(!live, |d| d.opacity(0.45))
+                .child(div().size(px(18.)).rounded_full().bg(if on {
+                    on_accent()
+                } else {
+                    content(0.75)
+                }));
+            match change {
+                Some(act) => track
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, _, _, cx| fire(this, &act, save, run, cx)))
+                    .into_any_element(),
+                None => track.into_any_element(),
+            }
+        }
+        Ctl::Pick(options) => {
+            let mut items = Vec::new();
+            for opt in options {
+                let Opt {
+                    label,
+                    chosen,
+                    change: act,
+                } = opt;
+                items.push(
+                    div()
+                        .id(("setting", next_id(&mut ui.ids)))
+                        .h(px(24.))
+                        .px(px(10.))
+                        .rounded(px(6.))
+                        .flex()
+                        .items_center()
+                        .text_size(px(12.5))
+                        .text_color(content(if chosen { 1. } else { 0.55 }))
+                        .when(chosen, |d| d.bg(content(0.1)))
+                        .when(!chosen, |d| d.hover(|s| s.text_color(content(0.9))))
+                        .cursor_pointer()
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| fire(this, &act, save, run, cx)),
+                        )
+                        .child(label)
+                        .into_any_element(),
+                );
+            }
+            // Wraps onto more lines when the options are many (the font lists).
+            div()
+                .flex()
+                .flex_wrap()
+                .max_w(px(440.))
+                .p(px(2.))
+                .rounded(px(8.))
+                .border_1()
+                .border_color(content(0.1))
+                .children(items)
+                .into_any_element()
+        }
+    }
+}
+
+// Pages. Each is a table of rows over AppSettings or over loaded backend data.
+
+/// The providers in the order of `src/lib/provider-registry.ts`: (id, name).
+const PROVIDER_LIST: &[(&str, &str)] = &[
+    ("claude", "Claude Code"),
+    ("codex", "Codex"),
+    ("cursor", "Cursor"),
+    ("grok", "Grok"),
+    ("opencode", "OpenCode"),
+    ("antigravity", "Antigravity"),
+    ("droid", "Droid"),
+    ("pi", "Pi"),
+    ("devin", "Devin"),
+    ("hermes", "Hermes"),
+];
+
+fn provider_name(id: &str) -> String {
+    PROVIDER_LIST
+        .iter()
+        .find(|(known, _)| *known == id)
+        .map_or_else(|| id.to_string(), |(_, name)| name.to_string())
+}
+
+/// The name a skill's source origin shows as: the shared folder, Sirus Code or a provider.
+fn origin_label(origin: &str) -> String {
+    match origin {
+        "agents" => t("Compartilhadas (.agents)").to_string(),
+        "sirus" => "Sirus Code".to_string(),
+        other => provider_name(other),
+    }
+}
+
+fn general(s: &Value) -> Vec<Group> {
+    let provider = provider_name(&current(s, top("defaultAgent")));
+    let sidebar_rows: &[SwitchRow] = &[(
+        t("Trabalhando e não lidas primeiro"),
+        t(
+            "Sessões trabalhando, esperando você ou concluídas sem serem vistas ficam acima da ordem das sessões. As listas não se mexem enquanto o ponteiro está sobre elas.",
+        ),
+        top("sidebarAttentionFirst"),
+    )];
+    let startup_rows: &[SwitchRow] = &[
+        (
+            t("Reabrir último projeto"),
+            t("Reabre o último projeto ativo ao iniciar o Sirus Code."),
+            top("openLastProject"),
+        ),
+        (
+            t("Reabrir sessão mais nova"),
+            t(
+                "Reabre a sessão criada mais recentemente no último projeto. As outras sessões continuam na barra lateral; os agentes não iniciam automaticamente.",
+            ),
+            top("restorePreviousSessions"),
+        ),
+    ];
+    let application_rows: &[SwitchRow] = &[
+        (
+            t("Confirmar fechamento de sessões em execução"),
+            t("Pede confirmação antes de fechar ou sair enquanto os agentes estão em execução."),
+            top("confirmCloseRunning"),
+        ),
+        (
+            t("Retomar sozinho quando o limite de uso liberar"),
+            t(
+                r#"Uma conversa parada pelo limite da IA envia "Continue from where you left off." quando o limite libera. Dá para cancelar em cada aviso."#,
+            ),
+            top("usageAutoResume"),
+        ),
+    ];
+    let environment_rows: &[SwitchRow] = &[
+        (
+            t("Abrir por padrão"),
+            t(
+                "Abre o painel Ambiente automaticamente. Quando desativado, ele fica fechado até você abrir. A última ação de abrir/fechar também atualiza esta preferência.",
+            ),
+            top("environmentPanelDefaultOpen"),
+        ),
+        (
+            t("Repositório"),
+            t("Exiba o link do repositório no painel Ambiente."),
+            top("showEnvironmentRepository"),
+        ),
+        (
+            "Editor",
+            t("Exiba as ações do editor no painel Ambiente."),
+            top("showEnvironmentEditor"),
+        ),
+    ];
+    let core = vec![
+        row(
+            t("Provedor padrão"),
+            t("Escolha o provedor das novas sessões. As sessões atuais mantêm seu provedor."),
+            vec![Ctl::Read(provider)],
+        ),
+        row(
+            t("Novas sessões"),
+            t("Escolha o workspace padrão das novas sessões."),
+            vec![pick(
+                s,
+                top("defaultSessionWorkspace"),
+                &[
+                    ("ask", t("Perguntar sempre")),
+                    ("checkout", "Local"),
+                    ("worktree", t("Novo worktree")),
+                ],
+            )],
+        ),
+        row(
+            t("Permissões padrão"),
+            t(
+                "O modo de aprovação com que novas conversas começam. Um provedor sem ele usa o próximo modo mais seguro que oferece; uma conversa mantém o último modo usado.",
+            ),
+            vec![pick(
+                s,
+                top("defaultApproval"),
+                &[
+                    ("ask", t("Solicitar aprovação")),
+                    ("auto", t("Aprovar por mim")),
+                    ("full", t("Acesso completo")),
+                ],
+            )],
+        ),
+        row(
+            t("Idioma"),
+            "",
+            vec![pick(
+                s,
+                top("locale"),
+                &[("pt-BR", "Português (Brasil)"), ("en", "English")],
+            )],
+        ),
+    ];
+    let mut sidebar = vec![
+        row(
+            t("Ordem dos projetos"),
+            t("Projetos fixados ficam primeiro. Arrastar uma pasta ativa a ordem manual."),
+            vec![pick(
+                s,
+                top("sidebarProjectSortOrder"),
+                &[("manual", "Manual"), ("created_at", t("Criação"))],
+            )],
+        ),
+        row(
+            t("Ordem das sessões"),
+            t("Organiza as sessões dentro de cada projeto. As fixadas mantêm sua própria área."),
+            vec![pick(
+                s,
+                top("sidebarThreadSortOrder"),
+                &[
+                    ("updated_at", t("Atividade recente")),
+                    ("created_at", t("Criação")),
+                ],
+            )],
+        ),
+    ];
+    sidebar.extend(switches(s, sidebar_rows));
+    vec![
+        group(t("Preferências padrão"), core),
+        group(t("Organização da sidebar"), sidebar),
+        group(t("Inicialização"), switches(s, startup_rows)),
+        group(t("Aplicativo"), switches(s, application_rows)),
+        group(t("Painel Ambiente"), switches(s, environment_rows)),
+    ]
+}
+
+fn chat(s: &Value) -> Vec<Group> {
+    let conversation_rows: &[SwitchRow] = &[
+        (
+            t("Recolher turnos terminados"),
+            t(
+                r#"Quando uma resposta termina, os passos dela se recolhem na linha "Trabalhou por". Desligue para manter todos os passos visíveis."#,
+            ),
+            top("foldFinishedTurns"),
+        ),
+        (
+            t("Mostrar sessões trabalhando"),
+            t(
+                "Lista as sessões em que um agente está trabalhando ao lado do campo de mensagem, quando duas ou mais rodam ao mesmo tempo.",
+            ),
+            top("showWorkingPanel"),
+        ),
+        (
+            t("Autocorreção"),
+            t(
+                "Sublinhado de ortografia e correções automáticas do macOS enquanto você escreve uma mensagem, em todas as conversas.",
+            ),
+            top("composerAutocorrect"),
+        ),
+        (
+            t("Abas de conversa"),
+            t(
+                "Mostra as conversas do projeto como abas no topo da janela. Desligado, a barra mostra só a conversa atual.",
+            ),
+            top("showSessionTabs"),
+        ),
+        (
+            t("Continuar conversas interrompidas após uma falha"),
+            t(
+                "Se o Sirus Code fechar inesperadamente enquanto um agente trabalha, a conversa continua na próxima abertura, pedindo que o agente confira primeiro o que já aconteceu. No máximo três vezes seguidas; conversas paradas, adiadas ou aguardando você ficam como estão.",
+            ),
+            top("continueInterruptedSessions"),
+        ),
+        (
+            t("Compactar conversas paradas do Claude antes do cache expirar (beta)"),
+            t(
+                "Uma conversa do Claude com mais de 200 mil tokens parada compacta uns dois minutos antes do cache do prompt expirar (1 hora na assinatura, 5 minutos com chave de API), assim ao voltar a conversa inteira não é reenviada. Aparece como um turno /compact; conversas adiadas ficam como estão.",
+            ),
+            top("compactIdleBeforeCacheExpiry"),
+        ),
+        (
+            t("Iniciar uma sessão nova quando o contexto estiver quase cheio"),
+            t(
+                "Quando uma conversa do Claude ou do Codex chega a 80% da janela de contexto, a próxima mensagem inicia uma sessão nova do provedor com um resumo curto montado pelo próprio app: as duas últimas trocas palavra por palavra e uma linha para cada anterior. Nenhuma chamada ao modelo é gasta com isso, e a conversa completa continua aqui.",
+            ),
+            top("rotateAtContextLimit"),
+        ),
+    ];
+    let diffs_rows: &[SwitchRow] = &[(
+        t("Quebrar linhas nos diffs"),
+        t("Linhas longas quebram em vez de rolar para o lado."),
+        top("diffWordWrap"),
+    )];
+    let recording_rows: &[SwitchRow] = &[
+        (
+            t("Mostrar teclas"),
+            t(
+                "Teclas digitadas na página aparecem embaixo do vídeo. Campos de senha nunca aparecem.",
+            ),
+            top("browserRecordingKeys"),
+        ),
+        (
+            t("Mostrar cliques"),
+            t("Um círculo marca cada clique no vídeo."),
+            top("browserRecordingClicks"),
+        ),
+    ];
+    let mut conversation = vec![
+        row(
+            t("Mensagem durante a resposta"),
+            t(
+                "Escolha se uma mensagem enviada enquanto o agente trabalha espera na fila ou instrui a resposta atual (Codex e Claude). ⌘Enter faz o contrário só naquela mensagem.",
+            ),
+            vec![pick(
+                s,
+                top("steerWhileRunning"),
+                &[("false", t("Fila")), ("true", t("Instruir"))],
+            )],
+        ),
+        row(
+            t("Enter durante o ditado"),
+            t(
+                "Parar e transcrever no composer, ou parar e enviar a mensagem assim que for transcrita.",
+            ),
+            vec![pick(
+                s,
+                top("dictationEnterSends"),
+                &[("false", t("Parar")), ("true", t("Parar e enviar"))],
+            )],
+        ),
+    ];
+    conversation.extend(switches(s, conversation_rows));
+    let mut agent = vec![row(
+        t("Exibição da resposta"),
+        t("Como o texto da resposta aparece enquanto o agente escreve."),
+        vec![pick(
+            s,
+            top("responseStreaming"),
+            &[
+                ("turn", t("Depois do turno")),
+                ("paragraph", t("Parágrafos prontos")),
+                ("token", t("Palavra por palavra")),
+            ],
+        )],
+    )];
+    agent.extend(switches(
+        s,
+        &[(
+            t("Acesso dos agentes ao navegador"),
+            t("Permite que agentes usem o navegador do app. Desligado, novos agentes não recebem as ferramentas dele e os que estão rodando são recusados; seu painel de navegador não muda."),
+            top("agentBrowserAccess"),
+        )],
+    ));
+    let mut review = vec![
+        row(
+            t("Abrir links no"),
+            t(
+                "Onde abrem os links de respostas, das suas mensagens e dos terminais. ⌘, Ctrl, Option ou clique do meio sempre abrem o navegador do sistema.",
+            ),
+            vec![pick(
+                s,
+                top("linkOpenTarget"),
+                &[
+                    ("app", t("Navegador do Sirus")),
+                    ("system", t("Navegador do sistema")),
+                ],
+            )],
+        ),
+        row(
+            t("Abrir pull requests e issues"),
+            t(
+                "Onde abre um link de pull request ou issue de um dos seus projetos. Outros repositórios seguem Abrir links no.",
+            ),
+            vec![pick(
+                s,
+                top("githubLinksInApp"),
+                &[("true", t("No Sirus Code")), ("false", t("Navegador"))],
+            )],
+        ),
+    ];
+    review.extend(switches(s, diffs_rows));
+    let mut recording = vec![row(
+        t("Quadros por segundo"),
+        t(
+            "60 fps fica mais suave e gera arquivos maiores. A página é capturada o mais rápido que ela permitir.",
+        ),
+        vec![pick(
+            s,
+            top("browserRecordingFps"),
+            &[("30", "30 fps"), ("60", "60 fps")],
+        )],
+    )];
+    recording.extend(switches(s, recording_rows));
+    let mut safety = switches(
+        s,
+        &[(
+            t("Confirmar ao fechar um terminal"),
+            t("Pergunta antes de fechar uma aba do terminal; o shell e o histórico dela terminam."),
+            top("confirmTerminalClose"),
+        )],
+    );
+    safety.push(row(
+        t("Confirmar ao excluir"),
+        t("Sempre ligado: excluir uma conversa apaga o histórico dela."),
+        vec![fixed(true)],
+    ));
+    vec![
+        group(t("Conversa"), conversation),
+        group(t("Comportamento do agente"), agent),
+        group(t("Revisão"), review),
+        group(
+            t("Navegador"),
+            switches(
+                s,
+                &[(
+                    t("Mostrar páginas que o agente abre"),
+                    t(
+                        "Uma página que o agente abre ou navega aparece num player pequeno sobre a conversa. Ela fica oculta enquanto o painel do navegador mostra a sessão.",
+                    ),
+                    top("browserShowAgentPages"),
+                )],
+            ),
+        ),
+        group(t("Gravações do navegador"), recording),
+        group(t("Confirmações de segurança"), safety),
+    ]
+}
+
+fn notifications(s: &Value) -> Vec<Group> {
+    const SOUNDS: &[(&str, &str)] = &[
+        ("glass", "Glass"),
+        ("ping", "Ping"),
+        ("pop", "Pop"),
+        ("submarine", "Submarine"),
+        ("tink", "Tink"),
+        ("hero", "Hero"),
+    ];
+    let activity_rows: &[SwitchRow] = &[
+        (
+            t("Avisos no app"),
+            t("Mostre um aviso para sessões que você não está visualizando."),
+            inner("notifications", "toasts"),
+        ),
+        (
+            t("Notificações do sistema"),
+            "",
+            inner("notifications", "system"),
+        ),
+        (
+            t("Sons de notificação"),
+            t("Toque o som escolhido. Usa o volume de saída do sistema."),
+            inner("notifications", "sounds"),
+        ),
+        (
+            t("Avisar com o app em foco"),
+            t("Mostre notificações e toque sons também enquanto o Sirus Code estiver ativo."),
+            inner("notifications", "foreground"),
+        ),
+        (
+            t("Sons"),
+            t(
+                "Um toque suave quando um agente termina um turno ou precisa de você. Não toca para a conversa que você está vendo.",
+            ),
+            top("agentSounds"),
+        ),
+    ];
+    // Each event: its sound, and its switch.
+    let event = |s: &Value,
+                 title: &'static str,
+                 about: &'static str,
+                 on: &'static str,
+                 sound: &'static str| {
+        row(
+            title,
+            about,
+            vec![
+                pick(s, inner("notifications", sound), SOUNDS),
+                switch_of(s, inner("notifications", on)),
+            ],
+        )
+    };
+    let mut events = vec![
+        event(
+            s,
+            t("Pedidos de permissão"),
+            t("Quando um agente precisa de aprovação para continuar."),
+            "permissions",
+            "permissionSound",
+        ),
+        event(
+            s,
+            t("Perguntas do agente"),
+            t("Quando um agente pede uma escolha ou resposta."),
+            "questions",
+            "questionSound",
+        ),
+        event(
+            s,
+            t("Tarefa concluída"),
+            t("Quando uma tarefa termina com sucesso. Cancelamentos e falhas não geram avisos."),
+            "completion",
+            "completionSound",
+        ),
+    ];
+    events.extend(switches(
+        s,
+        &[(
+            "Pull requests",
+            t("Quando outra pessoa abre um pull request ou pede sua revisão no repositório de um projeto salvo. Verificado ao abrir o Sirus Code e quando você volta para ele."),
+            inner("notifications", "pullRequests"),
+        )],
+    ));
+    vec![
+        group(t("Avisos de atividade"), switches(s, activity_rows)),
+        group(t("Eventos e sons"), events),
+    ]
+}
+
+/// Atalhos: (id, Portuguese command, Portuguese group, default shortcut as the app stores it).
+const KEYBINDINGS: &[(&str, &str, &str, &str)] = &[
+    ("new-session", "Nova sessão", "Sessão", "meta+n"),
+    ("palette", "Paleta de comandos", "Aplicativo", "meta+k"),
+    ("open-project", "Abrir projeto", "Projeto", "meta+o"),
+    ("settings", "Configurações", "Aplicativo", "meta+,"),
+    (
+        "toggle-sidebar",
+        "Mostrar / ocultar barra lateral",
+        "Visualização",
+        "meta+s",
+    ),
+    (
+        "toggle-context",
+        "Alternar painel direito",
+        "Visualização",
+        "meta+\\",
+    ),
+    ("open-terminal", "Abrir terminal", "Visualização", "meta+`"),
+    ("stop-agent", "Parar agente", "Sessão", "meta+."),
+    ("back", "Voltar", "Aplicativo", "meta+["),
+    ("forward", "Avançar", "Aplicativo", "meta+]"),
+    ("open-files", "Abrir Arquivos", "Visualização", "meta+alt+o"),
+    (
+        "open-browser",
+        "Abrir Navegador",
+        "Visualização",
+        "meta+alt+b",
+    ),
+    (
+        "toggle-environment",
+        "Mostrar/ocultar Ambiente",
+        "Visualização",
+        "meta+alt+e",
+    ),
+    (
+        "find-in-conversation",
+        "Buscar nesta conversa",
+        "Sessão",
+        "meta+f",
+    ),
+    (
+        "search-conversations",
+        "Buscar em todas as conversas",
+        "Sessão",
+        "meta+shift+f",
+    ),
+    (
+        "toggle-side-chat",
+        "Abrir ou fechar o chat lateral",
+        "Sessão",
+        "meta+alt+s",
+    ),
+    (
+        "send-new-thread",
+        "Enviar e começar nova conversa",
+        "Sessão",
+        "meta+alt+enter",
+    ),
+    (
+        "cycle-effort",
+        "Alternar nível de raciocínio",
+        "Sessão",
+        "shift+tab",
+    ),
+    (
+        "reopen-closed",
+        "Reabrir guia fechada",
+        "Visualização",
+        "meta+shift+t",
+    ),
+];
+
+const SHORTCUT_GROUPS: &[&str] = &["Sessão", "Aplicativo", "Projeto", "Visualização"];
+
+/// The shortcut as the app shows it (lilac ⌘ ⌥ ⇧ glyphs), as `shortcutLabel` in keybindings.ts.
+fn shortcut_label(combo: &str) -> String {
+    let mut s = combo.to_string();
+    if let Some(rest) = s.strip_suffix("enter") {
+        s = format!("{rest}↩");
+    }
+    if let Some(rest) = s.strip_suffix("tab") {
+        s = format!("{rest}⇥");
+    }
+    s = s
+        .replacen("meta+", "⌘", 1)
+        .replacen("alt+", "⌥", 1)
+        .replacen("shift+", "⇧", 1);
+    if let Some(rest) = s.strip_prefix('⌘') {
+        let (alt, rest) = rest.strip_prefix('⌥').map_or(("", rest), |r| ("⌥", r));
+        let (shift, rest) = rest.strip_prefix('⇧').map_or(("", rest), |r| ("⇧", r));
+        s = format!("{alt}{shift}⌘{rest}");
+    }
+    s.to_uppercase()
+}
+
+fn keybindings(s: &Value) -> Vec<Group> {
+    let custom = s.get("customShortcuts");
+    SHORTCUT_GROUPS
+        .iter()
+        .map(|&name| {
+            let rows = KEYBINDINGS
+                .iter()
+                .filter(|entry| entry.2 == name)
+                .map(|&(id, label, _, combo)| {
+                    let combo = custom
+                        .and_then(|c| c.get(id))
+                        .and_then(Value::as_str)
+                        .unwrap_or(combo);
+                    row(t(label), "", vec![Ctl::Read(shortcut_label(combo))])
+                })
+                .collect();
+            group(t(name), rows)
+        })
+        .filter(|item| !item.rows.is_empty())
+        .collect()
+}
+
+fn git(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
+    let host = get_data(d, "host");
+    vec![
+        group(
+            t("Instalação"),
+            vec![
+                row(
+                    t("Git detectado"),
+                    "",
+                    vec![Ctl::Read(if yes(&host["gitDetected"]) {
+                        t("Sim").to_string()
+                    } else {
+                        t("Não").to_string()
+                    })],
+                ),
+                row(
+                    t("Versão"),
+                    "",
+                    vec![Ctl::Read(
+                        host["gitVersion"].as_str().unwrap_or("—").to_string(),
+                    )],
+                ),
+                row(
+                    t("Executável"),
+                    "",
+                    vec![Ctl::Read(
+                        host["gitPath"].as_str().unwrap_or("—").to_string(),
+                    )],
+                ),
+            ],
+        ),
+        github_accounts(d),
+        group(
+            t("Comportamento"),
+            vec![
+                row(
+                    t("Atualizar referências ao abrir projeto"),
+                    t(
+                        "O fetch automático está indisponível enquanto a configuração Git do projeto puder executar helpers ou divulgar credenciais. Faça o fetch manualmente pelo terminal.",
+                    ),
+                    vec![Ctl::Read(t("Em breve").to_string()), fixed(false)],
+                ),
+                switch_row(
+                    s,
+                    t("Corrigir CI automaticamente"),
+                    t(
+                        "Quando os checks do PR aberto de uma sessão falham, o agente dela recebe os erros e corrige; depois o Sirus Code faz commit e push do branch da sessão (nunca forçado). Até 3 tentativas por falha; senão pausa e avisa.",
+                    ),
+                    top("ciAutoFix"),
+                ),
+                switch_row(
+                    s,
+                    t("Atualizar o branch padrão automaticamente"),
+                    t(
+                        "A cada 5 minutos, avança o checkout do projeto quando ele está no branch padrão do origin, sem mudanças locais e sem conversa rodando nele. Nunca faz merge, rebase nem mexe numa árvore com mudanças.",
+                    ),
+                    top("gitAutoPull"),
+                ),
+                switch_row(
+                    s,
+                    t("Permitir que sessões acompanhem o pull request"),
+                    t(
+                        "Uma sessão que acompanha o PR (pelo cartão Ambiente ou quando você pede ao agente) recebe um turno automático, quando está ociosa, se um check falhar, alguém revisar ou comentar o código ou o branch tiver conflitos com a base. O GitHub é lido no máximo uma vez por minuto por PR; o acompanhamento para após 5 atualizações sem um novo commit.",
+                    ),
+                    top("prWatch"),
+                ),
+                switch_row(
+                    s,
+                    t("Mostrar arquivos não rastreados"),
+                    "",
+                    top("gitShowUntracked"),
+                ),
+                row(
+                    t("Confirmar ações destrutivas do Git"),
+                    t(
+                        "Proteção permanente. O Sirus Code não executa operações destrutivas do Git automaticamente.",
+                    ),
+                    vec![fixed(true)],
+                ),
+            ],
+        ),
+    ]
+}
+
+/// Settings → Git → GitHub accounts (ADR-188), through the GitHub CLI: listing, switching, signing
+/// out (a second click) and adding an account with the device code shown here. The shell keeps
+/// `github` (the accounts), `github_device` ({code, url} while a sign-in waits) and
+/// `github_error` (the text of a failed sign-in) in its data.
+fn github_accounts(d: &HashMap<&'static str, Value>) -> Group {
+    let github = get_data(d, "github");
+    let device = get_data(d, "github_device");
+    let mut rows = vec![row(
+        "",
+        t(
+            "Pull requests, acompanhamento de PRs, correção de CI e pushes por HTTPS usam a conta ativa. As contas ficam guardadas no GitHub CLI (gh).",
+        ),
+        Vec::new(),
+    )];
+    if yes(&github["missing"]) {
+        rows.push(row(
+            "",
+            t("O GitHub CLI (gh) não está instalado. Instale com `brew install gh` e depois adicione uma conta aqui."),
+            Vec::new(),
+        ));
+    } else {
+        let accounts = github["accounts"].as_array().cloned().unwrap_or_default();
+        if accounts.is_empty() {
+            rows.push(row("", t("Nenhuma conta do GitHub conectada."), Vec::new()));
+        }
+        for account in &accounts {
+            let login = account["login"].as_str().unwrap_or_default();
+            let about = if yes(&account["valid"]) {
+                ""
+            } else {
+                t("Login expirado")
+            };
+            let mut controls = Vec::new();
+            if yes(&account["active"]) {
+                controls.push(Ctl::Read(t("Ativa").to_string()));
+            } else {
+                controls.push(Ctl::Button {
+                    label: t("Usar esta conta"),
+                    act: act_run("native_github_switch", json!({"login": login})),
+                    enabled: true,
+                    danger: false,
+                });
+            }
+            controls.push(confirm_button(
+                t("Sair"),
+                act_run("native_github_logout", json!({"login": login})),
+            ));
+            rows.push(row(login, about, controls));
+        }
+        if let Some(code) = device["code"].as_str() {
+            rows.push(row(
+                t("Código de confirmação"),
+                tf(
+                    "Abra {} e digite o código. Esta tela termina quando o GitHub confirmar.",
+                    &[&device["url"].as_str().unwrap_or("github.com/login/device")],
+                ),
+                vec![
+                    Ctl::Read(code.to_string()),
+                    Ctl::Button {
+                        label: t("Cancelar"),
+                        act: act_run("native_github_cancel", json!({})),
+                        enabled: true,
+                        danger: false,
+                    },
+                ],
+            ));
+        } else {
+            rows.push(row(
+                t("Adicionar conta"),
+                "",
+                vec![Ctl::Button {
+                    label: t("Adicionar conta"),
+                    act: act_run("native_github_login", json!({})),
+                    enabled: true,
+                    danger: false,
+                }],
+            ));
+            if let Some(error) = get_data(d, "github_error").as_str() {
+                rows.push(row("", error, Vec::new()));
+            }
+        }
+    }
+    group(t("Contas do GitHub"), rows)
+}
+
+/// A button that asks in the confirmation popup before running `act`.
+fn confirm_button(label: &'static str, act: Act) -> Ctl {
+    Ctl::Button {
+        label,
+        act,
+        enabled: true,
+        danger: true,
+    }
+}
+
+/// Bytes as the Portuguese of the app shows them: "512 MB", "1,2 GB".
+fn size_of(bytes: u64) -> String {
+    const GB: f64 = 1_000_000_000.0;
+    const MB: f64 = 1_000_000.0;
+    let bytes = bytes as f64;
+    if bytes >= GB {
+        format!("{:.1} GB", bytes / GB).replace('.', ",")
+    } else {
+        format!("{:.0} MB", (bytes / MB).max(1.0))
+    }
+}
+
+fn worktrees(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
+    let host = get_data(d, "host");
+    let custom = current(s, top("worktreeLocation")) == "custom";
+    let mut defaults = vec![
+        row(
+            t("Workspace padrão da sessão"),
+            "",
+            vec![pick(
+                s,
+                top("defaultSessionWorkspace"),
+                &[
+                    ("ask", t("Perguntar sempre")),
+                    ("checkout", t("Checkout atual")),
+                    ("worktree", t("Novo worktree")),
+                ],
+            )],
+        ),
+        switch_row(
+            s,
+            t("Iniciar novos worktrees a partir do origin"),
+            t(
+                "Busca o branch padrão do origin e baseia novos worktrees nele, e não no branch local. Sem origin ou sem rede, eles começam do branch local.",
+            ),
+            top("worktreesFromOrigin"),
+        ),
+        row(
+            t("Local dos worktrees"),
+            "",
+            vec![pick(
+                s,
+                top("worktreeLocation"),
+                &[
+                    ("automatic", t("Automático")),
+                    ("custom", t("Personalizado")),
+                ],
+            )],
+        ),
+    ];
+    if custom {
+        defaults.push(row(
+            t("Diretório personalizado"),
+            t("Pasta onde os worktrees são criados. Escolha uma pasta ou digite o caminho."),
+            vec![
+                Ctl::Field {
+                    key: "worktreeBasePath",
+                    text: current(s, top("worktreeBasePath")),
+                    width: 220.,
+                    button: None,
+                },
+                Ctl::Button {
+                    label: t("Escolher pasta"),
+                    act: act_run("native_pick_folder", json!({"key": "worktreeBasePath"})),
+                    enabled: true,
+                    danger: false,
+                },
+            ],
+        ));
+    } else {
+        defaults.push(row(
+            t("Diretório automático"),
+            host["worktreeRoot"]
+                .as_str()
+                .unwrap_or("Application Support / worktrees"),
+            Vec::new(),
+        ));
+    }
+    defaults.push(row(
+        t("Padrão do nome da branch"),
+        t("Variáveis: {session-name} {id}. O identificador mantém branches únicas."),
+        vec![Ctl::Field {
+            key: "worktreeBranchPattern",
+            text: current(s, top("worktreeBranchPattern")),
+            width: 220.,
+            button: None,
+        }],
+    ));
+    // Sessions that ended with their own isolated worktree (the `delete_session` of the Tauri build).
+    let finished: Vec<String> = get_data(d, "appState")["sessions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|session| {
+            session["worktree"]["isolated"].as_bool() == Some(true)
+                && matches!(
+                    session["status"].as_str(),
+                    Some("completed" | "failed" | "stopped")
+                )
+        })
+        .filter_map(|session| session["id"].as_str().map(str::to_string))
+        .collect();
+    let finished_control = if finished.is_empty() {
+        Ctl::Button {
+            label: t("Nenhum para limpar"),
+            act: act_run("", json!({})),
+            enabled: false,
+            danger: false,
+        }
+    } else {
+        confirm_button(
+            t("Limpar worktrees"),
+            act_run("native_delete_sessions", json!({"ids": finished})),
+        )
+    };
+    // Leftover folders (`worktree_cleanup_action`'s scan, loaded with the page): the clean removes
+    // only those with no uncommitted changes, and never a branch.
+    let scan = get_data(d, "worktreeScan");
+    let removable = scan["leftovers"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|item| item["kept"].is_null())
+        .count();
+    let kept = scan["leftovers"].as_array().map_or(0, Vec::len) - removable;
+    let freed = size_of(scan["reclaimableBytes"].as_u64().unwrap_or(0));
+    let mut leftover_controls = Vec::new();
+    if kept > 0 {
+        leftover_controls.push(Ctl::Read(tf("{} mantidas", &[&kept])));
+    }
+    leftover_controls.push(if removable == 0 {
+        Ctl::Button {
+            label: t("Nada sobrando"),
+            act: act_run("", json!({})),
+            enabled: false,
+            danger: false,
+        }
+    } else {
+        confirm_button(
+            t("Liberar espaço"),
+            act_run(
+                "worktree_cleanup_action",
+                json!({"action": {"type": "clean", "confirm": true}}),
+            ),
+        )
+    });
+    vec![
+        group(t("Padrões"), defaults),
+        group(
+            t("Limpeza"),
+            vec![
+                row(
+                    t("Limpar worktrees concluídos"),
+                    t(
+                        "Remove sessões encerradas e seus worktrees isolados. Worktrees com alterações são preservados.",
+                    ),
+                    vec![finished_control],
+                ),
+                row(
+                    t("Limpar worktrees que sobraram"),
+                    tf(
+                        "Pastas no local dos worktrees que nenhuma sessão usa. Pastas com alterações não commitadas ficam; branches nunca são apagadas.{}",
+                        &[&if removable > 0 {
+                            tf(" Liberam {}.", &[&freed])
+                        } else {
+                            String::new()
+                        }],
+                    ),
+                    leftover_controls,
+                ),
+            ],
+        ),
+    ]
+}
+
+fn terminal(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
+    let host = get_data(d, "host");
+    let font = match current(s, top("terminalFont")).as_str() {
+        "plexMono" => "IBM Plex Mono".to_string(),
+        "jetbrains" => "JetBrains Mono".to_string(),
+        "fira" => "Fira Code".to_string(),
+        "geistMono" => "Geist Mono".to_string(),
+        "source" => "Source Code Pro".to_string(),
+        "roboto" => "Roboto Mono".to_string(),
+        "ubuntu" => "Ubuntu Mono".to_string(),
+        "sfMono" => "SF Mono".to_string(),
+        "menlo" => "Menlo".to_string(),
+        "cascadia" => "Cascadia Code".to_string(),
+        "hack" => "Hack".to_string(),
+        "consolas" => "Consolas".to_string(),
+        other => other.to_string(),
+    };
+    vec![
+        group(
+            "Shell",
+            vec![
+                row(
+                    t("Shell padrão"),
+                    "",
+                    vec![Ctl::Read(host["shell"].as_str().unwrap_or("—").to_string())],
+                ),
+                row(
+                    t("Usar shell padrão do sistema"),
+                    t("O terminal usa sempre o shell configurado no sistema."),
+                    vec![fixed(true)],
+                ),
+                row(
+                    t("Diretório de trabalho"),
+                    "",
+                    vec![Ctl::Read(t("Workspace da sessão").to_string())],
+                ),
+            ],
+        ),
+        group(
+            t("Exibição"),
+            vec![
+                row(t("Fonte do terminal"), "", vec![Ctl::Read(font)]),
+                row(
+                    t("Tamanho da fonte do terminal"),
+                    t("De 10 a 22 px."),
+                    vec![
+                        Ctl::Field {
+                            key: "terminalFontSize",
+                            text: current(s, top("terminalFontSize")),
+                            width: 72.,
+                            button: None,
+                        },
+                        Ctl::Read("px".to_string()),
+                    ],
+                ),
+                row(
+                    t("Estilo do cursor"),
+                    "",
+                    vec![pick(
+                        s,
+                        top("terminalCursorStyle"),
+                        &[
+                            ("block", t("Bloco")),
+                            ("bar", t("Barra")),
+                            ("underline", t("Sublinhado")),
+                        ],
+                    )],
+                ),
+                row(
+                    t("Limite do histórico"),
+                    "",
+                    vec![pick(
+                        s,
+                        top("terminalScrollback"),
+                        &[("2000", "2000"), ("5000", "5000"), ("10000", "10000")],
+                    )],
+                ),
+            ],
+        ),
+    ]
+}
+
+/// A folder button: `Abrir` runs `native_open_path`; dimmed when there is no folder to open.
+fn open_button(path: String, disabled: bool) -> Ctl {
+    Ctl::Button {
+        label: t("Abrir"),
+        act: act_run("native_open_path", json!({"path": path})),
+        enabled: !disabled,
+        danger: false,
+    }
+}
+
+fn advanced(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
+    let host = get_data(d, "host");
+    let data_dir = host["dataDir"].as_str().unwrap_or_default();
+    let auto_check = flag(s, top("appUpdateAutoCheck"));
+    let download_field = top("appUpdateAutoDownload");
+    // Like the React page, the download switch waits on the automatic check.
+    let download = row(
+        t("Baixar atualizações em segundo plano"),
+        t(
+            "A versão nova é baixada e instalada e espera você reiniciar. Se você não reiniciar, ela entra na próxima vez que abrir o app.",
+        ),
+        vec![Ctl::Switch {
+            on: flag(s, download_field),
+            change: auto_check.then(|| change(s, download_field, json!(!flag(s, download_field)))),
+        }],
+    );
+    vec![
+        group(
+            t("Sobre"),
+            vec![
+                switch_row(
+                    s,
+                    t("Procurar atualizações automaticamente"),
+                    t("Ao abrir o Sirus Code e a cada poucas horas."),
+                    top("appUpdateAutoCheck"),
+                ),
+                download,
+                switch_row(
+                    s,
+                    t("Mostrar o que há de novo depois de atualizar"),
+                    t("Uma vez, na primeira abertura de cada versão."),
+                    top("appUpdateWhatsNew"),
+                ),
+            ],
+        ),
+        group(
+            t("Diagnóstico"),
+            vec![
+                switch_row(
+                    s,
+                    t("Logs de desenvolvimento"),
+                    t("Salva contagens limitadas do ciclo de execução localmente. Prompts, output, paths e credenciais são excluídos."),
+                    top("developerLogs"),
+                ),
+                row(
+                    t("Abrir diretório de dados do Sirus Code"),
+                    host["dataDir"].as_str().unwrap_or_default(),
+                    vec![open_button(data_dir.to_string(), data_dir.is_empty())],
+                ),
+                row(
+                    t("Abrir pasta de logs"),
+                    "",
+                    vec![open_button(
+                        format!("{data_dir}/logs"),
+                        data_dir.is_empty() || !flag(s, top("developerLogs")),
+                    )],
+                ),
+                row(
+                    t("Restaurar layout da janela"),
+                    t("Restaura a barra lateral e as larguras dos painéis."),
+                    vec![Ctl::Button {
+                        label: t("Restaurar"),
+                        act: act_run("native_reset_layout", json!({})),
+                        enabled: true,
+                        danger: false,
+                    }],
+                ),
+                row(
+                    t("Componentes UI Arc"),
+                    t("Explore todos os 100 componentes gratuitos com exemplos locais."),
+                    vec![Ctl::Read(
+                        t("A galeria é feita de componentes React da janela web; esta janela nativa não a renderiza.")
+                            .to_string(),
+                    )],
+                ),
+                row(
+                    t("Funcionalidades experimentais"),
+                    "",
+                    vec![Ctl::Read(t("Em breve").to_string()), fixed(false)],
+                ),
+            ],
+        ),
+        group(
+            t("Restaurar preferências"),
+            // `save_settings` with only the default agent: the host fills every other field with its
+            // default (AppSettings is `serde(default)`), as the Tauri page does.
+            vec![row(
+                t("Restaurar configurações do Sirus Code"),
+                t("Restaurar preferências não apaga pastas de projetos. Requer confirmação."),
+                vec![confirm_button(
+t("Restaurar"),
+                act_run(
+                        "save_settings",
+                        json!({"settings": {"defaultAgent": s["defaultAgent"]}}),
+                    ),
+                )],
+            )],
+        ),
+    ]
+}
+
+/// The providers in the order of the registry, with their installs and the enable switch.
+fn providers(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
+    let agents = get_data(d, "agents");
+    let install = |id: &str| {
+        agents
+            .as_array()
+            .and_then(|items| items.iter().find(|item| item["id"].as_str() == Some(id)))
+    };
+    let disabled = strings(&s["disabledProviders"]);
+    let mut clis = Vec::new();
+    for &(id, name) in PROVIDER_LIST {
+        let found = install(id);
+        let installed = found.and_then(|item| item["installed"].as_bool()) == Some(true);
+        let status = match (installed, found.and_then(|item| item["version"].as_str())) {
+            (true, Some(version)) => tf("Instalado · {}", &[&version]),
+            (true, None) => t("Instalado").to_string(),
+            (false, _) => t("Não detectado").to_string(),
+        };
+        let path = found
+            .and_then(|item| item["path"].as_str())
+            .unwrap_or(t("Nenhum executável"));
+        let on = !has(&disabled, id);
+        let flipped = if on {
+            with(&disabled, id)
+        } else {
+            without(&disabled, id)
+        };
+        clis.push(row(
+            name,
+            status,
+            vec![
+                Ctl::Read(path.to_string()),
+                Ctl::Field {
+                    key: key_of(format!("providerPath:{id}")),
+                    text: s["providerPaths"][id]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string(),
+                    width: 200.,
+                    button: None,
+                },
+                Ctl::Switch {
+                    on,
+                    change: Some(Act::Save {
+                        key: "disabledProviders",
+                        value: json!(flipped),
+                    }),
+                },
+            ],
+        ));
+    }
+
+    // Up to two providers in the sidebar's usage rings (`USAGE_PROVIDER_IDS`, registry order).
+    const USAGE: &[&str] = &["codex", "claude", "cursor", "opencode"];
+    const SIDEBAR_USAGE_LIMIT: usize = 2;
+    let chosen = strings(&s["sidebarUsageProviders"]);
+    let full = chosen.len() >= SIDEBAR_USAGE_LIMIT;
+    let mut usage = Vec::new();
+    for &(id, name) in PROVIDER_LIST.iter().filter(|(id, _)| USAGE.contains(id)) {
+        let on = has(&chosen, id);
+        let installed = install(id).and_then(|item| item["installed"].as_bool()) == Some(true);
+        let blocked = !on && (full || !installed);
+        let about = if !installed {
+            t("Não instalado")
+        } else if !on && full {
+            t("No máximo dois provedores. Desligue um para escolher outro.")
+        } else {
+            ""
+        };
+        let next = if on {
+            without(&chosen, id)
+        } else {
+            let mut picked = with(&chosen, id);
+            picked.truncate(SIDEBAR_USAGE_LIMIT);
+            picked
+        };
+        usage.push(row(
+            name,
+            about,
+            vec![Ctl::Switch {
+                on,
+                change: (!blocked).then(|| Act::Save {
+                    key: "sidebarUsageProviders",
+                    value: json!(next),
+                }),
+            }],
+        ));
+    }
+    usage.push(row(
+        "",
+        t("Mostra um anel de consumo de até dois provedores no rodapé da barra lateral."),
+        Vec::new(),
+    ));
+
+    vec![
+        group("CLIs", clis),
+        group(t("Consumo na barra lateral"), usage),
+        group(
+            t("Avançado"),
+            vec![row(
+                t("Manter agentes prontos"),
+                t(
+                    "Quantas conversas terminadas mantêm o agente aberto para responder mais rápido na próxima mensagem. Ficam até 30 minutos paradas; as paradas há mais tempo fecham primeiro.",
+                ),
+                vec![pick(
+                    s,
+                    top("keepIdleAgents"),
+                    &[
+                        ("0", t("Nenhuma")),
+                        ("1", "1"),
+                        ("2", "2"),
+                        ("3", "3"),
+                        ("5", "5"),
+                        ("16", t("Todas")),
+                    ],
+                )],
+            )],
+        ),
+        group(
+            t("Atualizações"),
+            vec![switch_row(
+                s,
+                t("Verificar atualizações das CLIs"),
+                t(
+                    "Verifica em segundo plano se Codex, Claude e outras CLIs têm versões mais novas.",
+                ),
+                top("enableProviderUpdateChecks"),
+            )],
+        ),
+    ]
+}
+
+/// The catalog's name for a skill's origin, as `skillSections` groups it.
+fn section_title(key: &str) -> String {
+    match key {
+        "shared" => t("Skills compartilhadas").to_string(),
+        "project" => t("Skills do projeto").to_string(),
+        origin => origin_label(origin),
+    }
+}
+
+/// The section a skill belongs to: project first, then shared, then its one origin.
+fn section_of(skill: &Value) -> String {
+    let sources = skill["sources"].as_array().cloned().unwrap_or_default();
+    if sources
+        .iter()
+        .any(|source| source["scope"].as_str() == Some("project"))
+    {
+        "project".to_string()
+    } else if sources.len() > 1 {
+        "shared".to_string()
+    } else {
+        sources
+            .first()
+            .and_then(|source| source["origin"].as_str())
+            .unwrap_or("sirus")
+            .to_string()
+    }
+}
+
+fn skill_row(skill: &Value, disabled: &[String]) -> Row {
+    let name = skill["name"].as_str().unwrap_or_default();
+    let description = skill["description"]
+        .as_str()
+        .filter(|text| !text.is_empty())
+        .unwrap_or(t("Sem descrição informada."));
+    let mut origins: Vec<String> = Vec::new();
+    for source in skill["sources"].as_array().into_iter().flatten() {
+        let label = origin_label(source["origin"].as_str().unwrap_or_default());
+        if !origins.contains(&label) {
+            origins.push(label);
+        }
+    }
+    let on = !has(disabled, name);
+    let mut flipped = if on {
+        with(disabled, name)
+    } else {
+        without(disabled, name)
+    };
+    flipped.sort();
+    row(
+        name,
+        tf(
+            "{} · Encontrada em: {}",
+            &[&description, &origins.join(", ")],
+        ),
+        vec![Ctl::Switch {
+            on,
+            change: Some(Act::Save {
+                key: "disabledSkills",
+                value: json!(flipped),
+            }),
+        }],
+    )
+}
+
+fn skills(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
+    let catalog = &get_data(d, "skills")["catalog"];
+    let disabled = strings(&s["disabledSkills"]);
+    let all = catalog["skills"].as_array().cloned().unwrap_or_default();
+    let enabled = all
+        .iter()
+        .filter(|skill| !has(&disabled, skill["name"].as_str().unwrap_or_default()))
+        .count();
+    let mut out = vec![
+        group(
+            t("Skills portáteis"),
+            vec![
+                row(
+                    t("Pasta de skills do Sirus Code"),
+                    t(
+                        "Adicione pastas com SKILL.md aqui. Skills invocadas funcionam entre provedores; a cópia do próprio provedor tem prioridade.",
+                    ),
+                    vec![Ctl::Read(
+                        catalog["portableDir"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_string(),
+                    )],
+                ),
+                row(
+                    "",
+                    tf(
+                        "{} de {} skills ativas · Em todas as origens",
+                        &[&enabled, &all.len()],
+                    ),
+                    Vec::new(),
+                ),
+            ],
+        ),
+        note(t(
+            "Os nomes e ícones dos provedores indicam onde cada cópia foi encontrada. Skills invocadas ficam disponíveis entre provedores. Os switches controlam o catálogo do Sirus Code; não alteram a descoberta nas CLIs externas.",
+        )),
+    ];
+    if catalog["truncated"].as_bool() == Some(true) {
+        out.push(note(t(
+            "A busca atingiu seu limite. Algumas skills podem não aparecer.",
+        )));
+    }
+    if all.is_empty() {
+        out.push(group(
+            "",
+            vec![row(
+                t("Nenhuma skill encontrada"),
+                t("Adicione uma pasta com SKILL.md no diretório acima ou na pasta de skills de um provedor e atualize."),
+                Vec::new(),
+            )],
+        ));
+        return out;
+    }
+    // Sections: project first, then shared, then each origin in name order (`skillSections`).
+    let rank = |key: &str| match key {
+        "project" => 0,
+        "shared" => 1,
+        _ => 2,
+    };
+    let mut tagged: Vec<(String, &Value)> =
+        all.iter().map(|skill| (section_of(skill), skill)).collect();
+    tagged.sort_by_key(|(key, _)| (rank(key.as_str()), key.clone()));
+    let mut keys: Vec<String> = tagged.iter().map(|(key, _)| key.clone()).collect();
+    keys.dedup();
+    for key in keys {
+        let rows: Vec<Row> = tagged
+            .iter()
+            .filter(|(section, _)| *section == key)
+            .map(|(_, skill)| skill_row(skill, &disabled))
+            .collect();
+        out.push(group(section_title(&key), rows));
+    }
+    out
+}
+
+/// The catalog as `src/lib/connectors-catalog.ts` lists it: (id, name, category, description, url,
+/// auth). Each service's official remote MCP server; GitHub signs in with a token, Context7 is open.
+const CATALOG: &[(&str, &str, &str, &str, &str, &str)] = &[
+    (
+        "supabase",
+        "Supabase",
+        "popular",
+        "Consultar Postgres, gerenciar projetos, funções e storage",
+        "https://mcp.supabase.com/mcp",
+        "oauth",
+    ),
+    (
+        "linear",
+        "Linear",
+        "popular",
+        "Encontrar, criar e atualizar issues e projetos",
+        "https://mcp.linear.app/mcp",
+        "oauth",
+    ),
+    (
+        "notion",
+        "Notion",
+        "popular",
+        "Buscar, ler e editar páginas e bancos",
+        "https://mcp.notion.com/mcp",
+        "oauth",
+    ),
+    (
+        "github",
+        "GitHub",
+        "popular",
+        "Issues, pull requests e repositórios (token)",
+        "https://api.githubcopilot.com/mcp/",
+        "token",
+    ),
+    (
+        "stripe",
+        "Stripe",
+        "popular",
+        "Clientes, pagamentos e assinaturas",
+        "https://mcp.stripe.com",
+        "oauth",
+    ),
+    (
+        "vercel",
+        "Vercel",
+        "popular",
+        "Projetos, deploys e logs",
+        "https://mcp.vercel.com",
+        "oauth",
+    ),
+    (
+        "sentry",
+        "Sentry",
+        "popular",
+        "Investigar erros, issues e traces",
+        "https://mcp.sentry.dev/mcp",
+        "oauth",
+    ),
+    (
+        "cloudflare",
+        "Cloudflare",
+        "developer",
+        "Workers, KV, R2 e D1",
+        "https://mcp.cloudflare.com/mcp",
+        "oauth",
+    ),
+    (
+        "neon",
+        "Neon",
+        "developer",
+        "Projetos e branches de Postgres serverless",
+        "https://mcp.neon.tech/mcp",
+        "oauth",
+    ),
+    (
+        "posthog",
+        "PostHog",
+        "developer",
+        "Analytics de produto, flags e erros",
+        "https://mcp.posthog.com/mcp",
+        "oauth",
+    ),
+    (
+        "netlify",
+        "Netlify",
+        "developer",
+        "Criar, publicar e gerenciar sites",
+        "https://netlify-mcp.netlify.app/mcp",
+        "oauth",
+    ),
+    (
+        "railway",
+        "Railway",
+        "developer",
+        "Fazer deploy e gerenciar serviços",
+        "https://mcp.railway.com",
+        "oauth",
+    ),
+    (
+        "prisma",
+        "Prisma",
+        "developer",
+        "Bancos Prisma Postgres",
+        "https://mcp.prisma.io/mcp",
+        "oauth",
+    ),
+    (
+        "figma",
+        "Figma",
+        "developer",
+        "Designs, componentes e variáveis",
+        "https://mcp.figma.com/mcp",
+        "oauth",
+    ),
+    (
+        "huggingface",
+        "Hugging Face",
+        "developer",
+        "Modelos, datasets e Spaces",
+        "https://huggingface.co/mcp",
+        "oauth",
+    ),
+    (
+        "context7",
+        "Context7",
+        "developer",
+        "Documentação atualizada de bibliotecas",
+        "https://mcp.context7.com/mcp",
+        "none",
+    ),
+    (
+        "atlassian",
+        "Atlassian",
+        "productivity",
+        "Issues do Jira e páginas do Confluence",
+        "https://mcp.atlassian.com/v1/mcp",
+        "oauth",
+    ),
+    (
+        "asana",
+        "Asana",
+        "productivity",
+        "Tarefas, projetos e metas",
+        "https://mcp.asana.com/mcp",
+        "oauth",
+    ),
+    (
+        "todoist",
+        "Todoist",
+        "productivity",
+        "Encontrar, adicionar e concluir tarefas",
+        "https://ai.todoist.net/mcp",
+        "oauth",
+    ),
+    (
+        "monday",
+        "monday.com",
+        "productivity",
+        "Quadros, itens e atualizações",
+        "https://mcp.monday.com/mcp",
+        "oauth",
+    ),
+    (
+        "canva",
+        "Canva",
+        "productivity",
+        "Designs e materiais da marca",
+        "https://mcp.canva.com/mcp",
+        "oauth",
+    ),
+    (
+        "intercom",
+        "Intercom",
+        "productivity",
+        "Conversas e contatos",
+        "https://mcp.intercom.com/mcp",
+        "oauth",
+    ),
+    (
+        "webflow",
+        "Webflow",
+        "productivity",
+        "Sites, páginas e CMS",
+        "https://mcp.webflow.com/mcp",
+        "oauth",
+    ),
+    (
+        "wix",
+        "Wix",
+        "productivity",
+        "Sites, lojas e agendamentos",
+        "https://mcp.wix.com/mcp",
+        "oauth",
+    ),
+    (
+        "paypal",
+        "PayPal",
+        "productivity",
+        "Faturas, pedidos e pagamentos",
+        "https://mcp.paypal.com/mcp",
+        "oauth",
+    ),
+    (
+        "square",
+        "Square",
+        "productivity",
+        "Pagamentos, catálogo e pedidos",
+        "https://mcp.squareup.com/mcp",
+        "oauth",
+    ),
+];
+
+/// The agents that take connectors (`CONNECTOR_AGENTS` in `src/lib/connectors.ts`).
+const CONNECTOR_AGENTS: &[&str] = &["claude", "codex", "opencode", "cursor", "devin", "hermes"];
+
+/// The catalog's category sections, in order.
+const CONNECTOR_GROUPS: &[(&str, &str)] = &[
+    ("popular", "Populares"),
+    ("developer", "Ferramentas de desenvolvimento"),
+    ("productivity", "Produtividade"),
+];
+
+fn catalog_desc(id: &str) -> Option<&'static str> {
+    CATALOG
+        .iter()
+        .find(|entry| entry.0 == id)
+        .map(|entry| entry.3)
+}
+
+/// The host of a connector's address, without its path or query (which can hold secrets).
+fn host_of(url: &str) -> String {
+    url.split("://")
+        .last()
+        .unwrap_or(url)
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// The agents a new connector is given: the installed ones that take connectors, else Claude.
+fn connector_agents(d: &HashMap<&'static str, Value>) -> Vec<String> {
+    let installed: Vec<String> = get_data(d, "agents")
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|agent| yes(&agent["installed"]))
+        .filter_map(|agent| agent["id"].as_str())
+        .filter(|id| CONNECTOR_AGENTS.contains(id))
+        .map(str::to_string)
+        .collect();
+    if installed.is_empty() {
+        vec!["claude".to_string()]
+    } else {
+        installed
+    }
+}
+
+/// The saved connectors with `connector` appended.
+fn connectors_with(list: &[Value], connector: Value) -> Value {
+    let mut next = list.to_vec();
+    next.push(connector);
+    Value::Array(next)
+}
+
+fn connectors(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
+    let list = s["connectors"].as_array().cloned().unwrap_or_default();
+    let states = get_data(d, "connectors");
+    // The sign-in opens the browser through the desktop app; a headless host cannot do it.
+    let browser = get_data(d, "host")["capabilities"]["headless"].as_bool() == Some(false);
+    let mut out = Vec::new();
+    if !list.is_empty() {
+        let mut rows = Vec::new();
+        for (index, connector) in list.iter().enumerate() {
+            let id = connector["id"].as_str().unwrap_or_default();
+            let enabled = connector["enabled"].as_bool().unwrap_or(true);
+            let auth = connector["auth"].as_str().unwrap_or("oauth");
+            let detail = connector["catalogId"]
+                .as_str()
+                .and_then(catalog_desc)
+                .map_or_else(
+                    || host_of(connector["url"].as_str().unwrap_or_default()),
+                    |desc| t(desc).to_string(),
+                );
+            let project = connector["projectId"].as_str().map_or_else(
+                || t("Todos os projetos").to_string(),
+                |project| {
+                    tf(
+                        "Projeto {}",
+                        &[&project.chars().take(8).collect::<String>()],
+                    )
+                },
+            );
+            let state = states
+                .as_array()
+                .and_then(|items| items.iter().find(|item| item["id"].as_str() == Some(id)))
+                .and_then(|item| item["state"].as_str())
+                .unwrap_or_default();
+            let connected = state == "connected";
+            let mut controls = Vec::new();
+            match auth {
+                "token" => {
+                    if connected {
+                        controls.push(Ctl::Read(t("Conectado").to_string()));
+                    }
+                    // The token is typed into a masked field and sent with `setToken`; it is never shown.
+                    controls.push(Ctl::Secret {
+                        key: key_of(format!("connector-token:{id}")),
+                        label: if connected {
+                            t("Trocar token")
+                        } else {
+                            t("Colar token")
+                        },
+                    });
+                }
+                "none" => controls.push(Ctl::Read(t("Pronto").to_string())),
+                _ => match state {
+                    "connected" => controls.push(Ctl::Read(t("Conectado").to_string())),
+                    "expired" | "signedOut" if browser => controls.push(Ctl::Button {
+                        label: if state == "expired" {
+                            t("Entrar de novo")
+                        } else {
+                            t("Entrar")
+                        },
+                        act: act_run(
+                            "connector_action",
+                            json!({"action": {"type": "signIn", "id": id}}),
+                        ),
+                        enabled: true,
+                        danger: false,
+                    }),
+                    "expired" | "signedOut" => controls.push(Ctl::Read(
+                        t("Entrar só pelo app Mac: o login abre o navegador.").to_string(),
+                    )),
+                    _ => {}
+                },
+            }
+            if connected {
+                controls.push(Ctl::Button {
+                    label: t("Sair"),
+                    act: act_run(
+                        "connector_action",
+                        json!({"action": {"type": "signOut", "id": id}}),
+                    ),
+                    enabled: true,
+                    danger: false,
+                });
+            }
+            controls.push(Ctl::Field {
+                key: key_of(format!("connector-name:{index}")),
+                text: connector["name"].as_str().unwrap_or_default().to_string(),
+                width: 150.,
+                button: None,
+            });
+            if connector["catalogId"].is_null() {
+                controls.push(Ctl::Field {
+                    key: key_of(format!("connector-url:{index}")),
+                    text: connector["url"].as_str().unwrap_or_default().to_string(),
+                    width: 220.,
+                    button: None,
+                });
+            }
+            let mut without_it = list.clone();
+            without_it.remove(index);
+            controls.push(confirm_button(
+                t("Remover"),
+                Act::Save {
+                    key: "connectors",
+                    value: Value::Array(without_it),
+                },
+            ));
+            let mut next = list.clone();
+            next[index]["enabled"] = json!(!enabled);
+            controls.push(Ctl::Switch {
+                on: enabled,
+                change: Some(Act::Save {
+                    key: "connectors",
+                    value: Value::Array(next),
+                }),
+            });
+            rows.push(row(
+                connector["name"].as_str().unwrap_or_default(),
+                format!("{detail} · {project}"),
+                controls,
+            ));
+        }
+        out.push(group(t("Conectados"), rows));
+    }
+    for (category, title) in CONNECTOR_GROUPS {
+        let rows: Vec<Row> = CATALOG
+            .iter()
+            .filter(|entry| entry.2 == *category)
+            .map(|&(id, name, _, desc, url, auth)| {
+                let added = list
+                    .iter()
+                    .any(|connector| connector["catalogId"].as_str() == Some(id));
+                let control = if added {
+                    Ctl::Read(t("Adicionado").to_string())
+                } else {
+                    // Saved as the Tauri page saves it; the sign-in is then started from the row.
+                    let value = connectors_with(
+                        &list,
+                        json!({
+                            "id": id,
+                            "catalogId": id,
+                            "name": name,
+                            "url": url,
+                            "auth": auth,
+                            "agents": connector_agents(d),
+                            "enabled": true,
+                        }),
+                    );
+                    Ctl::Button {
+                        label: t("Conectar"),
+                        act: Act::Save {
+                            key: "connectors",
+                            value,
+                        },
+                        enabled: true,
+                        danger: false,
+                    }
+                };
+                row(name, t(desc), vec![control])
+            })
+            .collect();
+        out.push(group(t(title), rows));
+    }
+    out.push(note(
+        t("Conversas novas recebem os conectores daqui. Os conectores de um projeto só chegam às conversas dele. Grok, Antigravity, Droid e Pi ainda não aceitam conectores."),
+    ));
+    out
+}
+
+fn computer(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
+    let c = get_data(d, "computer");
+    let shortcut = current(s, top("windowSnapShortcut"));
+    let shortcut_now = match shortcut.as_str() {
+        "optionShiftS" => "⌥⇧S",
+        "controlShiftS" => "⌃⇧S",
+        _ => "⌃⌥⌘S",
+    };
+    let snap_on = flag(s, top("windowSnapEnabled"));
+    let mut window = vec![
+        switch_row(
+            s,
+            t("Atalho global de captura"),
+            t(
+                "Em qualquer app, o atalho captura a janela da frente e anexa à conversa aberta no Sirus Code. Nada é enviado.",
+            ),
+            top("windowSnapEnabled"),
+        ),
+        row(
+            t("Atalho"),
+            t("Se outro app já usa a combinação, escolha outra."),
+            vec![if snap_on {
+                pick(
+                    s,
+                    top("windowSnapShortcut"),
+                    &[
+                        ("controlOptionCommandS", "⌃⌥⌘S"),
+                        ("optionShiftS", "⌥⇧S"),
+                        ("controlShiftS", "⌃⇧S"),
+                    ],
+                )
+            } else {
+                Ctl::Read(shortcut_now.to_string())
+            }],
+        ),
+    ];
+    if snap_on && !yes(&c["screenRecording"]) {
+        window.push(permission(
+            t("Gravação de Tela"),
+            t("Necessária para capturar a janela de outro app."),
+            false,
+            "requestScreenRecording",
+            "openScreenRecordingSettings",
+        ));
+    }
+
+    let accessibility = yes(&c["accessibility"]);
+    let screen = yes(&c["screenRecording"]);
+    let mut out = vec![
+        group(t("Captura de janela"), window),
+        group(
+            t("Computador"),
+            vec![switch_row(
+                s,
+                t("Permitir que agentes usem o computador"),
+                t(
+                    "Adiciona as ferramentas de computador aos próximos turnos. Cada app ainda precisa da sua aprovação uma vez por sessão.",
+                ),
+                top("computerUseEnabled"),
+            )],
+        ),
+        group(
+            t("Permissões do macOS"),
+            vec![
+                permission(
+                    t("Acessibilidade"),
+                    t("Ler os controles dos apps e enviar cliques e teclas."),
+                    accessibility,
+                    "requestAccessibility",
+                    "openAccessibilitySettings",
+                ),
+                permission(
+                    t("Gravação de Tela"),
+                    t("Capturas da janela do app aprovado."),
+                    screen,
+                    "requestScreenRecording",
+                    "openScreenRecordingSettings",
+                ),
+            ],
+        ),
+    ];
+    if !(accessibility && screen) {
+        out.push(note(
+            t("Depois de permitir nos Ajustes do Sistema, feche e reabra o Sirus Code se o status não atualizar."),
+        ));
+    }
+    out.push(group(
+        t("Segurança"),
+        vec![
+            row(
+                t("Aprovação por app"),
+                t("O agente só vê e usa os apps que você liberar, naquela sessão. Nada fica guardado depois que você fecha o app."),
+                Vec::new(),
+            ),
+            row(
+                t("Pare quando quiser"),
+                t("Aperte Esc ou Parar no indicador flutuante para revogar todos os apps de uma vez."),
+                Vec::new(),
+            ),
+            row(
+                t("Planejamento é só leitura"),
+                t("No modo planejamento o agente pode olhar, mas não clicar nem digitar."),
+                Vec::new(),
+            ),
+        ],
+    ));
+
+    let grants = c["grants"].as_array().cloned().unwrap_or_default();
+    let mut granted: Vec<Row> = grants
+        .iter()
+        .map(|grant| {
+            row(
+                grant["app"].as_str().unwrap_or_default(),
+                "",
+                vec![Ctl::Button {
+                    label: t("Revogar"),
+                    act: computer_act(json!({
+                        "type": "revoke",
+                        "sessionId": grant["sessionId"],
+                        "bundleId": grant["bundleId"],
+                    })),
+                    enabled: true,
+                    danger: false,
+                }],
+            )
+        })
+        .collect();
+    if granted.is_empty() {
+        granted.push(row("", t("Nenhum app liberado no momento."), Vec::new()));
+    } else {
+        granted.push(row(
+            "",
+            "",
+            vec![Ctl::Button {
+                label: t("Parar e revogar tudo"),
+                act: computer_act(json!({"type": "stop"})),
+                enabled: true,
+                danger: true,
+            }],
+        ));
+    }
+    out.push(group(t("Liberados agora"), granted));
+
+    let mut blocked = vec![row(
+        "",
+        t(
+            "Gerenciadores de senha, segurança do sistema, terminais e ferramentas de automação nunca podem ser controlados.",
+        ),
+        Vec::new(),
+    )];
+    blocked.extend(
+        strings(&c["blocked"])
+            .iter()
+            .map(|name| row(name.as_str(), "", Vec::new())),
+    );
+    out.push(group(t("Sempre bloqueados"), blocked));
+
+    let history: Vec<&Value> = c["history"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|entry| entry["app"].as_str().is_some_and(|app| !app.is_empty()))
+        .take(30)
+        .collect();
+    let history_rows: Vec<Row> = if history.is_empty() {
+        vec![row("", t("Nenhuma ação ainda."), Vec::new())]
+    } else {
+        history
+            .into_iter()
+            .map(|entry| {
+                let action = entry["action"].as_str().unwrap_or_default();
+                row(
+                    format!("{} · {action}", entry["app"].as_str().unwrap_or_default()),
+                    local_when(entry["at"].as_str().unwrap_or_default(), "%H:%M:%S"),
+                    vec![Ctl::Read(
+                        match entry["outcome"].as_str().unwrap_or_default() {
+                            "done" => t("feito"),
+                            "failed" => t("falhou"),
+                            "allowed" => t("liberado"),
+                            "declined" => t("recusado"),
+                            "blocked" => t("bloqueado"),
+                            other => other,
+                        }
+                        .to_string(),
+                    )],
+                )
+            })
+            .collect()
+    };
+    out.push(group(t("Ações recentes"), history_rows));
+    out
+}
+
+/// A permission row: its state, or the two buttons that ask for it or open its System Settings pane.
+fn permission(
+    title: &'static str,
+    about: &'static str,
+    granted: bool,
+    request: &'static str,
+    settings_pane: &'static str,
+) -> Row {
+    let controls = if granted {
+        vec![Ctl::Read(t("Permitido").to_string())]
+    } else {
+        vec![
+            Ctl::Button {
+                label: t("Permitir"),
+                act: computer_act(json!({"type": request})),
+                enabled: true,
+                danger: false,
+            },
+            Ctl::Button {
+                label: t("Abrir Ajustes do Sistema"),
+                act: computer_act(json!({"type": settings_pane})),
+                enabled: true,
+                danger: false,
+            },
+        ]
+    };
+    row(title, about, controls)
+}
+
+fn connections(d: &HashMap<&'static str, Value>) -> Vec<Group> {
+    let r = get_data(d, "remote");
+    let enabled = yes(&r["enabled"]);
+    let address = r["urls"]
+        .as_array()
+        .and_then(|urls| urls.first())
+        .and_then(Value::as_str);
+    let https = &r["https"];
+    let https_url = https["url"].as_str();
+    let https_setup = https["setupUrl"].as_str();
+
+    let mut access = vec![row(
+        t("Permitir outros aparelhos"),
+        t(
+            "Só aparelhos na sua rede Tailscale alcançam este Mac, e cada um precisa de um QR code desta página.",
+        ),
+        vec![Ctl::Switch {
+            on: enabled,
+            change: Some(remote_act(
+                json!({"type": "setEnabled", "enabled": !enabled}),
+            )),
+        }],
+    )];
+    if enabled {
+        let keep_awake = yes(&r["keepAwake"]);
+        access.push(row(
+            t("Manter o Mac acordado para o celular"),
+            t("Na tomada, o Mac não entra em repouso e seus aparelhos sempre o alcançam. A tela continua apagando e bloqueando; na bateria, o repouso funciona normalmente. Fechar a tampa ainda põe o Mac em repouso."),
+            vec![Ctl::Switch {
+                on: keep_awake,
+                change: Some(remote_act(
+                    json!({"type": "setKeepAwake", "enabled": !keep_awake}),
+                )),
+            }],
+        ));
+        match address {
+            Some(url) => access.push(row(
+                t("Endereço"),
+                t("Onde seus aparelhos encontram este Mac na Tailscale."),
+                vec![Ctl::Read(url.to_string())],
+            )),
+            None => access.push(row(
+                t("A Tailscale não está conectada"),
+                t("Instale a Tailscale neste Mac e no celular e entre com a mesma conta. É grátis para uso pessoal."),
+                vec![Ctl::Button {
+                    label: t("Verificar de novo"),
+                    act: remote_act(json!({"type": "status"})),
+                    enabled: true,
+                    danger: false,
+                }],
+            )),
+        }
+        if yes(&https["available"]) {
+            access.push(if https_url.is_some() {
+                row(
+                    t("Endereço seguro (HTTPS)"),
+                    t("Ligado. Os novos QR codes abrem o endereço seguro; aparelhos pareados antes precisam de um novo código por lá."),
+                    vec![Ctl::Button {
+                        label: t("Desativar"),
+                        act: remote_act(json!({"type": "disableHttps"})),
+                        enabled: true,
+                        danger: true,
+                    }],
+                )
+            } else {
+                row(
+                    t("Endereço seguro (HTTPS)"),
+                    t("Necessário para instalar o Sirus como app no celular e receber alertas. A Tailscale fornece o certificado."),
+                    vec![Ctl::Button {
+                        label: t("Ativar HTTPS"),
+                        act: remote_act(json!({"type": "enableHttps"})),
+                        enabled: true,
+                        danger: false,
+                    }],
+                )
+            });
+        }
+        if https_setup.is_some() && https_url.is_none() {
+            access.push(row(
+                t("Permita HTTPS na sua tailnet"),
+                t("Uma permissão única na sua conta da Tailscale. Abra a página, confirme e volte para verificar de novo."),
+                vec![
+                    Ctl::Button {
+                        label: t("Abrir página"),
+                        act: remote_act(json!({"type": "openHttpsSetup"})),
+                        enabled: true,
+                        danger: false,
+                    },
+                    Ctl::Button {
+                        label: t("Verificar de novo"),
+                        act: remote_act(json!({"type": "enableHttps"})),
+                        enabled: true,
+                        danger: false,
+                    },
+                ],
+            ));
+        }
+    }
+    let mut out = vec![group(t("Acesso remoto"), access)];
+    let error = r["error"]
+        .as_str()
+        .or_else(|| https["error"].as_str().filter(|_| https_setup.is_none()));
+    if let Some(text) = error {
+        out.push(note(text));
+    }
+
+    if enabled && address.is_some() {
+        let pairing = get_data(d, "pairing");
+        let mut rows = vec![row(
+            t("Celular ou outro computador"),
+            t(
+                "Mostra um código de uso único para conectar o app do Sirus no iPhone ou um navegador da sua Tailscale.",
+            ),
+            vec![Ctl::Button {
+                label: t("Gerar código"),
+                act: act_run("native_pair", json!({})),
+                enabled: true,
+                danger: false,
+            }],
+        )];
+        if let (Some(code), Some(link)) = (pairing["code"].as_str(), pairing["qr"].as_str()) {
+            rows.push(row(
+                t("Código"),
+                t("Digite no navegador da Tailscale ou no app do Sirus. Ele vale por pouco tempo."),
+                vec![Ctl::Read(spaced_code(code))],
+            ));
+            rows.push(row(
+                t("Endereço do QR code"),
+                t("O QR code do app aponta para este endereço."),
+                vec![Ctl::Read(link.to_string())],
+            ));
+        }
+        out.push(group(t("Conectar um aparelho"), rows));
+    }
+
+    let devices = r["devices"].as_array().cloned().unwrap_or_default();
+    let mut device_rows: Vec<Row> = Vec::new();
+    for device in &devices {
+        let id = device["id"].as_str().unwrap_or_default();
+        let created = device["createdAt"].as_str().unwrap_or_default();
+        let mut about = match device["lastSeen"].as_str() {
+            Some(seen) => tf(
+                "Adicionado em {} · último uso {}",
+                &[
+                    &local_when(created, t("%d/%m/%Y")),
+                    &local_when(seen, t("%d/%m/%Y %H:%M")),
+                ],
+            ),
+            None => tf("Adicionado em {}", &[&local_when(created, t("%d/%m/%Y"))]),
+        };
+        let push = yes(&device["push"]);
+        if push {
+            about.push_str(t(" · alertas ligados"));
+        }
+        let mut controls = vec![Ctl::Field {
+            key: key_of(format!("device-rename:{id}")),
+            text: device["name"].as_str().unwrap_or_default().to_string(),
+            width: 160.,
+            button: Some(t("Renomear")),
+        }];
+        if push {
+            controls.push(Ctl::Button {
+                label: t("Enviar alerta de teste"),
+                act: remote_act(json!({"type": "testPush", "deviceId": id})),
+                enabled: true,
+                danger: false,
+            });
+        }
+        controls.push(Ctl::Button {
+            label: t("Remover"),
+            act: remote_act(json!({"type": "revoke", "deviceId": id})),
+            enabled: true,
+            danger: true,
+        });
+        device_rows.push(row(
+            device["name"].as_str().unwrap_or_default(),
+            about,
+            controls,
+        ));
+    }
+    if device_rows.is_empty() {
+        device_rows.push(row("", t("Nenhum aparelho conectado ainda."), Vec::new()));
+    }
+    out.push(group(t("Aparelhos"), device_rows));
+    out.push(group(
+        t("O que um aparelho pode fazer"),
+        vec![row(
+            "",
+            t("Um aparelho conectado pode fazer o que esta janela faz: abrir sessões, enviar mensagens, aprovar ações, fazer commit e push. Seletores de arquivo, ditado e controle do computador ficam só no Mac. Remova o aparelho que não usar mais."),
+            Vec::new(),
+        )],
+    ));
+    out
+}
+
+// Text edits and the typography, effects, background, sidebar and Dock groups.
+
+/// A key made at run time (a provider, a connector's row, a device), interned so it is `'static`
+/// as `edit` takes it. The set is small: one entry per provider, connector row and device.
+fn key_of(text: String) -> &'static str {
+    static KEYS: Mutex<BTreeSet<&'static str>> = Mutex::new(BTreeSet::new());
+    let mut keys = KEYS.lock().unwrap_or_else(|poison| poison.into_inner());
+    if let Some(known) = keys.get(text.as_str()) {
+        return *known;
+    }
+    let leaked: &'static str = Box::leak(text.into_boxed_str());
+    keys.insert(leaked);
+    leaked
+}
+
+/// A six-digit pairing code written as "123 456".
+fn spaced_code(code: &str) -> String {
+    if code.len() == 6 {
+        format!("{} {}", &code[..3], &code[3..])
+    } else {
+        code.to_string()
+    }
+}
+
+/// The change a finished text edit makes, from the key `edit` started and the text typed. None
+/// when the text is not a value that key takes (the main app keeps the field open then).
+pub fn commit(settings: &Value, key: &str, text: &str) -> Option<Commit> {
+    let text = text.trim();
+    if let Some(id) = key.strip_prefix("providerPath:") {
+        // An empty path returns the provider to automatic detection.
+        let mut paths = settings["providerPaths"]
+            .as_object()
+            .cloned()
+            .unwrap_or_default();
+        if text.is_empty() {
+            paths.remove(id);
+        } else {
+            paths.insert(id.to_string(), json!(text));
+        }
+        return Some(Commit::Save {
+            key: "providerPaths",
+            value: Value::Object(paths),
+        });
+    }
+    // A pasted token goes to the host with `setToken`; it is not saved in the settings.
+    if let Some(id) = key.strip_prefix("connector-token:") {
+        if text.is_empty() {
+            return None;
+        }
+        return Some(Commit::Run {
+            cmd: "connector_action",
+            args: json!({"action": {"type": "setToken", "id": id, "token": text}}),
+        });
+    }
+    if let Some(rest) = key.strip_prefix("connector-") {
+        let (field, index) = rest.split_once(':')?;
+        let field = match field {
+            "name" => "name",
+            "url" => "url",
+            _ => return None,
+        };
+        if text.is_empty() {
+            return None;
+        }
+        let mut list = settings["connectors"].as_array().cloned()?;
+        list.get_mut(index.parse::<usize>().ok()?)?[field] = json!(text);
+        return Some(Commit::Save {
+            key: "connectors",
+            value: Value::Array(list),
+        });
+    }
+    if let Some(device) = key.strip_prefix("device-rename:") {
+        if text.is_empty() {
+            return None;
+        }
+        return Some(Commit::Run {
+            cmd: "remote_action",
+            args: json!({"action": {"type": "rename", "deviceId": device, "name": text}}),
+        });
+    }
+    match key {
+        "worktreeBasePath" => Some(Commit::Save {
+            key: "worktreeBasePath",
+            value: if text.is_empty() {
+                Value::Null
+            } else {
+                json!(text)
+            },
+        }),
+        "worktreeBranchPattern" => (!text.is_empty()).then(|| Commit::Save {
+            key: "worktreeBranchPattern",
+            value: json!(text),
+        }),
+        _ => {
+            // Numeric fields, with the ranges of the React controls.
+            const NUMBERS: &[(&str, i64, i64)] = &[
+                ("terminalFontSize", 10, 22),
+                ("codeFontSize", 10, 22),
+                ("uiFontSize", 11, 18),
+                ("chatBackgroundEmptyVisibility", 0, 100),
+                ("chatBackgroundSessionVisibility", 0, 100),
+            ];
+            let &(name, low, high) = NUMBERS.iter().find(|(name, _, _)| *name == key)?;
+            let number: i64 = text.parse().ok()?;
+            (low..=high).contains(&number).then(|| Commit::Save {
+                key: name,
+                value: json!(number),
+            })
+        }
+    }
+}
+
+const UI_FONT_OPTIONS: &[(&str, &str)] = &[
+    ("inter", "Inter"),
+    ("geist", "Geist"),
+    ("dmSans", "DM Sans"),
+    ("plexSans", "IBM Plex Sans"),
+    ("humanist", "Humanist"),
+    ("helvetica", "Helvetica"),
+];
+
+const MONO_FONT_OPTIONS: &[(&str, &str)] = &[
+    ("plexMono", "IBM Plex Mono"),
+    ("jetbrains", "JetBrains Mono"),
+    ("fira", "Fira Code"),
+    ("geistMono", "Geist Mono"),
+    ("source", "Source Code Pro"),
+    ("roboto", "Roboto Mono"),
+    ("ubuntu", "Ubuntu Mono"),
+    ("sfMono", "SF Mono"),
+    ("menlo", "Menlo"),
+    ("cascadia", "Cascadia Code"),
+    ("hack", "Hack"),
+    ("consolas", "Consolas"),
+];
+
+/// The family a mono font id is set in, for its sample line.
+fn mono_family(id: &str) -> &'static str {
+    MONO_FONT_OPTIONS
+        .iter()
+        .find(|(known, _)| *known == id)
+        .map_or("Menlo", |(_, label)| *label)
+}
+
+/// Settings → Aparência: the groups the native appearance page shares with the others, from
+/// `AppearanceSettings.tsx` (typography, effects and motion, chat background, sidebar, Dock).
+/// `data` may hold `host` (its `appearanceSupport` says what this Mac can do).
+pub fn appearance_groups<V: 'static>(
+    settings: &Value,
+    data: &HashMap<&'static str, Value>,
+    editing: Option<(&str, &str)>,
+    save: Save<V>,
+    edit: Edit<V>,
+    run: Run<V>,
+    cx: &mut Context<V>,
+) -> Vec<AnyElement> {
+    let mut ui = Ui {
+        ids: 0,
+        editing,
+        save,
+        edit,
+        run,
+    };
+    let support = &get_data(data, "host")["appearanceSupport"];
+    let s = settings;
+
+    let system_font = flag(s, top("systemUiFont"));
+    let ui_font = if system_font {
+        row(
+            t("Fonte da interface"),
+            t("A fonte do sistema está ativa; a escolha fica guardada para depois."),
+            vec![Ctl::Read(
+                UI_FONT_OPTIONS
+                    .iter()
+                    .find(|(id, _)| *id == current(s, top("uiFont")))
+                    .map_or("Inter", |(_, label)| *label)
+                    .to_string(),
+            )],
+        )
+    } else {
+        row(
+            t("Fonte da interface"),
+            "",
+            vec![pick(s, top("uiFont"), UI_FONT_OPTIONS)],
+        )
+    };
+    let interface = group(
+        t("Tipografia da interface"),
+        vec![
+            switch_row(
+                s,
+                t("Usar fonte do sistema na interface"),
+                t("Mantém a fonte escolhida guardada para quando esta opção estiver desligada."),
+                top("systemUiFont"),
+            ),
+            ui_font,
+            row(
+                t("Tamanho da fonte da interface"),
+                t("De 11 a 18 px."),
+                vec![
+                    Ctl::Field {
+                        key: "uiFontSize",
+                        text: current(s, top("uiFontSize")),
+                        width: 72.,
+                        button: None,
+                    },
+                    Ctl::Read("px".to_string()),
+                ],
+            ),
+            switch_row(s, t("Suavização de fontes"), "", top("fontSmoothing")),
+            row(
+                t("Densidade da interface"),
+                t("Ajusta o espaçamento sem mudar o tamanho do texto."),
+                vec![pick(
+                    s,
+                    top("density"),
+                    &[
+                        ("compact", t("Compacta")),
+                        ("default", t("Confortável")),
+                        ("comfortable", t("Espaçosa")),
+                    ],
+                )],
+            ),
+        ],
+    );
+
+    let code_font = top("codeFont");
+    let code = group(
+        t("Tipografia de código"),
+        vec![
+            row(
+                t("Fonte de código"),
+                t("Vale para código nas transcrições, diffs e no editor."),
+                vec![pick(s, code_font, MONO_FONT_OPTIONS)],
+            ),
+            row(
+                t("Tamanho da fonte de código"),
+                t("De 10 a 22 px."),
+                vec![
+                    Ctl::Field {
+                        key: "codeFontSize",
+                        text: current(s, top("codeFontSize")),
+                        width: 72.,
+                        button: None,
+                    },
+                    Ctl::Read("px".to_string()),
+                ],
+            ),
+            row(
+                t("Amostra"),
+                "",
+                vec![Ctl::Sample {
+                    family: mono_family(&current(s, code_font)),
+                    size: s["codeFontSize"].as_f64().unwrap_or(13.) as f32,
+                }],
+            ),
+        ],
+    );
+
+    let terminal_font = top("terminalFont");
+    let terminal_group = group(
+        t("Tipografia do terminal"),
+        vec![
+            row(
+                t("Fonte do terminal"),
+                "",
+                vec![pick(s, terminal_font, MONO_FONT_OPTIONS)],
+            ),
+            row(
+                t("Tamanho da fonte do terminal"),
+                t("De 10 a 22 px."),
+                vec![
+                    Ctl::Field {
+                        key: "terminalFontSize",
+                        text: current(s, top("terminalFontSize")),
+                        width: 72.,
+                        button: None,
+                    },
+                    Ctl::Read("px".to_string()),
+                ],
+            ),
+            row(
+                t("Amostra"),
+                "",
+                vec![Ctl::Sample {
+                    family: mono_family(&current(s, terminal_font)),
+                    size: s["terminalFontSize"].as_f64().unwrap_or(13.) as f32,
+                }],
+            ),
+        ],
+    );
+
+    let effects = group(
+        t("Efeitos e movimento"),
+        vec![
+            switch_row(s, t("Animações da interface"), "", top("animations")),
+            switch_row(
+                s,
+                t("Efeito de luz nos botões"),
+                t("Os botões reagem ao ponteiro do mouse."),
+                top("pointerGlow"),
+            ),
+            row(
+                t("Velocidade do corredor do composer"),
+                t(
+                    "O modelo de trabalho que percorre a borda do composer enquanto o agente trabalha.",
+                ),
+                vec![pick(
+                    s,
+                    top("composerLineSpeed"),
+                    &[
+                        ("slow", t("Lenta")),
+                        ("smooth", t("Suave")),
+                        ("fast", t("Rápida")),
+                    ],
+                )],
+            ),
+            switch_row(
+                s,
+                t("Reduzir movimento"),
+                t("Também respeita prefers-reduced-motion do sistema."),
+                top("reduceMotion"),
+            ),
+        ],
+    );
+
+    let background_rows = match s["chatBackground"].as_str() {
+        None => vec![row(
+            t("Escolher uma imagem"),
+            t("Uma imagem atrás dos painéis de conversa. Ela fica neste Mac."),
+            vec![Ctl::Button {
+                label: t("Escolher imagem"),
+                act: act_run("native_pick_background", json!({})),
+                enabled: true,
+                danger: false,
+            }],
+        )],
+        Some(name) => vec![
+            row(
+                t("Imagem atual"),
+                name,
+                vec![
+                    Ctl::Button {
+                        label: t("Trocar"),
+                        act: act_run("native_pick_background", json!({})),
+                        enabled: true,
+                        danger: false,
+                    },
+                    Ctl::Button {
+                        label: t("Remover"),
+                        act: Act::Save {
+                            key: "chatBackground",
+                            value: Value::Null,
+                        },
+                        enabled: true,
+                        danger: true,
+                    },
+                ],
+            ),
+            row(
+                t("Efeito do fundo"),
+                t("Como a imagem é desenhada atrás das conversas."),
+                vec![pick(
+                    s,
+                    top("chatBackgroundEffect"),
+                    &[
+                        ("none", t("Nenhum")),
+                        ("dither", "Dither"),
+                        ("ascii", "ASCII"),
+                        ("halftone", "Halftone"),
+                        ("scanlines", "Scanlines"),
+                        ("haze", "Haze"),
+                    ],
+                )],
+            ),
+            row(
+                t("Mostrar em"),
+                t("Só nas sessões vazias, ou em todas as conversas."),
+                vec![pick(
+                    s,
+                    top("chatBackgroundShowOn"),
+                    &[("empty", t("Só vazias")), ("all", t("Todas as sessões"))],
+                )],
+            ),
+            row(
+                t("Visibilidade no chat vazio"),
+                t("Força do fundo antes de a conversa ter mensagens."),
+                vec![
+                    Ctl::Field {
+                        key: "chatBackgroundEmptyVisibility",
+                        text: current(s, top("chatBackgroundEmptyVisibility")),
+                        width: 72.,
+                        button: None,
+                    },
+                    Ctl::Read("%".to_string()),
+                ],
+            ),
+            row(
+                t("Visibilidade na sessão"),
+                t("Força do fundo quando a conversa já tem mensagens. De 0 a 100%."),
+                vec![
+                    Ctl::Field {
+                        key: "chatBackgroundSessionVisibility",
+                        text: current(s, top("chatBackgroundSessionVisibility")),
+                        width: 72.,
+                        button: None,
+                    },
+                    Ctl::Read("%".to_string()),
+                ],
+            ),
+        ],
+    };
+    let background = group(t("Fundo do chat"), background_rows);
+
+    let mut sidebar_rows = vec![row(
+        t("Estilo da barra lateral"),
+        t("Barra de ícones, com as conversas nas abas, ou uma lista com todas as conversas."),
+        vec![pick(
+            s,
+            top("sidebarMode"),
+            &[
+                ("rail", t("Barra de ícones")),
+                ("list", t("Lista de conversas")),
+            ],
+        )],
+    )];
+    if current(s, top("sidebarMode")) == "list" {
+        sidebar_rows.push(row(
+            t("Ordem da lista"),
+            "",
+            vec![pick(
+                s,
+                top("sidebarListOrder"),
+                &[("recent", t("Recentes")), ("project", t("Por projeto"))],
+            )],
+        ));
+    }
+    let sidebar = group(t("Barra lateral"), sidebar_rows);
+
+    let dock_supported = yes(&support["dockIcon"]);
+    let application = group(
+        t("Aplicativo"),
+        vec![row(
+            t("Ícone do Dock"),
+            if dock_supported {
+                t("Escolha o ícone exibido no Dock.")
+            } else {
+                t("A personalização do Dock não está disponível neste host.")
+            },
+            vec![if dock_supported {
+                pick(
+                    s,
+                    top("dockIcon"),
+                    &[
+                        ("default", t("Padrão")),
+                        ("smokedGlass", t("Vidro fumê")),
+                        ("white", t("Branco")),
+                    ],
+                )
+            } else {
+                Ctl::Read(t("Indisponível").to_string())
+            }],
+        )],
+    );
+
+    [
+        interface,
+        code,
+        terminal_group,
+        effects,
+        background,
+        sidebar,
+        application,
+    ]
+    .into_iter()
+    .map(|item| group_view(item, &mut ui, cx))
+    .collect()
+}

@@ -222,23 +222,25 @@ mod vault {
         delete_generic_password, get_generic_password, set_generic_password,
     };
 
-    const SERVICE: &str = "Sirus Code connectors";
+    const KIND: &str = "connectors";
 
     pub fn get(id: &str) -> Option<String> {
-        get_generic_password(SERVICE, id)
+        get_generic_password(&crate::keychain_scope::service(KIND), id)
             .ok()
+            .or_else(|| crate::keychain_scope::adopt_shared(KIND, id))
             .and_then(|bytes| String::from_utf8(bytes).ok())
     }
 
     pub fn put(id: &str, value: &str) -> bool {
         // An item the old `security` path left belongs to that tool; replace it rather than fail.
-        set_generic_password(SERVICE, id, value.as_bytes()).is_ok()
-            || (delete_generic_password(SERVICE, id).is_ok()
-                && set_generic_password(SERVICE, id, value.as_bytes()).is_ok())
+        let service = crate::keychain_scope::service(KIND);
+        set_generic_password(&service, id, value.as_bytes()).is_ok()
+            || (delete_generic_password(&service, id).is_ok()
+                && set_generic_password(&service, id, value.as_bytes()).is_ok())
     }
 
     pub fn delete(id: &str) {
-        let _ = delete_generic_password(SERVICE, id);
+        let _ = delete_generic_password(&crate::keychain_scope::service(KIND), id);
     }
 }
 

@@ -18,11 +18,17 @@ pub enum Curve {
 }
 
 fn bezier(t: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
-    let at = |a: f32, b: f32, s: f32| 3. * a * s * (1. - s).powi(2) + 3. * b * s * s * (1. - s) + s.powi(3);
+    let at = |a: f32, b: f32, s: f32| {
+        3. * a * s * (1. - s).powi(2) + 3. * b * s * s * (1. - s) + s.powi(3)
+    };
     let (mut low, mut high) = (0f32, 1f32);
     for _ in 0..12 {
         let mid = (low + high) / 2.;
-        if at(x1, x2, mid) < t { low = mid } else { high = mid }
+        if at(x1, x2, mid) < t {
+            low = mid
+        } else {
+            high = mid
+        }
     }
     at(y1, y2, (low + high) / 2.)
 }
@@ -46,10 +52,22 @@ pub struct Tween {
 
 impl Tween {
     pub fn still(value: f32, now: Instant) -> Self {
-        Self { from: value, to: value, start: now, duration: 0., curve: Curve::Quad }
+        Self {
+            from: value,
+            to: value,
+            start: now,
+            duration: 0.,
+            curve: Curve::Quad,
+        }
     }
     pub fn from_to(from: f32, to: f32, now: Instant, duration: f32, curve: Curve) -> Self {
-        Self { from, to, start: now, duration, curve }
+        Self {
+            from,
+            to,
+            start: now,
+            duration,
+            curve,
+        }
     }
     pub fn at(&self, now: Instant) -> f32 {
         if self.duration <= 0. {
@@ -59,14 +77,21 @@ impl Tween {
         self.from + (self.to - self.from) * eased(t, self.curve)
     }
     pub fn done(&self, now: Instant) -> bool {
-        self.duration <= 0. || now.saturating_duration_since(self.start).as_secs_f32() >= self.duration
+        self.duration <= 0.
+            || now.saturating_duration_since(self.start).as_secs_f32() >= self.duration
     }
     /// Heads for `to` from wherever it is now; a repeated target keeps the running motion.
     pub fn set(&mut self, to: f32, now: Instant, duration: f32, curve: Curve) {
         if (to - self.to).abs() < 0.01 {
             return;
         }
-        *self = Self { from: self.at(now), to, start: now, duration, curve };
+        *self = Self {
+            from: self.at(now),
+            to,
+            start: now,
+            duration,
+            curve,
+        };
     }
     pub fn snap(&mut self, value: f32, now: Instant) {
         *self = Self::still(value, now);

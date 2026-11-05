@@ -49,7 +49,17 @@ pub struct Look {
 
 impl Default for Look {
     fn default() -> Self {
-        Self { preset: 0, accent: None, custom: None, mode: 0, diff: 0, hue: None, saturation: None, glass: true, scale: 1. }
+        Self {
+            preset: 0,
+            accent: None,
+            custom: None,
+            mode: 0,
+            diff: 0,
+            hue: None,
+            saturation: None,
+            glass: true,
+            scale: 1.,
+        }
     }
 }
 
@@ -62,16 +72,66 @@ pub struct Preset {
 }
 
 pub const PRESETS: &[Preset] = &[
-    Preset { name: "Sirus", hue: 255., saturation: 0.10, accent: 0xbdb4f2 },
-    Preset { name: "Carvão", hue: 0., saturation: 0., accent: 0xe6e6e6 },
-    Preset { name: "Oceano", hue: 212., saturation: 0.28, accent: 0x6fb3f2 },
-    Preset { name: "Floresta", hue: 150., saturation: 0.20, accent: 0x74c69d },
-    Preset { name: "Brasa", hue: 18., saturation: 0.24, accent: 0xf0925e },
-    Preset { name: "Ameixa", hue: 300., saturation: 0.20, accent: 0xd08bd9 },
-    Preset { name: "Areia", hue: 42., saturation: 0.18, accent: 0xdcbf7a },
-    Preset { name: "Coral", hue: 350., saturation: 0.20, accent: 0xee8a96 },
-    Preset { name: "Aurora", hue: 176., saturation: 0.24, accent: 0x5fd4c4 },
-    Preset { name: "Neon", hue: 285., saturation: 0.42, accent: 0xe45fd8 },
+    Preset {
+        name: "Sirus",
+        hue: 255.,
+        saturation: 0.10,
+        accent: 0xbdb4f2,
+    },
+    Preset {
+        name: "Carvão",
+        hue: 0.,
+        saturation: 0.,
+        accent: 0xe6e6e6,
+    },
+    Preset {
+        name: "Oceano",
+        hue: 212.,
+        saturation: 0.28,
+        accent: 0x6fb3f2,
+    },
+    Preset {
+        name: "Floresta",
+        hue: 150.,
+        saturation: 0.20,
+        accent: 0x74c69d,
+    },
+    Preset {
+        name: "Brasa",
+        hue: 18.,
+        saturation: 0.24,
+        accent: 0xf0925e,
+    },
+    Preset {
+        name: "Ameixa",
+        hue: 300.,
+        saturation: 0.20,
+        accent: 0xd08bd9,
+    },
+    Preset {
+        name: "Areia",
+        hue: 42.,
+        saturation: 0.18,
+        accent: 0xdcbf7a,
+    },
+    Preset {
+        name: "Coral",
+        hue: 350.,
+        saturation: 0.20,
+        accent: 0xee8a96,
+    },
+    Preset {
+        name: "Aurora",
+        hue: 176.,
+        saturation: 0.24,
+        accent: 0x5fd4c4,
+    },
+    Preset {
+        name: "Neon",
+        hue: 285.,
+        saturation: 0.42,
+        accent: 0xe45fd8,
+    },
 ];
 
 pub const ACCENTS: &[(&str, u32)] = &[
@@ -95,7 +155,11 @@ pub fn palette(look: &Look, system_dark: bool) -> Palette {
         _ => system_dark,
     };
     let tint = |s: f32, lightness: f32, alpha: f32| hsla(hue, s, lightness, alpha);
-    let pane_alpha = if look.glass { if dark { 0.95 } else { 0.9 } } else { 1. };
+    let pane_alpha = if look.glass {
+        if dark { 0.95 } else { 0.9 }
+    } else {
+        1.
+    };
     let accent: Hsla = match look.custom {
         Some((hue, light)) => hsla(hue / 360., 0.75, light, 1.),
         None => rgb(look.accent.map_or(p.accent, |a| ACCENTS[a].1)).into(),
@@ -124,9 +188,22 @@ pub fn palette(look: &Look, system_dark: bool) -> Palette {
 pub fn mix(from: Palette, to: Palette, t: f32) -> Palette {
     let one = |a: Hsla, b: Hsla| -> Hsla {
         let (a, b) = (a.to_rgb(), b.to_rgb());
-        Rgba { r: a.r + (b.r - a.r) * t, g: a.g + (b.g - a.g) * t, b: a.b + (b.b - a.b) * t, a: a.a + (b.a - a.a) * t }.into()
+        Rgba {
+            r: a.r + (b.r - a.r) * t,
+            g: a.g + (b.g - a.g) * t,
+            b: a.b + (b.b - a.b) * t,
+            a: a.a + (b.a - a.a) * t,
+        }
+        .into()
     };
-    Palette { shell: one(from.shell, to.shell), pane: one(from.pane, to.pane), field: one(from.field, to.field), floating: one(from.floating, to.floating), accent: one(from.accent, to.accent), ink: one(from.ink, to.ink) }
+    Palette {
+        shell: one(from.shell, to.shell),
+        pane: one(from.pane, to.pane),
+        field: one(from.field, to.field),
+        floating: one(from.floating, to.floating),
+        accent: one(from.accent, to.accent),
+        ink: one(from.ink, to.ink),
+    }
 }
 
 /// The diff's added and removed colors: default, colorblind or high contrast.
@@ -163,7 +240,11 @@ pub fn accent_wash(alpha: f32) -> Hsla {
 }
 /// Dark ink on a light accent, white on a dark one.
 pub fn on_accent() -> Hsla {
-    if accent().l > 0.62 { rgb(0x1d1c24).into() } else { gpui::white() }
+    if accent().l > 0.62 {
+        rgb(0x1d1c24).into()
+    } else {
+        gpui::white()
+    }
 }
 pub fn shell_fill() -> Hsla {
     current().shell
@@ -191,24 +272,50 @@ pub fn floating_fill() -> Hsla {
 pub fn rail_color() -> Hsla {
     let (base, ink) = (pane_opaque().to_rgb(), current().ink.to_rgb());
     let mix = |b: f32, i: f32| b + (i - b) * 0.14;
-    Rgba { r: mix(base.r, ink.r), g: mix(base.g, ink.g), b: mix(base.b, ink.b), a: 1. }.into()
+    Rgba {
+        r: mix(base.r, ink.r),
+        g: mix(base.g, ink.g),
+        b: mix(base.b, ink.b),
+        a: 1.,
+    }
+    .into()
 }
 pub fn icon(path: &'static str, side: f32) -> Svg {
-    svg().path(path).size(px(side)).text_color(content(0.5)).flex_shrink_0()
+    svg()
+        .path(path)
+        .size(px(side))
+        .text_color(content(0.5))
+        .flex_shrink_0()
 }
 pub fn provider_tile(provider: &str) -> Option<(Hsla, Hsla)> {
     let (top, bottom) = match provider {
         "claude" => (0xE3876A, 0xD06A49),
-        "opencode" => (0x3B3636, 0x1F1C1C),
-        _ => (0x7A8CFF, 0x4048FF),
+        "codex" => (0x7A8CFF, 0x4048FF),
+        "droid" => (0xE0733A, 0xB9521F),
+        "antigravity" => (0x4D4D55, 0x2C2C33),
+        "cursor" | "grok" | "pi" => (0x343434, 0x161616),
+        "hermes" | "devin" => (0x3A3A3E, 0x1E1E22),
+        _ => (0x3B3636, 0x1F1C1C),
     };
     Some((rgb(top).into(), rgb(bottom).into()))
 }
 pub fn provider_glyph(provider: &str, side: f32) -> AnyElement {
     let path = match provider {
         "claude" => "claude.svg",
-        "opencode" => "opencode.svg",
-        _ => "codex-glyph.svg",
+        "codex" => "codex-glyph.svg",
+        "cursor" => "cursor",
+        "grok" => "grok",
+        "antigravity" => "antigravity",
+        "droid" => "droid",
+        "pi" => "pi",
+        "devin" => "devin",
+        "hermes" => "hermes",
+        _ => "opencode.svg",
     };
-    svg().path(path).size(px(side)).text_color(gpui::white()).flex_shrink_0().into_any_element()
+    svg()
+        .path(path)
+        .size(px(side))
+        .text_color(gpui::white())
+        .flex_shrink_0()
+        .into_any_element()
 }

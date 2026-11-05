@@ -26,7 +26,8 @@ desktop = [
     "dep:tauri-plugin-deep-link",
     "dep:tauri-plugin-updater",
 ]
-host = []
+# The host checks native visual programs with the real interpreter (visual_check).
+host = ["dep:rquickjs"]
 
 [[bin]]
 name = "sirus-code"
@@ -54,6 +55,7 @@ tauri-plugin-deep-link = { version = "2", optional = true }
 tauri-plugin-updater = { version = "2", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+rquickjs = { version = "0.14.0", optional = true }
 thiserror = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }

@@ -45,6 +45,8 @@ mod commit_title;
 mod computer;
 mod computer_mcp;
 mod connectors;
+#[cfg(target_os = "macos")]
+mod keychain_scope;
 mod context_text;
 mod crash_resume;
 mod delegation;

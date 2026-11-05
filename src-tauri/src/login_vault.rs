@@ -152,7 +152,15 @@ pub struct KeychainStore;
 impl SecretStore for KeychainStore {
     fn read(&self) -> Result<Option<String>, String> {
         use security_framework::passwords::get_generic_password;
-        match get_generic_password("Sirus Code browser logins", "vault") {
+        let found =
+            get_generic_password(&crate::keychain_scope::service("browser logins"), "vault");
+        let found = match found {
+            Err(error) if error.code() == -25300 => {
+                crate::keychain_scope::adopt_shared("browser logins", "vault").ok_or(error)
+            }
+            other => other,
+        };
+        match found {
             Ok(bytes) => String::from_utf8(bytes)
                 .map(Some)
                 .map_err(|_| "The saved logins could not be read.".to_string()),
@@ -164,8 +172,12 @@ impl SecretStore for KeychainStore {
 
     fn write(&self, value: &str) -> Result<(), String> {
         use security_framework::passwords::set_generic_password;
-        set_generic_password("Sirus Code browser logins", "vault", value.as_bytes())
-            .map_err(|_| "The Keychain refused to save the logins.".to_string())
+        set_generic_password(
+            &crate::keychain_scope::service("browser logins"),
+            "vault",
+            value.as_bytes(),
+        )
+        .map_err(|_| "The Keychain refused to save the logins.".to_string())
     }
 }
 

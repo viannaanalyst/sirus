@@ -1306,6 +1306,7 @@ mod tests {
                 id: "v1".into(),
                 title: "Build times".into(),
                 html: "<svg viewBox=\"0 0 10 10\"></svg>".into(),
+                source: None,
                 created_at: "t".into(),
                 revision: 2,
             });

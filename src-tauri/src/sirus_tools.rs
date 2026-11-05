@@ -55,6 +55,7 @@ pub fn tool_definitions() -> Vec<Value> {
     let mut tools = crate::delegation::tool_definitions();
     // Inline visuals only touch the caller's own reply, so they are always on too (ADR-123).
     tools.push(crate::visuals::tool_definition());
+    tools.extend(crate::visuals::native_tool_definitions());
     // Guided reviews only store a guide, never change code, so they are always on too (ADR-125).
     tools.extend(crate::review_guides::tool_definitions());
     if std::env::var(ENV).as_deref() != Ok("1") {
@@ -355,6 +356,9 @@ pub fn execute(
     }
     if tool == crate::visuals::TOOL {
         return crate::visuals::execute(app, session_id, args);
+    }
+    if crate::visuals::NATIVE_TOOLS.contains(&tool) {
+        return crate::visuals::execute_native(app, session_id, tool, args);
     }
     if crate::review_guides::TOOLS.contains(&tool) {
         return crate::review_guides::execute(app, session_id, tool, args);

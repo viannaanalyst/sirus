@@ -4,7 +4,10 @@
 //! rectangle, a touch wider than tall, holding one mark. A split tab
 //! stacks one tile per pane, the focused one in front and the rest tucked
 //! behind it, each peeking out a little further right.
-use crate::theme::{TAB_PLATE_HEIGHT as _PLATE, black, content, icon, is_light, provider_glyph as _glyph, provider_tile, white};
+use crate::theme::{
+    TAB_PLATE_HEIGHT as _PLATE, black, content, icon, is_light, provider_glyph as _glyph,
+    provider_tile, white,
+};
 use gpui::{AnyElement, Corners, Div, Hsla, canvas, div, prelude::*, px};
 
 /// What a tile is made of.
@@ -577,4 +580,3 @@ pub(crate) fn fan_width(size: &TileSize, count: usize, fan: f32) -> f32 {
 pub(crate) fn fan_tile(size: &TileSize, card: &FanCard, face: Face, mark: AnyElement) -> Div {
     tile_lifted(size, card.depth, face, mark, card.lifted, card.tilt)
 }
-

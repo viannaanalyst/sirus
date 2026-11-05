@@ -316,7 +316,7 @@ fn execute(
     if !session_owned(app, session_id) {
         return Err("this session no longer exists".into());
     }
-    if tool.starts_with("sirus_") {
+    if tool.starts_with("sirus_") || crate::visuals::NATIVE_TOOLS.contains(&tool) {
         // Session tools for every session, behind the Settings switch (ADR-076).
         return crate::sirus_tools::execute(app, session_id, tool, &args);
     }

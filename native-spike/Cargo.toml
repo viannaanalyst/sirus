@@ -1,0 +1,27 @@
+# Throwaway GPUI comparison app: part 1 of the native spike. Its own workspace and
+# lockfile, unrelated to the Tauri app in src-tauri.
+[package]
+name = "sirus-native-spike"
+version = "0.0.1"
+edition = "2024"
+publish = false
+
+[dependencies]
+gpui = { package = "gpui-pre", version = "=0.3.9", default-features = false }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.9", default-features = false, features = ["font-kit", "runtime_shaders"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+gpui_apple = { package = "gpui-pre-apple", version = "=0.3.9" }
+
+[workspace]
+resolver = "2"
+
+[patch.crates-io]
+gpui-pre = { path = "vendor/gpui-pre" }
+gpui-pre-apple = { path = "vendor/gpui-pre-apple" }
+gpui-pre-linux = { path = "vendor/gpui-pre-linux" }
+gpui-pre-macos = { path = "vendor/gpui-pre-macos" }
+gpui-pre-windows = { path = "vendor/gpui-pre-windows" }
+
+[profile.release]
+debug = 0

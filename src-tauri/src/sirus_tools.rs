@@ -605,16 +605,17 @@ mod tests {
     #[test]
     fn tools_are_listed_only_with_the_child_flag() {
         std::env::remove_var(ENV);
-        // Delegation (4), inline visuals (1) and review guides (2) are always on.
-        assert_eq!(tool_definitions().len(), 7);
+        // Delegation (4), inline visuals (1), native visuals (3) and review guides (2) are always on.
+        assert_eq!(tool_definitions().len(), 10);
         std::env::set_var(ENV, "1");
         let tools = tool_definitions();
         std::env::remove_var(ENV);
-        // Delegation (4), inline visuals (1), review guides (2) and sessions (7).
-        assert_eq!(tools.len(), 14);
-        assert!(tools
-            .iter()
-            .all(|tool| tool["name"].as_str().unwrap().starts_with("sirus_")));
+        // Delegation (4), inline visuals (1), native visuals (3), review guides (2) and sessions (7).
+        assert_eq!(tools.len(), 17);
+        assert!(tools.iter().all(|tool| {
+            let name = tool["name"].as_str().unwrap();
+            name.starts_with("sirus_") || name.starts_with("visual_")
+        }));
     }
 
     #[test]

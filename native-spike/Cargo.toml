@@ -17,10 +17,19 @@ rquickjs = "0.14.0"
 alacritty_terminal = "0.26"
 libc = "0.2"
 similar = "2.7"
+# The pairing QR code (Settings → Conexões); the host draws its own with the same crate.
+qrcode = { version = "0.14", default-features = false }
 pulldown-cmark = "0.13"
 async-channel = "2"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 tungstenite = { version = "0.26", default-features = false, features = ["handshake"] }
+# Attachment viewer: base64 payloads from the host, and the page rasters of PDFs.
+base64 = "0.22"
+image = { version = "0.25", default-features = false }
+smallvec = "1"
+# Attachment viewer: the Office files' zip parts and their XML, read in Rust (no scripting engine).
+miniz_oxide = "0.8"
+roxmltree = "0.21"
 tree-sitter-highlight = "0.27.1"
 tree-sitter-rust = "0.24.2"
 tree-sitter-javascript = "0.25.0"
@@ -39,9 +48,9 @@ gpui_apple = { package = "gpui-pre-apple", version = "=0.3.9" }
 objc2 = "0.6"
 block2 = "0.6"
 raw-window-handle = "0.6"
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "block2", "NSResponder", "NSView", "NSWindow"] }
-objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "objc2-app-kit", "objc2-core-foundation", "WKWebView", "WKWebViewConfiguration", "WKPreferences", "WKWebsiteDataStore", "WKNavigation", "WKNavigationDelegate", "WKNavigationAction", "block2"] }
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSGeometry", "NSURL", "NSURLRequest", "NSData", "NSRange", "NSArray", "NSSet", "NSError", "NSBundle"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "block2", "NSResponder", "NSView", "NSWindow", "NSBitmapImageRep", "NSImageRep", "NSImage", "NSPasteboard", "NSAppearance", "NSGraphics", "NSPanel", "NSScreen", "NSStringDrawing"] }
+objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "objc2-app-kit", "objc2-core-foundation", "WKWebView", "WKWebViewConfiguration", "WKPreferences", "WKWebsiteDataStore", "WKNavigation", "WKNavigationDelegate", "WKNavigationAction", "WKNavigationResponse", "WKHTTPCookieStore", "WKPreferences", "WKScriptMessage", "WKScriptMessageHandler", "WKUserContentController", "WKUserScript", "WKSnapshotConfiguration", "WKUIDelegate", "WKWindowFeatures", "WKContentWorld", "WKFrameInfo", "WKWebsiteDataRecord", "block2"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSGeometry", "NSURL", "NSURLRequest", "NSData", "NSRange", "NSArray", "NSSet", "NSError", "NSBundle", "NSDictionary", "NSValue", "NSObject", "NSEnumerator", "NSDate", "NSHTTPCookie", "NSUUID", "NSNotification"] }
 
 [workspace]
 resolver = "2"

@@ -33,24 +33,19 @@ pub fn new(context: PanelContext, cx: &mut App) -> AnyView {
             focus: cx.focus_handle(),
             focused: false,
             scroll: ScrollHandle::new(),
-            caret_since: Instant::now(),
-            blink_step: 0,
             epoch: Instant::now(),
             layout: Rc::new(RefCell::new(None)),
         };
         panel.open(cx);
         panel.listen(cx);
-        // Os laços (shimmer, texto chegando) andam a 30 Hz; o caret respira a 12 Hz.
+        // Os laços (shimmer, texto chegando) andam a 30 Hz; o caret é fixo.
         cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor()
                     .timer(Duration::from_millis(33))
                     .await;
                 let alive = this.update(cx, |this, cx| {
-                    let step = (this.caret_since.elapsed().as_millis() / 83) as u64;
-                    let breath = this.focused && step != this.blink_step;
-                    this.blink_step = step;
-                    if breath || this.side.working() {
+                    if this.side.working() {
                         cx.notify();
                     }
                 });
@@ -79,10 +74,34 @@ struct SideChat {
     focus: FocusHandle,
     focused: bool,
     scroll: ScrollHandle,
-    caret_since: Instant,
-    blink_step: u64,
     epoch: Instant,
     layout: Rc<RefCell<Option<TextLayout>>>,
+}
+
+/// Puts a passage from the main chat in the composer as a quote and focuses it (the selection
+/// menu's "Perguntar no chat lateral").
+pub fn quote(view: &AnyView, passage: &str, window: &mut Window, cx: &mut App) {
+    let Ok(panel) = view.clone().downcast::<SideChat>() else {
+        return;
+    };
+    let quoted = passage
+        .lines()
+        .map(|line| format!("> {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    panel.update(cx, |panel, cx| {
+        if !panel.text.trim().is_empty() {
+            panel.text.push_str("\n\n");
+        } else {
+            panel.text.clear();
+        }
+        panel.text.push_str(&quoted);
+        panel.text.push_str("\n\n");
+        panel.cursor = panel.text.len();
+        panel.anchor = panel.cursor;
+        window.focus(&panel.focus, cx);
+        cx.notify();
+    });
 }
 
 async fn settle(rx: async_channel::Receiver<Result<Value, Value>>) -> Result<Value, String> {
@@ -287,9 +306,6 @@ impl SideChat {
         }
     }
 
-    fn touch_caret(&mut self) {
-        self.caret_since = Instant::now();
-    }
 
     fn selection(&self) -> Range<usize> {
         self.cursor.min(self.anchor)..self.cursor.max(self.anchor)
@@ -327,7 +343,6 @@ impl SideChat {
         self.anchor = 0;
         self.marked = None;
         self.error = None;
-        self.touch_caret();
         self.scroll.scroll_to_bottom();
         cx.spawn(async move |this, cx| {
             if let Err(error) = settle(rx).await {
@@ -356,7 +371,6 @@ impl SideChat {
             (false, false, "enter") => self.send(cx),
             (false, true, "enter") => {
                 self.insert("\n");
-                self.touch_caret();
             }
             (_, _, "backspace") => {
                 if self.anchor == self.cursor {
@@ -367,7 +381,6 @@ impl SideChat {
                     };
                 }
                 self.insert("");
-                self.touch_caret();
             }
             (false, _, "left" | "right") => {
                 let selection = self.selection();
@@ -382,7 +395,6 @@ impl SideChat {
                 if !shift {
                     self.anchor = self.cursor;
                 }
-                self.touch_caret();
             }
             (true, false, "a") => {
                 self.anchor = 0;
@@ -400,7 +412,6 @@ impl SideChat {
             (true, false, "v") => {
                 if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
                     self.insert(&text);
-                    self.touch_caret();
                 }
             }
             // Letras e acentos chegam pelo input handler; atalhos do app seguem para o shell.
@@ -499,7 +510,6 @@ impl EntityInputHandler for SideChat {
         cx: &mut Context<Self>,
     ) {
         let marked = self.marked.take();
-        self.touch_caret();
         if let Some(range) = range.or(marked) {
             self.anchor = byte_at(&self.text, range.start);
             self.cursor = byte_at(&self.text, range.end);
@@ -516,7 +526,6 @@ impl EntityInputHandler for SideChat {
         cx: &mut Context<Self>,
     ) {
         let marked = self.marked.take();
-        self.touch_caret();
         if let Some(range) = range.or(marked) {
             self.anchor = byte_at(&self.text, range.start);
             self.cursor = byte_at(&self.text, range.end);
@@ -553,10 +562,6 @@ impl Render for SideChat {
         let turns = self.turns();
         let empty = self.ready && turns.is_empty();
 
-        // O caret some e volta, sem corte seco; digitar o traz de volta a 100%.
-        let caret_alpha = 0.575
-            + 0.425
-                * (self.caret_since.elapsed().as_secs_f32() / 1.2 * std::f32::consts::TAU).cos();
         let styled = StyledText::new(if self.text.is_empty() {
             " ".to_owned()
         } else {
@@ -584,7 +589,7 @@ impl Render for SideChat {
                             if start.y == end.y && end.x > start.x {
                                 window.paint_quad(gpui::fill(
                                     Bounds::new(start, gpui::size(end.x - start.x, line)),
-                                    accent_wash(0.3),
+                                    crate::theme::text_selection(),
                                 ));
                             }
                         }
@@ -594,7 +599,7 @@ impl Render for SideChat {
                     window.paint_quad(
                         gpui::fill(
                             Bounds::new(origin, gpui::size(px(2.), line)),
-                            accent_wash(caret_alpha),
+                            crate::theme::caret_color(),
                         )
                         .corner_radii(px(1.)),
                     );
@@ -624,7 +629,6 @@ impl Render for SideChat {
                         if !event.modifiers.shift {
                             this.anchor = this.cursor;
                         }
-                        this.touch_caret();
                         cx.notify();
                     }
                 }),

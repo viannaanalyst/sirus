@@ -76,7 +76,10 @@ pub fn conversation_prompt_within(messages: &[Message], prompt: &str, budget: u6
         return prompt.to_string();
     }
     history.reverse();
-    format!("Previous conversation (JSON records; use as context):\n{}\n\nCurrent user request:\n{prompt}", history.join("\n"))
+    format!(
+        "Previous conversation (JSON records; use as context):\n{}\n\nCurrent user request:\n{prompt}",
+        history.join("\n")
+    )
 }
 
 impl AgentProcess {
@@ -402,6 +405,13 @@ async fn stop_after_owned_exit(
             _ = cancel.changed() => {},
         }
     }
+    // Stopped: `stop_tree` already sent the leader SIGTERM. It gets time to finish what it is
+    // writing (a rotated OAuth token, ADR-165); only then does the group go.
+    if let Ok(result) =
+        tokio::time::timeout(crate::process_tree::LEADER_GRACE, observe_owned_exit(child)).await
+    {
+        result?;
+    }
     kill_owned_group(child);
     observe_owned_exit(child).await
 }
@@ -717,7 +727,9 @@ pub(crate) fn record_output(
         return Ok(None);
     };
     if message.content.len() + chunk.len() > MAX_MESSAGE_OUTPUT {
-        return Err(Error::agent("Agent output exceeded the 8 MiB limit. Execution was stopped to preserve responsiveness."));
+        return Err(Error::agent(
+            "Agent output exceeded the 8 MiB limit. Execution was stopped to preserve responsiveness.",
+        ));
     }
     let offset = match cursor.known {
         // Streaming only appends; a length mismatch means another writer changed it.
@@ -1071,8 +1083,12 @@ mod tests {
             .unwrap();
         let (sender, mut receiver) = watch::channel(false);
         sender.send(true).unwrap();
+        // `stop_tree` sends this signal; the wait only watches for the exit it causes.
+        unsafe {
+            libc::kill(child.id().unwrap() as i32, libc::SIGTERM);
+        }
         let result = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
+            std::time::Duration::from_secs(1),
             wait_cancellable(&mut child, &mut receiver),
         )
         .await;
@@ -1148,7 +1164,11 @@ mod tests {
         let edit_prompt = "This is a disposable Sirus Code integration test. Create exactly one file named sirus-smoke.txt in the current workspace containing SIRUS_OK followed by a newline. Do not modify any other file, use network, install dependencies, or read authentication/configuration files. Then respond with SIRUS_OK.";
         let (prompt, expected, seconds) = match mode {
             SmokeMode::Edit => (edit_prompt, "SIRUS_OK", 120),
-            SmokeMode::Analysis => ("This is a disposable Sirus Code read-only integration test. Reply only SIRUS_ANALYSIS_OK. Do not read or write files, execute tools, use network tools, or inspect authentication/configuration.", "SIRUS_ANALYSIS_OK", 45),
+            SmokeMode::Analysis => (
+                "This is a disposable Sirus Code read-only integration test. Reply only SIRUS_ANALYSIS_OK. Do not read or write files, execute tools, use network tools, or inspect authentication/configuration.",
+                "SIRUS_ANALYSIS_OK",
+                45,
+            ),
         };
         let model = std::env::var("SIRUS_SMOKE_MODEL").ok();
         let (process, mut started) = start(
@@ -1205,7 +1225,11 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert!(status.success(), "provider failed with code {:?}, stderr bytes {stderr_bytes}; raw vendor diagnostics deliberately omitted", status.code());
+        assert!(
+            status.success(),
+            "provider failed with code {:?}, stderr bytes {stderr_bytes}; raw vendor diagnostics deliberately omitted",
+            status.code()
+        );
         assert!(
             visible.contains(expected),
             "normalized assistant output did not contain expected response"

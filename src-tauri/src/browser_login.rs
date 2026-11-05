@@ -61,7 +61,7 @@ pub fn parse_fill_result(raw: &str, origin: &str) -> Result<Value, String> {
 
 /// The JSON argument of the fill script. This is the only place the secrets are serialised
 /// for the page; `Credentials` itself has no `Serialize`.
-fn fill_arguments(
+pub(crate) fn fill_arguments(
     origin: &str,
     part: &str,
     credentials: &Credentials,

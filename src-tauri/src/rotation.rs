@@ -232,6 +232,7 @@ mod tests {
             used,
             window,
             cache_expires_at: None,
+            floor: None,
         });
         session
     }

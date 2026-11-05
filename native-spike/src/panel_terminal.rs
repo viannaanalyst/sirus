@@ -1,5 +1,6 @@
 //! Terminal side panel: a local PTY in the worktree, emulated by alacritty_terminal.
 //! Ported in part from Monocode's terminal.rs (MIT).
+use crate::i18n::{t, tf};
 use crate::panels::PanelContext;
 use crate::tab_tile::{Face, TAB_TILE, TAB_TILE_GAP, mark_tile, tab_tile_inset};
 use crate::theme;
@@ -66,7 +67,7 @@ pub fn new(context: PanelContext, cx: &mut App) -> AnyView {
 
 /// The panel's view: a tab strip over the terminals it holds. Every terminal
 /// keeps running; only the active one is drawn.
-struct TerminalPanel {
+pub struct TerminalPanel {
     cwd: String,
     terminals: Vec<Entity<Terminal>>,
     active: usize,
@@ -106,19 +107,50 @@ impl TerminalPanel {
         self.select(self.terminals.len() - 1, window, cx);
     }
     fn close(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if ix >= self.terminals.len() {
+        self.close_many(vec![ix], window, cx);
+    }
+    /// Closes the terminals at `ixs`. A shell with a command running asks first, in the
+    /// shell's popup, naming every running one together; idle shells close at once.
+    fn close_many(&mut self, ixs: Vec<usize>, window: &mut Window, cx: &mut Context<Self>) {
+        let targets: Vec<Entity<Terminal>> = ixs
+            .iter()
+            .filter_map(|ix| self.terminals.get(*ix).cloned())
+            .collect();
+        let label = folder_name(&self.cwd);
+        let marked: Vec<(String, bool)> = targets
+            .iter()
+            .map(|t| {
+                let at = self.terminals.iter().position(|o| o == t).unwrap_or(0);
+                (format!("{label} {}", at + 1), t.read(cx).busy())
+            })
+            .collect();
+        let running = running_names(&marked);
+        if !needs_confirm(window, cx, &running) {
+            self.close_now(&targets, window, cx);
             return;
         }
+        let panel = cx.entity();
+        let handle = window.window_handle();
+        confirm_close(window, cx, &running, move |cx: &mut App| {
+            let _ = cx.update_window(handle, |_, window, cx| {
+                panel.update(cx, |this, cx| this.close_now(&targets, window, cx));
+            });
+        });
+    }
+    fn close_now(&mut self, targets: &[Entity<Terminal>], window: &mut Window, cx: &mut Context<Self>) {
+        let active = self.terminals.get(self.active).cloned();
         // Dropping the last handle to a terminal shuts its shell down.
-        self.terminals.remove(ix);
+        self.terminals.retain(|t| !targets.contains(t));
         if self.terminals.is_empty() {
             let terminal = self.spawn(cx);
             self.terminals.push(terminal);
             self.active = 0;
-        } else if ix < self.active {
-            self.active -= 1;
+        } else {
+            self.active = active
+                .and_then(|a| self.terminals.iter().position(|t| *t == a))
+                .unwrap_or(self.active)
+                .min(self.terminals.len() - 1);
         }
-        self.active = self.active.min(self.terminals.len() - 1);
         self.focus_active(window, cx);
         cx.notify();
     }
@@ -316,6 +348,8 @@ struct Terminal {
     size: GridSize,
     geometry: Rc<Cell<Option<Geometry>>>,
     shell_pid: u32,
+    /// A duplicate of the PTY master, kept to ask which process group is in front.
+    master_fd: i32,
     exited: bool,
     selecting: bool,
     scroll_remainder: f32,
@@ -389,9 +423,14 @@ impl Terminal {
         };
         write_note(&term, &banner);
         let mut shell_pid = 0;
+        let mut master_fd = -1;
         let sender = match tty::new(&options, window, cx.entity_id().as_u64()) {
             Ok(pty) => {
                 shell_pid = pty.child().id();
+                {
+                    use std::os::fd::AsRawFd;
+                    master_fd = unsafe { libc::dup(pty.file().as_raw_fd()) };
+                }
                 match EventLoop::new(term.clone(), listener, pty, false, false) {
                     Ok(event_loop) => {
                         let sender = event_loop.channel();
@@ -438,6 +477,7 @@ impl Terminal {
             size,
             geometry: Rc::default(),
             shell_pid,
+            master_fd,
             selecting: false,
             scroll_remainder: 0.,
             marked: None,
@@ -666,8 +706,160 @@ impl Terminal {
     }
 }
 
+/// Whether closing needs the popup: something is running and Settings still asks.
+pub fn needs_confirm(window: &mut Window, cx: &App, running: &[String]) -> bool {
+    if running.is_empty() {
+        return false;
+    }
+    match window.root::<crate::shell::Shell>() {
+        Some(Some(shell)) => shell.read(cx).confirms_terminal_close(),
+        _ => true,
+    }
+}
+
+/// Asks in the shell's popup, naming every running terminal; `close` runs only on yes.
+pub fn confirm_close(
+    window: &mut Window,
+    cx: &mut App,
+    running: &[String],
+    close: impl FnOnce(&mut App) + 'static,
+) {
+    let (title, message) = if running.len() == 1 {
+        (
+            t("Fechar o terminal?").to_owned(),
+            tf(
+                "Há um comando rodando em \"{}\". Fechar encerra o shell e o que estiver rodando nele.",
+                &[&running[0]],
+            ),
+        )
+    } else {
+        (
+            t("Fechar os terminais?").to_owned(),
+            tf(
+                "Há comandos rodando em: {}. Fechar encerra esses shells e o que estiver rodando neles.",
+                &[&running.join(", ")],
+            ),
+        )
+    };
+    if let Some(Some(shell)) = window.root::<crate::shell::Shell>() {
+        shell.update(cx, |shell, cx| {
+            shell.confirm(title, message, t("Fechar"), close, cx)
+        });
+    }
+}
+
+/// One more terminal in the Terminal pane (the side panel or the bottom strip).
+pub fn add_in(view: &AnyView, window: &mut Window, cx: &mut App) -> bool {
+    match view.clone().downcast::<TerminalPanel>() {
+        Ok(panel) => {
+            panel.update(cx, |panel, cx| panel.add(window, cx));
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+/// Gives the keyboard to the Terminal pane's active shell.
+pub fn focus_in(view: &AnyView, window: &mut Window, cx: &mut App) {
+    if let Ok(panel) = view.clone().downcast::<TerminalPanel>() {
+        panel.update(cx, |panel, cx| panel.focus_active(window, cx));
+    }
+}
+
+/// A title-bar tab: one shell, or several side by side after Split Terminal Right.
+pub struct TerminalGroup {
+    cwd: String,
+    panes: Vec<Entity<Terminal>>,
+}
+
+impl TerminalGroup {
+    pub fn new(cwd: String, cx: &mut Context<Self>) -> Self {
+        let first = cx.new(|cx| Terminal::new(cwd.clone(), String::new(), cx));
+        Self {
+            cwd,
+            panes: vec![first],
+        }
+    }
+    /// A shell beside the last one, in the same folder, with the keyboard focus.
+    pub fn split(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let cwd = self.cwd.clone();
+        let pane = cx.new(|cx| Terminal::new(cwd, String::new(), cx));
+        self.panes.push(pane);
+        self.focus(window, cx);
+        cx.notify();
+    }
+    pub fn focus(&self, window: &mut Window, cx: &mut App) {
+        if let Some(pane) = self.panes.last() {
+            let focus = pane.read(cx).focus.clone();
+            window.focus(&focus, cx);
+        }
+    }
+    /// The folder's name, the label of the tab.
+    pub fn title(&self) -> String {
+        folder_name(&self.cwd)
+    }
+    /// Every pane with a name and whether a command runs in it.
+    pub fn panes_state(&self, cx: &App) -> Vec<(String, bool)> {
+        let label = folder_name(&self.cwd);
+        self.panes
+            .iter()
+            .enumerate()
+            .map(|(ix, pane)| (format!("{label} {}", ix + 1), pane.read(cx).busy()))
+            .collect()
+    }
+}
+
+impl Render for TerminalGroup {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let last = self.panes.len().saturating_sub(1);
+        div()
+            .id("sirus-terminal-group")
+            .size_full()
+            .flex()
+            .children(self.panes.iter().enumerate().map(|(ix, pane)| {
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .when(ix < last, |d| {
+                        d.border_r_1().border_color(theme::content(0.08))
+                    })
+                    .child(pane.clone().cached(StyleRefinement::default().size_full()))
+            }))
+    }
+}
+
+impl Terminal {
+    /// Whether a command other than the shell itself holds the terminal.
+    fn busy(&self) -> bool {
+        if self.exited || self.master_fd < 0 {
+            return false;
+        }
+        let front = unsafe { libc::tcgetpgrp(self.master_fd) };
+        foreground_busy(front, self.shell_pid as i32)
+    }
+}
+
+/// A shell is a process group leader, so while its group is in front the terminal is idle; any
+/// other group in front is a running command. An unreadable group (<= 0) counts as idle.
+pub fn foreground_busy(front: i32, shell: i32) -> bool {
+    front > 0 && shell > 0 && front != shell
+}
+
+/// The names of the terminals that have a command running, for the confirmation's message.
+pub fn running_names(terminals: &[(String, bool)]) -> Vec<String> {
+    terminals
+        .iter()
+        .filter(|(_, busy)| *busy)
+        .map(|(name, _)| name.clone())
+        .collect()
+}
+
 impl Drop for Terminal {
     fn drop(&mut self) {
+        if self.master_fd >= 0 {
+            unsafe { libc::close(self.master_fd) };
+        }
         if let Some(sender) = self.sender.take() {
             let _ = sender.send(Msg::Shutdown);
         }
@@ -892,7 +1084,7 @@ impl Element for Grid {
                 fg.a *= 0.66;
             }
             if selection.is_some_and(|s| s.contains(indexed.point)) {
-                bg = Some(theme::accent_wash(0.35));
+                bg = Some(theme::text_selection());
             }
             let ch = if c.flags.contains(Flags::HIDDEN) {
                 ' '
@@ -1384,4 +1576,31 @@ fn key_bytes(keystroke: &gpui::Keystroke, mode: TermMode) -> Option<Vec<u8>> {
         return meta(&[code]);
     }
     None
+}
+
+#[cfg(test)]
+mod close_tests {
+    use super::*;
+
+    #[test]
+    fn a_shell_in_front_is_idle_and_another_group_is_a_running_command() {
+        assert!(!foreground_busy(500, 500));
+        assert!(foreground_busy(731, 500));
+        // The group could not be read, or there is no shell.
+        assert!(!foreground_busy(-1, 500));
+        assert!(!foreground_busy(0, 500));
+        assert!(!foreground_busy(731, 0));
+    }
+
+    #[test]
+    fn only_busy_terminals_are_listed_together() {
+        let all = [
+            ("app 1".to_owned(), true),
+            ("app 2".to_owned(), false),
+            ("app 3".to_owned(), true),
+        ];
+        assert_eq!(running_names(&all), vec!["app 1", "app 3"]);
+        assert!(running_names(&all[1..2]).is_empty());
+        assert!(running_names(&[]).is_empty());
+    }
 }

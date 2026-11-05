@@ -115,6 +115,7 @@ mod tests {
             used: MIN_TOKENS,
             window: None,
             cache_expires_at: Some(expires),
+            floor: None,
         });
         assert!(due(&session, expires - LEAD_MS));
         assert!(!due(&session, expires - LEAD_MS - 1), "too early");
@@ -123,6 +124,7 @@ mod tests {
             used: MIN_TOKENS - 1,
             window: None,
             cache_expires_at: Some(expires),
+            floor: None,
         });
         assert!(!due(&session, expires - 1000), "small context");
     }

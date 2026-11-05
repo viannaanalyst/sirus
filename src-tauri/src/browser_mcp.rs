@@ -36,6 +36,9 @@ pub fn child_env() -> Vec<(&'static str, &'static str)> {
     if !agent_access() {
         env.push((BROWSER_TOOLS_ENV, "0"));
     }
+    if crate::browser_bridge::window_expected() {
+        env.push((crate::browser_bridge::WINDOW_ENV, "1"));
+    }
     env
 }
 
@@ -268,8 +271,7 @@ pub(crate) fn session_owned(app: &crate::runtime::AppHandle, session_id: &str) -
     owned
 }
 
-#[cfg_attr(not(all(target_os = "macos", feature = "desktop")), allow(dead_code))]
-fn arg_str(args: &Value, key: &str, limit: usize) -> Option<String> {
+pub(crate) fn arg_str(args: &Value, key: &str, limit: usize) -> Option<String> {
     let value = args.get(key)?.as_str()?.trim();
     if value.chars().count() > limit || value.chars().any(char::is_control) {
         return None;
@@ -277,23 +279,25 @@ fn arg_str(args: &Value, key: &str, limit: usize) -> Option<String> {
     Some(value.to_string())
 }
 
-#[cfg_attr(not(all(target_os = "macos", feature = "desktop")), allow(dead_code))]
-fn valid_ref(value: &str) -> bool {
+pub(crate) fn valid_ref(value: &str) -> bool {
     value.is_empty()
         || ((2..=5).contains(&value.len())
             && value.starts_with('e')
             && value[1..].chars().all(|c| c.is_ascii_digit()))
 }
 
-#[cfg_attr(not(all(target_os = "macos", feature = "desktop")), allow(dead_code))]
-fn valid_selector(value: &str) -> bool {
+pub(crate) fn valid_selector(value: &str) -> bool {
     value.chars().count() <= 300 && !value.chars().any(char::is_control)
 }
 
-#[cfg_attr(not(all(target_os = "macos", feature = "desktop")), allow(dead_code))]
 fn action_result(raw: String) -> Result<Value, String> {
     let parsed: Value =
         serde_json::from_str(&raw).map_err(|_| "invalid page response".to_string())?;
+    action_value(parsed)
+}
+
+/// The same check for a page result the window already decoded (the window bridge).
+pub(crate) fn action_value(parsed: Value) -> Result<Value, String> {
     if parsed.get("interrupted").and_then(Value::as_bool) == Some(true) {
         return Err("the page was used by the person and the action was interrupted".into());
     }
@@ -334,15 +338,16 @@ fn execute(
     browser_tool(app, session_id, tool, args)
 }
 
-/// The embedded browser lives in the Mac app's window; elsewhere its tools are not offered.
+/// The embedded browser lives in a window: the Mac app's own, or a window client attached to
+/// the host (`browser_bridge.rs`, ADR-189). With neither, the tools are refused.
 #[cfg(not(all(target_os = "macos", feature = "desktop")))]
 fn browser_tool(
-    _app: &crate::runtime::AppHandle,
-    _session_id: &str,
-    _tool: &str,
-    _args: Value,
+    app: &crate::runtime::AppHandle,
+    session_id: &str,
+    tool: &str,
+    args: Value,
 ) -> Result<Value, String> {
-    Err("the embedded browser is only available in the Mac app".into())
+    crate::browser_bridge::browser_tool(app, session_id, tool, args)
 }
 
 #[cfg(all(target_os = "macos", feature = "desktop"))]
@@ -616,8 +621,7 @@ fn browser_tool(
 }
 
 /// The element an agent names: a snapshot ref or a CSS selector, never empty.
-#[cfg(all(target_os = "macos", feature = "desktop"))]
-fn element_arg(args: &Value) -> Result<(String, String), String> {
+pub(crate) fn element_arg(args: &Value) -> Result<(String, String), String> {
     let reference = arg_str(args, "ref", 8).unwrap_or_default();
     let selector = arg_str(args, "selector", 300).unwrap_or_default();
     if !valid_ref(&reference) || !valid_selector(&selector) {
@@ -630,8 +634,7 @@ fn element_arg(args: &Value) -> Result<(String, String), String> {
 }
 
 /// The session's workspace and its attachment snapshots: the only places an upload may read.
-#[cfg(all(target_os = "macos", feature = "desktop"))]
-fn upload_roots(
+pub(crate) fn upload_roots(
     app: &crate::runtime::AppHandle,
     session_id: &str,
 ) -> (Option<PathBuf>, Vec<PathBuf>) {
@@ -653,7 +656,10 @@ fn upload_roots(
 }
 
 fn tool_definitions() -> Vec<Value> {
-    let browser = std::env::var(BROWSER_TOOLS_ENV).as_deref() != Ok("0");
+    // The host lists the browser tools only when a window client can run them (ADR-189).
+    let browser = std::env::var(BROWSER_TOOLS_ENV).as_deref() != Ok("0")
+        && (cfg!(all(target_os = "macos", feature = "desktop"))
+            || std::env::var(crate::browser_bridge::WINDOW_ENV).as_deref() == Ok("1"));
     browser_tool_definitions()
         .into_iter()
         .filter(|_| browser)
@@ -663,12 +669,6 @@ fn tool_definitions() -> Vec<Value> {
         .collect()
 }
 
-#[cfg(not(all(target_os = "macos", feature = "desktop")))]
-fn browser_tool_definitions() -> Vec<Value> {
-    Vec::new()
-}
-
-#[cfg(all(target_os = "macos", feature = "desktop"))]
 fn browser_tool_definitions() -> Vec<Value> {
     let element = json!({
         "type": "object",
@@ -742,6 +742,7 @@ mod tests {
                 .as_str()
                 .is_some_and(|name| name.starts_with("browser_")
                     || name.starts_with("sirus_")
+                    || name.starts_with("visual_")
                     || name.ends_with("_secret")
                     || name.ends_with("_pull_request")));
             assert!(tool["description"]
@@ -754,9 +755,11 @@ mod tests {
     #[test]
     fn agent_browser_access_off_hides_only_the_browser_tools() {
         let browser = browser_tool_definitions();
-        assert!(browser.iter().all(|tool| tool["name"]
-            .as_str()
-            .is_some_and(|name| name.starts_with("browser_"))));
+        assert!(browser.iter().all(|tool| {
+            tool["name"]
+                .as_str()
+                .is_some_and(|name| name.starts_with("browser_"))
+        }));
         set_agent_access(false);
         assert!(child_env().contains(&(BROWSER_TOOLS_ENV, "0")));
         set_agent_access(true);

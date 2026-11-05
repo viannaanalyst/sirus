@@ -351,7 +351,7 @@ pub fn network_entries(raw: &Value, limit: usize) -> Vec<Value> {
         .collect()
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "desktop"))]
 pub(crate) mod platform {
     use std::path::PathBuf;
 
@@ -1024,6 +1024,7 @@ return JSON.stringify({ ok: true, url: location.href, entries });
 }
 
 /// The person answers a page's dialog from the browser pane.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn browser_dialog_reply(
     app: tauri::AppHandle,
@@ -1053,6 +1054,7 @@ pub async fn browser_dialog_reply(
 
 /// Settings → Browser profiles: closes the profile's tabs and deletes its data. The renderer
 /// then saves settings without it.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn browser_profile_delete(
     app: tauri::AppHandle,
@@ -1070,6 +1072,7 @@ pub async fn browser_profile_delete(
 }
 
 /// Whether custom profiles work on this Mac (macOS 14 and later).
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn browser_profiles_supported() -> bool {
     crate::browser_profiles::custom_supported()
@@ -1077,6 +1080,7 @@ pub fn browser_profiles_supported() -> bool {
 
 /// Settings → Browser profiles → Import cookies (ADR-152): the browsers and Chrome profiles
 /// the owner can import from. Names only; nothing is read beyond the folder listing.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn browser_cookie_sources(
 ) -> crate::error::Result<Vec<crate::browser_cookies::CookieSource>> {
@@ -1100,6 +1104,7 @@ pub async fn browser_cookie_sources(
 }
 
 /// The domains that have cookies in one source, with counts. Values never leave the back end.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn browser_cookie_domains(
     source_id: String,
@@ -1131,6 +1136,7 @@ pub async fn browser_cookie_domains(
 
 /// Opens Privacy & Security at Full Disk Access, the setting Safari's cookie file needs (ADR-152).
 /// The address is fixed here, so the renderer cannot point it anywhere else.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn browser_open_full_disk_access(app: tauri::AppHandle) -> crate::error::Result<()> {
     #[cfg(target_os = "macos")]
@@ -1151,6 +1157,7 @@ pub fn browser_open_full_disk_access(app: tauri::AppHandle) -> crate::error::Res
 
 /// Imports the owner's ticked domains from one source into a saved profile. The renderer only
 /// calls this after the consent step; the back end checks the profile and the domain names.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn browser_cookie_import(
     app: tauri::AppHandle,

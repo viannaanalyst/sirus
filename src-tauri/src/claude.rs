@@ -249,6 +249,28 @@ impl Steers {
 fn unsupported(vendor_id: &str) -> Value {
     json!({"type":"control_response","response":{"subtype":"error","request_id":vendor_id,"error":"Unsupported native control request"}})
 }
+/// The content blocks of a steered instruction: its text first (the CLI echoes that block
+/// back, which is how the turn knows the instruction was read), then images and PDFs.
+fn steer_content(
+    text: &str,
+    attachments: &[std::sync::Arc<crate::attachments::PreparedAttachment>],
+) -> Result<Value> {
+    Ok(match crate::attachments::claude_input(text, attachments)? {
+        Value::String(text) => json!([{"type":"text","text":text}]),
+        blocks => blocks,
+    })
+}
+/// The unread steer an echoed user message answers: the uuid sent with it, else its text
+/// (an echo of an instruction with attachments may carry more blocks or another uuid).
+fn unread_steer(
+    unread: &[(String, String)],
+    uuid: Option<&str>,
+    echoed: Option<&str>,
+) -> Option<usize> {
+    unread
+        .iter()
+        .position(|(text, sent)| uuid == Some(sent.as_str()) || echoed == Some(text.as_str()))
+}
 /// The text of an echoed user message: its string content or first text block.
 fn echoed_text(value: &Value) -> Option<&str> {
     let content = &value["message"]["content"];
@@ -799,7 +821,10 @@ async fn run_turn(
     let mut usage_limit: Option<Option<i64>> = None;
     let mut deadline = None;
     // Instructions steered into this turn that Claude has not echoed back yet.
-    let mut unread_steers: Vec<String> = vec![];
+    // Each is the text sent (the echo's first text block) and the uuid sent with it.
+    let mut unread_steers: Vec<(String, String)> = vec![];
+    // Our answer's result came with an instruction still unread: the next result closes the turn.
+    let mut continuing = false;
     let mut background = Background::default();
     let mut steers = Steers::default();
     let mut updates = Updates::default();
@@ -836,11 +861,15 @@ async fn run_turn(
             Some(inbound)=run.replies.recv(),if !interrupted=>{
                 let reply=match inbound {
                     crate::codex::Inbound::Answer(reply)=>reply,
-                    crate::codex::Inbound::Steer{text,result}=>{
+                    crate::codex::Inbound::Steer{text,attachments,result}=>{
                         // Claude reads input sent during a turn at its next step, in the same turn.
-                        let sent=wire.send(json!({"type":"user","message":{"role":"user","content":[{"type":"text","text":text}]},"parent_tool_use_id":null,"session_id":native,"uuid":uuid::Uuid::new_v4().to_string()})).await;
+                        let steer_uuid=uuid::Uuid::new_v4().to_string();
+                        let sent=match steer_content(&text,&attachments) {
+                            Ok(content)=>wire.send(json!({"type":"user","message":{"role":"user","content":content},"parent_tool_use_id":null,"session_id":native,"uuid":steer_uuid})).await,
+                            Err(error)=>Err(error),
+                        };
                         if sent.is_ok() {
-                            unread_steers.push(text);
+                            unread_steers.push((text,steer_uuid));
                             // After our answer, an instruction runs as a turn of its own.
                             if background.since.is_some() {background.expect_follow_up();}
                         }
@@ -958,8 +987,14 @@ async fn run_turn(
             emit(Event::Activity(finished))?;
         }
         background.turn_began(&value);
+        // A compaction's boundary reports the rebuilt conversation; the monitor adds the
+        // provider's own prompt and tools back (`ContextUsage::floor`).
+        if value["type"] == "system" && value["subtype"] == "compact_boundary" {
+            if let Some(rebuilt) = value["compact_metadata"]["post_tokens"].as_u64() {
+                emit(Event::Compacted(rebuilt))?;
+            }
         // A manual compaction's result reports the summarizer call, not the rebuilt context.
-        if !(value["type"] == "result" && crate::codex::is_compact(&run.prompt)) {
+        } else if !(value["type"] == "result" && crate::codex::is_compact(&run.prompt)) {
             if let Some(mut usage) = context_usage(&value) {
                 usage.cache_expires_at = cache.expires_at(&value);
                 emit(Event::Context(usage))?;
@@ -1059,10 +1094,12 @@ async fn run_turn(
                     || echoed.is_some_and(|text| text.trim() == run.prompt.trim())
                 {
                     prompt_seen = true;
+                } else if let Some(index) =
+                    unread_steer(&unread_steers, value["uuid"].as_str(), echoed)
+                {
+                    unread_steers.remove(index);
                 } else if let Some(echoed) = echoed {
-                    if let Some(index) = unread_steers.iter().position(|steer| steer == echoed) {
-                        unread_steers.remove(index);
-                    } else if !prompt_seen
+                    if !prompt_seen
                         && (value["origin"]["kind"].is_string()
                             || (value["isSynthetic"] != true
                                 && echoed.trim_start().starts_with('<')))
@@ -1085,7 +1122,9 @@ async fn run_turn(
             }
             // Another prompt's result is not this turn's end: keep reading until ours answers.
             Some("result")
-                if !interrupted && answers_other_prompt(&value, &turn, foreign_prompt) =>
+                if !interrupted
+                    && !continuing
+                    && answers_other_prompt(&value, &turn, foreign_prompt) =>
             {
                 foreign_prompt = false;
                 // A limit reported for that prompt is not this turn's.
@@ -1093,7 +1132,10 @@ async fn run_turn(
             }
             // An instruction that arrived as the turn ended runs as its continuation.
             Some("result")
-                if !interrupted && !unread_steers.is_empty() && value["is_error"] != true => {}
+                if !interrupted && !unread_steers.is_empty() && value["is_error"] != true =>
+            {
+                continuing = true;
+            }
             Some("result") => {
                 if identity.is_none() {
                     return Err(Error::agent("Claude completed without native identity"));
@@ -1406,6 +1448,7 @@ fn context_usage(value: &Value) -> Option<crate::models::ContextUsage> {
             used: total(&value["message"]["usage"])?,
             window: None,
             cache_expires_at: None,
+            floor: None,
         }),
         "result" if value["subtype"] == "success" => {
             let usage = value["usage"]["iterations"]
@@ -1421,13 +1464,9 @@ fn context_usage(value: &Value) -> Option<crate::models::ContextUsage> {
                 used: total(usage)?,
                 window,
                 cache_expires_at: None,
+                floor: None,
             })
         }
-        "system" if value["subtype"] == "compact_boundary" => Some(crate::models::ContextUsage {
-            used: value["compact_metadata"]["post_tokens"].as_u64()?,
-            window: None,
-            cache_expires_at: None,
-        }),
         _ => None,
     }
 }
@@ -1484,6 +1523,36 @@ mod tests {
             json!({"type": "content_block_start", "content_block": {"type": "text"}}),
         ));
         assert_eq!(text_after.observe(&tool), None);
+    }
+
+    #[test]
+    fn a_steer_with_attachments_is_still_matched_by_its_echo() {
+        let unread = vec![
+            ("look\n\nUser-attached files: x".to_owned(), "u1".to_owned()),
+            ("second".to_owned(), "u2".to_owned()),
+        ];
+        // The echo carries the same first text block, then the image.
+        let echo = json!({"uuid":"other","message":{"content":[
+            {"type":"text","text":"look\n\nUser-attached files: x"},
+            {"type":"image","source":{"type":"base64","media_type":"image/png","data":""}}]}});
+        assert_eq!(
+            unread_steer(&unread, echo["uuid"].as_str(), echoed_text(&echo)),
+            Some(0)
+        );
+        // An echo that rewrites the text still matches by the uuid sent.
+        let rewritten =
+            json!({"uuid":"u2","message":{"content":[{"type":"text","text":"[Image #1]"}]}});
+        assert_eq!(
+            unread_steer(&unread, rewritten["uuid"].as_str(), echoed_text(&rewritten)),
+            Some(1)
+        );
+        assert_eq!(unread_steer(&unread, None, Some("unrelated")), None);
+    }
+
+    #[test]
+    fn steer_content_is_always_blocks_with_the_text_first() {
+        let content = steer_content("plain", &[]).unwrap();
+        assert_eq!(content, json!([{"type":"text","text":"plain"}]));
     }
 
     #[test]
@@ -1701,7 +1770,8 @@ send({'type':'result','subtype':'success','is_error':True,'terminal_reason':'api
             Some(crate::models::ContextUsage {
                 used: 1035,
                 window: None,
-                cache_expires_at: None
+                cache_expires_at: None,
+                floor: None,
             })
         );
         let child = json!({"type":"assistant","parent_tool_use_id":"tool","message":{"usage":{"input_tokens":10}}});
@@ -1712,7 +1782,8 @@ send({'type':'result','subtype':'success','is_error':True,'terminal_reason':'api
             Some(crate::models::ContextUsage {
                 used: 57,
                 window: Some(1000000),
-                cache_expires_at: None
+                cache_expires_at: None,
+                floor: None,
             })
         );
         assert_eq!(
@@ -2216,19 +2287,15 @@ send({{'type':'result','subtype':'success','is_error':False,'num_turns':0,'resul
         let readings: Vec<_> = events
             .iter()
             .filter_map(|event| match event {
-                Event::Context(usage) => Some(*usage),
+                Event::Compacted(rebuilt) => Some(*rebuilt),
                 _ => None,
             })
             .collect();
         // The boundary's rebuilt context, not the summarizer call on the result.
-        assert_eq!(
-            readings,
-            vec![crate::models::ContextUsage {
-                used: 38000,
-                window: None,
-                cache_expires_at: None
-            }]
-        );
+        assert_eq!(readings, vec![38000]);
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event, Event::Context(_))));
     }
 
     #[tokio::test]
@@ -2581,6 +2648,7 @@ assert sys.stdin.read()==''
                 | Event::Activity(_)
                 | Event::Model(_)
                 | Event::Context(_)
+                | Event::Compacted(_)
                 | Event::UsageLimit(_)
                 | Event::Feed(_) => {}
             }

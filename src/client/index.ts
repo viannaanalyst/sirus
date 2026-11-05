@@ -580,8 +580,8 @@ export class SirusClient {
     return this.transport.invoke<Session>("set_session_model", { sessionId, agent, model });
   }
 
-  listProviderModels(id: AgentProviderId) {
-    return this.transport.invoke<ProviderModelList>("list_provider_models", { id });
+  listProviderModels(id: AgentProviderId, refresh = false) {
+    return this.transport.invoke<ProviderModelList>("list_provider_models", { id, refresh });
   }
 
   deleteSession(sessionId: string, removeWorktree: boolean, confirm: boolean) {

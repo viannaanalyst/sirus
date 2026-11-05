@@ -2095,7 +2095,11 @@ pub async fn send_prompt(
         if let Some(goal) = &admitted_goal {
             session.goal = goal.clone();
         }
-        session.execution = request.execution.clone();
+        // A compaction carries no choices of its own: the session keeps its approval, effort,
+        // Fast and plan mode, so the kept process still matches and the person's settings survive.
+        if !compacting {
+            session.execution = request.execution.clone();
+        }
         session.pending_requests.clear();
         let user = Message {
             id: Uuid::new_v4().to_string(),
@@ -2443,15 +2447,20 @@ pub async fn respond_agent_request(
 const STEER_LIMIT: usize = 64 * 1024;
 
 /// Sends an instruction into the session's running Codex or Claude reply (ADR-062).
-/// Only text; the running turn keeps its model, approvals and attachments. Once the
-/// provider accepts it, the instruction is recorded on the reply at its current length.
+/// Text and, optionally, screenshots and files from the composer's draft (`attachment_ids`
+/// of `attachment_owner`, resolved as `send_prompt` does). The running turn keeps its model
+/// and approvals. Once the provider accepts it, the instruction is recorded on the reply at
+/// its current length, with its attachments, and the attachments count as sent.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn steer_turn(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
     session_id: String,
     text: String,
+    attachment_ids: Option<Vec<String>>,
+    attachment_owner: Option<String>,
 ) -> Result<()> {
+    let attachment_ids = attachment_ids.unwrap_or_default();
     let text = text.trim().to_owned();
     if text.is_empty() || text.len() > STEER_LIMIT || text.contains('\0') {
         return Err(Error::new(
@@ -2465,7 +2474,7 @@ pub async fn steer_turn(
             "Wait for the reply to finish, then send /compact.",
         ));
     }
-    let (receiver, generation) = {
+    let (receiver, generation, summaries) = {
         let data = state.data.lock();
         state.ensure_running()?;
         let session = data
@@ -2479,6 +2488,21 @@ pub async fn steer_turn(
         ) || !session.status.is_active()
         {
             return Err(Error::agent("This reply cannot take instructions now."));
+        }
+        let owner = attachment_owner.unwrap_or_else(|| format!("session:{}", session.id));
+        let attachments = state
+            .attachments
+            .resolve(&owner, &attachment_ids, session)?;
+        let summaries: Vec<_> = attachments
+            .iter()
+            .map(|file| file.summary(&state.data_path))
+            .collect();
+        let text = crate::attachments::file_prompt(&text, &attachments);
+        if text.len() > STEER_LIMIT + 16 * 1024 {
+            return Err(Error::new(
+                "invalid",
+                "The instruction and its files are too long.",
+            ));
         }
         // Compacting takes no instructions; the composer queues the message instead.
         let request = session
@@ -2499,19 +2523,38 @@ pub async fn steer_turn(
             .replies
             .clone()
             .ok_or_else(|| Error::agent("This reply cannot take instructions now."))?;
+        // Taken once: a second steer, or a send, of the same attachments is refused.
+        if !state.attachments.claim(&attachment_ids) {
+            return Err(Error::new(
+                "attachment",
+                "These attachments were already sent.",
+            ));
+        }
         let (result, receiver) = tokio::sync::oneshot::channel();
-        sender
+        if sender
             .try_send(crate::codex::Inbound::Steer {
-                text: text.clone(),
+                text,
+                attachments,
                 result,
             })
-            .map_err(|_| Error::agent("This reply cannot take instructions now."))?;
-        (receiver, process.generation.clone())
+            .is_err()
+        {
+            state.attachments.unclaim(&attachment_ids);
+            return Err(Error::agent("This reply cannot take instructions now."));
+        }
+        (receiver, process.generation.clone(), summaries)
     };
-    tokio::time::timeout(std::time::Duration::from_secs(15), receiver)
+    let delivered = tokio::time::timeout(std::time::Duration::from_secs(15), receiver)
         .await
-        .map_err(|_| Error::agent("The provider did not take the instruction in time."))?
-        .map_err(|_| Error::agent("The reply ended before taking the instruction."))??;
+        .map_err(|_| Error::agent("The provider did not take the instruction in time."))
+        .and_then(|received| {
+            received.map_err(|_| Error::agent("The reply ended before taking the instruction."))
+        })
+        .and_then(|result| result);
+    if let Err(error) = delivered {
+        state.attachments.unclaim(&attachment_ids);
+        return Err(error);
+    }
     let mut data = state.data_with_messages(&[&session_id]);
     let still_running = state
         .agents
@@ -2531,6 +2574,7 @@ pub async fn steer_turn(
                 text,
                 at: now_rfc3339(),
                 offset,
+                attachments: summaries,
             });
         }
         crate::transcript_view::emit(&app, session);
@@ -2996,7 +3040,7 @@ pub fn set_session_model(
 /// fills. After a restart or a CLI update nothing may have listed it yet, or the session's model
 /// may be new to it: the catalog is listed here instead of refusing the turn.
 async fn ensure_model_catalog(state: &Arc<AppState>, session_id: &str) {
-    let (agent, model, overrides) = {
+    let (agent, model, account, overrides) = {
         let data = state.data.lock();
         let Some(session) = data.sessions.iter().find(|item| item.id == session_id) else {
             return;
@@ -3004,6 +3048,7 @@ async fn ensure_model_catalog(state: &Arc<AppState>, session_id: &str) {
         (
             session.agent.clone(),
             session.model.clone(),
+            session.provider_account_id.clone(),
             data.settings.provider_paths.clone(),
         )
     };
@@ -3021,7 +3066,8 @@ async fn ensure_model_catalog(state: &Arc<AppState>, session_id: &str) {
     if known {
         return;
     }
-    let catalog = crate::provider_models::list_for_provider(agent.clone(), &overrides).await;
+    let catalog =
+        crate::provider_models::list_for_provider(agent.clone(), &overrides, &account, false).await;
     remember_catalog(state, &agent, overrides.get(&agent).cloned(), catalog);
 }
 
@@ -3061,9 +3107,22 @@ fn keeps_previous(
 pub async fn list_provider_models(
     state: State<'_, Arc<AppState>>,
     id: AgentProviderId,
+    refresh: Option<bool>,
 ) -> Result<crate::provider_models::ProviderModelList> {
-    let overrides = state.data.lock().settings.provider_paths.clone();
-    let catalog = crate::provider_models::list_for_provider(id.clone(), &overrides).await;
+    let (overrides, account) = {
+        let data = state.data.lock();
+        (
+            data.settings.provider_paths.clone(),
+            crate::provider_accounts::selected(&data, &id),
+        )
+    };
+    let catalog = crate::provider_models::list_for_provider(
+        id.clone(),
+        &overrides,
+        &account,
+        refresh.unwrap_or(false),
+    )
+    .await;
     Ok(remember_catalog(
         &state,
         &id,

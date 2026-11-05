@@ -261,6 +261,9 @@ pub struct Steer {
     pub text: String,
     pub at: String,
     pub offset: usize,
+    /// Screenshots and files steered with the text.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<MessageAttachment>,
 }
 
 /// Exact vendor identity bound to the owning native session and validated workspace.
@@ -383,6 +386,11 @@ pub struct ContextUsage {
     /// API key). Absent when unknown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_expires_at: Option<i64>,
+    /// The smallest reading seen: what the provider's own prompt and tools cost. A compaction's
+    /// boundary reports the rebuilt conversation without it, so the reading after a compaction
+    /// adds this back until the next reply reports the real figure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub floor: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

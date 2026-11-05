@@ -23,6 +23,7 @@ sirus-host: Sirus Code without a window (ADR-131)
 
 Usage:
   sirus-host serve [--data-dir DIR] [--bind ADDR] [--port PORT] [--ui-dir DIR] [--url URL]
+                   [--local-port PORT] [--https-port PORT] [--label NAME]
   sirus-host pair [--data-dir DIR]      one-time six-digit code and QR for a new device
   sirus-host devices [--data-dir DIR]   paired devices
   sirus-host revoke <device-id> [--data-dir DIR]
@@ -36,6 +37,13 @@ Options:
   --ui-dir DIR    the built front end (`npm run build` → dist/); default $SIRUS_UI_DIR,
                   else `ui/` next to the binary
   --url URL       address to show in pairing links (e.g. http://host.tailnet.ts.net:7710)
+  --local-port P  a window's own listener on 127.0.0.1:P, always on (Sirus Native, ADR-189).
+                  --port is then the listener for other devices, on only while Settings →
+                  Connections allows it (`remote.json`), on every address but Tailscale
+                  peers only
+  --https-port P  the `tailscale serve` HTTPS port (default 443; Sirus Native uses 8443 so a
+                  Sirus Code on the same Mac keeps 443)
+  --label NAME    appended to this computer's name on the phone's list
 ";
 
 /// The command a paired device sent, run as the window would run it.
@@ -87,6 +95,9 @@ struct Cli {
     port: u16,
     ui_dir: Option<PathBuf>,
     url: Option<String>,
+    local_port: Option<u16>,
+    https_port: Option<u16>,
+    label: Option<String>,
 }
 
 fn parse(arguments: &[String]) -> Result<Cli, String> {
@@ -98,6 +109,9 @@ fn parse(arguments: &[String]) -> Result<Cli, String> {
         port: crate::remote::DEFAULT_PORT,
         ui_dir: None,
         url: None,
+        local_port: None,
+        https_port: None,
+        label: None,
     };
     let mut iter = arguments.iter();
     while let Some(argument) = iter.next() {
@@ -122,6 +136,31 @@ fn parse(arguments: &[String]) -> Result<Cli, String> {
                     .ok()
                     .filter(|port| *port > 0)
                     .ok_or_else(|| "--port takes a number from 1 to 65535".to_string())?
+            }
+            "--local-port" => {
+                cli.local_port = Some(
+                    value("--local-port")?
+                        .parse()
+                        .ok()
+                        .filter(|port| *port > 0)
+                        .ok_or_else(|| "--local-port takes a number from 1 to 65535".to_string())?,
+                )
+            }
+            "--https-port" => {
+                cli.https_port = Some(
+                    value("--https-port")?
+                        .parse()
+                        .ok()
+                        .filter(|port| [443, 8443, 10000].contains(port))
+                        .ok_or_else(|| "--https-port is 443, 8443 or 10000".to_string())?,
+                )
+            }
+            "--label" => {
+                let label = value("--label")?;
+                if label.is_empty() || label.len() > 40 || label.chars().any(char::is_control) {
+                    return Err("--label takes a short one-line name".into());
+                }
+                cli.label = Some(label);
             }
             "--url" => {
                 let url = value("--url")?;
@@ -190,6 +229,13 @@ pub fn main() -> i32 {
     if arguments.iter().any(|argument| argument == "--mcp-browser") {
         return crate::browser_mcp::run_stdio();
     }
+    // The same binary is the computer-use tools server (`computer_mcp.rs`).
+    if arguments
+        .iter()
+        .any(|argument| argument == "--mcp-computer")
+    {
+        return crate::computer_mcp::run_stdio();
+    }
     let cli = match parse(&arguments) {
         Ok(cli) => cli,
         Err(message) => {
@@ -239,7 +285,10 @@ fn serve(cli: &Cli) -> i32 {
     match &ui {
         Some(ui) if ui.join("index.html").is_file() => {}
         Some(ui) => {
-            eprintln!("sirus-host: {} has no index.html (build the UI with `npm run build`)", ui.display());
+            eprintln!(
+                "sirus-host: {} has no index.html (build the UI with `npm run build`)",
+                ui.display()
+            );
             return 1;
         }
         None => eprintln!(
@@ -257,7 +306,13 @@ fn serve(cli: &Cli) -> i32 {
         }
     };
     // Never every address by default: the tailnet address, or loopback for `tailscale serve`.
+    // With a window's own listener, the one for other devices listens on every address like the
+    // Mac app does and refuses all but loopback and Tailscale peers.
+    let windowed = cli.local_port.is_some();
     let bind = cli.bind.unwrap_or_else(|| {
+        if windowed {
+            return IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED);
+        }
         remote_host::tailnet_address()
             .map(IpAddr::V4)
             .unwrap_or(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST))
@@ -267,6 +322,9 @@ fn serve(cli: &Cli) -> i32 {
         port: cli.port,
         url: cli.url.clone(),
         ui_dir: ui,
+        local_port: cli.local_port,
+        https_port: cli.https_port,
+        label: cli.label.clone(),
     };
     let code = crate::runtime::async_runtime::block_on(async {
         let urls = match remote_host::start_host(app.clone(), &dir, options).await {
@@ -280,12 +338,26 @@ fn serve(cli: &Cli) -> i32 {
             eprintln!("sirus-host: cannot open the control socket: {error}");
             return 1;
         }
-        println!("Sirus host listening on {bind}:{}", cli.port);
-        for url in &urls {
-            println!("  open {url}");
-        }
-        if urls.is_empty() {
-            println!("  (no address to show: pass --url, or put `tailscale serve` in front)");
+        if let Some(local) = cli.local_port {
+            println!("Sirus host: window on 127.0.0.1:{local}");
+            if urls.is_empty() {
+                println!(
+                    "  other devices: off (Settings → Connections turns them on, port {})",
+                    cli.port
+                );
+            } else {
+                for url in &urls {
+                    println!("  other devices: {url}");
+                }
+            }
+        } else {
+            println!("Sirus host listening on {bind}:{}", cli.port);
+            for url in &urls {
+                println!("  open {url}");
+            }
+            if urls.is_empty() {
+                println!("  (no address to show: pass --url, or put `tailscale serve` in front)");
+            }
         }
         println!("Data: {}", dir.display());
         println!("Pair a device: sirus-host pair{}", data_dir_hint(cli));
@@ -333,8 +405,13 @@ fn start(dir: &Path) -> crate::error::Result<AppHandle> {
     crate::browser_mcp::set_agent_access(data.settings.agent_browser_access);
     crate::agent_pool::set_limit(data.settings.keep_idle_agents as usize);
     crate::connectors::start(dir, &data_path, &mut data);
-    // Computer use drives the Mac's own apps; it never runs on a server.
-    crate::computer_mcp::init(app.clone(), dir.to_path_buf(), false);
+    // Computer use drives this Mac's own apps (macOS only; elsewhere it answers "only on macOS").
+    // The approval cards reach the local window client as `computer-state` (ADR-189).
+    crate::computer_mcp::init(
+        app.clone(),
+        dir.to_path_buf(),
+        data.settings.computer_use_enabled,
+    );
     app.manage(Arc::new(AppState::new(data_path, worktree_root, data)));
     crate::archive_removal::delete_archived(app.state::<Arc<AppState>>().inner());
     crate::notifications::install(&app);
@@ -376,8 +453,10 @@ fn error_message(error: &Value) -> String {
 }
 
 fn pair(cli: &Cli) -> i32 {
-    let Some(reply) = remote_host::control_request(&data_dir(cli), &json!({ "type": "pair" }))
-    else {
+    // `pair window`: the code Sirus Native's own window redeems (ADR-189).
+    let window = cli.positional.first().is_some_and(|word| word == "window");
+    let request = json!({ "type": if window { "pairWindow" } else { "pair" } });
+    let Some(reply) = remote_host::control_request(&data_dir(cli), &request) else {
         return not_running(cli);
     };
     let pairing = match reply {

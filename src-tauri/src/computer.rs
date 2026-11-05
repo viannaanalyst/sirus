@@ -202,11 +202,11 @@ pub fn key_code(name: &str) -> Option<u16> {
     })
 }
 
-#[cfg(all(target_os = "macos", feature = "desktop"))]
+#[cfg(target_os = "macos")]
 #[allow(unused_imports)]
 pub use platform::*;
 
-#[cfg(all(target_os = "macos", feature = "desktop"))]
+#[cfg(target_os = "macos")]
 mod platform {
     use super::*;
     use std::collections::HashMap;
@@ -946,6 +946,7 @@ mod platform {
 
     /// On-screen control indicator: a floating pill with Stop at the top of the
     /// controlled window's screen and a soft border around that window. Main thread only.
+    #[cfg(feature = "desktop")]
     pub mod overlay {
         use super::super::Frame;
         use std::cell::RefCell;
@@ -1238,7 +1239,7 @@ mod platform {
     }
 }
 
-#[cfg(not(all(target_os = "macos", feature = "desktop")))]
+#[cfg(not(target_os = "macos"))]
 mod fallback {
     use super::*;
     pub fn permissions() -> Permissions {
@@ -1249,7 +1250,7 @@ mod fallback {
         }
     }
 }
-#[cfg(not(all(target_os = "macos", feature = "desktop")))]
+#[cfg(not(target_os = "macos"))]
 pub use fallback::*;
 
 #[cfg(test)]
@@ -1270,7 +1271,7 @@ mod tests {
 
     /// Live check against Calculator: `cargo test live_calculator -- --ignored --nocapture`.
     /// Needs Accessibility (and Screen Recording for the screenshot) for the process running tests.
-    #[cfg(all(target_os = "macos", feature = "desktop"))]
+    #[cfg(target_os = "macos")]
     #[test]
     #[ignore]
     fn live_calculator() {

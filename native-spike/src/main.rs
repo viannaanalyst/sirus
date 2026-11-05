@@ -1,32 +1,65 @@
 //! Part 1 of the native spike: tabs, pinning, sidebar and motion on GPUI with sample data,
 //! to compare by feel against the Tauri app. GPUI is vendored from Monocode (Apache-2.0);
 //! a few presentation files are ported from Monocode (MIT, LICENSE-MONOCODE-MIT).
+mod attachment_doc;
+mod attachment_html;
+mod attachment_ooxml;
+mod attachment_pdf;
+mod attachment_web;
 mod backend;
+mod chat_background;
+mod browser_address;
+mod browser_bridge;
+mod browser_crop;
+mod browser_data;
+mod browser_device;
+mod browser_js;
+mod browser_pip;
+mod browser_profiles;
+mod browser_record;
+mod browser_tab;
+mod cli_diagnostics;
+mod connector_marks;
 mod data;
 mod effort_energy;
+mod file_editor;
 mod file_icons;
 mod folder_icon_data;
+mod git_sync;
+mod hover_track;
 mod i18n;
 mod local_git;
 mod markdown;
 mod marks;
 mod mascots;
 mod motion;
+mod send_morph;
 mod native_actions;
 mod panel_browser;
 mod panel_changes;
 mod panel_files;
 mod panel_sidechat;
+mod panel_simulator;
 mod panel_terminal;
 mod panels;
 mod project_avatar;
 mod project_files;
+mod project_scripts;
+mod project_scripts_view;
 mod provider_masks;
+mod reply_render;
+mod reply_rich;
+mod reply_view;
+mod settings_connectors;
+mod settings_pair;
+mod simulator;
 mod settings_pages;
 mod shell;
+mod subagent_team;
 mod syntax;
 mod tab_label;
 mod tab_tile;
+mod terminal_place;
 mod theme;
 mod visuals;
 
@@ -39,6 +72,12 @@ use std::borrow::Cow;
 struct Assets;
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
+        if let Some(bytes) = settings_connectors::asset(path) {
+            return Ok(Some(bytes));
+        }
+        if let Some(bytes) = settings_pair::asset(path) {
+            return Ok(Some(bytes));
+        }
         let bytes: &'static [u8] = match path {
             "plus" => include_bytes!("../assets/plus.svg"),
             "cursor" => include_bytes!("../assets/cursor.svg"),
@@ -96,12 +135,19 @@ impl AssetSource for Assets {
             "check" => include_bytes!("../assets/check.svg"),
             "users" => include_bytes!("../assets/users.svg"),
             "square" => include_bytes!("../assets/square.svg"),
+            "chevron-up" => include_bytes!("../assets/chevron-up.svg"),
+            "chevron-down" => include_bytes!("../assets/chevron-down.svg"),
+            "list-ordered" => include_bytes!("../assets/list-ordered.svg"),
+            "pause" => include_bytes!("../assets/pause.svg"),
+            "play" => include_bytes!("../assets/play.svg"),
+            "square-fill" => include_bytes!("../assets/square-fill.svg"),
             "window" => include_bytes!("../assets/window.svg"),
             "square-terminal" => include_bytes!("../assets/square-terminal.svg"),
             "files" => include_bytes!("../assets/files.svg"),
             "git-compare" => include_bytes!("../assets/git-compare.svg"),
             "globe" => include_bytes!("../assets/globe.svg"),
             "messages" => include_bytes!("../assets/messages.svg"),
+            "handoff" => include_bytes!("../assets/handoff.svg"),
             "smartphone" => include_bytes!("../assets/smartphone.svg"),
             "expand" => include_bytes!("../assets/expand.svg"),
             "settings" => include_bytes!("../assets/settings.svg"),
@@ -128,7 +174,7 @@ impl AssetSource for Assets {
             "codex-glyph.svg" => include_bytes!("../assets/codex-glyph.svg"),
             "opencode.svg" => include_bytes!("../assets/opencode.svg"),
             "prompt.svg" => include_bytes!("../assets/prompt.svg"),
-            other => match file_icons::asset(other) {
+            other => match file_icons::asset(other).or_else(|| panel_browser::asset(other)) {
                 Some(bytes) => bytes,
                 None => return Ok(None),
             },

@@ -114,7 +114,7 @@ pub fn device_from(
                 return Err(Error::new(
                     "invalid",
                     "Give a device preset, or both width and height.",
-                ))
+                ));
             }
         },
     };
@@ -581,7 +581,7 @@ mod tests {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "desktop"))]
 pub(crate) mod platform {
     use std::cell::RefCell;
     use std::collections::HashMap;
@@ -2993,7 +2993,7 @@ return result;
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(not(target_os = "macos"), feature = "desktop"))]
 mod platform {
     use tauri::AppHandle;
 
@@ -3175,6 +3175,7 @@ mod platform {
     }
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn browser_open(
     app: tauri::AppHandle,
@@ -3194,11 +3195,13 @@ pub async fn browser_open(
     crate::commands::native_task(move || platform::open(&app, &session_id)).await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn browser_close(app: tauri::AppHandle, session_id: String) -> Result<()> {
     crate::commands::native_task(move || platform::close(&app, &session_id)).await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn browser_state(
     app: tauri::AppHandle,
@@ -3208,6 +3211,7 @@ pub async fn browser_state(
 }
 
 /// A new tab, in a browser profile (ADR-150); `None` is the profile set in Settings.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn browser_new_tab(
     app: tauri::AppHandle,
@@ -3218,6 +3222,7 @@ pub async fn browser_new_tab(
     crate::commands::native_task(move || platform::new_tab(&app, &session_id, url, profile)).await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn browser_close_tab(
     app: tauri::AppHandle,
@@ -3227,6 +3232,7 @@ pub async fn browser_close_tab(
     crate::commands::native_task(move || platform::close_tab(&app, &session_id, &tab_id)).await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn browser_select_tab(
     app: tauri::AppHandle,
@@ -3236,6 +3242,7 @@ pub async fn browser_select_tab(
     crate::commands::native_task(move || platform::select_tab(&app, &session_id, &tab_id)).await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn browser_navigate(
     app: tauri::AppHandle,
@@ -3246,6 +3253,7 @@ pub async fn browser_navigate(
     crate::commands::native_task(move || platform::navigate(&app, &session_id, &tab_id, &url)).await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn browser_reload(
     app: tauri::AppHandle,
@@ -3255,6 +3263,7 @@ pub async fn browser_reload(
     crate::commands::native_task(move || platform::reload(&app, &session_id, &tab_id)).await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn browser_back(
     app: tauri::AppHandle,
@@ -3264,6 +3273,7 @@ pub async fn browser_back(
     crate::commands::native_task(move || platform::back(&app, &session_id, &tab_id)).await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn browser_forward(
     app: tauri::AppHandle,
@@ -3273,6 +3283,7 @@ pub async fn browser_forward(
     crate::commands::native_task(move || platform::forward(&app, &session_id, &tab_id)).await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn browser_set_bounds(
     app: tauri::AppHandle,
@@ -3282,6 +3293,7 @@ pub async fn browser_set_bounds(
     crate::commands::native_task(move || platform::set_bounds(&app, &session_id, bounds)).await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn browser_annotate_start(
     app: tauri::AppHandle,
@@ -3291,6 +3303,7 @@ pub async fn browser_annotate_start(
     crate::commands::native_task(move || platform::annotate_start(&app, &session_id, &tab_id)).await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn browser_annotate_finish(
     app: tauri::AppHandle,
@@ -3301,6 +3314,7 @@ pub async fn browser_annotate_finish(
         .await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn browser_annotate_cancel(
     app: tauri::AppHandle,
@@ -3312,6 +3326,7 @@ pub async fn browser_annotate_cancel(
 }
 
 /// Annotations with a screenshot (ADR-151): the marked elements, the page URL and a PNG.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn browser_annotate_capture(
     app: tauri::AppHandle,
@@ -3322,6 +3337,7 @@ pub async fn browser_annotate_capture(
         .await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn browser_copy_link(
     app: tauri::AppHandle,
@@ -3331,6 +3347,7 @@ pub async fn browser_copy_link(
     crate::commands::native_task(move || platform::copy_link(&app, &session_id, &tab_id)).await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn browser_capture(
     app: tauri::AppHandle,
@@ -3341,12 +3358,14 @@ pub async fn browser_capture(
 }
 
 /// Device mode (ADR-111): the page lays out at the device's CSS width inside a smaller frame.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn browser_set_zoom(app: tauri::AppHandle, session_id: String, zoom: f64) -> Result<()> {
     crate::commands::native_task(move || platform::set_zoom(&app, &session_id, zoom)).await
 }
 
 /// Floats the active tab in an always-on-top window, or puts it back (ADR-111).
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn browser_picture_in_picture(
     app: tauri::AppHandle,
@@ -3358,6 +3377,7 @@ pub async fn browser_picture_in_picture(
 }
 
 /// One JPEG frame of the page, base64, for the renderer's recorder (ADR-111).
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn browser_frame(
     app: tauri::AppHandle,
@@ -3370,6 +3390,7 @@ pub async fn browser_frame(
 }
 
 /// Device mode from the pane (ADR-111): `None` is the pane's own size.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn browser_set_device(
     app: tauri::AppHandle,
@@ -3385,6 +3406,7 @@ pub async fn browser_set_device(
 }
 
 /// The person's page zoom (ADR-112).
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn browser_set_user_zoom(
     app: tauri::AppHandle,
@@ -3395,6 +3417,7 @@ pub async fn browser_set_user_zoom(
 }
 
 /// `system`, `light` or `dark` for pages' `prefers-color-scheme` (ADR-112).
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn browser_set_appearance(
     app: tauri::AppHandle,
@@ -3404,6 +3427,7 @@ pub async fn browser_set_appearance(
     crate::commands::native_task(move || platform::set_appearance(&app, &session_id, &mode)).await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn browser_hard_reload(
     app: tauri::AppHandle,
@@ -3413,6 +3437,7 @@ pub async fn browser_hard_reload(
     crate::commands::native_task(move || platform::hard_reload(&app, &session_id, &tab_id)).await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn browser_devtools(
     app: tauri::AppHandle,
@@ -3423,6 +3448,7 @@ pub async fn browser_devtools(
 }
 
 /// `cookies` or `cache`, for every session's browser (they share one data store).
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn browser_clear_data(app: tauri::AppHandle, kind: String) -> Result<()> {
     let cookies = match kind.as_str() {
@@ -3434,6 +3460,7 @@ pub async fn browser_clear_data(app: tauri::AppHandle, kind: String) -> Result<(
 }
 
 /// Key presses and clicks since the last read, for recordings (ADR-112).
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn browser_input_events(
     app: tauri::AppHandle,

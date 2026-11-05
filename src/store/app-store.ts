@@ -2486,7 +2486,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const paths = get().settings.providerPaths;
     const request = (async () => {
       try {
-        const list = await client.listProviderModels(id);
+        const list = await client.listProviderModels(id, force);
         if (get().settings.providerPaths === paths) set((state) => ({ modelsByProvider: { ...state.modelsByProvider, [id]: list } }));
       } catch (error) { set({ error: formatUnknownError(error) }); }
     })();

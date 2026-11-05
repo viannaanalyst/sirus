@@ -17,6 +17,18 @@ pub struct Options {
     /// The URL to put in pairing links when the host is reached under another name.
     pub url: Option<String>,
     pub ui_dir: Option<PathBuf>,
+    /// Sirus Native (ADR-189): the window's own listener on this loopback port, always on.
+    /// `port` is then the listener for other devices, on only while `remote.json` says so.
+    pub local_port: Option<u16>,
+    /// The `tailscale serve` HTTPS port (443 when `None`).
+    pub https_port: Option<u16>,
+    /// Added to this computer's name on the phone's list.
+    pub label: Option<String>,
+}
+
+/// Whether the window has a listener of its own.
+pub fn has_local_listener() -> bool {
+    super::has_local_listener()
 }
 
 /// Starts serving; returns the addresses a device can open.
@@ -26,9 +38,19 @@ pub async fn start_host(app: AppHandle, data_dir: &Path, options: Options) -> Re
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Config>(&bytes).ok())
         .unwrap_or_default();
-    config.enabled = true;
+    let windowed = options.local_port.is_some();
     config.port = Some(options.port);
-    config.keep_awake = false;
+    if windowed {
+        if !config.windowed {
+            config.enabled = false;
+            config.keep_awake = false;
+            config.windowed = true;
+        }
+    } else {
+        // A server always serves; with a window, the owner's switch decides.
+        config.enabled = true;
+        config.keep_awake = false;
+    }
     let remote = Arc::new(Remote {
         path,
         config: parking_lot::Mutex::new(config),
@@ -42,6 +64,9 @@ pub async fn start_host(app: AppHandle, data_dir: &Path, options: Options) -> Re
             bind: Some(options.bind),
             url: options.url,
             ui_dir: options.ui_dir,
+            local_port: options.local_port,
+            https_port: options.https_port,
+            label: options.label,
         }),
     });
     if REMOTE.set(remote.clone()).is_err() {
@@ -49,6 +74,23 @@ pub async fn start_host(app: AppHandle, data_dir: &Path, options: Options) -> Re
     }
     save(&remote)?;
     refresh_https(&remote).await;
+    if windowed {
+        start_kind(app.clone(), remote.clone(), Kind::Window).await;
+        if let Some(error) = remote.error.lock().clone() {
+            return Err(Error::new("remote", error));
+        }
+        sync_awake(&remote);
+        // A busy port for other devices is shown in Settings, not a reason to stop the window.
+        if remote.config.lock().enabled {
+            start(app, remote.clone()).await;
+        }
+        let running = remote.server.lock().is_some();
+        return Ok(if running {
+            base_urls(&remote)
+        } else {
+            Vec::new()
+        });
+    }
     start(app, remote.clone()).await;
     if let Some(error) = remote.error.lock().clone() {
         return Err(Error::new("remote", error));
@@ -118,6 +160,8 @@ fn mime_type(file: &Path) -> &'static str {
 #[serde(tag = "type", rename_all = "camelCase")]
 enum ControlRequest {
     Pair,
+    /// A code for the window's own pairing: no address, and it works with other devices off.
+    PairWindow,
     Status,
     #[serde(rename_all = "camelCase")]
     Revoke {
@@ -170,6 +214,7 @@ pub async fn serve_control(app: AppHandle, data_dir: &Path) -> std::io::Result<(
 async fn control(app: AppHandle, request: ControlRequest) -> Result<Value> {
     Ok(match request {
         ControlRequest::Pair => serde_json::to_value(remote_pair().await?)?,
+        ControlRequest::PairWindow => json!({ "code": window_code()? }),
         ControlRequest::Status => serde_json::to_value(remote_action(app, Action::Status).await?)?,
         ControlRequest::Revoke { device_id } => {
             let known = remote()?
@@ -184,6 +229,18 @@ async fn control(app: AppHandle, request: ControlRequest) -> Result<Value> {
             serde_json::to_value(remote_action(app, Action::Revoke { device_id }).await?)?
         }
     })
+}
+
+/// A one-time code for the window's own device.
+fn window_code() -> Result<String> {
+    let remote = remote()?;
+    let code = pairing_code();
+    *remote.pairing.lock() = Some(PairCode {
+        hash: hash(&code),
+        expires: Instant::now() + PAIR_TTL,
+        failures: 0,
+    });
+    Ok(code)
 }
 
 /// The CLI's side: one request to a running `sirus-host serve`. `None` when none runs.
@@ -367,6 +424,7 @@ mod tests {
                 bind: Some("100.90.1.2".parse().unwrap()),
                 url: None,
                 ui_dir: None,
+                ..Listen::default()
             }),
         };
         assert_eq!(base_urls(&remote), ["http://100.90.1.2:7710"]);

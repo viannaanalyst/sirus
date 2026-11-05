@@ -122,7 +122,10 @@ pub struct Reply {
 pub enum Inbound {
     Answer(Reply),
     Steer {
+        /// The instruction with the attached files' context already in it.
         text: String,
+        /// Resolved attachments: images become input items, files are named in `text`.
+        attachments: Vec<std::sync::Arc<crate::attachments::PreparedAttachment>>,
         result: oneshot::Sender<Result<()>>,
     },
     /// Stop one background task of the running turn (Claude's `stop_task`, ADR-097).
@@ -160,6 +163,9 @@ pub enum Event {
     Model(String),
     /// Context-window reading reported by the provider (ADR-057).
     Context(crate::models::ContextUsage),
+    /// A compaction finished: the tokens of the rebuilt conversation, without the provider's
+    /// own prompt and tools (Claude's `compact_boundary`).
+    Compacted(u64),
     /// The turn hit the account's usage limit; the reset time when the provider reported it.
     UsageLimit(Option<i64>),
     /// A subagent's own message, thought or tool (ADR-146): live view only, never in the session.
@@ -634,9 +640,9 @@ async fn execute(
                     let Some(reply) = reply else { return Err(Error::agent("Codex response channel closed")); };
                     let reply = match reply {
                         Inbound::Answer(reply) => reply,
-                        Inbound::Steer { text, result } => {
+                        Inbound::Steer { text, attachments, result } => {
                             // `turn/steer` adds the person's input to this same turn; its events wait in the queue.
-                            let params = json!({"threadId":thread_id,"input":crate::attachments::codex_input(&text, &[]),"expectedTurnId":turn_id});
+                            let params = json!({"threadId":thread_id,"input":crate::attachments::codex_input(&text, &attachments),"expectedTurnId":turn_id});
                             let delivered = wire.request("turn/steer", params, &mut cancel.clone()).await.map(|_| ()).map_err(|_| Error::agent("Codex did not accept the instruction for this turn"));
                             let _ = result.send(delivered);
                             continue;
@@ -934,6 +940,7 @@ fn context_usage(params: &Value) -> Option<crate::models::ContextUsage> {
             .as_u64()
             .filter(|window| *window > 0),
         cache_expires_at: None,
+        floor: None,
     })
 }
 
@@ -1181,10 +1188,33 @@ pub fn monitor(
                     let cache_expires_at = usage.cache_expires_at.or(session
                         .context_usage
                         .and_then(|known| known.cache_expires_at));
+                    // The smallest reading is the provider's own prompt and tools.
+                    let floor = session
+                        .context_usage
+                        .and_then(|known| known.floor)
+                        .map_or(usage.used, |known| known.min(usage.used));
                     let next = crate::models::ContextUsage {
                         used: usage.used,
                         window,
                         cache_expires_at,
+                        floor: Some(floor).filter(|floor| *floor > 0),
+                    };
+                    publish = session.context_usage != Some(next);
+                    persist_immediately = false;
+                    coalesce = true;
+                    session.context_usage = Some(next);
+                }
+                Event::Compacted(rebuilt) => {
+                    // The boundary leaves out the provider's prompt and tools: add back what the
+                    // conversation was seen to cost at its lightest, until the next reply
+                    // reports the real figure.
+                    let known = session.context_usage;
+                    let floor = known.and_then(|known| known.floor);
+                    let next = crate::models::ContextUsage {
+                        used: rebuilt + floor.unwrap_or(0),
+                        window: known.and_then(|known| known.window),
+                        cache_expires_at: known.and_then(|known| known.cache_expires_at),
+                        floor,
                     };
                     publish = session.context_usage != Some(next);
                     persist_immediately = false;
@@ -1316,7 +1346,9 @@ pub fn monitor(
             match result {
                 Err(error) if crate::claude::auth_refresh_error(&error) => Err(Error::new(
                     "claude_auth_refresh",
-                    format!("{error}. Sign in to Claude Code again with `claude auth login --claudeai`: concurrent sessions can overwrite the shared credential."),
+                    format!(
+                        "{error}. Sign in to Claude Code again with `claude auth login --claudeai`: concurrent sessions can overwrite the shared credential."
+                    ),
                 )),
                 other => other,
             }
@@ -1540,7 +1572,8 @@ mod tests {
             Some(crate::models::ContextUsage {
                 used: 176000,
                 window: Some(256000),
-                cache_expires_at: None
+                cache_expires_at: None,
+                floor: None
             })
         );
         assert_eq!(context_usage(&json!({"tokenUsage":{"last":{}}})), None);
@@ -1773,12 +1806,13 @@ else:
                     Event::Identity(identity) => native = Some(identity),
                     Event::Delta(text) => output.push_str(&text),
                     Event::Pending(_) => {
-                        return Err(Error::agent("Unexpected approval in harmless native smoke"))
+                        return Err(Error::agent("Unexpected approval in harmless native smoke"));
                     }
                     Event::Answered(_)
                     | Event::Activity(_)
                     | Event::Model(_)
                     | Event::Context(_)
+                    | Event::Compacted(_)
                     | Event::UsageLimit(_)
                     | Event::Feed(_) => {}
                 }
@@ -1835,7 +1869,7 @@ else:
         let mut session = session();
         session.native_thread = None;
         session.worktree = tree.clone();
-        let prompt="This is a disposable host-approval integration test. Request one-time host approval using sandbox_permissions=require_escalated to execute exactly /usr/bin/true, with justification: harmless host approval routing test. Do not execute without requesting approval. The host will decline; do not retry or choose alternatives. After denial reply SIRUS_DENIED_OK. Do not read or write files, use network tools, inspect authentication/configuration, or change permissions.";
+        let prompt = "This is a disposable host-approval integration test. Request one-time host approval using sandbox_permissions=require_escalated to execute exactly /usr/bin/true, with justification: harmless host approval routing test. Do not execute without requesting approval. The host will decline; do not retry or choose alternatives. After denial reply SIRUS_DENIED_OK. Do not read or write files, use network tools, inspect authentication/configuration, or change permissions.";
         let (process, mut started) = start(
             session.clone(),
             tree.path.clone(),

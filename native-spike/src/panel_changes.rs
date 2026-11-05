@@ -1112,7 +1112,7 @@ fn kind_mark(kind: &str, added: Hsla, removed: Hsla) -> (&'static str, Hsla) {
 }
 
 /// One line of a diff: additions green, removals red on a faint wash, hunk headers muted.
-fn diff_line(text: &str) -> Div {
+pub(crate) fn diff_line(text: &str) -> Div {
     let (added, removed) = diff_colors(0);
     let (color, wash) = if text.starts_with("+++") || text.starts_with("---") {
         (content(0.5), None)
@@ -1218,7 +1218,7 @@ fn commit_file_row(
         .into_any_element()
 }
 
-fn note(text: &str, failed: bool) -> AnyElement {
+pub(crate) fn note(text: &str, failed: bool) -> AnyElement {
     let color: Hsla = if failed {
         rgb(0xe08a8a).into()
     } else {
@@ -1250,7 +1250,7 @@ fn commits_of(list: &Value) -> Vec<Commit> {
 }
 
 /// How long ago a commit was made, in the sidebar's short units ("agora", "12 min", "3 h", "2 d").
-fn age(when: &str) -> String {
+pub(crate) fn age(when: &str) -> String {
     let Ok(when) = chrono::DateTime::parse_from_rfc3339(when) else {
         return String::new();
     };

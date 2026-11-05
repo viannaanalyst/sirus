@@ -1,4 +1,6 @@
-use std::time::Duration;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::time::{Duration, Instant, SystemTime};
 
 use serde::{Deserialize, Serialize};
 
@@ -6,6 +8,80 @@ use crate::detect;
 use crate::models::AgentProviderId;
 
 const DISCOVER_TIMEOUT: Duration = Duration::from_secs(12);
+
+/// A Claude catalog the CLI reported is reused this long before the CLI is asked again.
+pub const CLAUDE_CATALOG_TTL: Duration = Duration::from_secs(6 * 60 * 60);
+
+/// Identifies the Claude executable a catalog was read from. Its `--version` is not read: the
+/// install resolver does not know it, and reading it costs a spawn on every call. The path and
+/// modified time stand in for it, since a CLI update rewrites the binary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecutableStamp {
+    path: PathBuf,
+    modified: SystemTime,
+}
+
+impl ExecutableStamp {
+    /// One canonicalize and one stat. `None` leaves the catalog uncached.
+    pub fn read(binary: &str) -> Option<Self> {
+        let path = std::fs::canonicalize(binary).ok()?;
+        let modified = std::fs::metadata(&path).ok()?.modified().ok()?;
+        Some(Self { path, modified })
+    }
+}
+
+struct ClaudeCatalogEntry {
+    stamp: ExecutableStamp,
+    fetched_at: Instant,
+    list: ProviderModelList,
+}
+
+/// Claude catalogs keyed by account. Only successful CLI reads are stored.
+#[derive(Default)]
+pub struct ClaudeCatalogCache {
+    entries: HashMap<String, ClaudeCatalogEntry>,
+}
+
+impl ClaudeCatalogCache {
+    /// The account's catalog, if it came from the same executable and is younger than the TTL.
+    pub fn get(
+        &self,
+        account: &str,
+        stamp: &ExecutableStamp,
+        now: Instant,
+    ) -> Option<ProviderModelList> {
+        let entry = self.entries.get(account)?;
+        (entry.stamp == *stamp
+            && now.saturating_duration_since(entry.fetched_at) < CLAUDE_CATALOG_TTL)
+            .then(|| entry.list.clone())
+    }
+
+    pub fn insert(
+        &mut self,
+        account: &str,
+        stamp: ExecutableStamp,
+        now: Instant,
+        list: ProviderModelList,
+    ) {
+        self.entries.insert(
+            account.to_owned(),
+            ClaudeCatalogEntry {
+                stamp,
+                fetched_at: now,
+                list,
+            },
+        );
+    }
+}
+
+static CLAUDE_CATALOGS: parking_lot::Mutex<Option<ClaudeCatalogCache>> =
+    parking_lot::Mutex::new(None);
+
+/// Only a catalog the CLI reported with at least one model may be reused; fallbacks and empty
+/// reads are failures and must be asked again.
+fn cacheable(list: &ProviderModelList) -> bool {
+    list.source == "cli" && !list.models.is_empty()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -69,9 +145,12 @@ fn offered_efforts(value: Option<&serde_json::Value>, objects: bool) -> Vec<Stri
         .unwrap_or_default()
 }
 
+/// `account` keys the Claude cache; `refresh` reads the CLI again instead of reusing the cache.
 pub async fn list_for_provider(
     provider: AgentProviderId,
     overrides: &std::collections::HashMap<AgentProviderId, String>,
+    account: &str,
+    refresh: bool,
 ) -> ProviderModelList {
     let install = detect::resolve_with_overrides(&provider, overrides);
     let Some(install) = install else {
@@ -97,7 +176,7 @@ pub async fn list_for_provider(
         AgentProviderId::Codex => list_codex(&binary).await,
         AgentProviderId::Cursor => list_cursor(&binary).await,
         AgentProviderId::OpenCode => list_opencode(&binary).await,
-        AgentProviderId::Claude => list_claude(&binary).await,
+        AgentProviderId::Claude => list_claude_cached(&binary, account, refresh).await,
         AgentProviderId::Grok => list_grok(&binary).await,
         AgentProviderId::Antigravity
         | AgentProviderId::Droid
@@ -264,10 +343,18 @@ async fn list_additional(provider: AgentProviderId, binary: &str) -> ProviderMod
     command.args(args).current_dir(std::env::temp_dir());
     let output = crate::cli_output::capture_command(command, DISCOVER_TIMEOUT).await;
     let Ok(output) = output else {
-        return empty(provider, "cli", "CLI catalog probe failed or timed out. Check the executable and sign in through its CLI, then refresh.");
+        return empty(
+            provider,
+            "cli",
+            "CLI catalog probe failed or timed out. Check the executable and sign in through its CLI, then refresh.",
+        );
     };
     if !output.status.success() {
-        return empty(provider, "cli", "CLI catalog is unavailable. Sign in through the provider CLI, then refresh. No login was started by Sirus Code.");
+        return empty(
+            provider,
+            "cli",
+            "CLI catalog is unavailable. Sign in through the provider CLI, then refresh. No login was started by Sirus Code.",
+        );
     }
     let text = String::from_utf8_lossy(&output.stdout);
     let models = match provider {
@@ -332,6 +419,29 @@ fn claude_docs_catalog(cli_installed: bool) -> ProviderModelList {
         },
         models,
     }
+}
+
+/// Claude's catalog costs a CLI spawn, so a successful read is reused per account for six hours
+/// or until the executable changes. A refresh always reads again; a failed read is not stored.
+async fn list_claude_cached(binary: &str, account: &str, refresh: bool) -> ProviderModelList {
+    let stamp = ExecutableStamp::read(binary);
+    if let (false, Some(stamp)) = (refresh, &stamp) {
+        let cached = CLAUDE_CATALOGS
+            .lock()
+            .get_or_insert_with(Default::default)
+            .get(account, stamp, Instant::now());
+        if let Some(list) = cached {
+            return list;
+        }
+    }
+    let list = list_claude(binary).await;
+    if let (true, Some(stamp)) = (cacheable(&list), stamp) {
+        CLAUDE_CATALOGS
+            .lock()
+            .get_or_insert_with(Default::default)
+            .insert(account, stamp, Instant::now(), list.clone());
+    }
+    list
 }
 
 async fn list_claude(binary: &str) -> ProviderModelList {
@@ -594,7 +704,11 @@ async fn list_hermes(binary: &str) -> ProviderModelList {
         );
     };
     if reply.get("error").is_some() {
-        return empty(AgentProviderId::Hermes, "cli", "Hermes has no model provider yet. Run `hermes model` in a terminal, then refresh. No login was started by Sirus Code.");
+        return empty(
+            AgentProviderId::Hermes,
+            "cli",
+            "Hermes has no model provider yet. Run `hermes model` in a terminal, then refresh. No login was started by Sirus Code.",
+        );
     }
     let models = parse_hermes_catalog(&reply["result"]);
     ProviderModelList {
@@ -877,11 +991,15 @@ mod tests {
     use super::*;
     #[test]
     fn additional_catalogs_only_admit_explicit_model_rows() {
-        let pi = parse_pi_catalog("provider model context max-out thinking images\nopenai gpt-6-sol 400K 64K yes yes\nNo models available. Use /login\n");
+        let pi = parse_pi_catalog(
+            "provider model context max-out thinking images\nopenai gpt-6-sol 400K 64K yes yes\nNo models available. Use /login\n",
+        );
         assert_eq!(pi.len(), 1);
         assert_eq!(pi[0].id, "openai/gpt-6-sol");
         assert!(pi[0].effort_levels.is_empty());
-        let droid = parse_droid_catalog("Usage: droid exec\nAvailable Models:\n  claude-sonnet-5    Sonnet 5\n  gpt-6-sol         GPT-6 Sol (default)\nModel details:\n  unrelated metadata\n");
+        let droid = parse_droid_catalog(
+            "Usage: droid exec\nAvailable Models:\n  claude-sonnet-5    Sonnet 5\n  gpt-6-sol         GPT-6 Sol (default)\nModel details:\n  unrelated metadata\n",
+        );
         assert_eq!(droid.len(), 2);
         assert_eq!(droid[1].display_name, "GPT-6 Sol");
         assert!(parse_droid_catalog("No model catalog\n").is_empty());
@@ -913,7 +1031,9 @@ mod tests {
     }
     #[test]
     fn opencode_verbose_catalog_uses_actual_variants_and_never_returns_provider_config() {
-        let rows=parse_opencode_verbose("provider/model\n{\"name\":\"Model\",\"variants\":{\"low\":{},\"high\":{},\"max\":{\"disabled\":true},\"arbitrary\":{}},\"headers\":{\"Authorization\":\"not-for-ui\"}}\nprovider/second\n{\"name\":\"Second\",\"variants\":{}}\n");
+        let rows = parse_opencode_verbose(
+            "provider/model\n{\"name\":\"Model\",\"variants\":{\"low\":{},\"high\":{},\"max\":{\"disabled\":true},\"arbitrary\":{}},\"headers\":{\"Authorization\":\"not-for-ui\"}}\nprovider/second\n{\"name\":\"Second\",\"variants\":{}}\n",
+        );
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].effort_levels, vec!["low", "high"]);
         assert!(!rows[0].fast_mode);
@@ -965,7 +1085,9 @@ mod tests {
 
     #[test]
     fn grok_catalog_does_not_claim_authentication_and_ignores_non_rows() {
-        let models = parse_grok_list("You are not authenticated.\nDefault model: grok-4.6\nAvailable models:\n * grok-4.6 (default)\n - grok-4.5\n - invalid row\n");
+        let models = parse_grok_list(
+            "You are not authenticated.\nDefault model: grok-4.6\nAvailable models:\n * grok-4.6 (default)\n - grok-4.5\n - invalid row\n",
+        );
         assert_eq!(models.len(), 2);
         assert_eq!(models[0].id, "grok-4.6");
         assert_eq!(models[0].availability, ModelAvailability::Unavailable);
@@ -1017,11 +1139,89 @@ mod tests {
     }
     #[test]
     fn cursor_and_opencode_parse_cli_rows_without_inventing_models() {
-        let cursor = parse_cursor_list("Available models\n\nauto - Auto (default)\nclaude-opus - Claude Opus\nTip: try - something\n");
+        let cursor = parse_cursor_list(
+            "Available models\n\nauto - Auto (default)\nclaude-opus - Claude Opus\nTip: try - something\n",
+        );
         assert_eq!(cursor.len(), 2);
         assert_eq!(cursor[1].id, "claude-opus");
-        let models = parse_opencode_list("provider/model\nnot a model\nWarning: /home/config missing\nhttps://example.com\n{\"id\":\"other/model\"}\n");
+        let models = parse_opencode_list(
+            "provider/model\nnot a model\nWarning: /home/config missing\nhttps://example.com\n{\"id\":\"other/model\"}\n",
+        );
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].id, "provider/model");
+    }
+
+    fn cli_catalog() -> ProviderModelList {
+        let models = parse_claude_models(
+            &serde_json::json!({"models":[{"value":"opus","displayName":"Opus"}]}),
+        )
+        .unwrap();
+        ProviderModelList {
+            provider: AgentProviderId::Claude,
+            source: "cli".into(),
+            note: String::new(),
+            models,
+        }
+    }
+
+    fn stamp(path: &str, secs: u64) -> ExecutableStamp {
+        ExecutableStamp {
+            path: PathBuf::from(path),
+            modified: SystemTime::UNIX_EPOCH + Duration::from_secs(secs),
+        }
+    }
+
+    #[test]
+    fn a_claude_catalog_is_reused_within_six_hours_for_the_same_account() {
+        let base = Instant::now();
+        let mut cache = ClaudeCatalogCache::default();
+        cache.insert("default", stamp("/bin/claude", 1), base, cli_catalog());
+        let hit = cache.get(
+            "default",
+            &stamp("/bin/claude", 1),
+            base + Duration::from_secs(3600),
+        );
+        assert_eq!(hit.map(|list| list.models.len()), Some(1));
+        assert!(cache.get("other", &stamp("/bin/claude", 1), base).is_none());
+    }
+
+    #[test]
+    fn a_claude_catalog_expires_after_six_hours() {
+        let base = Instant::now();
+        let mut cache = ClaudeCatalogCache::default();
+        cache.insert("default", stamp("/bin/claude", 1), base, cli_catalog());
+        let just_before = base + CLAUDE_CATALOG_TTL - Duration::from_secs(1);
+        assert!(cache
+            .get("default", &stamp("/bin/claude", 1), just_before)
+            .is_some());
+        let at_six_hours = base + CLAUDE_CATALOG_TTL;
+        assert!(cache
+            .get("default", &stamp("/bin/claude", 1), at_six_hours)
+            .is_none());
+    }
+
+    #[test]
+    fn a_changed_claude_cli_invalidates_its_catalog() {
+        let base = Instant::now();
+        let mut cache = ClaudeCatalogCache::default();
+        cache.insert("default", stamp("/bin/claude", 1), base, cli_catalog());
+        // A CLI update rewrites the binary: the modified time moves.
+        assert!(cache
+            .get("default", &stamp("/bin/claude", 2), base)
+            .is_none());
+        // A different executable path is a different CLI.
+        assert!(cache
+            .get("default", &stamp("/opt/claude", 1), base)
+            .is_none());
+    }
+
+    #[test]
+    fn failed_or_empty_claude_reads_are_not_cacheable() {
+        let fallback = claude_docs_catalog(true);
+        assert!(!cacheable(&fallback));
+        let mut empty = cli_catalog();
+        empty.models.clear();
+        assert!(!cacheable(&empty));
+        assert!(cacheable(&cli_catalog()));
     }
 }

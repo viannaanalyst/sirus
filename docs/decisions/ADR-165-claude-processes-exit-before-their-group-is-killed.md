@@ -46,3 +46,7 @@ recover from that.
   before, but only when a kept process does not exit on end of input.
 - The upstream race between unrelated processes refreshing at the same moment (ADR-162) remains.
   This removes the case Sirus caused by itself.
+
+## Later: Stop and quit
+
+Stop used to SIGKILL the group at once, with the same risk for a token being saved. `stop_tree` now sends the leader SIGTERM and the group goes when the leader exits or after `LEADER_GRACE` (2 s). Quit waits for that too, so a tool may run for up to 2 s after Stop. The Claude model catalog is cached for six hours per account, invalidated when the CLI binary changes, so fewer short-lived probes run.

@@ -61,6 +61,10 @@ pub struct Connector {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub catalog_id: Option<String>,
     pub name: String,
+    /// A name the person chose to tell accounts apart ("Conta Gabriel"). It is only shown: the
+    /// MCP server name agents use comes from `name` and never changes with it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     pub url: String,
     /// Only this project's sessions receive it; none means every project.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -101,6 +105,13 @@ pub fn validate(list: &[Connector]) -> Result<()> {
             || connector.name.chars().any(char::is_control)
         {
             return Err(invalid("A connector needs a short name."));
+        }
+        if connector.label.as_deref().is_some_and(|label| {
+            label.trim().is_empty()
+                || label.chars().count() > 64
+                || label.chars().any(char::is_control)
+        }) {
+            return Err(invalid("A connector's label must be short text."));
         }
         if !valid_url(&connector.url) {
             return Err(invalid("A connector's address must be an https URL."));
@@ -211,6 +222,9 @@ struct Tokens {
     client_secret: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     resource: Option<String>,
+    /// Who the sign-in is for (an email, a login or a workspace), when the service said so.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    account: Option<String>,
 }
 
 #[cfg(target_os = "macos")]
@@ -586,7 +600,44 @@ fn tokens_from(
         client_id: Some(client_id.to_owned()),
         client_secret: client_secret.map(str::to_owned),
         resource: Some(resource.to_owned()),
+        account: identity_from(body).or_else(|| previous.and_then(|tokens| tokens.account.clone())),
     })
+}
+
+/// A claim of a JWT's payload, read without checking the signature: it only labels a row.
+fn jwt_claims(token: &str) -> Option<Value> {
+    let payload = token.split('.').nth(1)?;
+    serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload.trim_end_matches('=')).ok()?).ok()
+}
+
+/// Who a token response says it is for. Only what the service sends is read: the claims of an
+/// OpenID `id_token` (or of a JWT access token), an `email` or `user` in the body, and Notion's
+/// `owner` and `workspace_name`. Services that say nothing give none.
+fn identity_from(body: &Value) -> Option<String> {
+    let text = |value: &Value| {
+        value
+            .as_str()
+            .map(str::trim)
+            .filter(|text| {
+                !text.is_empty() && text.len() <= 120 && !text.contains(char::is_control)
+            })
+            .map(str::to_owned)
+    };
+    let from_claims = |claims: &Value| {
+        ["email", "preferred_username", "name"]
+            .iter()
+            .find_map(|key| text(&claims[*key]))
+    };
+    [body["id_token"].as_str(), body["access_token"].as_str()]
+        .into_iter()
+        .flatten()
+        .filter_map(jwt_claims)
+        .find_map(|claims| from_claims(&claims))
+        .or_else(|| text(&body["email"]))
+        .or_else(|| text(&body["user"]["email"]))
+        .or_else(|| text(&body["user"]["name"]))
+        .or_else(|| text(&body["owner"]["user"]["person"]["email"]))
+        .or_else(|| text(&body["workspace_name"]))
 }
 
 /// The one request a loopback redirect brings: `code` and `state` from `/callback`.
@@ -633,7 +684,10 @@ async fn wait_for_code(listener: tokio::net::TcpListener, state: &str) -> Result
         } else {
             "<!doctype html><meta charset=utf-8><title>Sirus Code</title><body style=\"font:16px -apple-system,sans-serif;background:#111;color:#eee;display:grid;place-items:center;height:100vh;margin:0\"><p>O login não foi concluído. Tente de novo no Sirus Code.<br><small style=\"color:#888\">The sign-in did not finish. Try again in Sirus Code.</small></p>"
         };
-        let response = format!("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{page}", page.len());
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{page}",
+            page.len()
+        );
         let _ = stream.write_all(response.as_bytes()).await;
         if query("state").as_deref() != Some(state) {
             continue;
@@ -716,6 +770,35 @@ async fn sign_in(connector: &Connector, open: impl FnOnce(&str) -> Result<()>) -
         &discovery.resource,
     )?;
     save_tokens(&connector.id, &tokens)
+}
+
+/// Who a pasted token belongs to. GitHub's own API answers `GET /user` for it; other services
+/// have no call this knows, so they give none.
+async fn token_account(connector: &Connector, token: &str) -> Option<String> {
+    let host = reqwest::Url::parse(&connector.url).ok()?;
+    if host.host_str() != Some("api.githubcopilot.com") {
+        return None;
+    }
+    let reply = http()
+        .ok()?
+        .get("https://api.github.com/user")
+        .bearer_auth(token)
+        .header("User-Agent", "sirus-code")
+        .header("Accept", "application/vnd.github+json")
+        .timeout(Duration::from_secs(8))
+        .send()
+        .await
+        .ok()?
+        .error_for_status()
+        .ok()?
+        .bytes()
+        .await
+        .ok()?;
+    let reply: Value = serde_json::from_slice(&reply).ok()?;
+    reply["login"]
+        .as_str()
+        .filter(|login| !login.is_empty() && login.len() <= 64)
+        .map(|login| format!("@{login}"))
 }
 
 /// A usable access token: refreshed first when it is about to expire. None when signed out,
@@ -807,25 +890,31 @@ pub struct ConnectorStatus {
     pub id: String,
     /// `ready` (no sign-in needed), `connected`, `signedOut` or `expired`.
     pub state: &'static str,
+    /// Who is signed in (an email, a login or a workspace) when the service told us.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
 }
 
 fn status_of(connector: &Connector) -> ConnectorStatus {
-    let state = match connector.auth {
-        ConnectorAuth::None => "ready",
-        _ => match load_tokens(&connector.id) {
-            None => "signedOut",
-            Some(tokens)
-                if tokens.refresh_token.is_none()
-                    && tokens.expires_at.is_some_and(|at| at <= now()) =>
-            {
-                "expired"
-            }
-            Some(_) => "connected",
-        },
+    let tokens = match connector.auth {
+        ConnectorAuth::None => None,
+        _ => load_tokens(&connector.id),
+    };
+    let state = match (&connector.auth, &tokens) {
+        (ConnectorAuth::None, _) => "ready",
+        (_, None) => "signedOut",
+        (_, Some(tokens))
+            if tokens.refresh_token.is_none()
+                && tokens.expires_at.is_some_and(|at| at <= now()) =>
+        {
+            "expired"
+        }
+        _ => "connected",
     };
     ConnectorStatus {
         id: connector.id.clone(),
         state,
+        account: tokens.and_then(|tokens| tokens.account),
     }
 }
 
@@ -887,6 +976,7 @@ pub async fn connector_action(
             {
                 return Err(invalid("Paste the token without spaces."));
             }
+            let account = token_account(&connector, &token).await;
             save_tokens(
                 &connector.id,
                 &Tokens {
@@ -897,6 +987,7 @@ pub async fn connector_action(
                     client_id: None,
                     client_secret: None,
                     resource: None,
+                    account,
                 },
             )?;
         }
@@ -958,6 +1049,20 @@ pub fn server_name(name: &str) -> String {
     }
 }
 
+/// The server name agents see for a connector named `name`: from the name alone, never from the
+/// person's label, so renaming an account changes no tool id (`mcp__supabase_2__…`). A second
+/// connector with the same name gets `_2`, `_3`… in list order.
+fn unique_server_name(name: &str, used: &mut HashSet<String>) -> String {
+    let base = server_name(name);
+    let mut unique = base.clone();
+    let mut index = 2;
+    while !used.insert(unique.clone()) {
+        unique = format!("{base}_{index}");
+        index += 1;
+    }
+    unique
+}
+
 /// The connectors a session of this provider and project receives, with fresh tokens.
 /// Signed-out ones are left out; the session runs without them.
 pub async fn for_session(session: &Session) -> Vec<Active> {
@@ -984,15 +1089,8 @@ pub async fn for_session(session: &Session) -> Vec<Active> {
                 None => continue,
             },
         };
-        let base = server_name(&connector.name);
-        let mut name = base.clone();
-        let mut index = 2;
-        while !used.insert(name.clone()) {
-            name = format!("{base}_{index}");
-            index += 1;
-        }
         active.push(Active {
-            name,
+            name: unique_server_name(&connector.name, &mut used),
             url: connector.url,
             bearer,
         });
@@ -1104,6 +1202,7 @@ mod tests {
             id: id.into(),
             catalog_id: Some("supabase".into()),
             name: name.into(),
+            label: None,
             url: "https://mcp.supabase.com/mcp?project_ref=abc&read_only=true".into(),
             project_id: None,
             agents: vec![AgentProviderId::Claude, AgentProviderId::Codex],
@@ -1131,6 +1230,79 @@ mod tests {
     }
 
     #[test]
+    fn settings_saved_before_labels_load_without_one() {
+        let old = json!({
+            "id": "a-1", "catalogId": "supabase", "name": "Supabase",
+            "url": "https://mcp.supabase.com/mcp", "agents": ["claude"],
+            "enabled": true, "auth": "oauth"
+        });
+        let connector: Connector = serde_json::from_value(old).unwrap();
+        assert_eq!(connector.label, None);
+        assert!(validate(std::slice::from_ref(&connector)).is_ok());
+        assert!(
+            serde_json::to_value(&connector)
+                .unwrap()
+                .get("label")
+                .is_none(),
+            "an unnamed connector saves exactly as before"
+        );
+        let mut named = connector;
+        named.label = Some("Conta Gabriel".into());
+        assert!(validate(&[named.clone()]).is_ok());
+        let again: Connector =
+            serde_json::from_value(serde_json::to_value(&named).unwrap()).unwrap();
+        assert_eq!(again.label.as_deref(), Some("Conta Gabriel"));
+        named.label = Some("   ".into());
+        assert!(validate(&[named.clone()]).is_err());
+        named.label = Some("x".repeat(65));
+        assert!(validate(&[named]).is_err());
+    }
+
+    #[test]
+    fn a_label_never_changes_the_server_name_agents_use() {
+        let mut first = connector("a-1", "Supabase");
+        let mut second = connector("a-2", "Supabase");
+        let names = |list: &[Connector]| {
+            let mut used = HashSet::new();
+            list.iter()
+                .map(|connector| unique_server_name(&connector.name, &mut used))
+                .collect::<Vec<_>>()
+        };
+        let before = names(&[first.clone(), second.clone()]);
+        assert_eq!(before, ["supabase", "supabase_2"]);
+        first.label = Some("Conta Gabriel".into());
+        second.label = Some("Conta Moreira".into());
+        assert_eq!(names(&[first, second]), before);
+    }
+
+    #[test]
+    fn an_account_is_read_only_from_what_the_service_sends() {
+        let jwt = |claims: Value| {
+            format!(
+                "e30.{}.sig",
+                URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).unwrap())
+            )
+        };
+        assert_eq!(
+            identity_from(
+                &json!({"access_token": "opaque", "id_token": jwt(json!({"email": "g@x.dev"}))})
+            ),
+            Some("g@x.dev".into())
+        );
+        assert_eq!(
+            identity_from(&json!({"access_token": jwt(json!({"preferred_username": "gabriel"}))})),
+            Some("gabriel".into())
+        );
+        assert_eq!(
+            identity_from(
+                &json!({"access_token": "opaque", "workspace_name": "Acme", "owner": {"user": {"person": {"email": "o@acme.com"}}}})
+            ),
+            Some("o@acme.com".into())
+        );
+        assert_eq!(identity_from(&json!({"access_token": "opaque"})), None);
+    }
+
+    #[test]
     fn names_are_safe_and_never_sirus() {
         assert_eq!(server_name("Supabase · dp-prod"), "supabase_dp_prod");
         assert_eq!(server_name("sirus_browser"), "connector_sirus_browser");
@@ -1149,7 +1321,12 @@ mod tests {
             well_known(&bare, "oauth-authorization-server"),
             vec!["https://mcp.linear.app/.well-known/oauth-authorization-server".to_string()]
         );
-        assert_eq!(metadata_from_challenge("Bearer realm=\"OAuth\", resource_metadata=\"https://x.dev/.well-known/oauth-protected-resource/mcp\""), Some("https://x.dev/.well-known/oauth-protected-resource/mcp".into()));
+        assert_eq!(
+            metadata_from_challenge(
+                "Bearer realm=\"OAuth\", resource_metadata=\"https://x.dev/.well-known/oauth-protected-resource/mcp\""
+            ),
+            Some("https://x.dev/.well-known/oauth-protected-resource/mcp".into())
+        );
         assert_eq!(
             canonical(&reqwest::Url::parse("https://mcp.supabase.com/mcp?project_ref=a").unwrap()),
             "https://mcp.supabase.com/mcp"
@@ -1203,6 +1380,7 @@ mod tests {
             id: id.to_owned(),
             catalog_id: catalog.map(str::to_owned),
             name: id.to_owned(),
+            label: None,
             url: url.to_owned(),
             project_id: None,
             agents: Vec::new(),

@@ -15,7 +15,14 @@ use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use std::time::Duration;
 use tungstenite::Message;
 
+/// The window's own connection: loopback only, always on.
 const PORT: u16 = 7811;
+/// The listener for other devices, on only while Settings → Conexões allows it. Sirus Code uses
+/// 7710, so the two never clash on one Mac.
+const REMOTE_PORT: u16 = 7711;
+/// `tailscale serve` takes one handler per HTTPS port and Sirus Code holds 443, so this app
+/// serves its secure address on 8443 and turning either off leaves the other alone.
+const HTTPS_PORT: u16 = 8443;
 static HOST_PID: AtomicI32 = AtomicI32::new(0);
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -106,7 +113,7 @@ pub fn stop_host() {
     }
 }
 
-fn data_dir() -> PathBuf {
+pub fn data_dir() -> PathBuf {
     PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
         .join("Library/Application Support/com.siruscode.native")
 }
@@ -173,8 +180,51 @@ update sessions set json=json_remove(json,'$.nativeThread') where json_extract(j
 }
 
 fn healthy() -> bool {
-    let address: SocketAddr = ([127, 0, 0, 1], PORT).into();
-    http(address, "GET /api/health", None).is_some_and(|body| body.contains("\"app\":\"sirus\""))
+    health().is_some_and(|body| body.contains("\"app\":\"sirus\""))
+}
+
+fn health() -> Option<String> {
+    http(([127, 0, 0, 1], PORT).into(), "GET /api/health", None)
+}
+
+/// A host an older build left running: it serves the window on the one port and has no
+/// listener of its own for other devices, so Settings → Conexões could not turn it off.
+fn stop_old_host() {
+    let Some(body) = health() else { return };
+    if body.contains("\"window\":true") {
+        return;
+    }
+    let Ok(output) = Command::new("lsof")
+        .args(["-ti", &format!("tcp:{PORT}"), "-sTCP:LISTEN"])
+        .output()
+    else {
+        return;
+    };
+    for pid in String::from_utf8_lossy(&output.stdout).split_whitespace() {
+        let _ = Command::new("kill").args(["-TERM", pid]).status();
+    }
+    for _ in 0..40 {
+        if health().is_none() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// The phone's web app, built from this checkout: in the bundle, else the repository's `dist`.
+fn ui_dir() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let bundled = exe.parent()?.parent()?.join("Resources/ui");
+    let built = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../dist");
+    [bundled, built]
+        .into_iter()
+        .find(|dir| dir.join("index.html").is_file())
+}
+
+/// The web UI's folder and the address the window's own host serves it at: the hidden page that
+/// draws diagrams and formulas loads Sirus's bundled Mermaid and KaTeX from there.
+pub fn ui_assets() -> Option<(PathBuf, String)> {
+    ui_dir().map(|dir| (dir, format!("http://127.0.0.1:{PORT}")))
 }
 
 fn http(address: SocketAddr, line: &str, body: Option<&str>) -> Option<String> {
@@ -188,24 +238,34 @@ fn http(address: SocketAddr, line: &str, body: Option<&str>) -> Option<String> {
 }
 
 fn ensure_host(dir: &Path) -> Result<(), String> {
+    stop_old_host();
     if healthy() {
         return Ok(());
     }
     let host = host_binary()?;
     let log = std::fs::File::create(dir.join("host.log")).map_err(|e| e.to_string())?;
-    let child = Command::new(host)
+    let mut command = Command::new(host);
+    command
         .args([
             "serve",
-            "--bind",
-            "127.0.0.1",
-            "--port",
+            "--local-port",
             &PORT.to_string(),
-            "--url",
-            &format!("http://127.0.0.1:{PORT}"),
+            "--port",
+            &REMOTE_PORT.to_string(),
+            "--https-port",
+            &HTTPS_PORT.to_string(),
+            "--label",
+            "Sirus Native",
             "--data-dir",
         ])
-        .arg(dir)
+        .arg(dir);
+    if let Some(ui) = ui_dir() {
+        command.arg("--ui-dir").arg(ui);
+    }
+    let child = command
         .env("SIRUS_KEYCHAIN_APP", "Sirus Native")
+        // Agents are offered the browser tools: this window runs them.
+        .env("SIRUS_BROWSER_CLIENT", "1")
         .stdin(Stdio::null())
         .stdout(log.try_clone().map_err(|e| e.to_string())?)
         .stderr(log)
@@ -224,7 +284,7 @@ fn ensure_host(dir: &Path) -> Result<(), String> {
 /// Pairs this app as a device of its own host, keeping the token in the data folder.
 fn pair(dir: &Path) -> Result<String, String> {
     let output = Command::new(host_binary()?)
-        .arg("pair")
+        .args(["pair", "window"])
         .arg("--data-dir")
         .arg(dir)
         .output()
@@ -250,29 +310,6 @@ fn pair(dir: &Path) -> Result<String, String> {
     use std::os::unix::fs::PermissionsExt;
     let _ = std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600));
     Ok(token)
-}
-
-/// A one-time pairing code for another device, and its link.
-pub fn pairing_code() -> Option<(String, String)> {
-    let output = Command::new(host_binary().ok()?)
-        .arg("pair")
-        .arg("--data-dir")
-        .arg(data_dir())
-        .output()
-        .ok()?;
-    let text = String::from_utf8_lossy(&output.stdout).into_owned();
-    let code: String = text
-        .lines()
-        .find_map(|l| l.strip_prefix("Pairing code:"))?
-        .chars()
-        .filter(char::is_ascii_digit)
-        .collect();
-    let url = text
-        .lines()
-        .map(str::trim)
-        .find(|l| l.starts_with("http"))?
-        .to_owned();
-    Some((code, url))
 }
 
 /// Saves a chosen picture as the chat background the back end expects: `chat-<uuid>.jpg`.
@@ -360,7 +397,12 @@ fn session(
         "session-updated",
         "agent-output",
         "agent-exit",
+        "subagent-feed",
         "secret-state",
+        "browser_tool_request",
+        "login-vault-state",
+        "computer-state",
+        "remote-changed",
     ] {
         socket
             .send(Message::text(
@@ -368,6 +410,13 @@ fn session(
             ))
             .map_err(|e| e.to_string())?;
     }
+    // This window is the host's browser: agents' browser tools run here (browser_bridge.rs).
+    socket
+        .send(Message::text(
+            json!({ "type": "invoke", "id": u64::MAX, "cmd": "register_browser_client", "args": {} })
+                .to_string(),
+        ))
+        .map_err(|e| e.to_string())?;
     const STATE: u64 = 0;
     socket
         .send(Message::text(

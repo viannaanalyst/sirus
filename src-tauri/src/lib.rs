@@ -23,12 +23,10 @@ mod archive_removal;
 mod attachment_platform;
 mod attachments;
 mod auto_pull;
-#[cfg(feature = "desktop")]
 mod browser;
-#[cfg(feature = "desktop")]
 mod browser_agent;
+mod browser_bridge;
 mod browser_cookies;
-#[cfg(feature = "desktop")]
 mod browser_login;
 mod browser_mcp;
 mod browser_profiles;
@@ -45,8 +43,6 @@ mod commit_title;
 mod computer;
 mod computer_mcp;
 mod connectors;
-#[cfg(target_os = "macos")]
-mod keychain_scope;
 mod context_text;
 mod crash_resume;
 mod delegation;
@@ -71,6 +67,8 @@ mod goals;
 mod html_preview;
 mod idle_compaction;
 mod keep_awake;
+#[cfg(target_os = "macos")]
+mod keychain_scope;
 mod launch;
 mod local_servers;
 mod login_vault;
@@ -781,9 +779,19 @@ fn request_close(app: &tauri::AppHandle, prevent: impl FnOnce()) {
         close::Decision::Ask => {
             prevent();
             let (title, message, accept, cancel) = if portuguese {
-                ("Fechar Sirus Code?", "Há sessões em execução. Fechar interromperá os agentes. As sessões e suas mensagens serão mantidas.", "Fechar e interromper", "Continuar executando")
+                (
+                    "Fechar Sirus Code?",
+                    "Há sessões em execução. Fechar interromperá os agentes. As sessões e suas mensagens serão mantidas.",
+                    "Fechar e interromper",
+                    "Continuar executando",
+                )
             } else {
-                ("Close Sirus Code?", "Sessions are running. Closing will interrupt agents. Sessions and their messages will be kept.", "Close and interrupt", "Keep running")
+                (
+                    "Close Sirus Code?",
+                    "Sessions are running. Closing will interrupt agents. Sessions and their messages will be kept.",
+                    "Close and interrupt",
+                    "Keep running",
+                )
             };
             let app = app.clone();
             let callback_app = app.clone();

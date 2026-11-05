@@ -402,8 +402,14 @@ fn models(state: &Arc<AppState>, caller: &Session) -> Value {
                 .get(&install.id)
                 .map(|(_, list)| list.clone());
             let list = cached.unwrap_or_else(|| {
+                let account = crate::provider_accounts::selected(&state.data.lock(), &install.id);
                 let list = crate::runtime::async_runtime::block_on(
-                    crate::provider_models::list_for_provider(install.id.clone(), &overrides),
+                    crate::provider_models::list_for_provider(
+                        install.id.clone(),
+                        &overrides,
+                        &account,
+                        false,
+                    ),
                 );
                 state.catalogs.lock().insert(
                     install.id.clone(),
@@ -559,10 +565,18 @@ fn wake_prompt(ready: &[(String, String, &'static str)], portuguese: bool) -> St
         .collect::<Vec<_>>()
         .join(", ");
     match (portuguese, ready.len()) {
-        (true, 1) => format!("🛰 A tarefa delegada {list} terminou. Leia o resultado com sirus_delegation_status e continue."),
-        (true, _) => format!("🛰 As tarefas delegadas {list} terminaram. Leia os resultados com sirus_delegation_status e continue."),
-        (false, 1) => format!("🛰 The delegated task {list} finished. Read its result with sirus_delegation_status and continue."),
-        (false, _) => format!("🛰 The delegated tasks {list} finished. Read their results with sirus_delegation_status and continue."),
+        (true, 1) => format!(
+            "🛰 A tarefa delegada {list} terminou. Leia o resultado com sirus_delegation_status e continue."
+        ),
+        (true, _) => format!(
+            "🛰 As tarefas delegadas {list} terminaram. Leia os resultados com sirus_delegation_status e continue."
+        ),
+        (false, 1) => format!(
+            "🛰 The delegated task {list} finished. Read its result with sirus_delegation_status and continue."
+        ),
+        (false, _) => format!(
+            "🛰 The delegated tasks {list} finished. Read their results with sirus_delegation_status and continue."
+        ),
     }
 }
 

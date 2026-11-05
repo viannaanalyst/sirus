@@ -123,6 +123,10 @@ struct Config {
     /// This computer's id for the phone's list of computers (ADR-132), made once.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     host_id: Option<String>,
+    /// Written by a host with a window of its own (Sirus Native, ADR-189). Before that the host
+    /// forced `enabled` on to serve its window, so a file without this has no real choice in it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    windowed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -265,6 +269,24 @@ struct Listen {
     /// The built front end (`dist/`) when there is no Tauri asset resolver.
     #[cfg_attr(feature = "desktop", allow(dead_code))]
     ui_dir: Option<PathBuf>,
+    /// Sirus Native (ADR-189): the window's own connection listens here on loopback, always on,
+    /// and `enabled` in `remote.json` only controls the listener for other devices.
+    local_port: Option<u16>,
+    /// The HTTPS port `tailscale serve` uses for this app (443 when `None`). A second Sirus on
+    /// this Mac takes another one, since `tailscale serve` keeps one handler per port.
+    https_port: Option<u16>,
+    /// Appended to this computer's name for the phone's list ("<Mac> (Sirus Native)").
+    label: Option<String>,
+}
+
+/// The window's own listener (loopback), beside the one for other devices.
+static LOCAL: parking_lot::Mutex<Option<Server>> = parking_lot::const_mutex(None);
+
+/// Whether the window has a listener of its own, separate from the one for other devices.
+pub fn has_local_listener() -> bool {
+    REMOTE
+        .get()
+        .is_some_and(|remote| remote.listen.lock().local_port.is_some())
 }
 
 static REMOTE: OnceLock<Arc<Remote>> = OnceLock::new();
@@ -316,8 +338,9 @@ pub fn shutdown() {
 /// `-w` releases it if Sirus quits without cleaning up.
 fn sync_awake(remote: &Remote) {
     // `caffeinate` is the Mac's; a server stays awake on its own (ADR-131).
-    let wanted =
-        cfg!(all(target_os = "macos", feature = "desktop")) && awake_wanted(&remote.config.lock());
+    let mac = cfg!(target_os = "macos")
+        && (cfg!(feature = "desktop") || remote.listen.lock().local_port.is_some());
+    let wanted = mac && awake_wanted(&remote.config.lock());
     let mut awake = remote.awake.lock();
     if let Some(child) = awake.as_mut() {
         // A caffeinate that ended on its own is started again below.
@@ -373,7 +396,7 @@ pub async fn remote_action(app: AppHandle, action: Action) -> Result<Status> {
         }
         Action::EnableHttps => {
             let port = port(&remote.config.lock());
-            let outcome = tailscale::enable(port).await;
+            let outcome = tailscale::enable(port, https_port(&remote)).await;
             refresh_https(&remote).await;
             let mut https = remote.https.lock();
             match outcome {
@@ -386,7 +409,7 @@ pub async fn remote_action(app: AppHandle, action: Action) -> Result<Status> {
             }
         }
         Action::DisableHttps => {
-            tailscale::disable().await;
+            tailscale::disable(https_port(&remote)).await;
             refresh_https(&remote).await;
         }
         // The host prints the setup page instead (`sirus-host serve`).
@@ -406,10 +429,15 @@ pub async fn remote_action(app: AppHandle, action: Action) -> Result<Status> {
             let portuguese = app
                 .try_state::<Arc<crate::commands::AppState>>()
                 .is_some_and(|state| state.data.lock().settings.locale == "pt-BR");
-            let (title, body) = if portuguese {
-                ("Sirus Code", "Os alertas deste aparelho estão funcionando.")
+            let title = if remote.listen.lock().local_port.is_some() {
+                "Sirus Native"
             } else {
-                ("Sirus Code", "Alerts on this device are working.")
+                "Sirus Code"
+            };
+            let body = if portuguese {
+                "Os alertas deste aparelho estão funcionando."
+            } else {
+                "Alerts on this device are working."
             };
             let only = remote
                 .config
@@ -448,6 +476,7 @@ pub async fn remote_action(app: AppHandle, action: Action) -> Result<Status> {
         }
         Action::Rename { device_id, name } => {
             let name = owner_device_name(&name)?;
+            refuse_window_device(&remote, &device_id)?;
             let mut config = remote.config.lock();
             let device = config
                 .devices
@@ -459,6 +488,7 @@ pub async fn remote_action(app: AppHandle, action: Action) -> Result<Status> {
             save(&remote)?;
         }
         Action::Revoke { device_id } => {
+            refuse_window_device(&remote, &device_id)?;
             remote
                 .config
                 .lock()
@@ -469,6 +499,44 @@ pub async fn remote_action(app: AppHandle, action: Action) -> Result<Status> {
         }
     }
     Ok(status(&remote))
+}
+
+/// The hash of the token Sirus Native's own window keeps in `native-token` (ADR-189). That
+/// window is not a device the owner added: it is never listed, renamed or removed.
+fn window_token_hash(remote: &Remote) -> Option<String> {
+    remote.listen.lock().local_port?;
+    let token = std::fs::read_to_string(remote.path.with_file_name("native-token")).ok()?;
+    let token = token.trim();
+    (!token.is_empty()).then(|| hash(token))
+}
+
+fn refuse_window_device(remote: &Remote, device_id: &str) -> Result<()> {
+    let window = window_token_hash(remote);
+    let is_window = window.is_some_and(|window| {
+        remote
+            .config
+            .lock()
+            .devices
+            .iter()
+            .any(|device| device.id == device_id && device.token_hash == window)
+    });
+    if is_window {
+        return Err(Error::new(
+            "remote",
+            "This is the Sirus Native window itself, not a device.",
+        ));
+    }
+    Ok(())
+}
+
+/// How many devices count toward the limit: the window's own does not.
+fn counted_devices(remote: &Remote, config: &Config) -> usize {
+    let window = window_token_hash(remote);
+    config
+        .devices
+        .iter()
+        .filter(|device| window.as_deref() != Some(device.token_hash.as_str()))
+        .count()
 }
 
 /// A device name as the owner typed it: trimmed, one line, at most 60 characters.
@@ -490,7 +558,7 @@ pub async fn remote_pair() -> Result<Pairing> {
     if remote.server.lock().is_none() {
         return Err(Error::new("remote", "Turn on remote access first."));
     }
-    if remote.config.lock().devices.len() >= MAX_DEVICES {
+    if counted_devices(&remote, &remote.config.lock()) >= MAX_DEVICES {
         return Err(Error::new(
             "remote",
             format!("Up to {MAX_DEVICES} devices can be connected. Remove one first."),
@@ -612,9 +680,14 @@ async fn refresh_https(remote: &Remote) {
     let mut https = remote.https.lock();
     https.available = available;
     https.host = host.clone();
-    https.url = host
-        .filter(|_| serving)
-        .map(|host| format!("https://{host}"));
+    let https_port = https_port(remote);
+    https.url = host.filter(|_| serving).map(|host| {
+        if https_port == 443 {
+            format!("https://{host}")
+        } else {
+            format!("https://{host}:{https_port}")
+        }
+    });
     if https.url.is_some() {
         https.setup_url = None;
         https.error = None;
@@ -623,6 +696,7 @@ async fn refresh_https(remote: &Remote) {
 
 fn status(remote: &Remote) -> Status {
     let config = remote.config.lock().clone();
+    let window = window_token_hash(remote);
     Status {
         enabled: config.enabled,
         running: remote.server.lock().is_some(),
@@ -631,6 +705,7 @@ fn status(remote: &Remote) -> Status {
         devices: config
             .devices
             .into_iter()
+            .filter(|device| window.as_deref() != Some(device.token_hash.as_str()))
             .map(|device| DeviceInfo {
                 id: device.id,
                 name: device.name,
@@ -644,6 +719,10 @@ fn status(remote: &Remote) -> Status {
         keep_awake: config.keep_awake,
         awake: remote.awake.lock().is_some(),
     }
+}
+
+fn https_port(remote: &Remote) -> u16 {
+    remote.listen.lock().https_port.unwrap_or(443)
 }
 
 fn port(config: &Config) -> u16 {
@@ -693,85 +772,122 @@ fn save(remote: &Remote) -> Result<()> {
     Ok(())
 }
 
-async fn start(app: AppHandle, remote: Arc<Remote>) {
-    let port = port(&remote.config.lock());
-    if remote
-        .server
-        .lock()
-        .as_ref()
-        .is_some_and(|server| server.port == port)
-    {
-        return;
+/// Which listener: the one for the owner's other devices, or Sirus Native's own window (ADR-189).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Devices,
+    Window,
+}
+
+fn slot(remote: &Remote, kind: Kind) -> &parking_lot::Mutex<Option<Server>> {
+    match kind {
+        Kind::Devices => &remote.server,
+        Kind::Window => &LOCAL,
     }
-    stop(&remote);
-    let bind = remote
-        .listen
-        .lock()
-        .bind
-        .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
-    let listener = match tokio::net::TcpListener::bind((bind, port)).await {
-        Ok(listener) => listener,
-        Err(error) => {
-            tracing::warn!(%error, port, "remote access cannot listen");
-            *remote.error.lock() = Some(format!("Port {port} is not available: {error}"));
+}
+
+/// Boxed by hand: the connections it serves can call `remote_action`, which calls this.
+fn start(
+    app: AppHandle,
+    remote: Arc<Remote>,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+    start_kind(app, remote, Kind::Devices)
+}
+
+fn start_kind(
+    app: AppHandle,
+    remote: Arc<Remote>,
+    kind: Kind,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+    Box::pin(async move {
+        let (port, bind) = match kind {
+            Kind::Devices => (
+                port(&remote.config.lock()),
+                remote
+                    .listen
+                    .lock()
+                    .bind
+                    .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED)),
+            ),
+            Kind::Window => (
+                remote.listen.lock().local_port.unwrap_or(DEFAULT_PORT),
+                IpAddr::V4(Ipv4Addr::LOCALHOST),
+            ),
+        };
+        if slot(&remote, kind)
+            .lock()
+            .as_ref()
+            .is_some_and(|server| server.port == port)
+        {
             return;
         }
-    };
-    let (shutdown, mut stopped) = watch::channel(false);
-    *remote.server.lock() = Some(Server {
-        port,
-        shutdown: shutdown.clone(),
-    });
-    *remote.error.lock() = None;
-    let shared = Shared {
-        app,
-        remote: remote.clone(),
-        shutdown: shutdown.subscribe(),
-    };
-    let router = Router::new()
-        .route("/api/health", get(health))
-        .route("/api/pair", post(pair))
-        .route(
-            "/api/push",
-            get(push_key).put(push_subscribe).delete(push_unsubscribe),
-        )
-        .route("/api/push/identity", put(push_identity))
-        .route("/api/app-update/manifest", get(app_update_manifest))
-        .route(
-            "/api/app-update/file/{platform}/{runtime}/{*path}",
-            get(app_update_file),
-        )
-        .route("/api/socket", get(socket))
-        .route("/api/thumbnail/{id}", get(thumbnail))
-        .fallback(get(asset))
-        // The bundle is several megabytes of text; compressed it is about a quarter (gzip/brotli).
-        .layer(tower_http::compression::CompressionLayer::new());
-    // Device streams (ADR-128) are added after compression so they are never buffered.
-    // The Simulator pane is the Mac app's; the headless host has none (ADR-131).
-    #[cfg(feature = "desktop")]
-    let router = router.route("/api/device-hub/{*path}", get(device_hub));
-    let router = router.layer(middleware::from_fn(guard)).with_state(shared);
-    crate::runtime::async_runtime::spawn(async move {
-        let served = axum::serve(
-            listener,
-            router.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .with_graceful_shutdown(async move {
-            let _ = stopped.wait_for(|stopped| *stopped).await;
-        })
-        .await;
-        if let Err(error) = served {
-            tracing::warn!(%error, "remote access server stopped");
-            *remote.error.lock() = Some(error.to_string());
+        if let Some(server) = slot(&remote, kind).lock().take() {
+            let _ = server.shutdown.send(true);
         }
-        let mut server = remote.server.lock();
-        if server
-            .as_ref()
-            .is_some_and(|server| server.shutdown.same_channel(&shutdown))
-        {
-            *server = None;
-        }
-    });
+        let listener = match tokio::net::TcpListener::bind((bind, port)).await {
+            Ok(listener) => listener,
+            Err(error) => {
+                tracing::warn!(%error, port, "remote access cannot listen");
+                *remote.error.lock() = Some(format!("Port {port} is not available: {error}"));
+                return;
+            }
+        };
+        let (shutdown, mut stopped) = watch::channel(false);
+        *slot(&remote, kind).lock() = Some(Server {
+            port,
+            shutdown: shutdown.clone(),
+        });
+        *remote.error.lock() = None;
+        let shared = Shared {
+            app,
+            remote: remote.clone(),
+            shutdown: shutdown.subscribe(),
+        };
+        let router = Router::new()
+            .route("/api/health", get(health))
+            .route("/api/pair", post(pair))
+            .route(
+                "/api/push",
+                get(push_key).put(push_subscribe).delete(push_unsubscribe),
+            )
+            .route("/api/push/identity", put(push_identity))
+            .route("/api/app-update/manifest", get(app_update_manifest))
+            .route(
+                "/api/app-update/file/{platform}/{runtime}/{*path}",
+                get(app_update_file),
+            )
+            .route("/api/socket", get(socket))
+            .route("/api/thumbnail/{id}", get(thumbnail))
+            .fallback(get(asset))
+            // The bundle is several megabytes of text; compressed it is about a quarter (gzip/brotli).
+            .layer(tower_http::compression::CompressionLayer::new());
+        // Device streams (ADR-128) are added after compression so they are never buffered.
+        // The Simulator pane is the Mac app's; the headless host has none (ADR-131).
+        #[cfg(feature = "desktop")]
+        let router = router.route("/api/device-hub/{*path}", get(device_hub));
+        let router = router.layer(middleware::from_fn(guard)).with_state(shared);
+        crate::runtime::async_runtime::spawn(async move {
+            let served = axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(async move {
+                let _ = stopped.wait_for(|stopped| *stopped).await;
+            })
+            .await;
+            if let Err(error) = served {
+                tracing::warn!(%error, "remote access server stopped");
+                *remote.error.lock() = Some(error.to_string());
+            }
+            let mut server = slot(&remote, kind).lock();
+            if server
+                .as_ref()
+                .is_some_and(|server| server.shutdown.same_channel(&shutdown))
+            {
+                *server = None;
+            }
+        });
+    })
 }
 
 fn stop(remote: &Remote) {
@@ -799,7 +915,8 @@ async fn guard(
     }
     let remote = REMOTE.get();
     let https_host = remote.and_then(|remote| own_https_host(remote));
-    if same_origin(request.headers(), https_host.as_deref()) {
+    let https_authority = remote.and_then(|remote| own_https_authority(remote));
+    if same_origin(request.headers(), https_authority.as_deref()) {
         return next.run(request).await;
     }
     let Some(origin) = request
@@ -852,6 +969,15 @@ fn own_https_host(remote: &Remote) -> Option<String> {
         let url = remote.listen.lock().url.clone()?;
         let host = url.strip_prefix("https://")?.trim_end_matches('/');
         (!host.contains(['/', ':', '@'])).then(|| host.to_ascii_lowercase())
+    })
+}
+
+/// The HTTPS name with its port when `tailscale serve` uses one other than 443.
+fn own_https_authority(remote: &Remote) -> Option<String> {
+    let host = own_https_host(remote)?;
+    Some(match remote.listen.lock().https_port {
+        Some(port) if port != 443 => format!("{host}:{port}"),
+        _ => host,
     })
 }
 
@@ -926,7 +1052,7 @@ fn cross_origin_allowed(
 /// The origin a request came from when it is not this computer's own page: another
 /// computer's tailnet page or the desktop app.
 fn foreign_origin(remote: &Remote, headers: &HeaderMap) -> Option<String> {
-    let own = own_https_host(remote);
+    let own = own_https_authority(remote);
     if same_origin(headers, own.as_deref()) {
         return None;
     }
@@ -951,16 +1077,24 @@ fn host_identity(remote: &Remote) -> Value {
         }
     };
     let _ = save(remote);
+    let mut host_name = crate::commands::machine_host_name();
+    if let Some(label) = remote.listen.lock().label.clone() {
+        host_name = format!("{host_name} ({label})").trim().to_string();
+    }
     json!({
         "id": id,
-        "hostName": crate::commands::machine_host_name(),
-        "kind": if cfg!(feature = "desktop") { "mac" } else { "server" },
+        "hostName": host_name,
+        "kind": if cfg!(feature = "desktop") || remote.listen.lock().local_port.is_some() { "mac" } else { "server" },
     })
 }
 
 async fn health(AxumState(shared): AxumState<Shared>) -> Response {
     let mut body = host_identity(&shared.remote);
     body["app"] = json!("sirus");
+    // Sirus Native's host has a listener of its own for the window (ADR-189).
+    if shared.remote.listen.lock().local_port.is_some() {
+        body["window"] = json!(true);
+    }
     Json(body).into_response()
 }
 
@@ -1046,7 +1180,7 @@ async fn app_update_manifest(AxumState(shared): AxumState<Shared>, headers: Head
     else {
         return StatusCode::BAD_REQUEST.into_response();
     };
-    let Some(host) = own_https_host(&shared.remote)
+    let Some(host) = own_https_authority(&shared.remote)
         .or_else(|| value("host").filter(|host| !host.contains(['/', '@'])))
     else {
         return StatusCode::BAD_REQUEST.into_response();
@@ -1243,7 +1377,7 @@ fn redeem(
     let id = device.id.clone();
     {
         let mut config = remote.config.lock();
-        if config.devices.len() >= MAX_DEVICES {
+        if counted_devices(remote, &config) >= MAX_DEVICES {
             return Err("Too many devices are connected.");
         }
         config.devices.push(device);
@@ -1578,7 +1712,7 @@ enum Incoming {
 }
 
 async fn connection(mut socket: WebSocket, shared: Shared, origin: Option<String>) {
-    let (device, gzip) = match tokio::time::timeout(HELLO_TIMEOUT, socket.recv()).await {
+    let (device, gzip, local) = match tokio::time::timeout(HELLO_TIMEOUT, socket.recv()).await {
         Ok(Some(Ok(Message::Text(text)))) => match serde_json::from_str::<Incoming>(&text) {
             Ok(Incoming::Hello { token, gzip }) => {
                 let device = authenticate(&shared.remote, &token)
@@ -1586,11 +1720,15 @@ async fn connection(mut socket: WebSocket, shared: Shared, origin: Option<String
                 if device.is_some() {
                     let _ = shared.app.emit(CHANGED, ());
                 }
-                (device, gzip)
+                // The local window (Sirus Native, ADR-189) is the one holding the token it
+                // keeps in the data folder; no address or device name makes a device local.
+                let local =
+                    device.is_some() && crate::browser_bridge::is_local_window(&shared.app, &token);
+                (device, gzip, local)
             }
-            _ => (None, false),
+            _ => (None, false, false),
         },
-        _ => (None, false),
+        _ => (None, false, false),
     };
     let Some(device) = device else {
         let _ = socket
@@ -1609,6 +1747,7 @@ async fn connection(mut socket: WebSocket, shared: Shared, origin: Option<String
     let mut revoked = shared.remote.revoked.subscribe();
     let mut shutdown = shared.shutdown.clone();
     let mut listeners: HashMap<String, crate::runtime::EventId> = HashMap::new();
+    let connection_id = crate::browser_bridge::next_connection();
     loop {
         tokio::select! {
             message = socket.recv() => {
@@ -1618,6 +1757,20 @@ async fn connection(mut socket: WebSocket, shared: Shared, origin: Option<String
                     Some(Ok(_)) => continue,
                 };
                 match serde_json::from_str::<Incoming>(&text) {
+                    Ok(Incoming::Invoke { id, cmd, args }) if crate::browser_bridge::is_local_command(&cmd) => {
+                        let app = shared.app.clone();
+                        let outgoing = outgoing.clone();
+                        crate::runtime::async_runtime::spawn(async move {
+                            let result = if local {
+                                crate::browser_bridge::run_local(&app, connection_id, &outgoing, &cmd, &args)
+                                    .await
+                                    .map(Reply::Json)
+                            } else {
+                                Err(json!({ "code": "remote", "message": "This action is only available on the Mac." }))
+                            };
+                            let _ = outgoing.send(result_message(id, result)).await;
+                        });
+                    }
                     Ok(Incoming::Invoke { id, cmd, args }) => {
                         let app = shared.app.clone();
                         let outgoing = outgoing.clone();
@@ -1627,7 +1780,9 @@ async fn connection(mut socket: WebSocket, shared: Shared, origin: Option<String
                         });
                     }
                     Ok(Incoming::Listen { event }) => {
-                        if valid_event(&event) && !listeners.contains_key(&event) && listeners.len() < MAX_SUBSCRIPTIONS {
+                        if valid_event(&event)
+                            && (local || !crate::browser_bridge::LOCAL_EVENTS.contains(&event.as_str()))
+                            && !listeners.contains_key(&event) && listeners.len() < MAX_SUBSCRIPTIONS {
                             let outgoing = outgoing.clone();
                             let name = serde_json::to_string(&event).unwrap_or_default();
                             let id = shared.app.listen_any(event.clone(), move |message| {
@@ -1666,6 +1821,7 @@ async fn connection(mut socket: WebSocket, shared: Shared, origin: Option<String
     for (_, id) in listeners {
         shared.app.unlisten(id);
     }
+    crate::browser_bridge::unregister(connection_id);
     let _ = socket.send(Message::Close(None)).await;
 }
 
@@ -2328,6 +2484,44 @@ mod tests {
         assert!(!awake_wanted(&config));
         // On power only, and released when Sirus exits.
         assert_eq!(caffeinate_args(42), ["-s", "-w", "42"]);
+    }
+
+    #[test]
+    fn the_native_window_is_not_a_device_and_the_secure_port_joins_the_origin() {
+        let dir = tempfile::tempdir().unwrap();
+        let remote = remote(dir.path());
+        remote.listen.lock().local_port = Some(7811);
+        std::fs::write(dir.path().join("native-token"), "window-token\n").unwrap();
+        offer(&remote, "111111", Duration::from_secs(60));
+        let (window, _) = redeem(&remote, "111111", "Sirus Native", None).unwrap();
+        remote.config.lock().devices[0].token_hash = hash("window-token");
+        offer(&remote, "222222", Duration::from_secs(60));
+        let (phone, _) = redeem(&remote, "222222", "Phone", None).unwrap();
+        let listed: Vec<String> = status(&remote).devices.into_iter().map(|d| d.id).collect();
+        assert_eq!(listed, std::slice::from_ref(&phone));
+        assert!(refuse_window_device(&remote, &window).is_err());
+        assert!(refuse_window_device(&remote, &phone).is_ok());
+        assert_eq!(counted_devices(&remote, &remote.config.lock()), 1);
+        // Without a window listener nothing is hidden.
+        remote.listen.lock().local_port = None;
+        assert_eq!(status(&remote).devices.len(), 2);
+        // `tailscale serve` on another port: the page origin carries it.
+        remote.listen.lock().https_port = Some(8443);
+        remote.https.lock().host = Some("mac.tail6e87c3.ts.net".into());
+        assert_eq!(
+            own_https_authority(&remote).as_deref(),
+            Some("mac.tail6e87c3.ts.net:8443")
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::ORIGIN,
+            "https://mac.tail6e87c3.ts.net:8443".parse().unwrap(),
+        );
+        assert!(same_origin(
+            &headers,
+            own_https_authority(&remote).as_deref()
+        ));
+        assert!(!same_origin(&headers, Some("mac.tail6e87c3.ts.net")));
     }
 
     #[test]

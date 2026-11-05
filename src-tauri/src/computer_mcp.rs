@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, OnceLock};
 use std::time::{Duration, Instant};
 
-#[cfg(all(target_os = "macos", feature = "desktop"))]
+#[cfg(target_os = "macos")]
 use crate::runtime::Manager;
 use crate::runtime::{AppHandle, Emitter, State};
 use parking_lot::Mutex;
@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::commands::AppState;
-#[cfg(all(target_os = "macos", feature = "desktop"))]
+#[cfg(target_os = "macos")]
 use crate::computer::MouseButton;
 use crate::computer::{self, AppInfo};
 use crate::error::{Error, Result as IpcResult};
@@ -53,6 +53,7 @@ const BLOCKED: &[(&str, &str)] = &[
     ("com.apple.automator", "Automator"),
     ("com.apple.shortcuts", "Shortcuts"),
     ("com.siruscode.app", "Sirus Code"),
+    ("com.siruscode.native", "Sirus Native"),
 ];
 
 pub fn is_blocked(bundle_id: &str) -> bool {
@@ -256,7 +257,7 @@ pub struct Endpoint {
 /// The computer server is offered to a turn only while the Settings switch is on,
 /// and only in the macOS app, the one build whose bridge server listens.
 pub fn endpoint(session_id: &str) -> Option<Endpoint> {
-    if !cfg!(all(target_os = "macos", feature = "desktop")) || !enabled() {
+    if !cfg!(target_os = "macos") || !enabled() {
         return None;
     }
     let (_, socket) = APP.get()?;
@@ -319,7 +320,7 @@ pub fn acp_server(session_id: &str) -> Option<Value> {
     }))
 }
 
-#[cfg(all(target_os = "macos", feature = "desktop"))]
+#[cfg(target_os = "macos")]
 fn start_server(app: AppHandle, socket: PathBuf) {
     let _ = std::fs::remove_file(&socket);
     crate::runtime::async_runtime::spawn(async move {
@@ -343,10 +344,10 @@ fn start_server(app: AppHandle, socket: PathBuf) {
     });
 }
 
-#[cfg(not(all(target_os = "macos", feature = "desktop")))]
+#[cfg(not(target_os = "macos"))]
 fn start_server(_app: AppHandle, _socket: PathBuf) {}
 
-#[cfg(all(target_os = "macos", feature = "desktop"))]
+#[cfg(target_os = "macos")]
 async fn handle_connection(stream: tokio::net::UnixStream, app: AppHandle) {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     let (read, mut write) = stream.into_split();
@@ -441,7 +442,7 @@ fn valid_ref(reference: &str) -> bool {
         && reference[1..].chars().all(|c| c.is_ascii_digit())
 }
 
-#[cfg(all(target_os = "macos", feature = "desktop"))]
+#[cfg(target_os = "macos")]
 fn session_context(app: &AppHandle, session_id: &str) -> Option<(String, bool, String)> {
     let state = app.state::<Arc<AppState>>();
     let data = state.data.lock();
@@ -456,7 +457,7 @@ fn session_context(app: &AppHandle, session_id: &str) -> Option<(String, bool, S
     ))
 }
 
-#[cfg(all(target_os = "macos", feature = "desktop"))]
+#[cfg(target_os = "macos")]
 fn resolve(name: &str) -> Result<AppInfo, String> {
     let apps = computer::running_apps();
     let lower = name.to_lowercase();
@@ -468,7 +469,7 @@ fn resolve(name: &str) -> Result<AppInfo, String> {
         .ok_or_else(|| format!("{name} is not running. Use computer_apps to list apps or computer_launch with a bundle id."))
 }
 
-#[cfg(any(all(target_os = "macos", feature = "desktop"), test))]
+#[cfg(any(target_os = "macos", test))]
 fn granted(session_id: &str, bundle_id: &str) -> bool {
     with_bridge(|bridge| {
         bridge.grants.get(session_id).is_some_and(|apps| {
@@ -479,13 +480,15 @@ fn granted(session_id: &str, bundle_id: &str) -> bool {
 }
 
 /// Blocks the tool call until the person allows or declines this app for the session.
-#[cfg(all(target_os = "macos", feature = "desktop"))]
+#[cfg(target_os = "macos")]
 fn authorize(
     app: &AppHandle,
     session_id: &str,
     target: &AppInfo,
     provider: &str,
 ) -> Result<(), String> {
+    #[cfg(not(feature = "desktop"))]
+    let _ = app;
     if target.pid == std::process::id() as i32 || is_blocked(&target.bundle_id) {
         record(session_id, &target.name, "access", "blocked");
         publish();
@@ -508,6 +511,8 @@ fn authorize(
     let id = request.id.clone();
     with_bridge(|bridge| bridge.pending.push(Pending { request, reply }));
     publish();
+    // The host has no window to bounce; its window client shows the request from `computer-state`.
+    #[cfg(feature = "desktop")]
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.request_user_attention(Some(tauri::UserAttentionType::Informational));
     }
@@ -537,6 +542,7 @@ fn authorize(
 }
 
 fn hide_overlay() {
+    // The indicator is the window app's; the host has no AppKit main thread (ADR-189).
     #[cfg(all(target_os = "macos", feature = "desktop"))]
     if let Some((app, _)) = APP.get() {
         OVERLAY_GENERATION.fetch_add(1, Ordering::SeqCst);
@@ -574,7 +580,7 @@ fn show_overlay(provider: &str, target: &AppInfo, locale: &str, frame: Option<co
     let _ = (provider, target, locale, frame);
 }
 
-#[cfg(all(target_os = "macos", feature = "desktop"))]
+#[cfg(target_os = "macos")]
 fn observation(
     session_id: &str,
     target: &AppInfo,
@@ -597,7 +603,7 @@ fn observation(
     Ok(value)
 }
 
-#[cfg(all(target_os = "macos", feature = "desktop"))]
+#[cfg(target_os = "macos")]
 fn execute(app: &AppHandle, session_id: &str, tool: &str, args: &Value) -> Result<Value, String> {
     if !enabled() {
         return Err("Computer use is turned off. The person can enable it in Sirus Code Settings → Computer.".into());
@@ -809,7 +815,7 @@ fn execute(app: &AppHandle, session_id: &str, tool: &str, args: &Value) -> Resul
     Ok(value)
 }
 
-#[cfg(not(all(target_os = "macos", feature = "desktop")))]
+#[cfg(not(target_os = "macos"))]
 fn execute(
     _app: &AppHandle,
     _session_id: &str,
@@ -883,19 +889,19 @@ pub async fn computer_action(
     state.ensure_running()?;
     match action {
         Action::Status => {}
-        #[cfg(all(target_os = "macos", feature = "desktop"))]
+        #[cfg(target_os = "macos")]
         Action::RequestAccessibility => {
             computer::request_accessibility();
         }
-        #[cfg(all(target_os = "macos", feature = "desktop"))]
+        #[cfg(target_os = "macos")]
         Action::RequestScreenRecording => {
             computer::request_screen_recording();
         }
-        #[cfg(all(target_os = "macos", feature = "desktop"))]
+        #[cfg(target_os = "macos")]
         Action::OpenAccessibilitySettings => computer::open_privacy_pane(false),
-        #[cfg(all(target_os = "macos", feature = "desktop"))]
+        #[cfg(target_os = "macos")]
         Action::OpenScreenRecordingSettings => computer::open_privacy_pane(true),
-        #[cfg(not(all(target_os = "macos", feature = "desktop")))]
+        #[cfg(not(target_os = "macos"))]
         Action::RequestAccessibility
         | Action::RequestScreenRecording
         | Action::OpenAccessibilitySettings

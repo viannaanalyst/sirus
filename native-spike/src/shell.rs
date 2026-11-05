@@ -1,7 +1,10 @@
 //! The window: title strip, sidebar and a transcript with the live activity tree.
+#[path = "shell_terminal.rs"]
+mod shell_terminal;
 use crate::backend::{self, Backend, Incoming};
 use crate::data::{self, Conversation, Project, Turn};
 use crate::effort_energy;
+use crate::git_sync::{self, IncomingState};
 use crate::i18n::{t, tf};
 use crate::marks::{SPINNER_PERIOD, TILE_RAIL_INDENT, rail, shimmer, spinner_at};
 use crate::motion::{Curve, DISCLOSE, MENU, REORDER, SIDEBAR, SWITCH, TAB_OPEN, Tween, eased};
@@ -28,7 +31,47 @@ use gpui::{
 use serde_json::{Value, json};
 use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
+
+/// The message queue, steering and the composer keys that go with them.
+#[path = "composer_queue.rs"]
+mod composer_queue;
+/// The subagents of a turn as one card.
+#[path = "subagent_card.rs"]
+mod subagent_card;
+/// The tasks a reply delegated to other models, under the reply (delegated_tasks.rs).
+#[path = "delegated_tasks.rs"]
+mod delegated_tasks;
+/// What the running agents cost the Mac: the footer's gauge and its panel (agent_resources.rs).
+#[path = "agent_resources.rs"]
+mod agent_resources;
+/// Saving a conversation as Markdown from its context menu (conversation_export.rs).
+#[path = "conversation_export.rs"]
+mod conversation_export;
+/// The composer's context ring, its popup, Compact and Compact and send (ADR-057).
+#[path = "context_meter.rs"]
+pub(crate) mod context_meter;
+/// ⌘F: the find bar over the open conversation (transcript_find.rs).
+#[path = "transcript_find.rs"]
+pub(crate) mod transcript_find;
+/// Selecting the text of replies and user messages (transcript_select.rs).
+#[path = "transcript_select.rs"]
+pub(crate) mod transcript_select;
+/// The row of actions under a finished reply: copy, try again, undo, side chat (ADR-187).
+#[path = "message_actions.rs"]
+pub(crate) mod message_actions;
+
+#[path = "handoff.rs"]
+pub(crate) mod handoff;
+/// The changed files under a finished reply, opened in place (turn_review.rs).
+#[path = "turn_review.rs"]
+mod turn_review;
 use std::time::{Duration, Instant};
+
+#[path = "attachment_view.rs"]
+mod attachment_view;
+/// Conversations side by side: the layout tree, the panes, their drop zones and slide (split_panes.rs).
+#[path = "split_panes.rs"]
+pub(crate) mod split_panes;
 
 const NAV: f32 = 78. + 80.;
 const GAP: f32 = 2.;
@@ -52,6 +95,8 @@ const PANES: [(&str, &str, &str); 6] = [
     ("messages", "Chat lateral", "Uma conversa à parte."),
     ("smartphone", "Simulador", "Rode o app num aparelho."),
 ];
+/// The Simulator is built but hidden for now: the owner doesn't need it yet.
+const VISIBLE_PANES: usize = 5;
 const COMMANDS: [&str; 14] = [
     "Nova conversa",
     "Abrir ou fechar a sidebar",
@@ -128,6 +173,68 @@ impl Draft {
             .find('\n')
             .map_or(self.text.len(), |i| at + i)
     }
+}
+
+/// Whether a conversation's composer holds text that was not sent: its tab is dashed.
+fn tab_has_draft(drafts: &HashMap<usize, Draft>, conversation: usize) -> bool {
+    drafts
+        .get(&conversation)
+        .is_some_and(|d| !d.text.trim().is_empty())
+}
+
+/// The host's key for a conversation's composer draft, as Sirus Code's `session:<id>`.
+fn draft_key(session_id: &str) -> String {
+    format!("session:{session_id}")
+}
+
+/// Drafts are saved once the composer has been quiet this long.
+const DRAFT_SAVE_QUIET: Duration = Duration::from_millis(400);
+
+/// The time left before drafts edited at `edited` are saved, or `None` once the composer is quiet.
+fn draft_save_delay(edited: Instant, now: Instant) -> Option<Duration> {
+    let quiet = now.saturating_duration_since(edited);
+    (quiet < DRAFT_SAVE_QUIET).then(|| DRAFT_SAVE_QUIET - quiet)
+}
+
+/// A draft restored from the host, its caret at the end.
+fn restored_draft(text: &str) -> Draft {
+    Draft {
+        text: text.to_owned(),
+        cursor: text.len(),
+        anchor: text.len(),
+    }
+}
+
+/// Fills each conversation's empty composer from the host's drafts. `sessions` lists the session
+/// id of each conversation by index; text already typed in a composer is kept.
+fn restore_drafts(
+    drafts: &mut HashMap<usize, Draft>,
+    sessions: &[String],
+    saved: &HashMap<String, String>,
+) {
+    for (ix, session) in sessions.iter().enumerate() {
+        let Some(text) = saved.get(&draft_key(session)) else {
+            continue;
+        };
+        if drafts.get(&ix).is_none_or(|d| d.text.is_empty()) {
+            drafts.insert(ix, restored_draft(text));
+        }
+    }
+}
+
+/// The tabs a bulk close marks: every tab but `keep` that is not pinned and that `closes` picks,
+/// given each tab's index and the index of `keep`. Pinned tabs survive, as in browsers.
+fn bulk_close_marks(
+    tabs: &[(u64, bool)],
+    keep: u64,
+    closes: impl Fn(usize, usize) -> bool,
+) -> Vec<u64> {
+    let at = tabs.iter().position(|(id, _)| *id == keep).unwrap_or(0);
+    tabs.iter()
+        .enumerate()
+        .filter(|(ix, (id, pinned))| *id != keep && !pinned && closes(*ix, at))
+        .map(|(_, (id, _))| *id)
+        .collect()
 }
 
 /// A random version 4 UUID, one per send.
@@ -283,6 +390,14 @@ fn date_group(days: i64) -> u8 {
         7..=29 => 3,
         _ => 4,
     }
+}
+
+/// The pages of the composer's + menu.
+#[derive(Clone, Copy, PartialEq)]
+enum AddPage {
+    Add,
+    Goal,
+    Skills,
 }
 
 /// The popup every deletion passes through: what it does runs only on Confirm.
@@ -599,6 +714,12 @@ enum Waiting {
     Secrets,
     Agents,
     Branches,
+    /// `create_branch` from the Ambiente card's name field.
+    BranchCreate,
+    /// `git_incoming` for a conversation generation (git_sync.rs).
+    Incoming(u64),
+    /// `git_pull_ff` for a conversation generation (git_sync.rs).
+    IncomingPull(u64),
     Servers,
     Editors,
     Icons,
@@ -607,9 +728,23 @@ enum Waiting {
     SideChat,
     SettingsData(&'static str),
     Usage,
+    CliAgents,
+    CliProbe(String),
+    CliLogin(String),
+    ScriptsSaved(usize),
+    ScriptAction,
     Transcript(usize),
     Created,
     Session(usize),
+    /// A queued request sent to the host: its session and queue item.
+    Queued(String, String),
+    Steered(composer_queue::SteerWait),
+    /// `/compact` sent for a conversation, and the message that goes out behind it.
+    Compacted(usize, Option<Box<composer_queue::Outgoing>>),
+    /// An approval declined before a redirect (its redirect id).
+    Declined(u64),
+    /// A subagent's message, stop or feed (subagent_card.rs).
+    Subagent(subagent_card::Call),
 }
 
 /// A `git` result from a background thread.
@@ -630,6 +765,21 @@ struct PaletteState {
 struct Peek {
     open: bool,
     t: Tween,
+}
+
+fn look_file() -> std::path::PathBuf {
+    crate::backend::data_dir().join("native-look.json")
+}
+/// Aparência from disk; without a saved one, the default.
+fn load_look() -> Look {
+    std::fs::read(look_file())
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .map_or_else(Look::default, |value| crate::theme::look_from_json(&value))
+}
+fn save_look(look: &Look) {
+    let bytes = crate::theme::look_to_json(look).to_string();
+    let _ = std::fs::write(look_file(), bytes);
 }
 
 const PEEK_EDGE: f32 = 6.;
@@ -670,7 +820,8 @@ const APPEARANCE: &str = "Aparência";
 const TAB_MAX: f32 = 224.;
 const TAB_MIN: f32 = 64.;
 const SELECTED_MIN: f32 = 112.;
-const SIDEBAR_MIN: f32 = 190.;
+/// The sidebar's width when it opens, and the narrowest it can get.
+const SIDEBAR_MIN: f32 = 196.;
 const SIDEBAR_MAX: f32 = 420.;
 const CONV_ROW: f32 = 29.;
 const STEP_ROW: f32 = 26.;
@@ -726,7 +877,8 @@ pub struct Shell {
     dock_width: f32,
     resizing_dock: bool,
     /// The add menu: main list, or its goal page.
-    add_menu: Option<(bool, Tween)>,
+    add_menu: Option<(AddPage, Tween)>,
+    add_query: String,
     goal_input: Option<String>,
     visual_views: std::cell::RefCell<HashMap<String, gpui::AnyView>>,
     native_tx: async_channel::Sender<(&'static str, Value)>,
@@ -734,6 +886,12 @@ pub struct Shell {
     /// Which row of Ambiente is open.
     env_open: Option<&'static str>,
     env_branches: Vec<String>,
+    /// The name typed under "Criar branch…", when that row is open.
+    branch_draft: Option<String>,
+    branch_error: Option<String>,
+    branch_busy: bool,
+    /// The header's Puxar button and its popover (git_sync.rs).
+    incoming: IncomingState,
     env_servers: Vec<String>,
     env_editors: Vec<(String, String)>,
     env_icons: HashMap<String, std::path::PathBuf>,
@@ -743,19 +901,47 @@ pub struct Shell {
     /// Each side panel, per conversation; they keep their state while hidden.
     pane_views: HashMap<(usize, String), gpui::AnyView>,
     settings_data: HashMap<&'static str, Value>,
+    /// The project's scripts while its settings popup edits them (project_scripts.rs).
+    scripts_edit: Option<crate::project_scripts::Edit>,
+    /// Whether the notice above the composer shows the latest run's output.
+    scripts_output: bool,
     waiting: HashMap<u64, Waiting>,
     drafts: HashMap<usize, Draft>,
+    /// The draft text the host holds per draft key, so only changes are saved.
+    saved_drafts: HashMap<String, String>,
+    /// When a draft was last edited and not yet saved; the save timer waits for the composer to go quiet.
+    draft_edited: Option<Instant>,
+    /// Whether the save timer is running.
+    draft_timer: bool,
+    /// Messages waiting for the agent to be free, per session (composer_queue.rs).
+    queues: composer_queue::Queues,
+    /// The subagent card's folds, message input and open feed (subagent_card.rs).
+    subagents: subagent_card::State,
+    /// The footer's agent gauge and its panel (agent_resources.rs).
+    resources: agent_resources::State,
+    /// The context ring's popup and its compaction state (context_meter.rs).
+    context: context_meter::State,
+    /// The ⌘F find bar and its hits (transcript_find.rs).
+    find: transcript_find::State,
+    /// The text selected in a reply, and its menu (transcript_select.rs).
+    select: transcript_select::State,
+    /// The copy check, undo's outcome and its request under a reply (message_actions.rs).
+    message_actions: message_actions::State,
+    /// The changed files under a reply, opened in place (turn_review.rs).
+    turn_review: turn_review::State,
     /// Files attached to each conversation's next message: (id, name).
     attachments: HashMap<usize, Vec<(String, String)>>,
+    /// The attachment chips' facts and the open attachment viewer (attachment_view.rs).
+    viewer: attachment_view::Files,
     /// Ditado: since when it records.
     dictating: Option<Instant>,
-    blink_step: u128,
     viewport_width: f32,
     dock_drawn: f32,
     ignored_text: String,
     composer_layout: std::cell::RefCell<Option<TextLayout>>,
     selecting: bool,
-    caret_since: Instant,
+    tick: u32,
+    window_active: bool,
     composer_menu: Option<(ComposerMenu, Tween)>,
     models: HashMap<&'static str, Vec<ModelInfo>>,
     skills: Vec<(String, String)>,
@@ -787,7 +973,11 @@ pub struct Shell {
     filter_button_at: std::rc::Rc<std::cell::Cell<Option<gpui::Bounds<Pixels>>>>,
     context_menu: Option<ContextMenu>,
     confirm: Option<ConfirmDialog>,
+    /// Where the terminal lives: the strip, the title tabs (`shell_terminal.rs`).
+    term: shell_terminal::TermState,
     lists: HashMap<usize, gpui::ListState>,
+    /// The panes beside each other, when there are several (split_panes.rs).
+    split: split_panes::State,
     jump: Tween,
     trail_hover: Option<(usize, f32)>,
     usage_accounts: Option<AccountsPage>,
@@ -796,6 +986,7 @@ pub struct Shell {
     checkout_filter: HashMap<usize, String>,
     worktrees: HashMap<String, Vec<Value>>,
     usage_popup: Option<Tween>,
+    handoffs: handoff::State,
     usage_refreshing: bool,
     usage_chip: std::rc::Rc<std::cell::Cell<Option<gpui::Bounds<Pixels>>>>,
     /// Each project keeps its own tabs; `tabs` are the current project's.
@@ -816,6 +1007,9 @@ pub struct Shell {
     dock_active: Option<usize>,
     chooser_since: Instant,
     look: Look,
+    /// The send button's morph (send_morph.rs) and whether it wants another frame.
+    send_morph: std::cell::RefCell<crate::send_morph::Morph>,
+    send_moving: std::cell::Cell<bool>,
     system_dark: bool,
     theme_menu: Option<PaletteState>,
     settings_page: &'static str,
@@ -855,6 +1049,23 @@ impl Shell {
         let now = Instant::now();
         let (projects, conversations) = (Vec::new(), vec![Conversation::placeholder()]);
         let (backend, incoming) = backend::start();
+        crate::browser_bridge::start(backend.clone(), cx);
+        // A device paired, connected or was removed: Settings → Conexões lists it without a reload.
+        let remote_changed = backend.subscribe("remote-changed");
+        cx.spawn(async move |this, cx| {
+            while remote_changed.recv().await.is_ok() {
+                let done = this.update(cx, |this, cx| {
+                    if this.appearance.is_some() && this.settings_page == "Conexões" {
+                        this.load_settings_page();
+                        cx.notify();
+                    }
+                });
+                if done.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
         let (git_tx, git_rx) = async_channel::unbounded();
         let (native_tx, native_rx) = async_channel::unbounded::<(&'static str, Value)>();
         cx.spawn(async move |this, cx| {
@@ -899,6 +1110,7 @@ impl Shell {
         .detach();
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
+        cx.observe_window_activation(window, |_, _, cx| cx.notify()).detach();
         // Loops (spinners, shimmers, streaming text) tick together at 30 Hz, as Monocode's pulse.
         cx.spawn(async move |this, cx| {
             loop {
@@ -906,12 +1118,29 @@ impl Shell {
                     .timer(Duration::from_millis(33))
                     .await;
                 let alive = this.update(cx, |this, cx| {
-                    // The caret breathes at 12 Hz; nothing else needs a frame while idle.
-                    let elapsed = this.caret_since.elapsed().as_millis() / 83;
-                    let breath = elapsed != this.blink_step;
-                    this.blink_step = elapsed;
-                    if breath || this.conversations.iter().any(Conversation::working) {
+                    // An idle window draws nothing: the caret never blinks. Work animates at 15 Hz,
+                    // slower out of focus.
+                    this.tick = this.tick.wrapping_add(1);
+                    let every = if this.window_active { 2 } else { 12 };
+                    let pulse = this.tick % every == 0 && this.conversations.iter().any(Conversation::working);
+                    if pulse {
                         cx.notify();
+                    }
+                });
+                if alive.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+        // Sirus Code's incoming check: every 5 minutes while the window is visible. Answers only
+        // redraw when they change (git_sync.rs), so an idle window stays still.
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(git_sync::INCOMING_REFRESH).await;
+                let alive = this.update(cx, |this, _| {
+                    if this.incoming.due() {
+                        this.incoming_fetch();
                     }
                 });
                 if alive.is_err() {
@@ -938,12 +1167,17 @@ impl Shell {
             dock_width: 470.,
             resizing_dock: false,
             add_menu: None,
+            add_query: String::new(),
             goal_input: None,
             visual_views: Default::default(),
             native_tx,
             agent_versions: HashMap::new(),
             env_open: None,
             env_branches: Vec::new(),
+            branch_draft: None,
+            branch_error: None,
+            branch_busy: false,
+            incoming: IncomingState::default(),
             env_servers: Vec::new(),
             env_editors: Vec::new(),
             env_icons: HashMap::new(),
@@ -951,17 +1185,31 @@ impl Shell {
             setting_edit: None,
             pane_views: HashMap::new(),
             settings_data: HashMap::new(),
+            scripts_edit: None,
+            scripts_output: false,
             waiting: HashMap::new(),
             drafts: HashMap::new(),
+            saved_drafts: HashMap::new(),
+            draft_edited: None,
+            draft_timer: false,
+            queues: composer_queue::Queues::default(),
+            subagents: subagent_card::State::default(),
+            resources: agent_resources::State::default(),
+            context: Default::default(),
+            message_actions: Default::default(),
+            turn_review: Default::default(),
+            find: Default::default(),
+            select: Default::default(),
             attachments: HashMap::new(),
+            viewer: Default::default(),
             dictating: None,
-            blink_step: 0,
             viewport_width: 0.,
             dock_drawn: 0.,
             ignored_text: String::new(),
             composer_layout: Default::default(),
             selecting: false,
-            caret_since: now,
+            tick: 0,
+            window_active: true,
             composer_menu: None,
             models: HashMap::new(),
             skills: Vec::new(),
@@ -989,6 +1237,7 @@ impl Shell {
             filter_button_at: Default::default(),
             context_menu: None,
             confirm: None,
+            term: shell_terminal::TermState::new(),
             lists: HashMap::new(),
             jump: Tween::still(0., now),
             trail_hover: None,
@@ -998,6 +1247,8 @@ impl Shell {
             checkout_filter: HashMap::new(),
             worktrees: HashMap::new(),
             usage_popup: None,
+            handoffs: handoff::State::default(),
+            split: Default::default(),
             usage_refreshing: false,
             usage_chip: Default::default(),
             parked: HashMap::new(),
@@ -1016,7 +1267,9 @@ impl Shell {
             dock_panes: Vec::new(),
             dock_active: None,
             chooser_since: now,
-            look: Look::default(),
+            look: load_look(),
+            send_morph: Default::default(),
+            send_moving: Default::default(),
             system_dark: true,
             theme_menu: None,
             settings_page: APPEARANCE,
@@ -1039,7 +1292,7 @@ impl Shell {
             rolls: HashMap::new(),
             drag: None,
             menu: None,
-            sidebar_width: 264.,
+            sidebar_width: SIDEBAR_MIN,
             sidebar_open: true,
             sidebar: Tween::still(1., now),
             resizing: false,
@@ -1061,6 +1314,23 @@ impl Shell {
         shell.next_id = 2;
         shell.active = 1;
         shell.history.push(1);
+        // main.rs stops the host in the same quit pass, so the drafts reach it first: the replies
+        // are awaited here, while this handler runs before any quit future is polled.
+        cx.on_app_quit(|this, _| {
+            let deadline = Instant::now() + Duration::from_millis(500);
+            for reply in this.save_drafts() {
+                loop {
+                    match reply.try_recv() {
+                        Err(async_channel::TryRecvError::Empty) if Instant::now() < deadline => {
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
+                        _ => break,
+                    }
+                }
+            }
+            std::future::ready(())
+        })
+        .detach();
         shell
     }
 
@@ -1071,6 +1341,25 @@ impl Shell {
             Incoming::Problem(problem) => self.problem = Some(problem),
             Incoming::Ready(state) => self.load_state(state, cx),
             Incoming::Reply { id, ok, value } => match self.waiting.remove(&id) {
+                Some(Waiting::CliAgents) if ok => self.cli_agents_arrived(value, cx),
+                Some(Waiting::CliAgents) => self.problem = Some(error_text(&value)),
+                Some(Waiting::CliProbe(id)) => {
+                    let reply = if ok { value } else { json!({ "error": error_text(&value) }) };
+                    self.cli_reply("cliProbes", id, reply);
+                }
+                Some(Waiting::CliLogin(id)) => {
+                    let reply = if ok { value } else { json!({ "error": error_text(&value) }) };
+                    self.cli_reply("cliLogins", id, reply);
+                }
+                Some(Waiting::ScriptsSaved(ix)) if ok => {
+                    if let Some(project) = self.projects.get_mut(ix) {
+                        project.scripts = crate::project_scripts::Saved::of(&value["scripts"]);
+                    }
+                }
+                Some(Waiting::ScriptsSaved(_) | Waiting::ScriptAction) if !ok => {
+                    self.problem = Some(error_text(&value));
+                }
+                Some(Waiting::ScriptsSaved(_) | Waiting::ScriptAction) => {}
                 Some(Waiting::Older(ix)) if ok => {
                     let conversation = &mut self.conversations[ix];
                     let older = value["messages"].as_array().cloned().unwrap_or_default();
@@ -1118,6 +1407,7 @@ impl Shell {
                         name: value["name"].as_str().unwrap_or("").to_owned(),
                         path: value["path"].as_str().unwrap_or("").to_owned(),
                         appearance: value["appearance"].clone(),
+                scripts: crate::project_scripts::Saved::of(&value["scripts"]),
                         open: true,
                         pinned: false,
                         conversations: Vec::new(),
@@ -1162,9 +1452,35 @@ impl Shell {
                     self.load_account_usage();
                 }
                 Some(Waiting::SettingsData(key)) if ok => {
+                    if key == "connectors" {
+                        crate::settings_connectors::finish();
+                    }
+                    if key == "remote" {
+                        self.settings_data.remove("remote_error");
+                    }
                     self.settings_data.insert(key, value);
                 }
-                Some(Waiting::Attached(ix)) if ok => {
+                Some(Waiting::SettingsData("connectors")) => {
+                    crate::settings_connectors::finish();
+                    self.problem = Some(error_text(&value));
+                }
+                Some(Waiting::SettingsData("remote")) => {
+                    // Shown under the Remote access group, where the change was made.
+                    self.settings_data
+                        .insert("remote_error", json!(error_text(&value)));
+                }
+                Some(Waiting::Attached(_)) if !ok => {
+                    self.problem = Some(
+                        value["message"]
+                            .as_str()
+                            .or(value.as_str())
+                            .unwrap_or(t("Não foi possível anexar."))
+                            .to_owned(),
+                    );
+                }
+                Some(Waiting::Attached(ix)) => {
+                    self.problem = None;
+                    self.viewer.note(&value);
                     let added = value.as_array().into_iter().flatten().map(|a| {
                         (
                             a["id"].as_str().unwrap_or("").to_owned(),
@@ -1176,7 +1492,6 @@ impl Shell {
                 Some(Waiting::Dictated) if ok => {
                     if let Some(text) = value.as_str().filter(|t| !t.is_empty()) {
                         self.draft().insert(text);
-                        self.touch_caret();
                     }
                 }
                 Some(Waiting::SideChat) if ok && false => {
@@ -1344,6 +1659,22 @@ impl Shell {
                     self.conversations[ix].loaded = true;
                     self.open(ix, cx);
                 }
+                Some(Waiting::Queued(session, item)) => {
+                    self.queued_reply(&session, &item, ok, &value, cx)
+                }
+                Some(Waiting::Steered(wait)) => self.steered_reply(wait, ok, &value, cx),
+                Some(Waiting::Compacted(ix, then)) => self.compacted_reply(ix, then, ok, &value, cx),
+                Some(Waiting::Declined(key)) => self.declined_reply(key, ok, &value, cx),
+                Some(Waiting::Subagent(call)) => self.subagent_reply(call, ok, &value, cx),
+                Some(Waiting::BranchCreate) => self.branch_created(ok, &value, cx),
+                Some(Waiting::Incoming(generation)) => {
+                    if self.incoming.answer(generation, ok, &value) {
+                        cx.notify();
+                    }
+                }
+                Some(Waiting::IncomingPull(generation)) => {
+                    self.incoming_pulled(generation, ok, &value, cx)
+                }
                 Some(Waiting::Session(usize::MAX)) => {}
                 Some(Waiting::Session(_)) if ok => self.session_updated(&value, cx),
                 Some(_) | None if !ok => self.problem = Some(error_text(&value)),
@@ -1353,6 +1684,9 @@ impl Shell {
                 "session-updated" => self.session_updated(&payload, cx),
                 "agent-output" => self.agent_output(&payload),
                 "agent-exit" => self.refresh_diff(),
+                "subagent-feed" => {
+                    self.subagents.feed_event(&payload);
+                }
                 "secret-state" => {
                     self.secrets = payload["requests"].as_array().cloned().unwrap_or_default()
                 }
@@ -1367,6 +1701,11 @@ impl Shell {
         self.connected = true;
         self.problem = None;
         self.settings = state["settings"].clone();
+        if crate::chat_background::seed_monocode_default(&mut self.settings) {
+            self.backend
+                .invoke("save_settings", json!({ "settings": self.settings }));
+        }
+        crate::panel_browser::note_settings(&self.settings);
         crate::i18n::set_locale(self.settings["locale"].as_str().unwrap_or("pt-BR"));
         self.provider_accounts = state["providerAccounts"].clone();
         self.selected_accounts = if state["selectedProviderAccounts"].is_object() {
@@ -1374,6 +1713,16 @@ impl Shell {
         } else {
             json!({})
         };
+        // Drafts are keyed by conversation index, which the rebuild renumbers: carry each by session.
+        let sessions: Vec<String> = self.conversations.iter().map(|c| c.session_id.clone()).collect();
+        let mut by_session = Vec::new();
+        let mut sessionless = Vec::new();
+        for (ix, draft) in std::mem::take(&mut self.drafts) {
+            match sessions.get(ix).filter(|s| !s.is_empty()) {
+                Some(session) => by_session.push((session.clone(), draft)),
+                None => sessionless.push((ix, draft)),
+            }
+        }
         self.conversations.clear();
         self.tabs.clear();
         self.rows.clear();
@@ -1389,6 +1738,7 @@ impl Shell {
                 name: p["name"].as_str().unwrap_or("").to_owned(),
                 path: p["path"].as_str().unwrap_or("").to_owned(),
                 appearance: p["appearance"].clone(),
+                scripts: crate::project_scripts::Saved::of(&p["scripts"]),
                 open: false,
                 pinned: false,
                 conversations: Vec::new(),
@@ -1417,7 +1767,10 @@ impl Shell {
         let projects = &self.projects;
         self.project_order
             .sort_by(|a, b| latest(&projects[*b]).cmp(&latest(&projects[*a])));
-        let mut recent: Vec<usize> = (0..self.conversations.len()).collect();
+        // Side chats have no place in a project's list, so they never open on launch.
+        let mut recent: Vec<usize> = (0..self.conversations.len())
+            .filter(|ix| self.project_of(*ix).is_some())
+            .collect();
         recent.sort_by(|a, b| activity[*b].cmp(&activity[*a]));
         recent.truncate(4);
         self.parked.clear();
@@ -1457,6 +1810,25 @@ impl Shell {
             });
             self.next_id += 1;
         }
+        for (session, draft) in by_session {
+            if let Some(ix) = self.conversations.iter().position(|c| c.session_id == session) {
+                self.drafts.insert(ix, draft);
+            }
+        }
+        for (ix, draft) in sessionless {
+            self.drafts.entry(ix).or_insert(draft);
+        }
+        self.split_restore(cx);
+        self.saved_drafts = state["composerDrafts"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter_map(|(key, value)| Some((key.clone(), value.as_str()?.to_owned())))
+            .collect();
+        let sessions: Vec<String> = self.conversations.iter().map(|c| c.session_id.clone()).collect();
+        restore_drafts(&mut self.drafts, &sessions, &self.saved_drafts);
+        // Text typed while disconnected differs from the host's copy: it is saved now.
+        self.save_drafts();
         self.active = self.tabs[0].id;
         self.history.push(self.active);
         for provider in ["claude", "codex", "opencode"] {
@@ -1497,7 +1869,211 @@ impl Shell {
     }
 
     /// What the open Settings page shows, fresh from the back end.
+    /// Settings → Provedores: the install list first; each installed CLI is then tested and its
+    /// login read (cli_diagnostics.rs).
+    fn refresh_cli_diagnostics(&mut self) {
+        self.settings_data.remove("cliProbes");
+        self.settings_data.remove("cliLogins");
+        let call = self.backend.invoke("detect_agents", json!({}));
+        self.waiting.insert(call, Waiting::CliAgents);
+    }
+
+    fn cli_agents_arrived(&mut self, agents: Value, cx: &mut Context<Self>) {
+        let installed: Vec<String> = agents
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|agent| agent["installed"].as_bool() == Some(true))
+            .filter_map(|agent| agent["id"].as_str().map(str::to_owned))
+            .collect();
+        for id in installed {
+            let probe = self
+                .backend
+                .invoke("probe_provider", json!({ "id": id, "path": Value::Null }));
+            self.waiting.insert(probe, Waiting::CliProbe(id.clone()));
+            let usage = self
+                .backend
+                .invoke("provider_usage", json!({ "provider": id, "refresh": true }));
+            self.waiting.insert(usage, Waiting::CliLogin(id));
+        }
+        self.settings_data.insert("agents", agents);
+        cx.notify();
+    }
+
+    fn cli_reply(&mut self, key: &'static str, id: String, reply: Value) {
+        let slot = self.settings_data.entry(key).or_insert_with(|| json!({}));
+        slot[id] = reply;
+    }
+
+    /// Sends one `project_scripts_action`; its failure shows as the window's problem.
+    fn script_action(&mut self, args: Value, cx: &mut Context<Self>) {
+        let call = self.backend.invoke("project_scripts_action", args);
+        self.waiting.insert(call, Waiting::ScriptAction);
+        cx.notify();
+    }
+
+    fn run_script_in(&mut self, session: &str, kind: crate::project_scripts::Kind, cx: &mut Context<Self>) {
+        self.scripts_output = false;
+        self.script_action(crate::project_scripts::run_args(session, kind), cx);
+    }
+
+    /// Saves the settings popup's draft when it changed and is valid; `leave` ends the edit.
+    /// An invalid draft is not saved, and leaving discards it.
+    fn save_project_scripts(&mut self, leave: bool) {
+        if let Some(edit) = self.scripts_edit.as_ref() {
+            if let Some(project) = self.projects.get(edit.project) {
+                if edit.draft.changed(&project.scripts) && edit.draft.valid() {
+                    let args = edit.draft.save_args(&project.id);
+                    let index = edit.project;
+                    let call = self.backend.invoke("project_scripts_action", args);
+                    self.waiting.insert(call, Waiting::ScriptsSaved(index));
+                }
+            }
+        }
+        if leave {
+            self.scripts_edit = None;
+        }
+    }
+
+    fn focus_script(&mut self, field: crate::project_scripts::Field, cx: &mut Context<Self>) {
+        if let Some(edit) = self.scripts_edit.as_mut() {
+            edit.focus = Some(field);
+        }
+        cx.notify();
+    }
+
+    fn toggle_script_preview(&mut self, cx: &mut Context<Self>) {
+        if let Some(edit) = self.scripts_edit.as_mut() {
+            if edit.draft.open_preview_allowed() {
+                edit.draft.open_preview = !edit.draft.open_preview;
+            }
+        }
+        cx.notify();
+    }
+
+    /// The Scripts row of the settings popup: unfolding starts an edit of the saved scripts.
+    fn toggle_scripts_row(&mut self, cx: &mut Context<Self>) {
+        let opening = self.project_menu.as_ref().and_then(|m| m.expanded) != Some("scripts");
+        self.toggle_project_row("scripts", cx);
+        if opening {
+            if let Some(ix) = self.current_project {
+                self.scripts_edit = Some(crate::project_scripts::Edit::new(ix, &self.projects[ix].scripts));
+            }
+        }
+    }
+
+    /// The Scripts block of the settings popup, scrolling inside its own area.
+    fn scripts_fields_view(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+        let project = &self.projects[index];
+        let edit = self.scripts_edit.as_ref().filter(|edit| edit.project == index);
+        let draft = edit.map_or_else(
+            || crate::project_scripts::Draft::of(&project.scripts),
+            |edit| edit.draft.clone(),
+        );
+        let focus = edit.and_then(|edit| edit.focus);
+        let can_save = edit.is_some_and(|edit| {
+            edit.draft.changed(&project.scripts) && edit.draft.valid()
+        });
+        use crate::project_scripts::Field;
+        let handlers = [
+            crate::project_scripts_view::click(cx, |this, cx| this.focus_script(Field::Setup, cx)),
+            crate::project_scripts_view::click(cx, |this, cx| this.focus_script(Field::Finish, cx)),
+            crate::project_scripts_view::click(cx, |this, cx| this.focus_script(Field::Preview, cx)),
+        ];
+        let toggle = crate::project_scripts_view::click(cx, |this, cx| this.toggle_script_preview(cx));
+        let save = crate::project_scripts_view::click(cx, |this, cx| {
+            this.save_project_scripts(false);
+            cx.notify();
+        });
+        let fields = crate::project_scripts_view::fields(&draft, focus, handlers, toggle, save, can_save);
+        div()
+            .id("project-scripts-scroll")
+            .max_h(px(crate::project_scripts_view::SETTINGS_HEIGHT - 20.))
+            .overflow_y_scroll()
+            .child(fields)
+            .into_any_element()
+    }
+
+    /// The run notice above the composer: the conversation's latest script run.
+    fn script_notice(&self, ix: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let conversation = self.conversations.get(ix)?;
+        let run = crate::project_scripts::visible(&conversation.scripts)?.clone();
+        let shown = crate::project_scripts::notice(&run, conversation.working());
+        let session = conversation.session_id.clone();
+        let (stop, again, dismiss) = (session.clone(), session.clone(), session);
+        let kind = run.kind;
+        let handlers = [
+            crate::project_scripts_view::click(cx, move |this, cx| {
+                this.script_action(crate::project_scripts::cancel_args(&stop), cx)
+            }),
+            crate::project_scripts_view::click(cx, move |this, cx| {
+                this.run_script_in(&again, kind, cx)
+            }),
+            crate::project_scripts_view::click(cx, move |this, cx| {
+                this.script_action(crate::project_scripts::dismiss_args(&dismiss, kind), cx)
+            }),
+            crate::project_scripts_view::click(cx, |this, cx| {
+                this.scripts_output = !this.scripts_output;
+                cx.notify();
+            }),
+        ];
+        Some(crate::project_scripts_view::notice(&run, shown, self.scripts_output, handlers))
+    }
+
+    /// The composer's add menu rows that run the project's saved scripts in this conversation.
+    fn script_run_rows(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        use crate::project_scripts::Kind;
+        let ix = self.active_conversation();
+        let conversation = &self.conversations[ix];
+        let Some(project) = self.project_of(ix).and_then(|p| self.projects.get(p)) else {
+            return Vec::new();
+        };
+        let running = conversation
+            .scripts
+            .iter()
+            .any(|run| run.status == crate::project_scripts::Status::Running);
+        let enabled = crate::project_scripts::can_run(
+            conversation.isolated,
+            conversation.side_chat,
+            conversation.working(),
+            running,
+        );
+        [Kind::Setup, Kind::Finish]
+            .into_iter()
+            .filter(|kind| project.scripts.has(*kind))
+            .map(|kind| {
+                let about = if !conversation.isolated {
+                    t("Roda só em um worktree isolado").to_owned()
+                } else if running {
+                    t("Um script já está rodando").to_owned()
+                } else {
+                    project
+                        .scripts
+                        .body(kind)
+                        .lines()
+                        .map(str::trim)
+                        .find(|line| !line.is_empty())
+                        .unwrap_or("")
+                        .to_owned()
+                };
+                let session = conversation.session_id.clone();
+                let id = match kind {
+                    Kind::Setup => "add-run-setup",
+                    Kind::Finish => "add-run-finish",
+                };
+                let on_click = crate::project_scripts_view::click(cx, move |this, cx| {
+                    this.add_menu = None;
+                    this.run_script_in(&session, kind, cx);
+                });
+                crate::project_scripts_view::run_row(id, kind, about, enabled, on_click)
+            })
+            .collect()
+    }
+
     fn load_settings_page(&mut self) {
+        if self.settings_page == "Provedores" {
+            self.refresh_cli_diagnostics();
+        }
         for (key, command, args) in crate::settings_pages::loads(self.settings_page) {
             if command == "native_github_list" {
                 self.native_task(key, crate::native_actions::github_list);
@@ -1534,6 +2110,8 @@ impl Shell {
         match command {
             "native_confirm" => {
                 let label = text("label");
+                let title = args["title"].as_str().map(str::to_owned);
+                let message = args["message"].as_str().map(str::to_owned);
                 let then = args["then"].clone();
                 let run = move |this: &mut Self, cx: &mut Context<Self>| {
                     let name = |key: &str| -> &'static str {
@@ -1547,12 +2125,34 @@ impl Shell {
                 };
                 let action_label: &'static str = Box::leak(label.clone().into_boxed_str());
                 self.ask(
-                    format!("{label}?"),
-                    crate::i18n::t("Isso não pode ser desfeito.").to_owned(),
+                    title.unwrap_or_else(|| format!("{label}?")),
+                    message.unwrap_or_else(|| {
+                        crate::i18n::t("Isso não pode ser desfeito.").to_owned()
+                    }),
                     action_label,
                     run,
                     cx,
                 );
+            }
+            "native_terminal_placement" => {
+                if let Some(placement) =
+                    crate::terminal_place::Placement::from_id(&text("placement"))
+                {
+                    self.set_term_placement(placement, cx);
+                }
+            }
+            "native_connector_remove" => {
+                // Forgets the sign-in, then drops the connector from the saved list.
+                self.backend.invoke(
+                    "connector_action",
+                    json!({ "action": { "type": "signOut", "id": args["id"] } }),
+                );
+                self.save_setting("connectors", args["list"].clone(), cx);
+            }
+            "connector_action" => {
+                // The reply is the sign-in states; it lands in the page when a sign-in is over.
+                let id = self.backend.invoke(command, args);
+                self.waiting.insert(id, Waiting::SettingsData("connectors"));
             }
             "native_github_list" => self.native_task("github", crate::native_actions::github_list),
             "native_github_switch" => {
@@ -1598,24 +2198,37 @@ impl Shell {
                 self.load_settings_page();
             }
             "native_reset_layout" => {
-                self.sidebar_width = 264.;
+                self.sidebar_width = SIDEBAR_MIN;
                 self.look = Look::default();
+                save_look(&self.look);
             }
-            "native_pair" => {
-                let (tx, rx) = async_channel::bounded(1);
-                std::thread::spawn(move || {
-                    let _ = tx.send_blocking(backend::pairing_code());
-                });
-                cx.spawn(async move |this, cx| {
-                    if let Ok(Some((code, url))) = rx.recv().await {
-                        let _ = this.update(cx, |this, cx| {
-                            this.settings_data
-                                .insert("pairing", json!({ "code": code, "qr": url }));
-                            cx.notify();
-                        });
-                    }
-                })
-                .detach();
+            "cli_diagnostics" => self.refresh_cli_diagnostics(),
+            "native_copy" => {
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(text("text")));
+            }
+            "remote_action" => {
+                // The reply is the whole status, which lands in the page; reloading beside it
+                // would race the change.
+                let id = self.backend.invoke(command, args);
+                self.waiting.insert(id, Waiting::SettingsData("remote"));
+            }
+            name if name.starts_with("native_pair_") => {
+                let known = self.settings_data["remote"]["devices"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|d| d["id"].as_str().map(str::to_owned))
+                    .collect();
+                crate::settings_pair::command(
+                    self,
+                    name,
+                    &args,
+                    &self.backend.clone(),
+                    Shell::run_setting,
+                    Shell::edit_setting,
+                    known,
+                    cx,
+                );
             }
             "native_pick_folder" | "native_pick_background" => {
                 let folder = command == "native_pick_folder";
@@ -1784,7 +2397,6 @@ impl Shell {
         draft.anchor = mention.start;
         draft.insert(&format!("{sigil}{name} "));
         self.mention_selected = 0;
-        self.touch_caret();
         cx.notify();
     }
 
@@ -1918,9 +2530,6 @@ impl Shell {
             })
             .collect();
         let typed = page.and_then(|p| p.adding.clone());
-        let caret_alpha = 0.575
-            + 0.425
-                * (self.caret_since.elapsed().as_secs_f32() / 1.2 * std::f32::consts::TAU).cos();
         div()
             .flex()
             .flex_col()
@@ -2027,7 +2636,7 @@ impl Shell {
                             .w(px(1.5))
                             .h(px(15.))
                             .rounded_full()
-                            .bg(accent_wash(caret_alpha)),
+                            .bg(crate::theme::caret_color()),
                     ))
                     .into_any_element(),
                 None => div()
@@ -2308,7 +2917,7 @@ impl Shell {
                 .rounded(px(14.))
                 .border_1()
                 .border_color(content(0.12))
-                .bg(floating_fill())
+                .child(crate::theme::floating_surface(14.))
                 .shadow_lg()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .when(self.usage_accounts.is_some(), |d| {
@@ -2488,6 +3097,10 @@ impl Shell {
     fn add_session(&mut self, session: &Value) -> usize {
         let ix = self.conversations.len();
         self.conversations.push(Conversation::from_session(session));
+        // A side chat or a pull request's question belongs to its parent, not to the project's list.
+        if session["sideChat"].is_object() || session["pullAsk"].is_object() {
+            return ix;
+        }
         let project = session["projectId"].as_str().unwrap_or("");
         if let Some(project) = self.projects.iter_mut().find(|p| p.id == project) {
             project.conversations.insert(0, ix);
@@ -2515,16 +3128,52 @@ impl Shell {
         conversation.apply_meta(session);
         if conversation.loaded {
             if let Some(messages) = session["messages"].as_array().filter(|m| !m.is_empty()) {
-                let from = session["transcriptWindow"]["from"]
+                // A reply to a send carries the newest messages and no window: merge them by id.
+                let Some(from) = session["transcriptWindow"]["from"]
                     .as_u64()
-                    .map_or(conversation.base, |f| f as usize);
+                    .map(|f| f as usize)
+                else {
+                    for message in messages {
+                        match conversation
+                            .messages
+                            .iter_mut()
+                            .find(|m| m["id"] == message["id"])
+                        {
+                            Some(held) => *held = message.clone(),
+                            None => conversation.messages.push(message.clone()),
+                        }
+                    }
+                    conversation.rebuild();
+                    self.observe_queue(ix);
+                    cx.notify();
+                    return;
+                };
+                let kept = conversation.base + conversation.messages.len();
+                if from > kept {
+                    // The window starts past what's here, so messages are missing: load them.
+                    conversation.loaded = false;
+                    self.ensure_loaded(ix);
+                    cx.notify();
+                    return;
+                }
                 if from >= conversation.base {
                     conversation.messages.truncate(from - conversation.base);
                     conversation.messages.extend(messages.iter().cloned());
                 }
+                // Usually only the newest turn is in the window.
+                let at = from.saturating_sub(conversation.base);
+                if conversation.messages.iter().rposition(|m| m["role"] == "user").is_some_and(|last| last <= at) {
+                    conversation.rebuild_last();
+                } else {
+                    conversation.rebuild();
+                }
+            } else {
+                conversation.rebuild_last();
             }
-            conversation.rebuild();
         }
+        // A finished reply lets the next queued message start.
+        self.observe_queue(ix);
+        self.resources_running_changed(cx);
         cx.notify();
     }
 
@@ -2574,7 +3223,7 @@ impl Shell {
                 conversation.messages[at]["content"] = Value::String(text);
             }
         }
-        conversation.rebuild();
+        conversation.rebuild_last();
     }
 
     fn new_conversation(&mut self, project: Option<usize>) {
@@ -2648,6 +3297,19 @@ impl Shell {
 
     /// A search field, while one is up; otherwise typing goes to the composer's draft.
     fn query_target(&mut self) -> Option<&mut String> {
+        // The find bar takes the typing while it is up (transcript_find.rs).
+        if self.find.shown() {
+            return Some(&mut self.find.query);
+        }
+        // The settings popup's focused script field takes the typing.
+        if self.scripts_edit.as_ref().is_some_and(|edit| edit.focus.is_some()) {
+            let edit = self.scripts_edit.as_mut()?;
+            let field = edit.focus?;
+            return Some(edit.draft.field_mut(field));
+        }
+        if self.edit_target().is_some() {
+            return self.edit_target();
+        }
         if let Some((_, value)) = self.secret_entry.as_mut() {
             return Some(value);
         }
@@ -2657,8 +3319,24 @@ impl Shell {
         if let Some(message) = self.commit_message.as_mut() {
             return Some(message);
         }
+        if self.env_open == Some("branch") {
+            if let Some(draft) = self.branch_draft.as_mut() {
+                return Some(draft);
+            }
+        }
         if let Some(goal) = self.goal_input.as_mut() {
             return Some(goal);
+        }
+        // Field by field: this returns a borrow of `self`, so no method may borrow all of it.
+        let active = self
+            .tabs
+            .iter()
+            .find(|t| t.id == self.active)
+            .map_or(0, |t| t.conversation);
+        if let Some(c) = self.conversations.get(active) {
+            if self.subagents.composing(&c.session_id) {
+                return self.subagents.compose_text(&c.session_id);
+            }
         }
         if self.appearance.is_some() {
             return Some(
@@ -2670,8 +3348,11 @@ impl Shell {
         if matches!(self.composer_menu, Some((ComposerMenu::Catalog, _))) {
             return Some(&mut self.model_query);
         }
-        if self.confirm.is_some() {
+        if self.confirm.is_some() || self.viewer.visible() {
             return Some(&mut self.ignored_text);
+        }
+        if matches!(self.add_menu, Some((AddPage::Skills, _))) {
+            return Some(&mut self.add_query);
         }
         if let Some(name) = self.context_menu.as_mut().and_then(|m| m.renaming.as_mut()) {
             return Some(name);
@@ -2687,9 +3368,14 @@ impl Shell {
 
     /// Whether a popup's search or name field takes the keys instead of the composer.
     fn grabs_typing(&self) -> bool {
-        self.context_menu
-            .as_ref()
-            .is_some_and(|m| m.renaming.is_some())
+        self.find.shown()
+            || self.queues.is_editing()
+            || self.subagents.composing(&self.active_session_id())
+            || matches!(self.add_menu, Some((AddPage::Skills | AddPage::Goal, _)))
+            || self
+                .context_menu
+                .as_ref()
+                .is_some_and(|m| m.renaming.is_some())
             || matches!(self.composer_menu, Some((ComposerMenu::Catalog, _)))
             || self.project_menu.as_ref().is_some_and(|m| m.sub.is_some())
             || self
@@ -2698,16 +3384,96 @@ impl Shell {
                 .is_some_and(|p| p.adding.is_some())
     }
 
+    /// A click on the composer's toolbar hands the keys back to the composer, unless a popup
+    /// that takes typing is up (its field keeps the focus).
+    fn keep_typing_focus(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.grabs_typing() {
+            window.focus(&self.focus, cx);
+        }
+    }
+
     fn draft(&mut self) -> &mut Draft {
+        self.touch_drafts();
         let ix = self.active_conversation();
         self.drafts.entry(ix).or_default()
     }
 
-    fn touch_caret(&mut self) {
-        self.caret_since = Instant::now();
+    /// Notes that a draft changed: the save timer saves it once the composer is quiet.
+    fn touch_drafts(&mut self) {
+        self.draft_edited = Some(Instant::now());
+    }
+
+    /// Saves the drafts whose text the host does not hold yet, and returns the replies. Conversations
+    /// without a session id keep their drafts in memory only.
+    fn save_drafts(&mut self) -> Vec<async_channel::Receiver<Result<Value, Value>>> {
+        self.draft_edited = None;
+        // Every conversation, not only those holding a draft: sending removes the draft, and the
+        // empty text is what clears it on the host.
+        let changed: Vec<(String, String)> = self
+            .conversations
+            .iter()
+            .enumerate()
+            .filter(|(_, conversation)| !conversation.session_id.is_empty())
+            .map(|(ix, conversation)| {
+                let text = self.drafts.get(&ix).map_or(String::new(), |d| d.text.clone());
+                (draft_key(&conversation.session_id), text)
+            })
+            .collect();
+        let mut replies = Vec::new();
+        for (key, text) in changed {
+            if self.saved_drafts.get(&key).map(String::as_str) == Some(text.as_str())
+                || (text.is_empty() && !self.saved_drafts.contains_key(&key))
+            {
+                continue;
+            }
+            self.saved_drafts.insert(key.clone(), text.clone());
+            replies.push(self.backend.request(
+                "save_composer_draft",
+                json!({ "key": key, "value": text }),
+            ));
+        }
+        replies
+    }
+
+    /// Runs the save timer while a draft is unsaved: it saves once the composer has been quiet.
+    fn ensure_draft_timer(&mut self, cx: &mut Context<Self>) {
+        if self.draft_timer || self.draft_edited.is_none() {
+            return;
+        }
+        self.draft_timer = true;
+        cx.spawn(async move |this, cx| {
+            loop {
+                let wait = this.update(cx, |this, _| {
+                    let delay = this
+                        .draft_edited
+                        .and_then(|edited| draft_save_delay(edited, Instant::now()));
+                    if delay.is_none() {
+                        this.save_drafts();
+                        this.draft_timer = false;
+                    }
+                    delay
+                });
+                match wait {
+                    Ok(Some(delay)) => cx.background_executor().timer(delay).await,
+                    _ => break,
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// The active conversation's session id, empty while there is none.
+    fn active_session_id(&self) -> String {
+        self.conversations
+            .get(self.active_conversation())
+            .map_or_else(String::new, |c| c.session_id.clone())
     }
 
     fn active_conversation(&self) -> usize {
+        // A pane being built names its own conversation.
+        if let Some(building) = self.split.building() {
+            return building;
+        }
         self.tabs
             .iter()
             .find(|t| t.id == self.active)
@@ -2715,6 +3481,7 @@ impl Shell {
     }
 
     fn select(&mut self, id: u64, cx: &mut Context<Self>) {
+        self.leave_title_tab();
         if self.active == id {
             return;
         }
@@ -2727,6 +3494,7 @@ impl Shell {
     fn show(&mut self, id: u64, cx: &mut Context<Self>) {
         self.active = id;
         self.marked = None;
+        self.split_sync();
         if let Some(ix) = self
             .tabs
             .iter()
@@ -2872,13 +3640,12 @@ impl Shell {
         closes: impl Fn(usize, usize) -> bool,
         cx: &mut Context<Self>,
     ) {
-        let at = self.tabs.iter().position(|t| t.id == keep).unwrap_or(0);
+        let tabs: Vec<(u64, bool)> = self.tabs.iter().map(|t| (t.id, t.pinned)).collect();
+        let marks = bulk_close_marks(&tabs, keep, closes);
         let mut closed_active = false;
-        for (ix, tab) in self.tabs.iter_mut().enumerate() {
-            if tab.id != keep && !tab.pinned && closes(ix, at) {
-                tab.closing = true;
-                closed_active |= tab.id == self.active;
-            }
+        for tab in self.tabs.iter_mut().filter(|t| marks.contains(&t.id)) {
+            tab.closing = true;
+            closed_active |= tab.id == self.active;
         }
         if closed_active {
             self.select(keep, cx);
@@ -3159,7 +3926,7 @@ impl Shell {
                             .rounded_md()
                             .border_1()
                             .border_color(content(0.1))
-                            .bg(floating_fill())
+                            .child(crate::theme::floating_surface(6.))
                             .shadow_md()
                             .text_size(px(12.))
                             .text_color(content(1.))
@@ -3202,6 +3969,17 @@ impl Shell {
     }
 
     fn mouse_move(&mut self, event: &MouseMoveEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.split_move(event, cx) {
+            return;
+        }
+        if self.select.dragging() {
+            if event.pressed_button != Some(MouseButton::Left) {
+                self.select.stop_drag();
+            } else if self.select.drag_to(event.position) {
+                cx.notify();
+            }
+            return;
+        }
         if self.effort_drag {
             if event.pressed_button != Some(MouseButton::Left) {
                 self.effort_drag = false;
@@ -3275,6 +4053,13 @@ impl Shell {
     }
 
     fn mouse_up(&mut self, _: &MouseUpEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        self.split_release(cx);
+        if self.select.release() {
+            if let Some(url) = self.select.take_link() {
+                cx.open_url(&url);
+            }
+            cx.notify();
+        }
         self.effort_drag = false;
         self.resizing = false;
         self.resizing_dock = false;
@@ -3290,17 +4075,26 @@ impl Shell {
         }
     }
 
-    fn key(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    fn key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let keys = &event.keystroke;
         let key = keys.key.as_str();
+        // The find bar's keys come first: its Esc closes the bar, never stops the agent.
+        if self.find_keys(keys, window, cx) {
+            return;
+        }
+        // A queued message being edited takes its keys first.
+        if self.queues.is_editing() && self.queue_keys(keys, window, cx) {
+            return;
+        }
+        if self.subagent_keys(key, cx) {
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
         if self.goal_input.is_some() && matches!(key, "enter" | "escape" | "backspace") {
             match key {
                 "enter" => {
-                    let goal = self.goal_input.take().unwrap_or_default();
-                    let ix = self.active_conversation();
-                    self.conversations[ix].goal =
-                        (!goal.trim().is_empty()).then(|| goal.trim().to_owned());
-                    self.add_menu = None;
+                    self.save_goal();
                 }
                 "escape" => {
                     self.goal_input = None;
@@ -3309,6 +4103,23 @@ impl Shell {
                 _ => {
                     if let Some(goal) = self.goal_input.as_mut() {
                         goal.pop();
+                    }
+                }
+            }
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
+        if self.env_open == Some("branch")
+            && self.branch_draft.is_some()
+            && matches!(key, "enter" | "escape" | "backspace")
+        {
+            match key {
+                "enter" => self.submit_branch(cx),
+                "escape" => self.branch_draft = None,
+                _ => {
+                    if let Some(draft) = self.branch_draft.as_mut() {
+                        draft.pop();
                     }
                 }
             }
@@ -3332,7 +4143,31 @@ impl Shell {
         }
         if self.setting_edit.is_some() && matches!(key, "enter" | "escape" | "backspace") {
             match key {
-                "enter" => self.commit_setting_edit(cx),
+                "enter" => {
+                    let saves = self
+                        .setting_edit
+                        .as_ref()
+                        .is_some_and(|(field, _)| crate::settings_connectors::enter_saves(field));
+                    let names = self
+                        .setting_edit
+                        .as_ref()
+                        .is_some_and(|(field, _)| crate::settings_pair::enter_saves(field));
+                    self.commit_setting_edit(cx);
+                    if names {
+                        crate::settings_pair::key(self, key, Shell::run_setting, cx);
+                    }
+                    if saves {
+                        let list = self.settings["connectors"].clone();
+                        crate::settings_connectors::key(
+                            self,
+                            key,
+                            &list,
+                            Shell::save_setting,
+                            Shell::run_setting,
+                            cx,
+                        );
+                    }
+                }
                 "escape" => self.setting_edit = None,
                 _ => {
                     if let Some((_, value)) = self.setting_edit.as_mut() {
@@ -3340,6 +4175,35 @@ impl Shell {
                     }
                 }
             }
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
+        if self.appearance.is_some()
+            && self.settings_page == "Conectores"
+            && matches!(key, "enter" | "escape")
+            && crate::settings_connectors::wants_keys()
+        {
+            let list = self.settings["connectors"].clone();
+            if crate::settings_connectors::key(
+                self,
+                key,
+                &list,
+                Shell::save_setting,
+                Shell::run_setting,
+                cx,
+            ) {
+                cx.stop_propagation();
+                cx.notify();
+                return;
+            }
+        }
+        if self.appearance.is_some()
+            && self.settings_page == "Conexões"
+            && matches!(key, "enter" | "escape")
+            && crate::settings_pair::wants_keys()
+            && crate::settings_pair::key(self, key, Shell::run_setting, cx)
+        {
             cx.stop_propagation();
             cx.notify();
             return;
@@ -3393,12 +4257,38 @@ impl Shell {
                 return;
             }
         }
+        if matches!(self.add_menu, Some((AddPage::Skills, _))) {
+            match key {
+                "escape" => {
+                    self.add_query.clear();
+                    if let Some((page, _)) = self.add_menu.as_mut() {
+                        *page = AddPage::Add;
+                    }
+                }
+                "backspace" => {
+                    self.add_query.pop();
+                }
+                "enter" => {
+                    if let Some((name, _)) = self.skill_hits().first().cloned() {
+                        self.use_skill(&name, cx);
+                    }
+                }
+                _ => return,
+            }
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
         if self.confirm.is_some() {
             match key {
                 "enter" => self.answer_confirm(true, cx),
                 "escape" => self.answer_confirm(false, cx),
                 _ => {}
             }
+            cx.stop_propagation();
+            return;
+        }
+        if self.attachment_key(key, keys.modifiers.platform, cx) {
             cx.stop_propagation();
             return;
         }
@@ -3464,7 +4354,24 @@ impl Shell {
             cx.notify();
             return;
         }
+        if key == "escape" && self.select.active() {
+            self.select.clear();
+            cx.notify();
+            return;
+        }
+        if key == "escape" && self.message_actions.more.take().is_some() {
+            cx.notify();
+            return;
+        }
         if key == "escape" && self.usage_popup.take().is_some() {
+            cx.notify();
+            return;
+        }
+        if key == "escape" && self.resources.close() {
+            cx.notify();
+            return;
+        }
+        if key == "escape" && self.context.close() {
             cx.notify();
             return;
         }
@@ -3615,6 +4522,10 @@ impl Shell {
             cx.notify();
             return;
         }
+        // Escape and ⌘. stop the agent, ⌘Enter flips queue/steer, ↑ recalls the last message.
+        if self.queue_keys(keys, window, cx) {
+            return;
+        }
         if matches!(key, "pageup" | "pagedown") {
             let ix = self.active_conversation();
             let state = self.list_state(ix, cx);
@@ -3641,9 +4552,11 @@ impl Shell {
             (true, true, false, "p") => self.toggle_pin(self.active, cx),
             (true, false, false, "s") => self.toggle_sidebar(cx),
             (true, false, false, ",") => self.toggle_appearance(cx),
+            (true, false, false, "f") => self.open_find(window, cx),
             (true, false, false, "k") => self.toggle_palette(false, cx),
             (true, false, false, "p") => self.toggle_palette(true, cx),
             (true, false, false, "\\") => self.toggle_dock(cx),
+            (true, shift, false, "j") => self.term_shortcut(shift, window, cx),
             (true, true, false, "w") => self.close_where(self.active, |_, _| true, cx),
             (true, false, false, "[") => self.navigate(false, cx),
             (true, false, false, "]") => self.navigate(true, cx),
@@ -3670,7 +4583,6 @@ impl Shell {
             }
             (false, true, false, "enter") => {
                 self.draft().insert("\n");
-                self.touch_caret();
                 cx.stop_propagation();
                 cx.notify();
             }
@@ -3718,9 +4630,15 @@ impl Shell {
                         draft.anchor = draft.cursor;
                     }
                 }
-                self.touch_caret();
                 cx.stop_propagation();
                 cx.notify();
+            }
+            (true, false, false, "c") if self.copy_selected_text(cx) => {
+                cx.stop_propagation();
+                cx.notify();
+            }
+            (true, false, false, "a") if self.select_reply_text(cx) => {
+                cx.stop_propagation();
             }
             (true, false, false, "a") => {
                 let draft = self.draft();
@@ -3746,17 +4664,29 @@ impl Shell {
                 let clipboard = cx.read_from_clipboard();
                 let image = clipboard.as_ref().and_then(|item| {
                     item.entries().iter().find_map(|entry| match entry {
-                        gpui::ClipboardEntry::Image(image) => Some(image.bytes.clone()),
+                        gpui::ClipboardEntry::Image(image) => Some((image.bytes.clone(), image.format)),
                         _ => None,
                     })
                 });
-                if let Some(bytes) = image {
-                    let ix = self.active_conversation();
-                    let owner = self.conversations[ix].session_id.clone();
-                    let id = self.backend.invoke("paste_prompt_attachments", json!({ "owner": owner, "files": [{ "name": "imagem.png", "data": base64(&bytes) }] }));
-                    self.waiting.insert(id, Waiting::Attached(ix));
+                // Files copied in Finder paste as attachments.
+                let files: Vec<std::path::PathBuf> =
+                    clipboard.as_ref().map_or_else(Vec::new, |item| {
+                        item.entries()
+                            .iter()
+                            .filter_map(|entry| match entry {
+                                gpui::ClipboardEntry::ExternalPaths(paths) => {
+                                    Some(paths.paths().to_vec())
+                                }
+                                _ => None,
+                            })
+                            .flatten()
+                            .collect()
+                    });
+                if !files.is_empty() {
+                    self.attach_files(files, cx);
+                } else if let Some((bytes, kind)) = image {
+                    self.attach_pasted_image(bytes, kind, cx);
                 } else if let Some(text) = clipboard.and_then(|item| item.text()) {
-                    self.touch_caret();
                     match self.query_target() {
                         Some(query) => query.push_str(&text),
                         None => self.draft().insert(&text),
@@ -3862,49 +4792,9 @@ impl Shell {
         (drawn, y, moving)
     }
 
+    /// Enter and the send button: sends, queues or steers (composer_queue.rs).
     fn send(&mut self, cx: &mut Context<Self>) {
-        let ix = self.active_conversation();
-        let conversation = &self.conversations[ix];
-        if conversation.session_id.is_empty() {
-            return;
-        }
-        let session_id = conversation.session_id.clone();
-        let chosen = self.execution(conversation.provider, conversation.model.as_deref());
-        let plain_cursor = conversation.provider == "cursor"
-            && conversation
-                .model
-                .as_deref()
-                .and_then(|id| self.models.get("cursor")?.iter().find(|m| m.id == id))
-                .is_some_and(|m| !m.parameterized);
-        let execution = json!({ "approval": conversation.approval, "effort": if plain_cursor { None } else { chosen.effort }, "fast": chosen.fast && !plain_cursor, "planning": conversation.planning });
-        let (goal, debugging, team) = (
-            conversation.goal.clone(),
-            conversation.debugging,
-            conversation.team,
-        );
-        let prompt = self
-            .drafts
-            .get(&ix)
-            .map_or(String::new(), |d| d.text.trim().to_owned());
-        if prompt.is_empty() || conversation.working() {
-            return;
-        }
-        self.drafts.remove(&ix);
-        self.marked = None;
-        let attachment_ids: Vec<String> = self
-            .attachments
-            .remove(&ix)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|(id, _)| id)
-            .collect();
-        let session_owner = session_id.clone();
-        // One id per send, so a repeated delivery can't start a second turn.
-        let id = self.backend.invoke("send_prompt", json!({ "request": { "sessionId": session_id, "prompt": prompt, "clientRequestId": uuid(), "execution": execution, "attachmentIds": attachment_ids, "attachmentOwner": session_owner, "goal": goal, "debugging": debugging, "team": team } }));
-        self.waiting.insert(id, Waiting::Session(ix));
-        self.list_state(ix, cx)
-            .set_follow_mode(gpui::FollowMode::Tail);
-        cx.notify();
+        self.send_with(false, cx);
     }
 
     fn respond_secret(&mut self, id: &str, value: Option<String>, cx: &mut Context<Self>) {
@@ -3918,36 +4808,62 @@ impl Shell {
     }
 
     /// Sends files to the back end, which keeps them for this conversation's next message.
-    fn attach_paths(&mut self, paths: Vec<std::path::PathBuf>, cx: &mut Context<Self>) {
+    pub(crate) fn attach_paths(&mut self, paths: Vec<std::path::PathBuf>, cx: &mut Context<Self>) {
+        self.attach_files(paths, cx);
+    }
+
+    fn skill_hits(&self) -> Vec<(String, String)> {
+        let off: Vec<&str> = self.settings["disabledSkills"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
+        let needle = self.add_query.trim().to_lowercase();
+        self.skills
+            .iter()
+            .filter(|(name, about)| {
+                !off.contains(&name.as_str())
+                    && (needle.is_empty()
+                        || name.to_lowercase().contains(&needle)
+                        || about.to_lowercase().contains(&needle))
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// Adds `/name` at the start of the draft, once, as Sirus Code's `insertSkillInvocation`.
+    fn use_skill(&mut self, name: &str, cx: &mut Context<Self>) {
+        let token = format!("/{name}");
+        let draft = self.draft();
+        let leading = draft
+            .text
+            .split_whitespace()
+            .take_while(|t| t.starts_with('/'))
+            .any(|t| t.eq_ignore_ascii_case(&token));
+        if !leading {
+            draft.text = format!("{token} {}", draft.text);
+            let end = draft.text.len();
+            draft.cursor = end;
+            draft.anchor = end;
+        }
+        self.add_menu = None;
+        self.add_query.clear();
+        cx.notify();
+    }
+
+    fn save_goal(&mut self) {
+        let goal = self.goal_input.take().unwrap_or_default();
         let ix = self.active_conversation();
-        let backend = self.backend.clone();
-        let owner = self.conversations[ix].session_id.clone();
-        let (tx, rx) = async_channel::bounded(1);
-        std::thread::spawn(move || {
-            let files: Vec<Value> = paths.iter().filter_map(|path| {
-                let data = std::fs::read(path).ok()?;
-                Some(json!({ "name": path.file_name()?.to_string_lossy(), "data": base64(&data) }))
-            }).collect();
-            let _ = tx.send_blocking(files);
-        });
-        cx.spawn(async move |this, cx| {
-            let Ok(files) = rx.recv().await else { return };
-            let id = backend.invoke(
-                "paste_prompt_attachments",
-                json!({ "owner": owner, "files": files }),
-            );
-            let _ = this.update(cx, |this, cx| {
-                this.waiting.insert(id, Waiting::Attached(ix));
-                cx.notify();
-            });
-        })
-        .detach();
+        self.conversations[ix].goal =
+            (!goal.trim().is_empty()).then(|| goal.trim().chars().take(400).collect());
+        self.add_menu = None;
     }
 
     fn pick_attachments(&mut self, cx: &mut Context<Self>) {
         let paths = cx.prompt_for_paths(gpui::PathPromptOptions {
             files: true,
-            directories: false,
+            directories: true,
             multiple: true,
             prompt: None,
         });
@@ -3989,7 +4905,8 @@ impl Shell {
         moving: &mut bool,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let (goal_page, open) = self.add_menu.as_ref()?;
+        let (page, open) = self.add_menu.as_ref()?;
+        let page = *page;
         if !open.done(now) {
             *moving = true;
         }
@@ -4000,11 +4917,26 @@ impl Shell {
             conversation.debugging,
             conversation.team,
         );
+        // As Sirus Code's `supportsPlanning` and its team check.
+        let provider = conversation.provider;
+        let planning_ok = !matches!(provider, "grok" | "antigravity")
+            && (provider != "codex" || conversation.model.is_some());
+        let team_ok = matches!(provider, "claude" | "codex" | "opencode");
+        let caret = move || {
+            div()
+                .flex_shrink_0()
+                .w(px(1.5))
+                .h(px(15.))
+                .rounded_full()
+                .bg(crate::theme::caret_color())
+        };
+        let track = crate::hover_track::list("add-menu");
         let item = |id: &'static str,
                     glyph: &'static str,
                     title: &'static str,
                     about: &'static str,
                     on: bool| {
+            track.row_named(
             div()
                 .id(id)
                 .h(px(32.))
@@ -4017,7 +4949,6 @@ impl Shell {
                 .text_color(content(0.92))
                 .cursor_pointer()
                 .when(on, |d| d.bg(accent_wash(0.14)))
-                .when(!on, |d| d.hover(|s| s.bg(content(0.07))))
                 .child(icon(glyph, 15.).text_color(if on { accent() } else { content(0.6) }))
                 .child(div().flex_shrink_0().child(title))
                 .child(
@@ -4028,37 +4959,199 @@ impl Shell {
                         .text_size(px(12.))
                         .text_color(content(0.45))
                         .child(about),
-                )
+                ),
+                id,
+                on,
+            )
         };
-        let body: Vec<AnyElement> = if *goal_page {
+        let back = |cx: &mut Context<Self>| {
+            div()
+                .id("add-back")
+                .mb(px(4.))
+                .h(px(26.))
+                .px(px(8.))
+                .rounded(px(6.))
+                .flex()
+                .items_center()
+                .gap(px(4.))
+                .text_size(px(12.5))
+                .text_color(content(0.55))
+                .cursor_pointer()
+                .hover(|s| s.text_color(content(0.95)))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.goal_input = None;
+                    this.add_query.clear();
+                    if let Some((page, _)) = this.add_menu.as_mut() {
+                        *page = AddPage::Add;
+                    }
+                    cx.notify();
+                }))
+                .child(icon("chevron-left", 14.).text_color(content(0.55)))
+                .child(crate::i18n::t("Adicionar"))
+                .into_any_element()
+        };
+        let body: Vec<AnyElement> = if page == AddPage::Goal {
             let text = self.goal_input.clone().unwrap_or_default();
             vec![
+                back(cx),
                 div()
                     .px(px(8.))
-                    .pt(px(4.))
                     .pb(px(6.))
-                    .text_size(px(12.))
-                    .text_color(content(0.5))
-                    .child(crate::i18n::t(
-                        "Defina uma meta a perseguir nesta conversa.",
+                    .text_size(px(13.))
+                    .text_color(content(0.7))
+                    .child(crate::i18n::t("Defina uma meta a perseguir"))
+                    .into_any_element(),
+                div()
+                    .min_h(px(66.))
+                    .mx(px(8.))
+                    .p(px(8.))
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(content(0.14))
+                    .bg(field_fill())
+                    .text_size(px(13.))
+                    .flex()
+                    .items_start()
+                    .child(typed_text(
+                        &text,
+                        crate::i18n::t("Escreva a meta e aperte Enter"),
+                        caret(),
                     ))
                     .into_any_element(),
                 div()
-                    .min_h(px(30.))
-                    .mx(px(4.))
-                    .p(px(7.))
-                    .rounded_md()
+                    .mx(px(8.))
+                    .mt(px(6.))
+                    .text_size(px(11.5))
+                    .text_color(content(0.45))
+                    .child(crate::i18n::t(
+                        "Aplicada ao enviar e mantida nos seus próximos envios manuais.",
+                    ))
+                    .into_any_element(),
+                div()
+                    .id("goal-save")
+                    .mx(px(8.))
+                    .mt(px(8.))
+                    .mb(px(6.))
+                    .w(px(72.))
+                    .h(px(28.))
+                    .rounded(px(7.))
+                    .bg(content(0.09))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_size(px(12.5))
+                    .text_color(content(0.9))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(content(0.14)))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.save_goal();
+                        cx.notify();
+                    }))
+                    .child(crate::i18n::t("Salvar"))
+                    .into_any_element(),
+            ]
+        } else if page == AddPage::Skills {
+            let hits = self.skill_hits();
+            // The list scrolls, so it has its own pill, clipped with it.
+            let skills = crate::hover_track::list("add-skills");
+            let list: Vec<AnyElement> = hits
+                .iter()
+                .enumerate()
+                .map(|(at, (name, about))| {
+                    let chosen = name.clone();
+                    skills.row(
+                    div()
+                        .id(("skill-pick", at))
+                        .px(px(8.))
+                        .py(px(6.))
+                        .rounded(px(7.))
+                        .flex()
+                        .items_start()
+                        .gap(px(8.))
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |this, _, _, cx| this.use_skill(&chosen, cx)))
+                        .child(
+                            div()
+                                .mt(px(2.))
+                                .child(icon("box", 13.).text_color(content(0.5))),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .flex()
+                                .flex_col()
+                                .child(
+                                    div()
+                                        .truncate()
+                                        .text_size(px(13.))
+                                        .text_color(content(0.95))
+                                        .child(name.clone()),
+                                )
+                                .child(
+                                    div()
+                                        .mt(px(1.))
+                                        .text_size(px(11.5))
+                                        .line_clamp(2)
+                                        .text_color(content(0.45))
+                                        .child(about.clone()),
+                                ),
+                        ),
+                    at,
+                    false,
+                    )
+                    .into_any_element()
+                })
+                .collect();
+            let empty = list.is_empty();
+            vec![
+                back(cx),
+                div()
+                    .px(px(8.))
+                    .pb(px(6.))
+                    .text_size(px(12.))
+                    .text_color(content(0.45))
+                    .child(crate::i18n::t(
+                        "Selecione um fluxo para adicionar /nome-da-skill ao rascunho.",
+                    ))
+                    .into_any_element(),
+                div()
+                    .mx(px(8.))
+                    .mb(px(6.))
+                    .h(px(32.))
+                    .px(px(8.))
+                    .rounded(px(8.))
                     .border_1()
                     .border_color(content(0.14))
+                    .bg(field_fill())
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
                     .text_size(px(13.))
-                    .text_color(content(0.95))
-                    .child(if text.is_empty() {
-                        div()
-                            .text_color(content(0.4))
-                            .child(crate::i18n::t("Escreva a meta e aperte Enter"))
-                    } else {
-                        div().child(text)
+                    .child(icon("search", 13.).text_color(content(0.45)))
+                    .child(typed_text(
+                        &self.add_query,
+                        crate::i18n::t("Buscar skills"),
+                        caret(),
+                    ))
+                    .into_any_element(),
+                div()
+                    .id("skill-list")
+                    .max_h(px(256.))
+                    .overflow_y_scroll()
+                    .flex()
+                    .flex_col()
+                    .child(skills.pill())
+                    .when(empty, |d| {
+                        d.child(
+                            div()
+                                .p(px(8.))
+                                .text_size(px(12.))
+                                .text_color(content(0.45))
+                                .child(crate::i18n::t("Nenhuma skill encontrada")),
+                        )
                     })
+                    .children(list)
                     .into_any_element(),
             ]
         } else {
@@ -4103,9 +5196,11 @@ impl Shell {
                     false,
                 )
                 .on_click(cx.listener(|this, _, _, cx| {
-                    this.add_menu = None;
-                    this.draft().insert("/");
-                    this.touch_caret();
+                    this.add_query.clear();
+                    this.refresh_skills();
+                    if let Some((page, _)) = this.add_menu.as_mut() {
+                        *page = AddPage::Skills;
+                    }
                     cx.notify();
                 }))
                 .into_any_element(),
@@ -4120,7 +5215,7 @@ impl Shell {
                     let ix = this.active_conversation();
                     this.goal_input = Some(this.conversations[ix].goal.clone().unwrap_or_default());
                     if let Some((page, _)) = this.add_menu.as_mut() {
-                        *page = true;
+                        *page = AddPage::Goal;
                     }
                     cx.notify();
                 }))
@@ -4132,13 +5227,29 @@ impl Shell {
                     crate::i18n::t("Analisar e propor antes de editar"),
                     planning,
                 )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    let ix = this.active_conversation();
-                    this.conversations[ix].planning = !this.conversations[ix].planning;
-                    this.conversations[ix].debugging = false;
-                    this.add_menu = None;
-                    cx.notify();
-                }))
+                .when(!planning_ok, |d| d.opacity(0.4))
+                .when(planning_ok, |d| {
+                    d.on_click(cx.listener(|this, _, _, cx| {
+                        let ix = this.active_conversation();
+                        let on = !this.conversations[ix].planning;
+                        this.conversations[ix].planning = on;
+                        if on {
+                            // Planning never runs with full access, as in Sirus Code.
+                            this.conversations[ix].debugging = false;
+                            if this.conversations[ix].approval == "full" {
+                                this.conversations[ix].approval =
+                                    if this.conversations[ix].provider == "cursor" {
+                                        "auto"
+                                    } else {
+                                        "ask"
+                                    }
+                                    .to_owned();
+                            }
+                        }
+                        this.add_menu = None;
+                        cx.notify();
+                    }))
+                })
                 .into_any_element(),
                 item(
                     "add-debug",
@@ -4149,9 +5260,12 @@ impl Shell {
                 )
                 .on_click(cx.listener(|this, _, _, cx| {
                     let ix = this.active_conversation();
-                    this.conversations[ix].debugging = !this.conversations[ix].debugging;
-                    this.conversations[ix].planning = false;
-                    this.conversations[ix].team = false;
+                    let on = !this.conversations[ix].debugging;
+                    this.conversations[ix].debugging = on;
+                    if on {
+                        this.conversations[ix].planning = false;
+                        this.conversations[ix].team = false;
+                    }
                     this.add_menu = None;
                     cx.notify();
                 }))
@@ -4163,15 +5277,30 @@ impl Shell {
                     crate::i18n::t("Vários agentes trabalhando juntos"),
                     team,
                 )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    let ix = this.active_conversation();
-                    this.conversations[ix].team = !this.conversations[ix].team;
-                    this.conversations[ix].debugging = false;
-                    this.add_menu = None;
-                    cx.notify();
-                }))
+                .when(!team_ok, |d| d.opacity(0.4))
+                .when(team_ok, |d| {
+                    d.on_click(cx.listener(|this, _, _, cx| {
+                        let ix = this.active_conversation();
+                        let on = !this.conversations[ix].team;
+                        this.conversations[ix].team = on;
+                        if on {
+                            this.conversations[ix].planning = false;
+                            this.conversations[ix].debugging = false;
+                        }
+                        this.add_menu = None;
+                        cx.notify();
+                    }))
+                })
                 .into_any_element(),
             ]
+        };
+        // The project's scripts run from the add menu's main page too (ADR-078).
+        let body = if page == AddPage::Add {
+            let mut body = body;
+            body.extend(self.script_run_rows(cx));
+            body
+        } else {
+            body
         };
         Some(
             div()
@@ -4186,9 +5315,10 @@ impl Shell {
                 .rounded(px(12.))
                 .border_1()
                 .border_color(content(0.12))
-                .bg(floating_fill())
+                .child(crate::theme::floating_surface(12.))
                 .shadow_lg()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(track.pill())
                 .children(body)
                 .into_any_element(),
         )
@@ -4209,12 +5339,7 @@ impl Shell {
     }
 
     fn stop(&mut self, cx: &mut Context<Self>) {
-        let session_id = self.conversations[self.active_conversation()]
-            .session_id
-            .clone();
-        self.backend
-            .invoke("stop_agent", json!({ "sessionId": session_id }));
-        cx.notify();
+        self.stop_agent(cx);
     }
 
     // Drawing.
@@ -4231,6 +5356,7 @@ impl Shell {
         let mark = mark_tile(&TAB_TILE, face, glyph);
         let closable = active || width >= 72.;
         let title = ((width - PIN_WIDTH) / 60.).clamp(0., 1.);
+        let draft = tab_has_draft(&self.drafts, tab.conversation);
         div()
             .id(("tab", id))
             .group(group.clone())
@@ -4272,6 +5398,21 @@ impl Shell {
                 }),
             )
             .child(mark)
+            // A conversation with a composer draft dashes its tab, as Monocode's title tabs do.
+            // Overlaid so the dashes take no room from the content.
+            .when(draft, |d| {
+                d.child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full()
+                        .rounded_md()
+                        .border_1()
+                        .border_dashed()
+                        .border_color(content(if active { 0.3 } else { 0.25 })),
+                )
+            })
             // The title keeps its width while the plate narrows, so pinning clips it instead of rewrapping.
             .when(title > 0., |d| {
                 d.child(
@@ -4364,7 +5505,7 @@ impl Shell {
         let controls = (80. + 28. * open_dock + 72.).max(width - dock_edge - 16. + 6.);
         let (added, removed) = self.diff_stat();
         let (add_color, remove_color) = diff_colors(self.look.diff);
-        let strip = width - strip_left - 12. - PLATE - 6. - controls - 10.;
+        let strip = width - strip_left - 12. - PLATE - 6. - controls - 10. - self.term.chips_width();
         *moving |= self.layout_tabs(strip, now, reduced);
         let tabs: Vec<AnyElement> = {
             // Pinned tabs live in the dock, not the strip.
@@ -4384,6 +5525,7 @@ impl Shell {
         let dock = self.pinned_dock(now, moving, reduced, cx);
         let tray = self.tray.at(now);
         let add_x = self.new_tab_x.at(now) + tray;
+        let term_chips = self.term_chips(strip_left + strip + PLATE + 8., cx);
         div()
             .h(px(TITLE_BAR))
             .flex_shrink_0()
@@ -4423,6 +5565,11 @@ impl Shell {
                     .flex()
                     .gap(px(4.))
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .children(git_sync::pill(
+                        git_sync::shown(self.incoming.value.as_ref()),
+                        self.incoming.pulling,
+                        cx.listener(|this, _, _, cx| this.incoming_toggle(cx)),
+                    ))
                     .child(
                         div()
                             .id("top-diff")
@@ -4513,7 +5660,7 @@ impl Shell {
                         .items_center()
                         .gap(px(2.))
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .children(PANES.iter().enumerate().map(|(ix, (glyph, name, _))| {
+                        .children(PANES.iter().take(VISIBLE_PANES).enumerate().map(|(ix, (glyph, name, _))| {
                             let chosen = active_pane == Some(ix);
                             div()
                                 .id(("pane-tab", ix))
@@ -4562,6 +5709,7 @@ impl Shell {
                 cx,
                 true,
             ))
+            .children(term_chips)
             .child(
                 div()
                     .absolute()
@@ -4586,7 +5734,10 @@ impl Shell {
                             .left(px(add_x))
                             .top(px((TITLE_BAR - PLATE) / 2.))
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                            .on_click(cx.listener(|this, _, _, cx| {
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if this.term_plus_click(strip_left + add_x, cx) {
+                                    return;
+                                }
                                 this.new_conversation(None);
                                 cx.notify();
                             })),
@@ -4659,6 +5810,7 @@ impl Shell {
                                         .relative()
                                         .w_full()
                                         .h(px(height + 12.))
+                                        .child(crate::hover_track::list("sidebar").pill())
                                         .children(drawn),
                                 ),
                             )
@@ -4684,7 +5836,7 @@ impl Shell {
                 .rounded(px(10.))
                 .border_1()
                 .border_color(content(0.1))
-                .bg(field_fill())
+                .child(crate::theme::floating_surface(10.))
                 .shadow_lg()
                 .overflow_hidden()
                 .child(contents("sidebar-list", self, cx, drawn))
@@ -4792,6 +5944,7 @@ impl Shell {
         }
         let shown = open.at(now).clamp(0., 1.);
         let filter = &self.session_filter;
+        let track = crate::hover_track::list("filter-menu");
         let caption = |text: &'static str| {
             div()
                 .px(px(8.))
@@ -4805,23 +5958,26 @@ impl Shell {
                    glyph: Option<&'static str>,
                    label: String,
                    chosen: bool| {
-            div()
-                .id(id)
-                .h(px(30.))
-                .px(px(8.))
-                .rounded(px(7.))
-                .flex()
-                .items_center()
-                .gap(px(9.))
-                .text_size(px(13.))
-                .text_color(content(0.92))
-                .cursor_pointer()
-                .hover(|s| s.bg(content(0.09)))
-                .children(glyph.map(|g| icon(g, 14.).text_color(content(0.6))))
-                .child(div().flex_1().min_w_0().truncate().child(label))
-                .when(chosen, |d| {
-                    d.child(icon("check", 13.).text_color(content(0.8)))
-                })
+            track.row_named(
+                div()
+                    .id(id)
+                    .h(px(30.))
+                    .px(px(8.))
+                    .rounded(px(7.))
+                    .flex()
+                    .items_center()
+                    .gap(px(9.))
+                    .text_size(px(13.))
+                    .text_color(content(0.92))
+                    .cursor_pointer()
+                    .children(glyph.map(|g| icon(g, 14.).text_color(content(0.6))))
+                    .child(div().flex_1().min_w_0().truncate().child(label))
+                    .when(chosen, |d| {
+                        d.child(icon("check", 13.).text_color(content(0.8)))
+                    }),
+                &format!("{}{}", id.0, id.1),
+                false,
+            )
         };
         let statuses: Vec<AnyElement> = [
             ("working", "zap", "Trabalhando"),
@@ -4885,6 +6041,7 @@ impl Shell {
             .into_iter()
             .enumerate()
             .map(|(at, provider)| {
+                track.row(
                 div()
                     .id(("filter-provider", at))
                     .h(px(30.))
@@ -4896,7 +6053,6 @@ impl Shell {
                     .text_size(px(13.))
                     .text_color(content(0.92))
                     .cursor_pointer()
-                    .hover(|s| s.bg(content(0.09)))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         let hidden = &mut this.session_filter.hidden_providers;
                         match hidden.iter().position(|p| *p == provider) {
@@ -4916,8 +6072,11 @@ impl Shell {
                     .child(div().flex_1().child(provider_title(provider)))
                     .when(!filter.hidden_providers.contains(&provider), |d| {
                         d.child(icon("check", 13.).text_color(content(0.8)))
-                    })
-                    .into_any_element()
+                    }),
+                100 + at,
+                false,
+                )
+                .into_any_element()
             })
             .collect();
         Some(
@@ -4935,9 +6094,10 @@ impl Shell {
                 .rounded(px(12.))
                 .border_1()
                 .border_color(content(0.12))
-                .bg(floating_fill())
+                .child(crate::theme::floating_surface(12.))
                 .shadow_lg()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(track.pill())
                 .child(caption("Status"))
                 .children(statuses)
                 .child(caption("Período"))
@@ -5049,6 +6209,34 @@ impl Shell {
         cx.notify();
     }
 
+    /// Settings → Comportamento do chat → "Confirmar ao fechar um terminal" (on unless turned off).
+    pub fn confirms_terminal_close(&self) -> bool {
+        self.settings["confirmTerminalClose"] != json!(false)
+    }
+
+    /// Confirmation in the shell's popup for another view (the browser panel's deletions); `action`
+    /// runs only on yes.
+    pub fn confirm(
+        &mut self,
+        title: String,
+        message: String,
+        action_label: &'static str,
+        action: impl FnOnce(&mut gpui::App) + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        self.ask(title, message, action_label, move |_, cx| action(cx), cx);
+    }
+
+    /// The browser's custom profiles and the profile new tabs open in, kept with the settings.
+    pub fn save_browser_profiles(&mut self, profiles: Value, default: &str, cx: &mut Context<Self>) {
+        self.settings["browserProfiles"] = profiles;
+        self.settings["defaultBrowserProfile"] = json!(default);
+        crate::panel_browser::note_settings(&self.settings);
+        self.backend
+            .invoke("save_settings", json!({ "settings": self.settings }));
+        cx.notify();
+    }
+
     fn ask_delete_conversation(&mut self, index: usize, cx: &mut Context<Self>) {
         let title = self.conversations[index].title.clone();
         self.ask(
@@ -5129,7 +6317,7 @@ impl Shell {
                         .rounded(px(14.))
                         .border_1()
                         .border_color(content(0.12))
-                        .bg(floating_fill())
+                        .child(crate::theme::floating_surface(14.))
                         .shadow_lg()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(
@@ -5275,40 +6463,42 @@ impl Shell {
             *moving = true;
         }
         let shown = menu.open.at(now).clamp(0., 1.);
+        let track = crate::hover_track::list("context-menu");
         let item = |id: &'static str,
                     glyph: &'static str,
                     label: &'static str,
                     hint: Option<&'static str>| {
-            div()
-                .id(id)
-                .h(px(30.))
-                .px(px(8.))
-                .rounded(px(7.))
-                .flex()
-                .items_center()
-                .gap(px(9.))
-                .text_size(px(13.))
-                .text_color(content(0.92))
-                .cursor_pointer()
-                .hover(|s| s.bg(content(0.09)))
-                .child(icon(glyph, 14.).text_color(content(0.65)))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .child(crate::i18n::t(label)),
-                )
-                .children(hint.map(|h| div().text_size(px(11.)).text_color(content(0.4)).child(h)))
+            track.row_named(
+                div()
+                    .id(id)
+                    .h(px(30.))
+                    .px(px(8.))
+                    .rounded(px(7.))
+                    .flex()
+                    .items_center()
+                    .gap(px(9.))
+                    .text_size(px(13.))
+                    .text_color(content(0.92))
+                    .cursor_pointer()
+                    .child(icon(glyph, 14.).text_color(content(0.65)))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .child(crate::i18n::t(label)),
+                    )
+                    .children(
+                        hint.map(|h| div().text_size(px(11.)).text_color(content(0.4)).child(h)),
+                    ),
+                id,
+                false,
+            )
         };
         let divider = || div().mx(px(6.)).my(px(4.)).h(px(1.)).bg(content(0.08));
         let danger: gpui::Hsla = rgb(0xe08a8a).into();
         let close = |this: &mut Self| this.context_menu = None;
         let body: AnyElement = if let Some(name) = &menu.renaming {
-            let caret_alpha = 0.575
-                + 0.425
-                    * (self.caret_since.elapsed().as_secs_f32() / 1.2 * std::f32::consts::TAU)
-                        .cos();
             div()
                 .h(px(32.))
                 .px(px(8.))
@@ -5327,7 +6517,7 @@ impl Shell {
                         .w(px(1.5))
                         .h(px(15.))
                         .rounded_full()
-                        .bg(accent_wash(caret_alpha)),
+                        .bg(crate::theme::caret_color()),
                 ))
                 .into_any_element()
         } else {
@@ -5368,6 +6558,14 @@ impl Shell {
                             )),
                         )
                         .child(
+                            item("menu-split", "layout-grid", "Abrir ao lado", None).on_click(
+                                cx.listener(move |this, _, _, cx| {
+                                    close(this);
+                                    this.open_beside(index, split_panes::Edge::Right, cx);
+                                }),
+                            ),
+                        )
+                        .child(
                             item("menu-rename", "pencil", "Renomear", Some("F2")).on_click(
                                 cx.listener(move |this, _, _, cx| {
                                     let name = this.conversations[index].title.clone();
@@ -5389,6 +6587,27 @@ impl Shell {
                                 }),
                             ),
                         )
+                        .child(
+                            item("menu-export", "upload", "Exportar conversa", None).on_click(
+                                cx.listener(move |this, _, _, cx| {
+                                    close(this);
+                                    this.export_conversation(index, cx);
+                                }),
+                            ),
+                        )
+                        .child({
+                            // Forks the newest reply; disabled while the conversation works.
+                            let fork = item("menu-fork", "branch", "Bifurcar", None);
+                            if self.can_fork_latest(index) {
+                                fork.on_click(cx.listener(move |this, _, _, cx| {
+                                    close(this);
+                                    this.fork_latest(index, cx);
+                                }))
+                                .into_any_element()
+                            } else {
+                                fork.opacity(0.4).into_any_element()
+                            }
+                        })
                         .child(divider())
                         .child(
                             div()
@@ -5526,10 +6745,11 @@ impl Shell {
                 .rounded(px(12.))
                 .border_1()
                 .border_color(content(0.12))
-                .bg(floating_fill())
+                .child(crate::theme::floating_surface(12.))
                 .shadow_lg()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
+                .child(crate::hover_track::list("context-menu").pill())
                 .child(body)
                 .into_any_element(),
         )
@@ -5543,7 +6763,7 @@ impl Shell {
         let state = gpui::ListState::new(
             1 + self.conversations[conversation].turns.len(),
             gpui::ListAlignment::Top,
-            px(900.),
+            px(320.),
         );
         state.set_follow_mode(gpui::FollowMode::Tail);
         let shell = cx.entity().downgrade();
@@ -5695,7 +6915,7 @@ impl Shell {
                 .rounded(px(12.))
                 .border_1()
                 .border_color(content(0.12))
-                .bg(floating_fill())
+                .child(crate::theme::floating_surface(12.))
                 .shadow_lg()
                 .child(
                     div()
@@ -5827,6 +7047,7 @@ impl Shell {
 
     /// Closes the popup, saving a name being edited. Says whether it was open.
     fn close_project_menu(&mut self) -> bool {
+        self.save_project_scripts(true);
         let Some(menu) = self.project_menu.take() else {
             return false;
         };
@@ -5852,6 +7073,9 @@ impl Shell {
     }
 
     fn open_project_sub(&mut self, sub: ProjectSub, cx: &mut Context<Self>) {
+        if self.project_menu.as_ref().is_some_and(|m| m.sub != Some(sub)) {
+            self.save_project_scripts(true);
+        }
         let Some(ix) = self.current_project else {
             return;
         };
@@ -5881,7 +7105,6 @@ impl Shell {
                 .invoke("list_worktrees", json!({ "projectId": id }));
             self.waiting.insert(call, Waiting::Worktrees(id));
         }
-        self.touch_caret();
         cx.notify();
     }
 
@@ -5935,6 +7158,9 @@ impl Shell {
     }
 
     fn toggle_project_row(&mut self, which: &'static str, cx: &mut Context<Self>) {
+        if self.project_menu.as_ref().and_then(|m| m.expanded) == Some("scripts") {
+            self.save_project_scripts(true);
+        }
         if let Some(menu) = self.project_menu.as_mut() {
             menu.expanded = if menu.expanded == Some(which) {
                 None
@@ -6019,6 +7245,20 @@ impl Shell {
         let Some(project) = self.current_project else {
             return false;
         };
+        // A focused script field takes Enter, Backspace, Tab and Escape before the menu does.
+        if let Some(edit) = self.scripts_edit.as_mut() {
+            let taken = match key {
+                "enter" => edit.enter(),
+                "backspace" => edit.backspace(),
+                "tab" => edit.tab(),
+                "escape" => edit.escape(),
+                _ => false,
+            };
+            if taken {
+                cx.notify();
+                return true;
+            }
+        }
         match key {
             "tab" => {
                 let next = match sub {
@@ -6031,6 +7271,7 @@ impl Shell {
             }
             "escape" => {
                 if sub.is_some() {
+                    self.save_project_scripts(true);
                     if sub == Some(ProjectSub::Settings) {
                         self.commit_project_name(&query);
                     }
@@ -6130,6 +7371,7 @@ impl Shell {
                     )
             },
         );
+        let track = crate::hover_track::list("project-menu");
         let row = |id: &'static str,
                    glyph: &'static str,
                    label: &'static str,
@@ -6137,6 +7379,7 @@ impl Shell {
                    target: ProjectSub,
                    cx: &mut Context<Self>| {
             let active = sub == Some(target);
+            track.row_named(
             div()
                 .id(id)
                 .h(px(32.))
@@ -6149,7 +7392,6 @@ impl Shell {
                 .text_color(content(0.92))
                 .cursor_pointer()
                 .when(active, |d| d.bg(content(0.09)))
-                .hover(|s| s.bg(content(0.09)))
                 .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                     if *hovered {
                         this.open_project_sub(target, cx);
@@ -6167,7 +7409,10 @@ impl Shell {
                         .text_color(content(0.42))
                         .children(value),
                 )
-                .child(icon("chevron-right", 12.).text_color(content(0.45)))
+                .child(icon("chevron-right", 12.).text_color(content(0.45))),
+                id,
+                active,
+            )
         };
         let main = div()
             .id("project-menu")
@@ -6183,9 +7428,10 @@ impl Shell {
             .rounded(px(12.))
             .border_1()
             .border_color(content(0.12))
-            .bg(floating_fill())
+            .child(crate::theme::floating_surface(12.))
             .shadow_lg()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(crate::hover_track::list("project-menu").pill())
             .child(row(
                 "project-checkouts",
                 "branch",
@@ -6240,16 +7486,13 @@ impl Shell {
         if since < 0.14 {
             *moving = true;
         }
-        let caret_alpha = 0.575
-            + 0.425
-                * (self.caret_since.elapsed().as_secs_f32() / 1.2 * std::f32::consts::TAU).cos();
         let caret = move || {
             div()
                 .flex_shrink_0()
                 .w(px(1.5))
                 .h(px(16.))
                 .rounded_full()
-                .bg(accent_wash(caret_alpha))
+                .bg(crate::theme::caret_color())
         };
         let query = menu.query.clone();
         let selected = menu.selected;
@@ -6282,6 +7525,7 @@ impl Shell {
                             focus: bool,
                             target: Option<String>,
                             cx: &mut Context<Self>| {
+                    crate::hover_track::list("checkout-list").row(
                     div()
                         .id(("checkout-row", id))
                         .min_h(px(44.))
@@ -6292,7 +7536,6 @@ impl Shell {
                         .gap(px(9.))
                         .cursor_pointer()
                         .when(focus, |d| d.bg(content(0.09)))
-                        .hover(|s| s.bg(content(0.09)))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             match target.clone() {
                                 Some(path) => {
@@ -6335,7 +7578,10 @@ impl Shell {
                         )
                         .when(chosen, |d| {
                             d.child(icon("check", 13.).text_color(content(0.8)))
-                        })
+                        }),
+                    id,
+                    focus,
+                    )
                 };
                 let mut list: Vec<AnyElement> = vec![
                     line(
@@ -6402,6 +7648,7 @@ impl Shell {
                                 .overflow_y_scroll()
                                 .flex()
                                 .flex_col()
+                                .child(crate::hover_track::list("checkout-list").pill())
                                 .children(list)
                                 .child(create),
                         )
@@ -6417,6 +7664,7 @@ impl Shell {
                     .enumerate()
                     .map(|(at, project)| {
                         let info = &self.projects[project];
+                        crate::hover_track::list("project-list").row(
                         div()
                             .id(("project-pick", at))
                             .h(px(40.))
@@ -6427,7 +7675,6 @@ impl Shell {
                             .gap(px(8.))
                             .cursor_pointer()
                             .when(selected == at, |d| d.bg(content(0.09)))
-                            .hover(|s| s.bg(content(0.09)))
                             .on_click(
                                 cx.listener(move |this, _, _, cx| this.switch_project(project, cx)),
                             )
@@ -6468,8 +7715,11 @@ impl Shell {
                                     .text_size(px(11.))
                                     .text_color(content(0.4))
                                     .child(tilde_parent(&info.path)),
-                            )
-                            .into_any_element()
+                            ),
+                        at,
+                        selected == at,
+                        )
+                        .into_any_element()
                     })
                     .collect();
                 let count = list.len().min(9) as f32;
@@ -6485,6 +7735,7 @@ impl Shell {
                             .overflow_y_scroll()
                             .flex()
                             .flex_col()
+                            .child(crate::hover_track::list("project-list").pill())
                             .children(list),
                     )
                     .child(
@@ -6715,7 +7966,14 @@ impl Shell {
                 } else {
                     Vec::new()
                 };
-                let extra = (move_rows.len() + editor_rows.len()) as f32 * 28.;
+                let scripts_open = expanded == Some("scripts");
+        let scripts_rows: Vec<AnyElement> = if scripts_open {
+            vec![self.scripts_fields_view(index, cx)]
+        } else {
+            Vec::new()
+        };
+        let extra = (move_rows.len() + editor_rows.len()) as f32 * 28.
+            + if scripts_open { crate::project_scripts_view::SETTINGS_HEIGHT } else { 0. };
                 let reveal_path = project_path.clone();
                 let divider = || div().mx(px(4.)).my(px(5.)).h(px(1.)).bg(content(0.08));
                 let body = div()
@@ -6838,6 +8096,12 @@ impl Shell {
                             this.open_settings_page(APPEARANCE, cx);
                         })),
                     )
+                    .child(crate::project_scripts_view::settings_row(
+                        "project-scripts",
+                        scripts_open,
+                        crate::project_scripts_view::click(cx, |this, cx| this.toggle_scripts_row(cx)),
+                    ))
+                    .children(scripts_rows)
                     .child(
                         item(
                             "project-move",
@@ -6918,7 +8182,7 @@ impl Shell {
             .rounded(px(12.))
             .border_1()
             .border_color(content(0.12))
-            .bg(floating_fill())
+            .child(crate::theme::floating_surface(12.))
             .shadow_lg()
             .overflow_hidden()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -7056,7 +8320,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let conversation = &self.conversations[index];
-        div()
+        let row = div()
             .id(("conversation", index))
             .absolute()
             .left(px(6.))
@@ -7071,9 +8335,12 @@ impl Shell {
             .items_center()
             .gap(px(8.))
             .when(active, |d| d.bg(content(0.09)))
-            .when(!active, |d| d.hover(|s| s.bg(content(0.05))))
             .cursor_pointer()
             .on_click(cx.listener(move |this, _, _, cx| this.open(index, cx)))
+            .on_drag(
+                split_panes::ConvDrag { session: conversation.session_id.clone(), title: conversation.title.clone() },
+                |drag, _, _, cx| cx.new(|_| split_panes::DragChip::new(drag.title.clone())),
+            )
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(move |this, event: &MouseDownEvent, _, cx| {
@@ -7097,7 +8364,9 @@ impl Shell {
                     .text_size(px(11.))
                     .text_color(content(0.35))
                     .child(conversation.age()),
-            )
+            );
+        crate::hover_track::list("sidebar")
+            .row(row, index, active)
             .into_any_element()
     }
 
@@ -7110,11 +8379,21 @@ impl Shell {
         let index = self.active_conversation();
         let list_state = self.list_state(index, cx);
         let wanted = 1 + self.conversations[index].turns.len();
+        // A drag past the edge scrolls (transcript_select.rs); it keeps the frames coming.
+        *moving |= self.select_autoscroll(&list_state);
         let listed = list_state.item_count();
         if listed < wanted {
             list_state.splice(listed..listed, wanted - listed);
         } else if listed > wanted {
             list_state.reset(wanted);
+        }
+        // ⌘F: the hits follow the query and the turns (transcript_find.rs); a new query reveals its first hit.
+        let turns = &self.conversations[index].turns;
+        if let Some(turn) = self.find.sync(index, turns.len(), |i| {
+            (turns[i].user.as_str(), turns[i].answer.as_str())
+        }) {
+            list_state.pause_following_tail();
+            list_state.scroll_to_reveal_item(turn + 1);
         }
         let switching = self.switch.at(now);
         *moving |= !self.switch.done(now);
@@ -7188,6 +8467,16 @@ impl Shell {
                 if animating {
                     window.request_animation_frame();
                 }
+                // The ⌘F hit's turn takes the accent wash (transcript_find.rs).
+                let view = if this.find.current() == Some(item - 1) {
+                    div()
+                        .rounded(px(10.))
+                        .bg(crate::theme::accent_wash(0.1))
+                        .child(view)
+                        .into_any_element()
+                } else {
+                    view
+                };
                 column(view, if last { 28. } else { 14. })
             }),
         )
@@ -7200,25 +8489,6 @@ impl Shell {
             .overflow_hidden()
             .flex()
             .flex_col()
-            .when_some(
-                self.settings["chatBackground"]
-                    .as_str()
-                    .filter(|n| !n.is_empty())
-                    .map(backend::background_path),
-                |d, path| {
-                    let visibility = self.settings["chatBackgroundSessionVisibility"]
-                        .as_f64()
-                        .unwrap_or(30.) as f32
-                        / 100.;
-                    d.child(
-                        gpui::img(path)
-                            .absolute()
-                            .size_full()
-                            .object_fit(gpui::ObjectFit::Cover)
-                            .opacity(visibility),
-                    )
-                },
-            )
             .child(
                 div()
                     .relative()
@@ -7233,6 +8503,7 @@ impl Shell {
                             .child(items),
                     )
                     .children(trail)
+                    .children(self.find_bar(now, moving, cx))
                     .when(jump > 0.01, |d| {
                         d.child(
                             div()
@@ -7282,7 +8553,7 @@ impl Shell {
                     .h(px(26.))
                     .bg(linear_gradient(
                         180.,
-                        linear_color_stop(pane_opaque(), 0.),
+                        linear_color_stop(pane_fill(), 0.),
                         linear_color_stop(transparent(), 1.),
                     )),
             )
@@ -7789,6 +9060,7 @@ impl Shell {
         let approval = self.conversations[self.active_conversation()]
             .approval
             .clone();
+        let track = crate::hover_track::list("access-menu");
         let mut rows = vec![
             div()
                 .px(px(8.))
@@ -7806,6 +9078,7 @@ impl Shell {
                 .map(|(i, mode)| {
                     let (glyph, label, about, color) = access_look(mode);
                     let chosen = approval == mode;
+                    track.row(
                     div()
                         .id(("access", i))
                         .px(px(8.))
@@ -7815,10 +9088,12 @@ impl Shell {
                         .gap(px(8.))
                         .cursor_pointer()
                         .when(chosen, |d| d.bg(content(0.1)))
-                        .when(!chosen, |d| d.hover(|s| s.bg(content(0.06))))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             let ix = this.active_conversation();
                             this.conversations[ix].approval = mode.to_owned();
+                            if mode == "full" {
+                                this.conversations[ix].planning = false;
+                            }
                             this.composer_menu = None;
                             cx.notify();
                         }))
@@ -7844,8 +9119,11 @@ impl Shell {
                                     .mt(px(3.))
                                     .child(icon("check", 13.).text_color(content(0.6))),
                             )
-                        })
-                        .into_any_element()
+                        }),
+                    i,
+                    chosen,
+                    )
+                    .into_any_element()
                 }),
         );
         rows
@@ -8045,9 +9323,6 @@ impl Shell {
         let rows = self.model_rows();
         let loading = !favorites_scope && !self.models.contains_key(scope.as_str());
         let selected_row = self.model_selected;
-        let caret_alpha = 0.575
-            + 0.425
-                * (self.caret_since.elapsed().as_secs_f32() / 1.2 * std::f32::consts::TAU).cos();
         let conversation = &self.conversations[self.active_conversation()];
         let has_model = conversation.model.is_some();
         let tab = |id: usize,
@@ -8100,12 +9375,14 @@ impl Shell {
             rail_tabs
                 .push(tab(index + 1, active, mark, (*provider).to_owned(), cx).into_any_element());
         }
+        let models = crate::hover_track::list("model-list");
         let list: Vec<AnyElement> = rows
             .iter()
             .enumerate()
             .map(|(index, row)| {
                 let (provider, id, star_id, favorite) =
                     (row.provider, row.id.clone(), row.id.clone(), row.favorite);
+                models.row(
                 div()
                     .id(("model-row", index))
                     .flex()
@@ -8115,7 +9392,6 @@ impl Shell {
                     .when(row.selected || selected_row == Some(index), |d| {
                         d.bg(content(0.09))
                     })
-                    .hover(|s| s.bg(content(0.09)))
                     .child(
                         div()
                             .id(("model-pick", index))
@@ -8192,8 +9468,11 @@ impl Shell {
                                         content(0.4)
                                     }),
                             ),
-                    )
-                    .into_any_element()
+                    ),
+                    index,
+                    row.selected || selected_row == Some(index),
+                )
+                .into_any_element()
             })
             .collect();
         let empty = if loading {
@@ -8298,7 +9577,7 @@ impl Shell {
                                     .w(px(1.5))
                                     .h(px(15.))
                                     .rounded_full()
-                                    .bg(accent_wash(caret_alpha)),
+                                    .bg(crate::theme::caret_color()),
                             ))
                             .when(!self.model_query.is_empty(), |d| {
                                 d.child(
@@ -8332,6 +9611,7 @@ impl Shell {
                             .p(px(4.))
                             .flex()
                             .flex_col()
+                            .child(models.pill())
                             .when(list.is_empty(), |d| {
                                 d.child(
                                     div()
@@ -8399,10 +9679,13 @@ impl Shell {
                 .rounded(px(12.))
                 .border_1()
                 .border_color(content(0.12))
-                .bg(floating_fill())
+                .child(crate::theme::floating_surface(12.))
                 .shadow_lg()
                 .overflow_hidden()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .when(which == ComposerMenu::Access, |d| {
+                    d.child(crate::hover_track::list("access-menu").pill())
+                })
                 .children(body)
                 .into_any_element(),
         )
@@ -8455,6 +9738,7 @@ impl Shell {
         let mention = self.mention();
         let mention_selected = self.mention_selected;
         let dictating = self.dictating.is_some();
+        let goal_text = conversation.goal.clone().unwrap_or_default();
         let mode_chips: [(&str, bool, &'static str); 4] = [
             (t("Planejamento"), conversation.planning, "bulb"),
             ("Debug", conversation.debugging, "bug"),
@@ -8462,15 +9746,20 @@ impl Shell {
             (t("Meta"), conversation.goal.is_some(), "goal"),
         ];
         let attached = self.attachments.get(&ix).cloned().unwrap_or_default();
+        let attachment_chips = self.attachment_chips(&attached, cx);
         let secret = self.secrets.first().cloned();
         let secret_entry = self.secret_entry.clone();
         let draft = self.drafts.get(&ix).cloned().unwrap_or_default();
-        let has_text = !draft.text.trim().is_empty();
+        let has_text = !draft.text.trim().is_empty() || !attached.is_empty();
+        // While the agent works Stop and Send sit side by side, and what is sent joins the
+        // queue. With only a queue waiting and nothing written, none.
+        let approvals_pending = conversation
+            .pending
+            .iter()
+            .any(|r| r["kind"]["type"] != "userInput");
+        let queueing = live || self.queues.waiting(&conversation.session_id);
+        let queue_card = self.queue_card(ix, cx);
         let typing = self.palette_ui.is_none() && self.appearance.is_none() && !self.grabs_typing();
-        // Fades out and back with no hard cut; typing brings it back to full.
-        let caret_alpha = 0.575
-            + 0.425
-                * (self.caret_since.elapsed().as_secs_f32() / 1.2 * std::f32::consts::TAU).cos();
         let styled = styled_tokens(if draft.text.is_empty() {
             " ".to_owned()
         } else {
@@ -8485,7 +9774,7 @@ impl Shell {
             |_, _, _| {},
             move |bounds, _, window, _| {
                 let line = layout.line_height();
-                let fill = accent_wash(0.3);
+                let fill = crate::theme::text_selection();
                 if !selection.is_empty() {
                     let mut at = selection.start;
                     while at < selection.end {
@@ -8519,8 +9808,8 @@ impl Shell {
                     {
                         window.paint_quad(
                             gpui::fill(
-                                Bounds::new(origin, gpui::size(px(2.), line)),
-                                accent_wash(caret_alpha),
+                                Bounds::new(origin, gpui::size(px(crate::theme::CARET_WIDTH), line)),
+                                crate::theme::caret_color(),
                             )
                             .corner_radii(px(1.)),
                         );
@@ -8549,7 +9838,6 @@ impl Shell {
                             draft.anchor = index;
                         }
                         this.selecting = true;
-                        this.touch_caret();
                         cx.notify();
                     }
                 }),
@@ -8563,8 +9851,8 @@ impl Shell {
                         .top_0()
                         .left_0()
                         .text_color(content(0.4))
-                        .child(if live {
-                            t("O agente está trabalhando…")
+                        .child(if approvals_pending {
+                            t("Ou diga ao agente o que fazer em vez disso (recusa a aprovação)…")
                         } else {
                             t("Peça qualquer coisa")
                         }),
@@ -8598,6 +9886,8 @@ impl Shell {
                 .cursor_pointer()
                 .hover(|s| s.bg(content(0.07)).text_color(content(0.95)))
         };
+        let ring = self.context_ring(cx);
+        let compact_send = self.compact_send_pending();
         let composer_store = self.composer_bounds.clone();
         div()
             .relative()
@@ -8607,8 +9897,29 @@ impl Shell {
             .max_w(px(760.))
             .px(px(24.))
             .pb(px(14.))
-            .child(gpui::canvas(move |bounds, _, _| composer_store.set(Some(bounds)), |_, _, _, _| {}).absolute().size_full())
-            .child(div().absolute().left_0().right_0().top(px(-24.)).h(px(24.)).bg(linear_gradient(0., linear_color_stop(pane_opaque(), 0.), linear_color_stop(transparent(), 1.))))
+            .child(
+                gpui::canvas(
+                    move |bounds, _, _| composer_store.set(Some(bounds)),
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .left_0()
+                .top_0()
+                .size_full(),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .top(px(-24.))
+                    .h(px(24.))
+                    .bg(linear_gradient(
+                        0.,
+                        linear_color_stop(pane_fill(), 0.),
+                        linear_color_stop(transparent(), 1.),
+                    )),
+            )
             .when_some(mention, |d, mention| {
                 let selected = mention_selected.min(mention.hits.len() - 1);
                 d.child(
@@ -8624,48 +9935,147 @@ impl Shell {
                         .rounded(px(12.))
                         .border_1()
                         .border_color(content(0.12))
-                        .bg(floating_fill())
+                        .child(crate::theme::floating_surface(12.))
                         .shadow_lg()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .children(mention.hits.into_iter().enumerate().map(|(i, (name, about))| {
-                            let chosen = name.clone();
-                            div().id(("mention", i)).h(px(30.)).px(px(8.)).rounded_md().flex().items_center().gap(px(10.)).text_size(px(13.)).text_color(content(0.92)).cursor_pointer()
-                                .when(i == selected, |d| d.bg(content(0.1)))
-                                .when(i != selected, |d| d.hover(|s| s.bg(content(0.06))))
-                                .on_click(cx.listener(move |this, _, _, cx| this.accept_mention(&chosen, cx)))
-                                .when(about.is_empty(), |d| d.child(crate::file_icons::file_icon(name.rsplit('/').next().unwrap_or(&name), false, 15.)))
-                                .child(div().flex_shrink_0().child(name))
-                                .child(div().flex_1().min_w_0().truncate().text_size(px(11.5)).text_color(content(0.45)).child(about))
-                        })),
+                        .child(crate::hover_track::list("mention-menu").pill())
+                        .children(mention.hits.into_iter().enumerate().map(
+                            |(i, (name, about))| {
+                                let chosen = name.clone();
+                                crate::hover_track::list("mention-menu").row(
+                                div()
+                                    .id(("mention", i))
+                                    .h(px(30.))
+                                    .px(px(8.))
+                                    .rounded_md()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(10.))
+                                    .text_size(px(13.))
+                                    .text_color(content(0.92))
+                                    .cursor_pointer()
+                                    .when(i == selected, |d| d.bg(content(0.1)))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.accept_mention(&chosen, cx)
+                                    }))
+                                    .when(about.is_empty(), |d| {
+                                        d.child(crate::file_icons::file_icon(
+                                            name.rsplit('/').next().unwrap_or(&name),
+                                            false,
+                                            15.,
+                                        ))
+                                    })
+                                    .child(div().flex_shrink_0().child(name))
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .truncate()
+                                            .text_size(px(11.5))
+                                            .text_color(content(0.45))
+                                            .child(about),
+                                    ),
+                                i,
+                                i == selected,
+                                )
+                            },
+                        )),
                 )
             })
+            // Sign-in approvals and computer-use requests (browser_bridge.rs).
+            .when_some(
+                crate::browser_bridge::cards(&conversation.session_id),
+                |d, cards| d.child(cards),
+            )
             // A request for a secret: the value is typed here, masked, and the agent never sees it.
             .when_some(secret, |d, request| {
                 let id = request["id"].as_str().unwrap_or("").to_owned();
-                let label = request["envName"].as_str().or(request["label"].as_str()).unwrap_or("").to_owned();
+                let label = request["envName"]
+                    .as_str()
+                    .or(request["label"].as_str())
+                    .unwrap_or("")
+                    .to_owned();
                 let about = request["description"].as_str().unwrap_or("").to_owned();
                 let typing_secret = secret_entry.as_ref().is_some_and(|(entry, _)| *entry == id);
-                let masked = secret_entry.as_ref().filter(|_| typing_secret).map_or(String::new(), |(_, value)| "•".repeat(value.chars().count()));
+                let masked = secret_entry
+                    .as_ref()
+                    .filter(|_| typing_secret)
+                    .map_or(String::new(), |(_, value)| {
+                        "•".repeat(value.chars().count())
+                    });
                 let (open_id, decline_id) = (id.clone(), id.clone());
                 d.child(
-                    div().mb(px(8.)).h(px(40.)).px(px(10.)).rounded(px(12.)).border_1().border_color(accent()).bg(field_fill()).flex().items_center().gap(px(8.)).text_size(px(13.))
+                    div()
+                        .mb(px(8.))
+                        .h(px(40.))
+                        .px(px(10.))
+                        .rounded(px(12.))
+                        .border_1()
+                        .border_color(accent())
+                        .bg(field_fill())
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .text_size(px(13.))
                         .child(icon("key", 15.).text_color(accent()))
                         .child(div().flex_shrink_0().text_color(content(0.95)).child(label))
                         .child(if typing_secret {
-                            div().flex_1().min_w_0().truncate().text_color(content(0.9)).child(if masked.is_empty() { t("Digite o valor e aperte Enter").to_owned() } else { masked })
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_color(content(0.9))
+                                .child(if masked.is_empty() {
+                                    t("Digite o valor e aperte Enter").to_owned()
+                                } else {
+                                    masked
+                                })
                         } else {
-                            div().flex_1().min_w_0().truncate().text_size(px(12.)).text_color(content(0.5)).child(about)
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(px(12.))
+                                .text_color(content(0.5))
+                                .child(about)
                         })
                         .when(!typing_secret, |d| {
-                            d.child(div().id("secret-decline").h(px(26.)).px(px(10.)).rounded_md().flex().items_center().text_size(px(12.5)).text_color(content(0.75)).cursor_pointer().hover(|s| s.bg(content(0.08)))
-                                .on_click(cx.listener(move |this, _, _, cx| this.respond_secret(&decline_id, None, cx)))
-                                .child(t("Recusar")))
-                            .child(div().id("secret-open").h(px(26.)).px(px(10.)).rounded_md().flex().items_center().text_size(px(12.5)).text_color(on_accent()).bg(accent()).cursor_pointer().hover(|s| s.opacity(0.88))
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.secret_entry = Some((open_id.clone(), String::new()));
-                                    cx.notify();
-                                }))
-                                .child(t("Informar")))
+                            d.child(
+                                div()
+                                    .id("secret-decline")
+                                    .h(px(26.))
+                                    .px(px(10.))
+                                    .rounded_md()
+                                    .flex()
+                                    .items_center()
+                                    .text_size(px(12.5))
+                                    .text_color(content(0.75))
+                                    .cursor_pointer()
+                                    .hover(|s| s.bg(content(0.08)))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.respond_secret(&decline_id, None, cx)
+                                    }))
+                                    .child(t("Recusar")),
+                            )
+                            .child(
+                                div()
+                                    .id("secret-open")
+                                    .h(px(26.))
+                                    .px(px(10.))
+                                    .rounded_md()
+                                    .flex()
+                                    .items_center()
+                                    .text_size(px(12.5))
+                                    .text_color(on_accent())
+                                    .bg(accent())
+                                    .cursor_pointer()
+                                    .hover(|s| s.opacity(0.88))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.secret_entry = Some((open_id.clone(), String::new()));
+                                        cx.notify();
+                                    }))
+                                    .child(t("Informar")),
+                            )
                         }),
                 )
             })
@@ -8674,24 +10084,77 @@ impl Shell {
                 let question = kind["type"] == "userInput";
                 let asked = &kind["questions"][0];
                 let question_id = asked["id"].as_str().unwrap_or("").to_owned();
-                let options: Vec<String> = asked["options"].as_array().into_iter().flatten().filter_map(|o| o["label"].as_str().map(str::to_owned)).collect();
+                let options: Vec<String> = asked["options"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|o| o["label"].as_str().map(str::to_owned))
+                    .collect();
                 let what = match kind["type"].as_str() {
-                    Some("command") => tf("Executar: {}", &[&kind["command"].as_str().unwrap_or("")]),
+                    Some("command") => {
+                        tf("Executar: {}", &[&kind["command"].as_str().unwrap_or("")])
+                    }
                     Some("fileChange") => t("Alterar arquivos").to_owned(),
-                    Some("tool") => tf("Usar a ferramenta {}", &[&kind["name"].as_str().unwrap_or("")]),
-                    _ => asked["question"].as_str().unwrap_or(t("O agente fez uma pergunta.")).to_owned(),
+                    Some("tool") => tf(
+                        "Usar a ferramenta {}",
+                        &[&kind["name"].as_str().unwrap_or("")],
+                    ),
+                    _ => asked["question"]
+                        .as_str()
+                        .unwrap_or(t("O agente fez uma pergunta."))
+                        .to_owned(),
                 };
-                let (accept, decline, asked_request) = (request.clone(), request.clone(), request.clone());
+                let (accept, decline, asked_request) =
+                    (request.clone(), request.clone(), request.clone());
                 let button = |id: &'static str, label: &'static str, main: bool| {
-                    div().id(id).h(px(26.)).px(px(10.)).rounded_md().flex().items_center().text_size(px(12.5)).cursor_pointer().text_color(if main { on_accent() } else { content(0.85) }).bg(if main { accent() } else { content(0.08) }).hover(|s| s.opacity(0.88))
+                    div()
+                        .id(id)
+                        .h(px(26.))
+                        .px(px(10.))
+                        .rounded_md()
+                        .flex()
+                        .items_center()
+                        .text_size(px(12.5))
+                        .cursor_pointer()
+                        .text_color(if main { on_accent() } else { content(0.85) })
+                        .bg(if main { accent() } else { content(0.08) })
+                        .hover(|s| s.opacity(0.88))
                 };
                 d.child(
-                    div().mb(px(8.)).p(px(10.)).rounded(px(12.)).border_1().border_color(accent_wash(0.4)).bg(field_fill()).flex().items_center().gap(px(10.))
-                        .child(div().flex_1().min_w_0().text_size(px(13.)).text_color(content(0.9)).child(what))
+                    div()
+                        .mb(px(8.))
+                        .p(px(10.))
+                        .rounded(px(12.))
+                        .border_1()
+                        .border_color(accent_wash(0.4))
+                        .bg(field_fill())
+                        .flex()
+                        .items_center()
+                        .gap(px(10.))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_size(px(13.))
+                                .text_color(content(0.9))
+                                .child(what),
+                        )
                         .when(question, |d| {
                             d.children(options.into_iter().enumerate().map(|(i, label)| {
-                                let (request, question_id, answer) = (asked_request.clone(), question_id.clone(), label.clone());
-                                div().id(("answer", i)).h(px(26.)).px(px(10.)).rounded_md().flex().items_center().text_size(px(12.5)).cursor_pointer().text_color(content(0.9)).bg(content(0.08)).hover(|s| s.bg(content(0.14)))
+                                let (request, question_id, answer) =
+                                    (asked_request.clone(), question_id.clone(), label.clone());
+                                div()
+                                    .id(("answer", i))
+                                    .h(px(26.))
+                                    .px(px(10.))
+                                    .rounded_md()
+                                    .flex()
+                                    .items_center()
+                                    .text_size(px(12.5))
+                                    .cursor_pointer()
+                                    .text_color(content(0.9))
+                                    .bg(content(0.08))
+                                    .hover(|s| s.bg(content(0.14)))
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.answer(ix, &request, &question_id, &answer);
                                         cx.notify();
@@ -8700,32 +10163,39 @@ impl Shell {
                             }))
                         })
                         .when(!question, |d| {
-                            d.child(button("deny", t("Recusar"), false).on_click(cx.listener(move |this, _, _, cx| {
-                                this.respond(ix, &decline, "decline");
-                                cx.notify();
-                            })))
-                            .child(button("allow", t("Aprovar"), true).on_click(cx.listener(move |this, _, _, cx| {
-                                this.respond(ix, &accept, "accept");
-                                cx.notify();
-                            })))
+                            d.child(button("deny", t("Recusar"), false).on_click(cx.listener(
+                                move |this, _, _, cx| {
+                                    this.respond(ix, &decline, "decline");
+                                    cx.notify();
+                                },
+                            )))
+                            .child(
+                                button("allow", t("Aprovar"), true).on_click(cx.listener(
+                                    move |this, _, _, cx| {
+                                        this.respond(ix, &accept, "accept");
+                                        cx.notify();
+                                    },
+                                )),
+                            )
                         }),
                 )
             })
+            .when_some(queue_card, |d, card| d.child(card))
+            .when_some(self.handoff_card(ix, cx), |d, card| d.child(card))
+            .when_some(self.script_notice(ix, cx), |d, card| d.child(card))
             .child(
                 div()
-                    .rounded(px(20.))
+                    .rounded(px(12.))
                     .border_1()
                     .border_color(content(0.1))
-                    .bg(content(0.03))
+                    .child(crate::theme::composer_surface(11.))
                     .flex()
                     .flex_col()
                     .child(
                         div()
-                            .rounded(px(19.))
-                            .border_1()
+                            .rounded(px(11.))
+                            .border_b_1()
                             .border_color(content(0.07))
-                            .bg(field_fill())
-                            .shadow_md()
                             .pt(px(14.))
                             .px(px(8.))
                             .pb(px(8.))
@@ -8733,61 +10203,191 @@ impl Shell {
                             .flex_col()
                             .gap(px(8.))
                             .when(mode_chips.iter().any(|m| m.1), |d| {
-                                d.child(div().px(px(8.)).flex().flex_wrap().gap(px(5.)).children(mode_chips.iter().filter(|m| m.1).map(|(label, _, glyph)| {
-                                    div().h(px(22.)).px(px(7.)).rounded(px(7.)).flex().items_center().gap(px(5.)).text_size(px(12.)).text_color(accent()).bg(accent_wash(0.13)).child(icon(glyph, 12.).text_color(accent())).child(*label)
-                                })))
+                                d.child(div().px(px(8.)).flex().flex_wrap().gap(px(5.)).children(
+                                    mode_chips.iter().enumerate().filter(|(_, m)| m.1).map(
+                                        |(at, (label, _, glyph))| {
+                                            div()
+                                                .id(("mode-chip", at))
+                                                .h(px(22.))
+                                                .pl(px(7.))
+                                                .pr(px(3.))
+                                                .rounded(px(7.))
+                                                .flex()
+                                                .items_center()
+                                                .gap(px(5.))
+                                                .text_size(px(12.))
+                                                .text_color(accent())
+                                                .bg(accent_wash(0.13))
+                                                .child(icon(glyph, 12.).text_color(accent()))
+                                                .child(div().max_w(px(176.)).truncate().child(
+                                                    if at == 3 {
+                                                        goal_text.clone()
+                                                    } else {
+                                                        (*label).to_owned()
+                                                    },
+                                                ))
+                                                .child(
+                                                    div()
+                                                        .id(("mode-chip-off", at))
+                                                        .size(px(16.))
+                                                        .rounded_sm()
+                                                        .flex()
+                                                        .items_center()
+                                                        .justify_center()
+                                                        .cursor_pointer()
+                                                        .hover(|s| s.bg(accent_wash(0.2)))
+                                                        .on_click(cx.listener(
+                                                            move |this, _, _, cx| {
+                                                                let ix = this.active_conversation();
+                                                                match at {
+                                                                    0 => {
+                                                                        this.conversations[ix]
+                                                                            .planning = false
+                                                                    }
+                                                                    1 => {
+                                                                        this.conversations[ix]
+                                                                            .debugging = false
+                                                                    }
+                                                                    2 => {
+                                                                        this.conversations[ix]
+                                                                            .team = false
+                                                                    }
+                                                                    _ => {
+                                                                        this.conversations[ix]
+                                                                            .goal = None
+                                                                    }
+                                                                }
+                                                                cx.notify();
+                                                            },
+                                                        ))
+                                                        .child(
+                                                            icon("close", 10.).text_color(accent()),
+                                                        ),
+                                                )
+                                        },
+                                    ),
+                                ))
                             })
-                            .when(!attached.is_empty(), |d| {
-                                d.child(div().px(px(8.)).flex().flex_wrap().gap(px(5.)).children(attached.into_iter().enumerate().map(|(i, (id, name))| {
-                                    div().id(("attached", i)).h(px(24.)).pl(px(6.)).pr(px(3.)).rounded(px(7.)).flex().items_center().gap(px(5.)).text_size(px(12.)).text_color(content(0.8)).bg(content(0.08))
-                                        .child(crate::file_icons::file_icon(&name, false, 13.))
-                                        .child(name)
-                                        .child(div().id(("attached-remove", i)).size(px(16.)).rounded_sm().flex().items_center().justify_center().cursor_pointer().hover(|s| s.bg(content(0.14)))
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                let owner = this.conversations[ix].session_id.clone();
-                                                this.backend.invoke("release_prompt_attachments", json!({ "owner": owner, "ids": [id.clone()] }));
-                                                if let Some(list) = this.attachments.get_mut(&ix) {
-                                                    list.retain(|(kept, _)| *kept != id);
-                                                }
-                                                cx.notify();
-                                            }))
-                                            .child(icon("close", 10.).text_color(content(0.6))))
-                                })))
-                            })
-                            .child(div().id("composer-text").px(px(8.)).max_h(px(190.)).overflow_y_scroll().text_size(px(14.)).line_height(px(22.)).text_color(content(0.95)).child(text))
+                            .children(attachment_chips)
+                            .child(
+                                div()
+                                    .id("composer-text")
+                                    .px(px(8.))
+                                    .max_h(px(190.))
+                                    .overflow_y_scroll()
+                                    .text_size(px(14.))
+                                    .line_height(px(22.))
+                                    .text_color(content(0.95))
+                                    .child(text),
+                            )
                             .child(
                                 div()
                                     .flex()
                                     .items_center()
-                                    .child(round("composer-add", "plus")
-                                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.add_menu = match this.add_menu {
-                                                Some(_) => None,
-                                                None => Some((false, Tween::from_to(0., 1., Instant::now(), if cx.reduce_motion() { 0. } else { MENU }, Curve::Expo))),
-                                            };
-                                            cx.notify();
-                                        })))
+                                    .child(
+                                        round("composer-add", "plus")
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _, window, cx| {
+                                                    this.keep_typing_focus(window, cx);
+                                                    cx.stop_propagation();
+                                                }),
+                                            )
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.add_menu = match this.add_menu {
+                                                    Some(_) => None,
+                                                    None => Some((
+                                                        AddPage::Add,
+                                                        Tween::from_to(
+                                                            0.,
+                                                            1.,
+                                                            Instant::now(),
+                                                            if cx.reduce_motion() {
+                                                                0.
+                                                            } else {
+                                                                MENU
+                                                            },
+                                                            Curve::Expo,
+                                                        ),
+                                                    )),
+                                                };
+                                                cx.notify();
+                                            })),
+                                    )
                                     .child(div().flex_1())
                                     .child(
                                         round("composer-mic", "mic")
                                             .when(dictating, |d| d.bg(rgb(0xe0654d)))
-                                            .on_click(cx.listener(|this, _, _, cx| this.toggle_dictation(cx))),
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.toggle_dictation(cx)
+                                            })),
                                     )
-                                    .child(
-                                        div()
-                                            .id("send")
-                                            .ml(px(2.))
-                                            .size(px(30.))
-                                            .rounded_full()
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .bg(if live { content(0.14) } else if has_text { accent() } else { content(0.09) })
-                                            .when(live || has_text, |d| d.cursor_pointer().hover(|s| s.opacity(0.88)))
-                                            .on_click(cx.listener(move |this, _, _, cx| if live { this.stop(cx) } else { this.send(cx) }))
-                                            .child(icon(if live { "square" } else { "arrow-up" }, 15.).text_color(if live { content(0.9) } else if has_text { on_accent() } else { content(0.4) })),
-                                    ),
+                                    // A heavy conversation idle past its cache compacts before
+                                    // this message; the plain arrow sends without (context_meter.rs).
+                                    .when(compact_send && has_text && !live, |d| {
+                                        d.child(
+                                            div()
+                                                .id("send-plain")
+                                                .ml(px(2.))
+                                                .size(px(26.))
+                                                .rounded(px(7.))
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .bg(content(0.09))
+                                                .cursor_pointer()
+                                                .hover(|s| s.bg(content(0.16)))
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.context.skip_compact = true;
+                                                    this.send(cx);
+                                                    this.context.skip_compact = false;
+                                                }))
+                                                .child(icon("arrow-up", 15.).text_color(content(0.7))),
+                                        )
+                                    })
+                                    .when(live || !queueing || has_text, |d| {
+                                        // One button: Stop while the agent works with nothing typed.
+                                        let stopping = live && !has_text;
+                                        let expanded = has_text;
+                                        let face = crate::send_morph::Face {
+                                            stop: stopping,
+                                            label: if compact_send && !live {
+                                                t("Compactar e enviar")
+                                            } else if live {
+                                                t("Na fila")
+                                            } else {
+                                                t("Enviar")
+                                            },
+                                            glyph: if compact_send && has_text && !live {
+                                                "chevrons-down-up"
+                                            } else {
+                                                "chevron-up"
+                                            },
+                                            expanded,
+                                        };
+                                        let frame = self.send_morph.borrow_mut().frame(
+                                            face,
+                                            crate::send_morph::expanded_width(face.label),
+                                            !cx.reduce_motion(),
+                                        );
+                                        if frame.moving {
+                                            self.send_moving.set(true);
+                                        }
+                                        d.child(
+                                            crate::send_morph::button("send", face, &frame, has_text || stopping)
+                                                .ml(px(2.))
+                                                .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+                                                    if stopping {
+                                                        this.stop(cx);
+                                                    } else if has_text {
+                                                        // Shift-click sends without compacting.
+                                                        this.context.skip_compact = event.modifiers().shift;
+                                                        this.send(cx);
+                                                        this.context.skip_compact = false;
+                                                    }
+                                                })),
+                                        )
+                                    }),
                             ),
                     )
                     .child(
@@ -8797,23 +10397,84 @@ impl Shell {
                             .flex()
                             .items_center()
                             .gap(px(2.))
+                            // Empty space in the toolbar keeps typing in the composer.
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, window, cx| {
+                                    this.keep_typing_focus(window, cx)
+                                }),
+                            )
                             .child(
-                                div().id("composer-access").h(px(24.)).px(px(6.)).rounded(px(7.)).flex().items_center().gap(px(6.)).text_size(px(12.)).text_color(access_color).cursor_pointer().hover(|s| s.bg(content(0.06)))
+                                div()
+                                    .id("composer-access")
+                                    .h(px(24.))
+                                    .px(px(6.))
+                                    .rounded(px(7.))
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(6.))
+                                    .text_size(px(12.))
+                                    .text_color(access_color)
+                                    .cursor_pointer()
+                                    .hover(|s| s.bg(content(0.06)))
                                     .child(icon(access_glyph, 14.).text_color(access_color))
                                     .child(access)
-                                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                                    .on_click(cx.listener(|this, _, _, cx| this.toggle_composer_menu(ComposerMenu::Access, cx))),
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, window, cx| {
+                                            this.keep_typing_focus(window, cx);
+                                            cx.stop_propagation();
+                                        }),
+                                    )
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.toggle_composer_menu(ComposerMenu::Access, cx)
+                                    })),
                             )
                             .child(div().flex_1())
-                                                        .child(shelf_button("composer-model").relative().max_w(px(300.))
-                                .child(gpui::canvas(move |bounds, _, _| trigger_store.set(Some(bounds)), |_, _, _, _| {}).absolute().size_full())
-                                .child(svg().path(provider_path(provider)).size(px(16.)).flex_shrink_0().text_color(gpui::Hsla::from(gpui::rgb(provider_brand(provider)))))
-                                .child(div().min_w_0().truncate().child(model))
-                                .children(effort.map(|e| div().flex_shrink_0().text_color(content(0.4)).child(e)))
-                                .when(chosen.fast, |d| d.child(theme_icon("zap-fill", 12.).text_color(gpui::rgb(0xf0c43a))))
-                                .child(chevron_down())
-                                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                                .on_click(cx.listener(|this, _, _, cx| this.toggle_composer_menu(ComposerMenu::Effort, cx)))),
+                            .children(ring)
+                            .child(
+                                shelf_button("composer-model")
+                                    .relative()
+                                    .max_w(px(300.))
+                                    .child(
+                                        gpui::canvas(
+                                            move |bounds, _, _| trigger_store.set(Some(bounds)),
+                                            |_, _, _, _| {},
+                                        )
+                                        .absolute()
+                                        .size_full(),
+                                    )
+                                    .child(
+                                        svg()
+                                            .path(provider_path(provider))
+                                            .size(px(16.))
+                                            .flex_shrink_0()
+                                            .text_color(gpui::Hsla::from(gpui::rgb(
+                                                provider_brand(provider),
+                                            ))),
+                                    )
+                                    .child(div().min_w_0().truncate().child(model))
+                                    .children(effort.map(|e| {
+                                        div().flex_shrink_0().text_color(content(0.4)).child(e)
+                                    }))
+                                    .when(chosen.fast, |d| {
+                                        d.child(
+                                            theme_icon("zap-fill", 12.)
+                                                .text_color(gpui::rgb(0xf0c43a)),
+                                        )
+                                    })
+                                    .child(chevron_down())
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, window, cx| {
+                                            this.keep_typing_focus(window, cx);
+                                            cx.stop_propagation();
+                                        }),
+                                    )
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.toggle_composer_menu(ComposerMenu::Effort, cx)
+                                    })),
+                            ),
                     ),
             )
             .into_any_element()
@@ -8907,11 +10568,12 @@ impl Shell {
                 )
             })
             .child(div().flex_1())
+            .when_some(self.resources_gauge(cx), |d, gauge| d.child(gauge))
             .child(self.settings_button(cx))
             .into_any_element()
     }
 
-    fn turn_view(
+    fn turn_body(
         &self,
         conversation: usize,
         index: usize,
@@ -8920,6 +10582,9 @@ impl Shell {
         moving: &mut bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        if context_meter::is_compact_command(&turn.user) {
+            return self.compaction_row(conversation, index, turn, now, moving);
+        }
         let provider = turn
             .provider
             .unwrap_or(self.conversations[conversation].provider);
@@ -8951,7 +10616,22 @@ impl Shell {
             provider,
         );
         let label: AnyElement = if live {
-            shimmer(tf("{} trabalhando", &[&name]), clock)
+            let running = turn.started_ms.map(|start| {
+                (chrono::Utc::now().timestamp_millis().max(0) as u64)
+                    .saturating_sub(start)
+                    .saturating_sub(turn.paused_ms)
+                    / 1000
+            });
+            shimmer(
+                match running {
+                    Some(s) if s >= 60 => {
+                        tf("{} trabalhando há {}m {}s", &[&name, &(s / 60), &(s % 60)])
+                    }
+                    Some(s) => tf("{} trabalhando há {}s", &[&name, &s]),
+                    None => tf("{} trabalhando", &[&name]),
+                },
+                clock,
+            )
         } else {
             let worked = match turn.seconds {
                 Some(s) if s >= 60 => {
@@ -9128,97 +10808,17 @@ impl Shell {
         let body: Vec<AnyElement> = rows.into_iter().map(|(_, row)| row).collect();
         let has_header =
             live || !turn.steps.is_empty() || !turn.agents.is_empty() || turn.seconds.is_some();
-        // Subagents, as the activity tree: one rail from the model's tile, each with its status.
-        let agents: Option<AnyElement> = (!turn.agents.is_empty()).then(|| {
-            let finished = turn.agents.iter().filter(|a| !a.running).count();
-            let count = turn.agents.len();
-            div()
-                .flex()
-                .flex_col()
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(8.))
-                        .h(px(STEP_ROW))
-                        .text_size(px(13.))
-                        .text_color(content(0.7))
-                        .child(mark_tile(
-                            &ACTIVITY_TILE,
-                            Face::Neutral,
-                            icon("users", 12.).text_color(content(0.85)),
-                        ))
-                        .child(div().flex_1().child(if count == 1 {
-                            t("1 agente").to_owned()
-                        } else {
-                            tf("{} agentes", &[&count])
-                        }))
-                        .child(
-                            div()
-                                .text_size(px(12.))
-                                .text_color(content(0.45))
-                                .child(tf("{} de {}", &[&finished, &count])),
-                        ),
-                )
-                .children(turn.agents.iter().enumerate().map(|(i, agent)| {
-                    let time = agent.seconds.map(|s| {
-                        if s >= 60 {
-                            format!("{}m {}s", s / 60, s % 60)
-                        } else {
-                            format!("{s}s")
-                        }
-                    });
-                    let tools = (agent.tools > 0).then(|| tf("{} ferramentas", &[&agent.tools]));
-                    child_row(
-                        STEP_ROW,
-                        i + 1 == count,
-                        div()
-                            .flex()
-                            .flex_1()
-                            .min_w_0()
-                            .items_center()
-                            .gap(px(7.))
-                            .child(if agent.running {
-                                self.spin(now).into_any_element()
-                            } else if agent.failed {
-                                icon("close", 13.)
-                                    .text_color(rgb(0xe08a8a))
-                                    .into_any_element()
-                            } else {
-                                icon("check", 13.)
-                                    .text_color(rgb(0x7ad69a))
-                                    .into_any_element()
-                            })
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .truncate()
-                                    .child(agent.label.clone()),
-                            )
-                            .children(tools.map(|t| {
-                                div()
-                                    .flex_shrink_0()
-                                    .text_size(px(11.5))
-                                    .text_color(content(0.4))
-                                    .child(t)
-                            }))
-                            .children(time.map(|t| {
-                                div()
-                                    .flex_shrink_0()
-                                    .text_size(px(11.5))
-                                    .text_color(content(0.4))
-                                    .child(t)
-                            }))
-                            .into_any_element(),
-                    )
-                }))
-                .into_any_element()
-        });
+        // Subagents, as one card (subagent_card.rs), and the pill for the ones in the background.
+        let agents = self.subagent_card(conversation, index, turn, provider, now, moving, cx);
+        let pill = self.background_pill(turn);
         div()
+            .group(format!("turn-actions-{index}"))
             .flex()
             .flex_col()
             .gap(px(8.))
+            .when(!turn.attachments.is_empty(), |d| {
+                d.child(self.sent_chips(conversation, index, &turn.attachments, cx))
+            })
             .when(!turn.user.is_empty(), |d| {
                 d.child(
                     div().flex().justify_end().child(
@@ -9231,11 +10831,26 @@ impl Shell {
                             .text_size(px(14.))
                             .line_height(px(21.))
                             .text_color(content(0.95))
-                            .child(styled_tokens(turn.user.clone())),
+                            .child(transcript_select::user_text(
+                                &self.select,
+                                transcript_select::Reply { conversation, turn: index, user: true },
+                                turn.user.clone(),
+                                styled_tokens(turn.user.clone()),
+                            )),
                     ),
                 )
             })
-            .when(has_header, |d| d.child(header))
+            .when(has_header, |d| match pill {
+                Some(pill) => d.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(10.))
+                        .child(header)
+                        .child(pill),
+                ),
+                None => d.child(header),
+            })
             .when(body_height > 0., |d| {
                 d.child(
                     div()
@@ -9255,8 +10870,35 @@ impl Shell {
                     .map(|(i, visual)| self.visual_element(index, i, visual, cx)),
             )
             .when(!turn.answer.is_empty(), |d| {
-                d.child(crate::markdown::render(&turn.answer))
+                d.child(transcript_select::scoped(
+                    &self.select,
+                    transcript_select::Reply { conversation, turn: index, user: false },
+                    || {
+                        // Linked pictures and videos, diagrams, formulas and HTML open from here.
+                        let rich = crate::reply_view::Rich {
+                            session: self.conversations[conversation].session_id.clone(),
+                            cwd: self.conversations[conversation].worktree.clone(),
+                            streaming: turn.live,
+                            act: std::rc::Rc::new(cx.listener(
+                                |this, act: &crate::reply_rich::Act, _, cx| {
+                                    this.reply_act(act.clone(), cx)
+                                },
+                            )),
+                        };
+                        let body = crate::markdown::render_rich(&turn.answer, &rich);
+                        self.wake_reply_assets(cx);
+                        body
+                    },
+                ))
             })
+            .when_some(self.delegated_tasks_view(turn, cx), |d, row| d.child(row))
+            .when_some(self.turn_actions(conversation, index, turn, cx), |d, row| {
+                d.child(row)
+            })
+            .when_some(
+                self.turn_review_view(conversation, index, turn, cx),
+                |d, review| d.child(review),
+            )
             .into_any_element()
     }
 
@@ -9275,6 +10917,9 @@ impl Shell {
     }
 
     fn open_pane(&mut self, kind: usize, cx: &mut Context<Self>) {
+        if kind == 0 && self.term_redirect(cx) {
+            return;
+        }
         if !self.dock_panes.contains(&kind) {
             self.dock_panes.push(kind);
         }
@@ -9335,7 +10980,7 @@ impl Shell {
                 if since < 0.4 && !reduced {
                     *moving = true;
                 }
-                let cards = PANES.iter().enumerate().map(|(ix, (glyph, name, about))| {
+                let cards = PANES.iter().take(VISIBLE_PANES).enumerate().map(|(ix, (glyph, name, about))| {
                     // Each card rises in just after the one before it.
                     let t = if reduced {
                         1.
@@ -9506,7 +11151,7 @@ impl Shell {
             if let Some(commands) = needle.strip_prefix('>') {
                 let commands = commands.trim();
                 for (ix, label) in COMMANDS.iter().enumerate() {
-                    if t(label).to_lowercase().contains(commands) {
+                    if *label != "Abrir Simulador" && t(label).to_lowercase().contains(commands) {
                         hits.push(PaletteHit::Command(ix));
                     }
                 }
@@ -9550,7 +11195,7 @@ impl Shell {
             }
         }
         for (ix, label) in COMMANDS.iter().enumerate() {
-            if t(label).to_lowercase().contains(&needle) {
+            if *label != "Abrir Simulador" && t(label).to_lowercase().contains(&needle) {
                 hits.push(PaletteHit::Command(ix));
             }
         }
@@ -9690,6 +11335,7 @@ impl Shell {
             let hit = hit.clone();
             let two_lines = matches!(hit, PaletteHit::File(..));
             rows.push(
+                crate::hover_track::list("palette").row(
                 div()
                     .id(("palette-row", ix))
                     .mx(px(6.))
@@ -9702,7 +11348,6 @@ impl Shell {
                     .text_size(px(13.))
                     .text_color(content(0.9))
                     .when(ix == selected, |d| d.bg(content(0.1)))
-                    .when(ix != selected, |d| d.hover(|s| s.bg(content(0.05))))
                     .cursor_pointer()
                     .on_click(cx.listener({
                         let hit = hit.clone();
@@ -9738,8 +11383,11 @@ impl Shell {
                                         .child(d)
                                 }))
                         }
-                    })
-                    .into_any_element(),
+                    }),
+                    ix,
+                    ix == selected,
+                )
+                .into_any_element(),
             );
         }
         if hits.is_empty() {
@@ -9781,7 +11429,7 @@ impl Shell {
                         .rounded(px(14.))
                         .border_1()
                         .border_color(content(0.12))
-                        .bg(floating_fill())
+                        .child(crate::theme::floating_surface(14.))
                         .shadow_lg()
                         .pb(px(6.))
                         .flex()
@@ -9808,6 +11456,7 @@ impl Shell {
                                     div().flex_shrink_0().w(px(1.5)).h(px(18.)).bg(accent()),
                                 )),
                         )
+                        .child(crate::hover_track::list("palette").pill())
                         .children(rows)
                         .when(state.files, |d| {
                             d.child(
@@ -9834,6 +11483,8 @@ impl Shell {
     }
 
     fn toggle_env_row(&mut self, row: &'static str) {
+        self.branch_draft = None;
+        self.branch_error = None;
         self.env_open = if self.env_open == Some(row) {
             None
         } else {
@@ -10059,6 +11710,27 @@ impl Shell {
                     cx.notify();
                 }))
                 .child(t("Puxar da origem")).into_any_element());
+            list.push(div().id("env-branch-new").h(px(24.)).px(px(6.)).rounded(px(6.)).flex().items_center().text_size(px(12.)).text_color(content(0.6)).cursor_pointer().hover(|s| s.bg(content(0.07)))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.branch_draft = Some(String::new());
+                    this.branch_error = None;
+                    cx.notify();
+                }))
+                .child(t("Criar branch…")).into_any_element());
+            // The name field (git_sync.rs): the problem with the typed name shows under it, else
+            // the host's last answer.
+            if let Some(draft) = self.branch_draft.clone() {
+                let checked = git_sync::check_branch_name(&draft, &self.env_branches);
+                let problem = checked.as_ref().err().and_then(|p| git_sync::problem_text(*p));
+                let error = problem.map(str::to_owned).or_else(|| self.branch_error.clone());
+                list.push(git_sync::branch_field(
+                    &draft,
+                    error.as_deref(),
+                    checked.is_ok(),
+                    self.branch_busy,
+                    cx.listener(|this, _, _, cx| this.submit_branch(cx)),
+                ));
+            }
             rows.push(sub(list).into_any_element());
         }
         rows.push(
@@ -10231,7 +11903,7 @@ impl Shell {
                 .rounded_lg()
                 .border_1()
                 .border_color(content(0.12))
-                .bg(floating_fill())
+                .child(crate::theme::floating_surface(8.))
                 .shadow_lg()
                 .opacity(p)
                 .flex()
@@ -10240,6 +11912,99 @@ impl Shell {
                 .children(rows)
                 .into_any_element(),
         )
+    }
+
+    /// Asks the host for the selected conversation's incoming commits (git_sync.rs).
+    fn incoming_fetch(&mut self) {
+        let session = self.incoming.session().to_owned();
+        if session.is_empty() {
+            return;
+        }
+        let generation = self.incoming.generation();
+        let id = self
+            .backend
+            .invoke("git_incoming", json!({ "sessionId": session }));
+        self.waiting.insert(id, Waiting::Incoming(generation));
+    }
+
+    /// The header's Puxar: `git pull --ff-only` from the branch's upstream.
+    fn incoming_pull(&mut self, cx: &mut Context<Self>) {
+        if !self.incoming.begin_pull() {
+            return;
+        }
+        let session = self.incoming.session().to_owned();
+        let generation = self.incoming.generation();
+        let id = self
+            .backend
+            .invoke("git_pull_ff", json!({ "sessionId": session }));
+        self.waiting.insert(id, Waiting::IncomingPull(generation));
+        cx.notify();
+    }
+
+    fn incoming_pulled(&mut self, generation: u64, ok: bool, value: &Value, cx: &mut Context<Self>) {
+        let answer = git_sync::pull_answer(ok, value);
+        let done = matches!(answer, git_sync::Pulled::Done(_));
+        if !self.incoming.pulled(generation, answer) {
+            return;
+        }
+        if done {
+            self.refresh_diff();
+            // The green check stays a moment, then the popover closes.
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(git_sync::PULLED_FOR).await;
+                let _ = this.update(cx, |this, cx| {
+                    if this.incoming.faded(generation) {
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        }
+        cx.notify();
+    }
+
+    fn incoming_toggle(&mut self, cx: &mut Context<Self>) {
+        self.environment = None;
+        let duration = if cx.reduce_motion() { 0. } else { MENU };
+        self.incoming.toggle(Instant::now(), duration);
+        cx.notify();
+    }
+
+    /// "Criar branch…" in the Ambiente card: checks the name, then the host creates and switches.
+    fn submit_branch(&mut self, cx: &mut Context<Self>) {
+        let Some(draft) = self.branch_draft.clone() else {
+            return;
+        };
+        let ix = self.active_conversation();
+        let Some(project) = self.project_of(ix) else {
+            return;
+        };
+        if self.branch_busy {
+            return;
+        }
+        if let Ok(name) = git_sync::check_branch_name(&draft, &self.env_branches) {
+            self.branch_busy = true;
+            self.branch_error = None;
+            let id = self.backend.invoke(
+                "create_branch",
+                json!({ "projectId": self.projects[project].id, "branch": name, "confirm": true }),
+            );
+            self.waiting.insert(id, Waiting::BranchCreate);
+        }
+        cx.notify();
+    }
+
+    fn branch_created(&mut self, ok: bool, value: &Value, cx: &mut Context<Self>) {
+        self.branch_busy = false;
+        if ok {
+            self.branch_draft = None;
+            self.branch_error = None;
+            self.env_open = None;
+            self.refresh_diff();
+        } else {
+            self.branch_error = Some(error_text(value));
+        }
+        cx.notify();
     }
 
     fn toggle_appearance(&mut self, cx: &mut Context<Self>) {
@@ -10262,6 +12027,7 @@ impl Shell {
         let now = Instant::now();
         self.palette_from = crate::theme::current_palette();
         change(&mut self.look);
+        save_look(&self.look);
         self.palette_t = Tween::from_to(
             0.,
             1.,
@@ -10298,6 +12064,7 @@ impl Shell {
         } else {
             (hue, 0.35 + v * 0.5)
         });
+        save_look(&self.look);
         cx.notify();
     }
 
@@ -10395,7 +12162,8 @@ impl Shell {
             .pt(px(TITLE_BAR))
             .px(px(8.))
             .overflow_y_scroll()
-            .child(
+            .child(crate::hover_track::list("settings-nav").pill())
+            .child(crate::hover_track::list("settings-nav").row_named(
                 div()
                     .id("settings-back")
                     .h(px(30.))
@@ -10408,14 +12176,15 @@ impl Shell {
                     .text_size(px(13.))
                     .text_color(content(0.95))
                     .cursor_pointer()
-                    .hover(|s| s.bg(content(0.07)))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.appearance = None;
                         cx.notify();
                     }))
                     .child(icon("arrow-left", 16.).text_color(content(0.65)))
                     .child(t("Voltar ao app")),
-            )
+                "settings-back",
+                false,
+            ))
             .child(
                 div()
                     .h(px(34.))
@@ -10446,6 +12215,7 @@ impl Shell {
                     .children(items.iter().map(|(glyph, name)| {
                         let name: &'static str = name;
                         let chosen = name == self.settings_page;
+                        crate::hover_track::list("settings-nav").row_named(
                         div()
                             .id(name)
                             .h(px(32.))
@@ -10457,7 +12227,6 @@ impl Shell {
                             .text_size(px(13.))
                             .text_color(content(if chosen { 1. } else { 0.72 }))
                             .when(chosen, |d| d.bg(content(0.1)))
-                            .when(!chosen, |d| d.hover(|s| s.bg(content(0.06))))
                             .cursor_pointer()
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if this.settings_page == name {
@@ -10487,12 +12256,25 @@ impl Shell {
                             } else {
                                 0.55
                             })))
-                            .child(t(name))
+                            .child(t(name)),
+                        name,
+                        chosen,
+                        )
                     }))
             }));
         let body: AnyElement = if self.settings_page == APPEARANCE {
             self.appearance_page(cx)
         } else {
+            crate::settings_connectors::set_context(
+                self.projects
+                    .iter()
+                    .map(|p| (p.id.clone(), p.name.clone()))
+                    .collect(),
+                self.current_project
+                    .and_then(|ix| self.projects.get(ix))
+                    .map(|p| p.id.clone()),
+                (self.viewport_width - 256. - 64.).min(716.),
+            );
             crate::settings_pages::page(
                 self.settings_page,
                 &self.settings,
@@ -10519,7 +12301,8 @@ impl Shell {
                         }
                     }),
                 )
-                .bg(pane_opaque())
+                // Over glass the app underneath fades out instead, so the desktop shows through.
+                .bg(if pane_fill().a < 0.5 { chrome_wash() } else { pane_opaque() })
                 .flex()
                 .child(nav)
                 .child(
@@ -10544,6 +12327,22 @@ impl Shell {
                                 .child(body),
                         ),
                 )
+                .children(crate::settings_connectors::overlay(
+                    self.settings_page,
+                    &self.settings,
+                    self.setting_edit.as_ref().map(|(k, v)| (*k, v.as_str())),
+                    Shell::save_setting,
+                    Shell::edit_setting,
+                    Shell::run_setting,
+                    cx,
+                ))
+                .children(crate::settings_pair::overlay(
+                    self.settings_page,
+                    self.setting_edit.as_ref().map(|(k, v)| (*k, v.as_str())),
+                    Shell::run_setting,
+                    Shell::edit_setting,
+                    cx,
+                ))
                 .into_any_element(),
         )
     }
@@ -10724,6 +12523,7 @@ impl Shell {
                 .enumerate()
                 .map(|(row, (ix, preset))| {
                     let highlighted = row == menu.selected;
+                    crate::hover_track::list("theme-menu").row(
                     div()
                         .id(("theme", ix))
                         .h(px(30.))
@@ -10735,12 +12535,14 @@ impl Shell {
                         .text_size(px(13.))
                         .text_color(content(0.92))
                         .when(highlighted, |d| d.bg(content(0.1)))
-                        .when(!highlighted, |d| d.hover(|s| s.bg(content(0.06))))
                         .cursor_pointer()
                         .on_click(cx.listener(move |this, _, _, cx| this.pick_theme(ix, cx)))
                         .child(swatch(ix))
-                        .child(crate::i18n::t(preset.name))
-                        .into_any_element()
+                        .child(crate::i18n::t(preset.name)),
+                    ix,
+                    highlighted,
+                    )
+                    .into_any_element()
                 })
                 .collect();
             gpui::deferred(
@@ -10757,7 +12559,7 @@ impl Shell {
                     .rounded(px(12.))
                     .border_1()
                     .border_color(content(0.12))
-                    .bg(floating_fill())
+                    .child(crate::theme::floating_surface(12.))
                     .shadow_lg()
                     .flex()
                     .flex_col()
@@ -10782,6 +12584,7 @@ impl Shell {
                                 div().flex_shrink_0().w(px(1.5)).h(px(15.)).bg(accent()),
                             )),
                     )
+                    .child(crate::hover_track::list("theme-menu").pill())
                     .children(rows),
             )
             .with_priority(4)
@@ -11191,7 +12994,7 @@ impl Shell {
                     danger: bool,
                     cx: &mut Context<Self>,
                     action: fn(&mut Self, u64, &mut Context<Self>)| {
-            div()
+            let row = div()
                 .id(id)
                 .h(px(26.))
                 .px(px(8.))
@@ -11206,8 +13009,7 @@ impl Shell {
                     content(if enabled { 0.9 } else { 0.3 })
                 })
                 .when(enabled, |d| {
-                    d.hover(|s| s.bg(content(0.1)))
-                        .cursor_pointer()
+                    d.cursor_pointer()
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.menu = None;
                             action(this, tab, cx);
@@ -11221,7 +13023,12 @@ impl Shell {
                         .text_size(px(12.))
                         .text_color(content(0.4))
                         .child(shortcut),
-                )
+                );
+            if enabled {
+                crate::hover_track::list("tab-menu").row_named(row, id, false)
+            } else {
+                row
+            }
         };
         Some(
             div()
@@ -11235,10 +13042,11 @@ impl Shell {
                 .rounded_lg()
                 .border_1()
                 .border_color(content(0.12))
-                .bg(floating_fill())
+                .child(crate::theme::floating_surface(8.))
                 .shadow_lg()
                 .opacity(open.clamp(0., 1.))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(crate::hover_track::list("tab-menu").pill())
                 .child(item(
                     "menu-pin",
                     "pin",
@@ -11331,7 +13139,7 @@ impl Shell {
                 .px(px(8.))
                 .py(px(4.))
                 .rounded_md()
-                .bg(floating_fill())
+                .child(crate::theme::floating_surface(6.))
                 .text_size(px(11.5))
                 .text_color(content(0.75))
                 .child(tf(
@@ -11507,7 +13315,11 @@ fn card_corner_mask(begin: bool) -> impl IntoElement {
                     path.line_to(start);
                     path.arc_to(gpui::point(r, r), px(0.), false, false, end);
                     path.close();
-                    if let Ok(path) = path.build() {
+                    // Over glass the renderer already restored the backdrop outside the curve; a
+                    // fill here would darken the corner.
+                    if pane_fill().a >= 1.
+                        && let Ok(path) = path.build()
+                    {
                         window.paint_path(path, shell_fill().blend(chrome_wash()));
                     }
                 }
@@ -11637,7 +13449,6 @@ impl EntityInputHandler for Shell {
         cx: &mut Context<Self>,
     ) {
         let marked = self.marked.take();
-        self.touch_caret();
         self.mention_selected = 0;
         self.mention_dismissed = None;
         if let Some(query) = self.query_target() {
@@ -11664,7 +13475,6 @@ impl EntityInputHandler for Shell {
         cx: &mut Context<Self>,
     ) {
         let marked = self.marked.take();
-        self.touch_caret();
         let start_utf16;
         if let Some(query) = self.query_target() {
             let end = data::utf16_len(query);
@@ -11707,8 +13517,26 @@ impl EntityInputHandler for Shell {
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let now = Instant::now();
+        self.select.begin_frame();
+        self.ensure_draft_timer(cx);
         let reduced = cx.reduce_motion();
         let size = window.viewport_size();
+        self.window_active = window.is_window_active();
+        // The header's incoming check follows the selected conversation, its folder and its turns.
+        if !self.conversations.is_empty() {
+            let conversation = &self.conversations[self.active_conversation()];
+            let (session, folder, working) = (
+                conversation.session_id.clone(),
+                conversation.worktree.clone(),
+                conversation.working(),
+            );
+            if self.incoming.observe(&session, &folder, working, self.window_active) {
+                self.incoming_fetch();
+            }
+        }
+        if let Some(field) = crate::settings_connectors::take_autofocus() {
+            self.setting_edit = Some(field);
+        }
         if let Some(kind) = self
             .dock_active
             .filter(|_| self.dock_open && !self.conversations.is_empty())
@@ -11747,11 +13575,15 @@ impl Render for Shell {
         } else {
             (None, self.peek.is_some().then_some(sidebar))
         };
-        let transcript = self.transcript(now, &mut moving, cx);
+        let transcript = self.split_view(now, &mut moving, cx);
+        // Settings → Aparência → Fundo do chat: under the card, clipped by its corner masks.
+        let empty_chat = self.conversations[self.active_conversation()].turns.is_empty();
+        let chat_background = crate::chat_background::layer(&self.settings, empty_chat, window, cx);
         let menu = self.menu_view(now, &mut moving, cx);
         let open = self.sidebar.at(now);
         let footer = self.footer(self.sidebar_width * open, cx);
         let panel = self.appearance_view(now, &mut moving, cx);
+        let settings_cover = self.appearance.as_ref().map_or(0., |open| open.at(now).clamp(0., 1.));
         self.viewport_width = f32::from(size.width);
         self.viewport_height = f32::from(size.height);
         self.dock_drawn = self.dock.at(now) * self.dock_width;
@@ -11762,17 +13594,42 @@ impl Render for Shell {
                 || self.menu.is_some()
                 || self.peek.is_some()
                 || self.project_menu.is_some()
-                || self.confirm.is_some(),
+                || self.confirm.is_some()
+                || self.viewer.visible(),
         );
         let composer_menu = self.composer_menu_view(now, &mut moving, cx);
         let usage_popup = self.usage_popup_view(now, &mut moving, cx);
+        let resources_popup = self.resources_popup_view(now, &mut moving, cx);
+        let context_popup = self.context_popup_view(now, &mut moving, cx);
         let project_menu = self.project_menu_view(now, &mut moving, cx);
         let filter_menu = self.filter_menu_view(now, &mut moving, cx);
         let context_menu = self.context_menu_view(now, &mut moving, cx);
+        let select_menu = self.select_menu_view(now, &mut moving, cx);
+        let handoff_popup = self.handoff_popup_view(now, &mut moving, cx);
+        let more_menu = self.more_menu_view(now, &mut moving, cx);
         let confirm_dialog = self.confirm_view(now, &mut moving, cx);
+        let term_plus_menu = self.term_plus_menu_view(now, &mut moving, cx);
+        let title_tab = self.title_tab_view();
+        let bottom_terminal = self.bottom_view();
+        let attachment_modal = self.attachment_view(now, &mut moving, cx);
         let trail_card = self.trail_card();
         let add_menu = self.add_menu_view(now, &mut moving, cx);
         let environment = self.environment_view(now, &mut moving, cx);
+        let incoming_card = {
+            let p = match &self.incoming.tween {
+                Some(tween) => {
+                    moving |= !tween.done(now);
+                    tween.at(now).clamp(0., 1.)
+                }
+                None => 1.,
+            };
+            git_sync::popover(
+                &self.incoming,
+                TITLE_BAR,
+                p,
+                cx.listener(|this, _, _, cx| this.incoming_pull(cx)),
+            )
+        };
         // Watches the pointer over the whole window, even above opaque panels.
         let view = cx.entity();
         let height = f32::from(size.height);
@@ -11836,6 +13693,7 @@ impl Render for Shell {
         let dock_width = dock_full * dock_share;
         let dock = (dock_share > 0.001).then(|| self.dock_view(dock_full, now, &mut moving, cx));
         let stats = self.stats(now);
+        moving |= self.send_moving.take();
         if moving {
             window.request_animation_frame();
         }
@@ -11854,7 +13712,10 @@ impl Render for Shell {
             .on_mouse_move(cx.listener(Self::mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
             .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
-                let closed = [this.menu.take().is_some(), this.environment.take().is_some(), this.composer_menu.take().is_some(), this.add_menu.take().is_some(), this.usage_popup.take().is_some(), this.close_project_menu(), this.session_filter.open.take().is_some(), this.context_menu.take().is_some()];
+                if this.select.clear_unless_claimed() {
+                    cx.notify();
+                }
+                let closed = [this.incoming.close(), this.menu.take().is_some(), this.environment.take().is_some(),this.composer_menu.take().is_some(), this.add_menu.take().is_some(), this.usage_popup.take().is_some(), this.resources.close(), this.context.close(), this.close_project_menu(), this.session_filter.open.take().is_some(), this.context_menu.take().is_some(), this.term.close_menu()];
                 this.goal_input = None;
                 if closed.contains(&true) {
                     cx.notify();
@@ -11866,6 +13727,8 @@ impl Render for Shell {
                     .flex()
                     .flex_col()
                     .bg(chrome_wash())
+                    .when(pane_fill().a < 0.5, |d| d.opacity(1. - settings_cover))
+                    .when(pane_fill().a < 0.5 && settings_cover >= 1., |d| d.invisible())
                     .child(titlebar)
                     .child(
                         div()
@@ -11893,18 +13756,21 @@ impl Render for Shell {
                                             .flex()
                                             .overflow_hidden()
                                             .child(card_corner_mask(true))
+                                            .children(chat_background)
                                             .child(
                                                 div()
                                                     .flex_1()
                                                     .min_w_0()
                                                     .h_full()
                                                     .flex()
+                                                    .flex_col()
                                                     .rounded(px(10.))
                                                     .border_1()
                                                     .border_color(content(0.08))
                                                     .bg(pane_fill())
                                                     .overflow_hidden()
-                                                    .child(transcript)
+                                                    .child(div().flex_1().min_h_0().w_full().flex()
+                                                    .child(title_tab.unwrap_or(transcript))
                                                     .when_some(dock, |d, dock| {
                                                         d.child(
                                                             div().id("dock-resize").relative().flex_shrink_0().h_full().w(px(1.)).bg(content(0.08)).opacity(dock_share)
@@ -11914,7 +13780,8 @@ impl Render for Shell {
                                                                 }))),
                                                         )
                                                             .child(div().flex_shrink_0().h_full().w(px(dock_width)).overflow_hidden().child(dock))
-                                                    }),
+                                                    }))
+                                                    .children(bottom_terminal),
                                             )
                                             .child(card_corner_mask(false)),
                                     ),
@@ -11923,6 +13790,7 @@ impl Render for Shell {
                     .child(footer),
             )
             .child(tracker)
+            .child(crate::panel_browser::frame_end())
             .child(input_area)
             // Behind a peeking sidebar the window goes out of focus, as in Monocode.
             .children(peek_blur.filter(|t| *t > 0.001).map(|t| {
@@ -11936,15 +13804,93 @@ impl Render for Shell {
             .children(project_menu)
             .children(filter_menu)
             .children(context_menu)
+            .children(select_menu)
+            .children(handoff_popup)
+            .children(more_menu)
             .children(trail_card)
+            .children(attachment_modal)
             .children(confirm_dialog)
+            .children(term_plus_menu)
             .children(menu)
             .children(composer_menu)
             .children(usage_popup)
+            .children(resources_popup)
+            .children(context_popup)
             .children(add_menu)
             .children(environment)
+            .children(incoming_card)
             .children(panel)
             .children(palette_view)
             .children(stats)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bulk_close_keeps_pinned_tabs_and_the_kept_one() {
+        // (id, pinned): tab 3 is kept, tabs 1 and 4 are pinned.
+        let tabs = [(1, true), (2, false), (3, false), (4, true), (5, false)];
+        assert_eq!(bulk_close_marks(&tabs, 3, |_, _| true), vec![2, 5]);
+        assert_eq!(bulk_close_marks(&tabs, 3, |ix, at| ix > at), vec![5]);
+        assert_eq!(bulk_close_marks(&tabs, 3, |ix, at| ix < at), vec![2]);
+    }
+
+    #[test]
+    fn bulk_close_marks_nothing_when_only_pinned_tabs_are_left() {
+        let tabs = [(1, true), (2, true)];
+        assert!(bulk_close_marks(&tabs, 1, |_, _| true).is_empty());
+    }
+
+    #[test]
+    fn a_tab_is_dashed_only_for_unsent_text() {
+        let mut drafts = HashMap::new();
+        drafts.insert(0, Draft { text: "hello".into(), ..Default::default() });
+        drafts.insert(1, Draft { text: " \n".into(), ..Default::default() });
+        assert!(tab_has_draft(&drafts, 0));
+        assert!(!tab_has_draft(&drafts, 1));
+        assert!(!tab_has_draft(&drafts, 2));
+    }
+
+    #[test]
+    fn draft_keys_are_sirus_codes_session_keys() {
+        assert_eq!(draft_key("abc"), "session:abc");
+    }
+
+    #[test]
+    fn a_saved_draft_is_restored_with_the_caret_at_its_end() {
+        let draft = restored_draft("olá");
+        assert_eq!((draft.text.as_str(), draft.cursor, draft.anchor), ("olá", "olá".len(), "olá".len()));
+    }
+
+    #[test]
+    fn restoring_fills_empty_composers_and_keeps_typed_text() {
+        let sessions = vec!["a".to_owned(), "b".to_owned(), String::new(), "c".to_owned()];
+        let saved = HashMap::from([
+            ("session:a".to_owned(), "from host".to_owned()),
+            ("session:b".to_owned(), "older".to_owned()),
+        ]);
+        let mut drafts = HashMap::new();
+        drafts.insert(1, Draft { text: "typed".into(), cursor: 5, anchor: 5 });
+        restore_drafts(&mut drafts, &sessions, &saved);
+        assert_eq!(drafts[&0].text, "from host");
+        assert_eq!(drafts[&0].cursor, "from host".len());
+        assert_eq!(drafts[&1].text, "typed");
+        assert!(!drafts.contains_key(&2));
+        assert!(!drafts.contains_key(&3));
+    }
+
+    #[test]
+    fn drafts_wait_until_the_composer_is_quiet() {
+        let edited = Instant::now();
+        assert_eq!(draft_save_delay(edited, edited), Some(DRAFT_SAVE_QUIET));
+        assert_eq!(
+            draft_save_delay(edited, edited + Duration::from_millis(150)),
+            Some(Duration::from_millis(250))
+        );
+        assert_eq!(draft_save_delay(edited, edited + DRAFT_SAVE_QUIET), None);
+        assert_eq!(draft_save_delay(edited, edited + Duration::from_secs(5)), None);
     }
 }

@@ -2,7 +2,7 @@
 //! bound to AppSettings keys or to backend commands (`loads` names what a page reads). The text is
 //! the Portuguese of `src/i18n`. Text fields (`Ctl::Field`) start editing through `edit`; the main
 //! app types into the edited text and, on Enter, calls `commit` and saves or runs what it returns.
-//! Pairing and folder choices are run as `native_pair` and `native_pick_folder`. GitHub accounts,
+//! The pairing popup (`settings_pair.rs`) and folder choices are run as `native_pair_*` and `native_pick_folder`. GitHub accounts,
 //! opening folders and the two-click confirmations run as the `native_*` commands of
 //! `native_actions`; the rest goes to the host as the backend commands the Tauri build uses
 //! (`connector_action`, `worktree_cleanup_action`, `delete_session`). Destructive buttons ask first
@@ -112,11 +112,6 @@ enum Ctl {
     },
     /// A sample line set in a font family and size, for the typography groups.
     Sample { family: &'static str, size: f32 },
-    /// A secret typed into a masked field: `label` starts it; while typing, only dots show.
-    Secret {
-        key: &'static str,
-        label: &'static str,
-    },
 }
 
 struct Row {
@@ -198,10 +193,10 @@ pub fn page<V: 'static>(
     cx: &mut Context<V>,
 ) -> AnyElement {
     let mut shown = build(page, settings, data);
-    if loads(page)
+    let loading = loads(page)
         .iter()
-        .any(|(key, _, _)| !data.contains_key(key))
-    {
+        .any(|(key, _, _)| !data.contains_key(key));
+    if loading {
         shown.groups = vec![note(t(LOADING))];
     }
     let mut ui = Ui {
@@ -216,6 +211,12 @@ pub fn page<V: 'static>(
         actions.push(control_view(ctl, &mut ui, cx));
     }
     let mut body = Vec::new();
+    if page == "Conectores" && !loading {
+        // Sirus's own layout: search, connected list, catalog cards and a dialog.
+        body.push(crate::settings_connectors::view(
+            settings, data, editing, save, edit, run, cx,
+        ));
+    }
     for group in shown.groups {
         body.push(group_view(group, &mut ui, cx));
     }
@@ -301,6 +302,12 @@ fn build(page: &str, s: &Value, d: &HashMap<&'static str, Value>) -> Page {
                 },
                 enabled: true,
                 danger: false,
+            },
+            Ctl::Button {
+                label: t("Verificar CLIs"),
+                act: act_run("cli_diagnostics", json!({})),
+                enabled: true,
+                danger: false,
             }],
             ..page_of(
                 t("Provedores"),
@@ -343,7 +350,7 @@ fn build(page: &str, s: &Value, d: &HashMap<&'static str, Value>) -> Page {
             t(
                 "Conecte Supabase, Linear, Notion e outros serviços uma vez; Claude, Codex, OpenCode e os outros agentes ACP passam a usá-los.",
             ),
-            connectors(s, d),
+            Vec::new(),
         ),
         "Computador" => {
             if get_data(d, "computer")["supported"].as_bool() == Some(false) {
@@ -741,49 +748,6 @@ fn control_view<V: 'static>(ctl: Ctl, ui: &mut Ui<'_, V>, cx: &mut Context<V>) -
             .text_color(content(0.6))
             .child(value)
             .into_any_element(),
-        Ctl::Secret { key, label } => {
-            let edit = ui.edit;
-            // Only the dots of the typed text show: the secret itself is never drawn.
-            let typing = ui
-                .editing
-                .and_then(|(known, typed)| (known == key).then(|| typed.chars().count()));
-            let id = next_id(&mut ui.ids);
-            match typing {
-                Some(count) => div()
-                    .id(("setting", id))
-                    .h(px(28.))
-                    .w(px(220.))
-                    .px(px(8.))
-                    .rounded(px(6.))
-                    .border_1()
-                    .border_color(accent())
-                    .flex()
-                    .items_center()
-                    .gap(px(1.))
-                    .text_size(px(12.5))
-                    .text_color(content(0.95))
-                    .overflow_hidden()
-                    .child("•".repeat(count))
-                    .child(div().w(px(1.5)).h(px(14.)).bg(accent()))
-                    .into_any_element(),
-                None => div()
-                    .id(("setting", id))
-                    .h(px(28.))
-                    .px(px(10.))
-                    .rounded(px(6.))
-                    .border_1()
-                    .border_color(content(0.12))
-                    .flex()
-                    .items_center()
-                    .text_size(px(12.5))
-                    .text_color(content(0.85))
-                    .cursor_pointer()
-                    .hover(|style| style.bg(content(0.08)))
-                    .on_click(cx.listener(move |this, _, _, cx| edit(this, key, String::new(), cx)))
-                    .child(label)
-                    .into_any_element(),
-            }
-        }
         Ctl::Sample { family, size } => div()
             .max_w(px(260.))
             .px(px(10.))
@@ -1073,8 +1037,33 @@ fn general(s: &Value) -> Vec<Group> {
         group(t("Organização da sidebar"), sidebar),
         group(t("Inicialização"), switches(s, startup_rows)),
         group(t("Aplicativo"), switches(s, application_rows)),
+        group(t("Terminal"), vec![terminal_placement_row()]),
         group(t("Painel Ambiente"), switches(s, environment_rows)),
     ]
+}
+
+/// Where the terminal opens. Kept in its own file, not in the host's settings, so it is a
+/// `native_terminal_placement` command rather than a saved key.
+fn terminal_placement_row() -> Row {
+    use crate::terminal_place::{Placement, current};
+    let now = current();
+    row(
+        t("Posição do terminal"),
+        t("Embaixo, no painel lateral ou como abas na barra de título. ⌘J abre um terminal e ⇧⌘J divide à direita."),
+        vec![Ctl::Pick(
+            Placement::ALL
+                .iter()
+                .map(|p| Opt {
+                    label: t(p.label()),
+                    chosen: *p == now,
+                    change: Act::Run {
+                        cmd: "native_terminal_placement",
+                        args: json!({ "placement": p.id() }),
+                    },
+                })
+                .collect(),
+        )],
+    )
 }
 
 fn chat(s: &Value) -> Vec<Group> {
@@ -2025,6 +2014,47 @@ t("Restaurar"),
 }
 
 /// The providers in the order of the registry, with their installs and the enable switch.
+/// Each installed CLI's path, version, test and login, with a button that copies them
+/// (cli_diagnostics.rs). The checks follow Verificar CLIs and the page's opening.
+fn diagnostics_rows(d: &HashMap<&'static str, Value>) -> Vec<Row> {
+    use crate::cli_diagnostics::{self, Probe};
+    let entries = cli_diagnostics::entries(
+        get_data(d, "agents"),
+        get_data(d, "cliProbes"),
+        get_data(d, "cliLogins"),
+    );
+    let rows: Vec<Row> = entries
+        .into_iter()
+        .filter(|(_, entry)| !matches!(entry.probe, Probe::Absent))
+        .map(|(_, entry)| {
+            let copy = cli_diagnostics::copy_text(&entry);
+            row(
+                entry.name.clone(),
+                entry
+                    .path
+                    .clone()
+                    .unwrap_or_else(|| t("Nenhum executável").to_owned()),
+                vec![
+                    Ctl::Read(entry.version.clone().unwrap_or_else(|| "—".to_owned())),
+                    Ctl::Read(cli_diagnostics::probe_text(&entry.probe)),
+                    Ctl::Read(cli_diagnostics::login_text(&entry.login)),
+                    Ctl::Button {
+                        label: t("Copiar"),
+                        act: act_run("native_copy", json!({ "text": copy })),
+                        enabled: true,
+                        danger: false,
+                    },
+                ],
+            )
+        })
+        .collect();
+    if rows.is_empty() {
+        vec![row("", t("Nenhuma CLI detectada ainda."), Vec::new())]
+    } else {
+        rows
+    }
+}
+
 fn providers(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
     let agents = get_data(d, "agents");
     let install = |id: &str| {
@@ -2120,6 +2150,7 @@ fn providers(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
 
     vec![
         group("CLIs", clis),
+        group(t("Diagnóstico das CLIs"), diagnostics_rows(d)),
         group(t("Consumo na barra lateral"), usage),
         group(
             t("Avançado"),
@@ -2293,440 +2324,6 @@ fn skills(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
             .collect();
         out.push(group(section_title(&key), rows));
     }
-    out
-}
-
-/// The catalog as `src/lib/connectors-catalog.ts` lists it: (id, name, category, description, url,
-/// auth). Each service's official remote MCP server; GitHub signs in with a token, Context7 is open.
-const CATALOG: &[(&str, &str, &str, &str, &str, &str)] = &[
-    (
-        "supabase",
-        "Supabase",
-        "popular",
-        "Consultar Postgres, gerenciar projetos, funções e storage",
-        "https://mcp.supabase.com/mcp",
-        "oauth",
-    ),
-    (
-        "linear",
-        "Linear",
-        "popular",
-        "Encontrar, criar e atualizar issues e projetos",
-        "https://mcp.linear.app/mcp",
-        "oauth",
-    ),
-    (
-        "notion",
-        "Notion",
-        "popular",
-        "Buscar, ler e editar páginas e bancos",
-        "https://mcp.notion.com/mcp",
-        "oauth",
-    ),
-    (
-        "github",
-        "GitHub",
-        "popular",
-        "Issues, pull requests e repositórios (token)",
-        "https://api.githubcopilot.com/mcp/",
-        "token",
-    ),
-    (
-        "stripe",
-        "Stripe",
-        "popular",
-        "Clientes, pagamentos e assinaturas",
-        "https://mcp.stripe.com",
-        "oauth",
-    ),
-    (
-        "vercel",
-        "Vercel",
-        "popular",
-        "Projetos, deploys e logs",
-        "https://mcp.vercel.com",
-        "oauth",
-    ),
-    (
-        "sentry",
-        "Sentry",
-        "popular",
-        "Investigar erros, issues e traces",
-        "https://mcp.sentry.dev/mcp",
-        "oauth",
-    ),
-    (
-        "cloudflare",
-        "Cloudflare",
-        "developer",
-        "Workers, KV, R2 e D1",
-        "https://mcp.cloudflare.com/mcp",
-        "oauth",
-    ),
-    (
-        "neon",
-        "Neon",
-        "developer",
-        "Projetos e branches de Postgres serverless",
-        "https://mcp.neon.tech/mcp",
-        "oauth",
-    ),
-    (
-        "posthog",
-        "PostHog",
-        "developer",
-        "Analytics de produto, flags e erros",
-        "https://mcp.posthog.com/mcp",
-        "oauth",
-    ),
-    (
-        "netlify",
-        "Netlify",
-        "developer",
-        "Criar, publicar e gerenciar sites",
-        "https://netlify-mcp.netlify.app/mcp",
-        "oauth",
-    ),
-    (
-        "railway",
-        "Railway",
-        "developer",
-        "Fazer deploy e gerenciar serviços",
-        "https://mcp.railway.com",
-        "oauth",
-    ),
-    (
-        "prisma",
-        "Prisma",
-        "developer",
-        "Bancos Prisma Postgres",
-        "https://mcp.prisma.io/mcp",
-        "oauth",
-    ),
-    (
-        "figma",
-        "Figma",
-        "developer",
-        "Designs, componentes e variáveis",
-        "https://mcp.figma.com/mcp",
-        "oauth",
-    ),
-    (
-        "huggingface",
-        "Hugging Face",
-        "developer",
-        "Modelos, datasets e Spaces",
-        "https://huggingface.co/mcp",
-        "oauth",
-    ),
-    (
-        "context7",
-        "Context7",
-        "developer",
-        "Documentação atualizada de bibliotecas",
-        "https://mcp.context7.com/mcp",
-        "none",
-    ),
-    (
-        "atlassian",
-        "Atlassian",
-        "productivity",
-        "Issues do Jira e páginas do Confluence",
-        "https://mcp.atlassian.com/v1/mcp",
-        "oauth",
-    ),
-    (
-        "asana",
-        "Asana",
-        "productivity",
-        "Tarefas, projetos e metas",
-        "https://mcp.asana.com/mcp",
-        "oauth",
-    ),
-    (
-        "todoist",
-        "Todoist",
-        "productivity",
-        "Encontrar, adicionar e concluir tarefas",
-        "https://ai.todoist.net/mcp",
-        "oauth",
-    ),
-    (
-        "monday",
-        "monday.com",
-        "productivity",
-        "Quadros, itens e atualizações",
-        "https://mcp.monday.com/mcp",
-        "oauth",
-    ),
-    (
-        "canva",
-        "Canva",
-        "productivity",
-        "Designs e materiais da marca",
-        "https://mcp.canva.com/mcp",
-        "oauth",
-    ),
-    (
-        "intercom",
-        "Intercom",
-        "productivity",
-        "Conversas e contatos",
-        "https://mcp.intercom.com/mcp",
-        "oauth",
-    ),
-    (
-        "webflow",
-        "Webflow",
-        "productivity",
-        "Sites, páginas e CMS",
-        "https://mcp.webflow.com/mcp",
-        "oauth",
-    ),
-    (
-        "wix",
-        "Wix",
-        "productivity",
-        "Sites, lojas e agendamentos",
-        "https://mcp.wix.com/mcp",
-        "oauth",
-    ),
-    (
-        "paypal",
-        "PayPal",
-        "productivity",
-        "Faturas, pedidos e pagamentos",
-        "https://mcp.paypal.com/mcp",
-        "oauth",
-    ),
-    (
-        "square",
-        "Square",
-        "productivity",
-        "Pagamentos, catálogo e pedidos",
-        "https://mcp.squareup.com/mcp",
-        "oauth",
-    ),
-];
-
-/// The agents that take connectors (`CONNECTOR_AGENTS` in `src/lib/connectors.ts`).
-const CONNECTOR_AGENTS: &[&str] = &["claude", "codex", "opencode", "cursor", "devin", "hermes"];
-
-/// The catalog's category sections, in order.
-const CONNECTOR_GROUPS: &[(&str, &str)] = &[
-    ("popular", "Populares"),
-    ("developer", "Ferramentas de desenvolvimento"),
-    ("productivity", "Produtividade"),
-];
-
-fn catalog_desc(id: &str) -> Option<&'static str> {
-    CATALOG
-        .iter()
-        .find(|entry| entry.0 == id)
-        .map(|entry| entry.3)
-}
-
-/// The host of a connector's address, without its path or query (which can hold secrets).
-fn host_of(url: &str) -> String {
-    url.split("://")
-        .last()
-        .unwrap_or(url)
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or_default()
-        .to_string()
-}
-
-/// The agents a new connector is given: the installed ones that take connectors, else Claude.
-fn connector_agents(d: &HashMap<&'static str, Value>) -> Vec<String> {
-    let installed: Vec<String> = get_data(d, "agents")
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|agent| yes(&agent["installed"]))
-        .filter_map(|agent| agent["id"].as_str())
-        .filter(|id| CONNECTOR_AGENTS.contains(id))
-        .map(str::to_string)
-        .collect();
-    if installed.is_empty() {
-        vec!["claude".to_string()]
-    } else {
-        installed
-    }
-}
-
-/// The saved connectors with `connector` appended.
-fn connectors_with(list: &[Value], connector: Value) -> Value {
-    let mut next = list.to_vec();
-    next.push(connector);
-    Value::Array(next)
-}
-
-fn connectors(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
-    let list = s["connectors"].as_array().cloned().unwrap_or_default();
-    let states = get_data(d, "connectors");
-    // The sign-in opens the browser through the desktop app; a headless host cannot do it.
-    let browser = get_data(d, "host")["capabilities"]["headless"].as_bool() == Some(false);
-    let mut out = Vec::new();
-    if !list.is_empty() {
-        let mut rows = Vec::new();
-        for (index, connector) in list.iter().enumerate() {
-            let id = connector["id"].as_str().unwrap_or_default();
-            let enabled = connector["enabled"].as_bool().unwrap_or(true);
-            let auth = connector["auth"].as_str().unwrap_or("oauth");
-            let detail = connector["catalogId"]
-                .as_str()
-                .and_then(catalog_desc)
-                .map_or_else(
-                    || host_of(connector["url"].as_str().unwrap_or_default()),
-                    |desc| t(desc).to_string(),
-                );
-            let project = connector["projectId"].as_str().map_or_else(
-                || t("Todos os projetos").to_string(),
-                |project| {
-                    tf(
-                        "Projeto {}",
-                        &[&project.chars().take(8).collect::<String>()],
-                    )
-                },
-            );
-            let state = states
-                .as_array()
-                .and_then(|items| items.iter().find(|item| item["id"].as_str() == Some(id)))
-                .and_then(|item| item["state"].as_str())
-                .unwrap_or_default();
-            let connected = state == "connected";
-            let mut controls = Vec::new();
-            match auth {
-                "token" => {
-                    if connected {
-                        controls.push(Ctl::Read(t("Conectado").to_string()));
-                    }
-                    // The token is typed into a masked field and sent with `setToken`; it is never shown.
-                    controls.push(Ctl::Secret {
-                        key: key_of(format!("connector-token:{id}")),
-                        label: if connected {
-                            t("Trocar token")
-                        } else {
-                            t("Colar token")
-                        },
-                    });
-                }
-                "none" => controls.push(Ctl::Read(t("Pronto").to_string())),
-                _ => match state {
-                    "connected" => controls.push(Ctl::Read(t("Conectado").to_string())),
-                    "expired" | "signedOut" if browser => controls.push(Ctl::Button {
-                        label: if state == "expired" {
-                            t("Entrar de novo")
-                        } else {
-                            t("Entrar")
-                        },
-                        act: act_run(
-                            "connector_action",
-                            json!({"action": {"type": "signIn", "id": id}}),
-                        ),
-                        enabled: true,
-                        danger: false,
-                    }),
-                    "expired" | "signedOut" => controls.push(Ctl::Read(
-                        t("Entrar só pelo app Mac: o login abre o navegador.").to_string(),
-                    )),
-                    _ => {}
-                },
-            }
-            if connected {
-                controls.push(Ctl::Button {
-                    label: t("Sair"),
-                    act: act_run(
-                        "connector_action",
-                        json!({"action": {"type": "signOut", "id": id}}),
-                    ),
-                    enabled: true,
-                    danger: false,
-                });
-            }
-            controls.push(Ctl::Field {
-                key: key_of(format!("connector-name:{index}")),
-                text: connector["name"].as_str().unwrap_or_default().to_string(),
-                width: 150.,
-                button: None,
-            });
-            if connector["catalogId"].is_null() {
-                controls.push(Ctl::Field {
-                    key: key_of(format!("connector-url:{index}")),
-                    text: connector["url"].as_str().unwrap_or_default().to_string(),
-                    width: 220.,
-                    button: None,
-                });
-            }
-            let mut without_it = list.clone();
-            without_it.remove(index);
-            controls.push(confirm_button(
-                t("Remover"),
-                Act::Save {
-                    key: "connectors",
-                    value: Value::Array(without_it),
-                },
-            ));
-            let mut next = list.clone();
-            next[index]["enabled"] = json!(!enabled);
-            controls.push(Ctl::Switch {
-                on: enabled,
-                change: Some(Act::Save {
-                    key: "connectors",
-                    value: Value::Array(next),
-                }),
-            });
-            rows.push(row(
-                connector["name"].as_str().unwrap_or_default(),
-                format!("{detail} · {project}"),
-                controls,
-            ));
-        }
-        out.push(group(t("Conectados"), rows));
-    }
-    for (category, title) in CONNECTOR_GROUPS {
-        let rows: Vec<Row> = CATALOG
-            .iter()
-            .filter(|entry| entry.2 == *category)
-            .map(|&(id, name, _, desc, url, auth)| {
-                let added = list
-                    .iter()
-                    .any(|connector| connector["catalogId"].as_str() == Some(id));
-                let control = if added {
-                    Ctl::Read(t("Adicionado").to_string())
-                } else {
-                    // Saved as the Tauri page saves it; the sign-in is then started from the row.
-                    let value = connectors_with(
-                        &list,
-                        json!({
-                            "id": id,
-                            "catalogId": id,
-                            "name": name,
-                            "url": url,
-                            "auth": auth,
-                            "agents": connector_agents(d),
-                            "enabled": true,
-                        }),
-                    );
-                    Ctl::Button {
-                        label: t("Conectar"),
-                        act: Act::Save {
-                            key: "connectors",
-                            value,
-                        },
-                        enabled: true,
-                        danger: false,
-                    }
-                };
-                row(name, t(desc), vec![control])
-            })
-            .collect();
-        out.push(group(t(title), rows));
-    }
-    out.push(note(
-        t("Conversas novas recebem os conectores daqui. Os conectores de um projeto só chegam às conversas dele. Grok, Antigravity, Droid e Pi ainda não aceitam conectores."),
-    ));
     out
 }
 
@@ -2991,7 +2588,15 @@ fn connections(d: &HashMap<&'static str, Value>) -> Vec<Group> {
             Some(url) => access.push(row(
                 t("Endereço"),
                 t("Onde seus aparelhos encontram este Mac na Tailscale."),
-                vec![Ctl::Read(url.to_string())],
+                vec![
+                    Ctl::Read(url.to_string()),
+                    Ctl::Button {
+                        label: t("Copiar endereço"),
+                        act: act_run("native_copy", json!({"text": url})),
+                        enabled: true,
+                        danger: false,
+                    },
+                ],
             )),
             None => access.push(row(
                 t("A Tailscale não está conectada"),
@@ -3009,12 +2614,15 @@ fn connections(d: &HashMap<&'static str, Value>) -> Vec<Group> {
                 row(
                     t("Endereço seguro (HTTPS)"),
                     t("Ligado. Os novos QR codes abrem o endereço seguro; aparelhos pareados antes precisam de um novo código por lá."),
-                    vec![Ctl::Button {
-                        label: t("Desativar"),
-                        act: remote_act(json!({"type": "disableHttps"})),
-                        enabled: true,
-                        danger: true,
-                    }],
+                    vec![
+                        Ctl::Read(https_url.unwrap_or_default().to_string()),
+                        Ctl::Button {
+                            label: t("Desativar"),
+                            act: remote_act(json!({"type": "disableHttps"})),
+                            enabled: true,
+                            danger: true,
+                        },
+                    ],
                 )
             } else {
                 row(
@@ -3051,40 +2659,30 @@ fn connections(d: &HashMap<&'static str, Value>) -> Vec<Group> {
         }
     }
     let mut out = vec![group(t("Acesso remoto"), access)];
-    let error = r["error"]
+    let error = get_data(d, "remote_error")
         .as_str()
+        .or_else(|| r["error"].as_str())
         .or_else(|| https["error"].as_str().filter(|_| https_setup.is_none()));
     if let Some(text) = error {
         out.push(note(text));
     }
 
     if enabled && address.is_some() {
-        let pairing = get_data(d, "pairing");
-        let mut rows = vec![row(
-            t("Celular ou outro computador"),
-            t(
-                "Mostra um código de uso único para conectar o app do Sirus no iPhone ou um navegador da sua Tailscale.",
-            ),
-            vec![Ctl::Button {
-                label: t("Gerar código"),
-                act: act_run("native_pair", json!({})),
-                enabled: true,
-                danger: false,
-            }],
-        )];
-        if let (Some(code), Some(link)) = (pairing["code"].as_str(), pairing["qr"].as_str()) {
-            rows.push(row(
-                t("Código"),
-                t("Digite no navegador da Tailscale ou no app do Sirus. Ele vale por pouco tempo."),
-                vec![Ctl::Read(spaced_code(code))],
-            ));
-            rows.push(row(
-                t("Endereço do QR code"),
-                t("O QR code do app aponta para este endereço."),
-                vec![Ctl::Read(link.to_string())],
-            ));
-        }
-        out.push(group(t("Conectar um aparelho"), rows));
+        out.push(group(
+            t("Conectar um aparelho"),
+            vec![row(
+                t("Celular ou outro computador"),
+                t(
+                    "Mostra um código de uso único para conectar o app do Sirus no iPhone ou um navegador da sua Tailscale.",
+                ),
+                vec![Ctl::Button {
+                    label: t("Conectar um aparelho"),
+                    act: act_run("native_pair_open", json!({})),
+                    enabled: true,
+                    danger: false,
+                }],
+            )],
+        ));
     }
 
     let devices = r["devices"].as_array().cloned().unwrap_or_default();
@@ -3162,15 +2760,6 @@ fn key_of(text: String) -> &'static str {
     leaked
 }
 
-/// A six-digit pairing code written as "123 456".
-fn spaced_code(code: &str) -> String {
-    if code.len() == 6 {
-        format!("{} {}", &code[..3], &code[3..])
-    } else {
-        code.to_string()
-    }
-}
-
 /// The change a finished text edit makes, from the key `edit` started and the text typed. None
 /// when the text is not a value that key takes (the main app keeps the field open then).
 pub fn commit(settings: &Value, key: &str, text: &str) -> Option<Commit> {
@@ -3191,32 +2780,12 @@ pub fn commit(settings: &Value, key: &str, text: &str) -> Option<Commit> {
             value: Value::Object(paths),
         });
     }
-    // A pasted token goes to the host with `setToken`; it is not saved in the settings.
-    if let Some(id) = key.strip_prefix("connector-token:") {
-        if text.is_empty() {
-            return None;
-        }
-        return Some(Commit::Run {
-            cmd: "connector_action",
-            args: json!({"action": {"type": "setToken", "id": id, "token": text}}),
-        });
+    // The Connectors page keeps its own search, dialog fields and rename in its module.
+    if crate::settings_connectors::commit(key, text) {
+        return None;
     }
-    if let Some(rest) = key.strip_prefix("connector-") {
-        let (field, index) = rest.split_once(':')?;
-        let field = match field {
-            "name" => "name",
-            "url" => "url",
-            _ => return None,
-        };
-        if text.is_empty() {
-            return None;
-        }
-        let mut list = settings["connectors"].as_array().cloned()?;
-        list.get_mut(index.parse::<usize>().ok()?)?[field] = json!(text);
-        return Some(Commit::Save {
-            key: "connectors",
-            value: Value::Array(list),
-        });
+    if crate::settings_pair::commit(key, text) {
+        return None;
     }
     if let Some(device) = key.strip_prefix("device-rename:") {
         if text.is_empty() {

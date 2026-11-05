@@ -132,9 +132,10 @@ pub enum Enable {
     Failed(String),
 }
 
-pub async fn enable(port: u16) -> Enable {
+pub async fn enable(port: u16, https_port: u16) -> Enable {
     let target = format!("http://127.0.0.1:{port}");
-    let Some((ok, text)) = run_until(&["serve", "--bg", "--https=443", &target], SERVE, |text| {
+    let flag = format!("--https={https_port}");
+    let Some((ok, text)) = run_until(&["serve", "--bg", &flag, &target], SERVE, |text| {
         setup_url(text).is_some()
     })
     .await
@@ -158,8 +159,8 @@ pub async fn enable(port: u16) -> Enable {
     )
 }
 
-pub async fn disable() {
-    let _ = run(&["serve", "--https=443", "off"], QUICK).await;
+pub async fn disable(https_port: u16) {
+    let _ = run(&["serve", &format!("--https={https_port}"), "off"], QUICK).await;
 }
 
 /// The first Tailscale admin link in the CLI's message.

@@ -9,7 +9,8 @@
 //! debounced and ranked off the UI thread (project_files.rs). Source view colors come from
 //! tree-sitter, parsed once per file in the background (syntax.rs).
 use crate::file_icons::{file_icon, folder_icon};
-use crate::i18n::t;
+use crate::file_editor::{Editor, EditorEvent, MAX_EDITABLE_BYTES};
+use crate::i18n::{t, tf};
 use crate::markdown;
 use crate::motion::{Curve, DISCLOSE, eased};
 use crate::panels::PanelContext;
@@ -117,6 +118,10 @@ struct Text {
     colors: Colors,
     preview: ListState,
     source: ListState,
+    /// The Source view's editor. None for a file over MAX_EDITABLE_BYTES, which stays read-only.
+    editor: Option<Entity<Editor>>,
+    /// The editor's events: a save, or a change that the tab's dot must show.
+    _events: Option<Subscription>,
 }
 
 /// One open file: a tab. It keeps its mode and scroll position while another tab is on screen.
@@ -258,7 +263,7 @@ impl FilesPanel {
             let _ = this.update(cx, |this, cx| {
                 let viewer = match reply {
                     Ok(value) if value["binary"].as_bool().unwrap_or(false) => Viewer::Binary,
-                    Ok(value) => text_viewer(value["content"].as_str().unwrap_or(""), cx),
+                    Ok(value) => text_viewer(&path, value["content"].as_str().unwrap_or(""), cx),
                     Err(error) => Viewer::Failed(error),
                 };
                 if let Some(tab) = this.tabs.iter_mut().find(|tab| tab.path == path) {
@@ -301,6 +306,84 @@ impl FilesPanel {
         }
     }
 
+    fn editor_of(&self, path: &str) -> Option<Entity<Editor>> {
+        match &self.tabs.iter().find(|tab| tab.path == path)?.viewer {
+            Viewer::Text(text) => text.editor.clone(),
+            _ => None,
+        }
+    }
+
+    fn tab_modified(&self, ix: usize, cx: &App) -> bool {
+        match self.tabs.get(ix).map(|tab| &tab.viewer) {
+            Some(Viewer::Text(text)) => text
+                .editor
+                .as_ref()
+                .is_some_and(|editor| editor.read(cx).is_modified()),
+            _ => false,
+        }
+    }
+
+    /// The tab's ×. A file with unsaved changes asks first, in the shell's popup; the others close.
+    fn request_close(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.tab_modified(ix, cx) {
+            self.close_tab(ix, cx);
+            return;
+        }
+        let Some(tab) = self.tabs.get(ix) else {
+            return;
+        };
+        let path = tab.path.clone();
+        let name = tab.name.clone();
+        let panel = cx.entity();
+        if let Some(Some(shell)) = window.root::<crate::shell::Shell>() {
+            shell.update(cx, |shell, cx| {
+                shell.confirm(
+                    t("Descartar alterações?").to_owned(),
+                    tf(
+                        "\"{}\" tem alterações não salvas. Fechar a aba descarta essas alterações.",
+                        &[&name],
+                    ),
+                    t("Descartar"),
+                    move |cx: &mut App| {
+                        let _ = panel.update(cx, |this, cx| this.close_path(&path, cx));
+                    },
+                    cx,
+                )
+            });
+        }
+    }
+
+    fn close_path(&mut self, path: &str, cx: &mut Context<Self>) {
+        if let Some(ix) = self.tabs.iter().position(|tab| tab.path == path) {
+            self.close_tab(ix, cx);
+        }
+    }
+
+    /// ⌘S: writes the file's text through the host, then marks what was written as saved. The
+    /// file is not checked against the disk first: a change made outside the editor is overwritten,
+    /// as the desktop app's editor does.
+    fn save(&mut self, path: String, cx: &mut Context<Self>) {
+        let Some(editor) = self.editor_of(&path) else {
+            return;
+        };
+        if !editor.read(cx).is_modified() {
+            return;
+        }
+        let (content, revision) = editor.read(cx).snapshot();
+        let rx = self.backend.request(
+            "write_text_file",
+            json!({ "sessionId": self.session_id, "path": path, "content": content }),
+        );
+        cx.spawn(async move |_, cx| {
+            let reply = settle(rx).await;
+            let _ = editor.update(cx, |editor, cx| match reply {
+                Ok(_) => editor.mark_saved(revision, cx),
+                Err(error) => editor.set_error(Some(error), cx),
+            });
+        })
+        .detach();
+    }
+
     /// The `+` of the tab strip: back to the tree, with the search ready to pick another file.
     fn add_tab(&mut self, cx: &mut Context<Self>) {
         self.active = None;
@@ -337,7 +420,8 @@ impl FilesPanel {
         let Viewer::Text(text) = &mut tab.viewer else {
             return;
         };
-        if !matches!(text.colors, Colors::Idle) {
+        // The editor parses its own colors and keeps them up to date.
+        if text.editor.is_some() || !matches!(text.colors, Colors::Idle) {
             return;
         }
         if !syntax::supports(&name) {
@@ -896,10 +980,11 @@ impl FilesPanel {
                     .hover(|s| s.bg(content(0.1)))
                     .child(theme::icon("close", 12.))
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(cx.listener(move |this, _, _, cx| {
+                    .on_click(cx.listener(move |this, _, window, cx| {
                         cx.stop_propagation();
-                        this.close_tab(ix, cx);
+                        this.request_close(ix, window, cx);
                     }));
+                let modified = self.tab_modified(ix, cx);
                 let plate = div()
                     .id(("file-tab-button", ix))
                     .relative()
@@ -922,6 +1007,15 @@ impl FilesPanel {
                         file_icon(&tab.name, false, 12.),
                     ))
                     .child(div().flex_1().min_w_0().truncate().child(tab.name.clone()))
+                    .when(modified, |d| {
+                        d.child(
+                            div()
+                                .flex_shrink_0()
+                                .size(px(6.))
+                                .rounded_full()
+                                .bg(content(0.6)),
+                        )
+                    })
                     .child(close)
                     .on_click(cx.listener(move |this, _, _, cx| this.select_tab(ix, cx)));
                 div()
@@ -1244,7 +1338,7 @@ fn marks(text: &str, positions: &[usize], offset: usize) -> Vec<(Range<usize>, H
 
 // ---- The file view -------------------------------------------------------------------------
 
-fn text_viewer(text: &str, cx: &mut Context<FilesPanel>) -> Viewer {
+fn text_viewer(path: &str, text: &str, cx: &mut Context<FilesPanel>) -> Viewer {
     let lines: Vec<String> = text.lines().map(str::to_owned).collect();
     let preview = ListState::new(1, ListAlignment::Top, px(240.));
     let source = ListState::new(lines.len(), ListAlignment::Top, px(480.));
@@ -1254,12 +1348,29 @@ fn text_viewer(text: &str, cx: &mut Context<FilesPanel>) -> Viewer {
             let _ = weak.update(cx, |_, cx| cx.notify());
         });
     }
+    let (editor, events) = if text.len() <= MAX_EDITABLE_BYTES {
+        let name = path.rsplit('/').next().unwrap_or(path).to_owned();
+        let editor = cx.new(|cx| Editor::new(&name, text.to_owned(), cx));
+        let path = path.to_owned();
+        let events = cx.subscribe(
+            &editor,
+            move |this: &mut FilesPanel, _, event: &EditorEvent, cx| match event {
+                EditorEvent::Save => this.save(path.clone(), cx),
+                EditorEvent::Changed => cx.notify(),
+            },
+        );
+        (Some(editor), Some(events))
+    } else {
+        (None, None)
+    };
     Viewer::Text(Text {
         content: Arc::from(text),
         lines: Rc::new(lines),
         colors: Colors::Idle,
         preview,
         source,
+        editor,
+        _events: events,
     })
 }
 
@@ -1279,6 +1390,15 @@ impl FilesPanel {
             }
             Viewer::Text(text) => text,
         };
+        if opened.mode == Mode::Source {
+            if let Some(editor) = &text.editor {
+                return div()
+                    .flex_1()
+                    .min_h_0()
+                    .child(editor.clone())
+                    .into_any_element();
+            }
+        }
         let (state, view) = match opened.mode {
             Mode::Preview => {
                 let markdown = text.content.clone();
@@ -1344,14 +1464,15 @@ impl FilesPanel {
             .right_0()
             .h(px(18.))
             .bg(pane_fade());
-        let mut body = div()
-            .relative()
-            .flex_1()
-            .min_h_0()
-            .flex()
-            .flex_col()
-            .child(view.flex_1().min_h_0())
-            .child(fade);
+        let mut body = div().relative().flex_1().min_h_0().flex().flex_col();
+        if opened.mode == Mode::Source && text.content.len() > MAX_EDITABLE_BYTES {
+            body = body.child(note(
+                t("Arquivo grande demais para editar: somente leitura."),
+                0,
+                false,
+            ));
+        }
+        let mut body = body.child(view.flex_1().min_h_0()).child(fade);
         if at_end == Some(false) {
             body = body.child(to_end);
         }
@@ -1390,7 +1511,7 @@ fn pane_fade() -> Background {
 /// One line of the source view: its number in a gutter, then the text, which wraps under the
 /// gutter's top so the number stays on the line's first row. `spans` are its syntax colors, once
 /// parsed.
-fn source_line(index: usize, text: &str, spans: Option<&LineSpans>) -> gpui::Div {
+pub(crate) fn source_line(index: usize, text: &str, spans: Option<&LineSpans>) -> gpui::Div {
     let shown = if text.is_empty() {
         " ".to_owned()
     } else {
@@ -1438,7 +1559,7 @@ fn source_line(index: usize, text: &str, spans: Option<&LineSpans>) -> gpui::Div
 }
 
 /// Monocode's `--syntax-*` colors (src/styles/index.css), dark and light.
-fn group_color(group: Group) -> Hsla {
+pub(crate) fn group_color(group: Group) -> Hsla {
     let (dark, light) = match group {
         Group::Keyword => (0x569cd6, 0x0000ff),
         Group::Callable => (0xdcdcaa, 0x795e26),
@@ -1473,6 +1594,8 @@ pub struct TextField {
     placeholder: &'static str,
     focus: FocusHandle,
     focus_pending: bool,
+    /// Shows bullets instead of the text and never copies it (a password).
+    masked: bool,
 }
 
 impl EventEmitter<TextFieldEvent> for TextField {}
@@ -1487,6 +1610,26 @@ impl TextField {
             placeholder,
             focus: cx.focus_handle(),
             focus_pending: false,
+            masked: false,
+        }
+    }
+
+    /// The field's focus handle, to tell whether it is being typed in.
+    pub fn focus_handle(&self) -> &FocusHandle {
+        &self.focus
+    }
+
+    /// A password field: bullets on screen, nothing copied out.
+    pub fn set_masked(&mut self, masked: bool) {
+        self.masked = masked;
+    }
+
+    /// What is drawn for a part of the text.
+    fn shown(&self, range: Range<usize>) -> String {
+        if self.masked {
+            "•".repeat(self.text[range].chars().count())
+        } else {
+            self.text[range].to_owned()
         }
     }
 
@@ -1578,13 +1721,19 @@ impl TextField {
                 self.anchor = 0;
                 self.cursor = self.text.len();
             }
-            "c" if command => cx.write_to_clipboard(gpui::ClipboardItem::new_string(
-                self.text[sel.clone()].to_owned(),
-            )),
+            "c" if command => {
+                if !self.masked {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                        self.text[sel.clone()].to_owned(),
+                    ))
+                }
+            }
             "x" if command => {
-                cx.write_to_clipboard(gpui::ClipboardItem::new_string(
-                    self.text[sel.clone()].to_owned(),
-                ));
+                if !self.masked {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                        self.text[sel.clone()].to_owned(),
+                    ));
+                }
                 self.insert("");
             }
             "v" if command => {
@@ -1626,7 +1775,7 @@ impl Render for TextField {
             div()
                 .flex()
                 .items_center()
-                .child(segment(&self.text[..sel.start]))
+                .child(segment(&self.shown(0..sel.start)))
                 .child(if sel.is_empty() {
                     div()
                         .w(px(1.))
@@ -1639,11 +1788,11 @@ impl Render for TextField {
                         })
                         .into_any_element()
                 } else {
-                    segment(&self.text[sel.clone()])
-                        .bg(theme::accent_wash(0.35))
+                    segment(&self.shown(sel.clone()))
+                        .bg(theme::text_selection())
                         .into_any_element()
                 })
-                .child(segment(&self.text[sel.end..]))
+                .child(segment(&self.shown(sel.end..self.text.len())))
                 .into_any_element()
         };
         let entity = cx.entity();
@@ -1685,11 +1834,11 @@ impl Render for TextField {
     }
 }
 
-fn utf16_len(s: &str) -> usize {
+pub(crate) fn utf16_len(s: &str) -> usize {
     s.encode_utf16().count()
 }
 
-fn byte_at(text: &str, utf16: usize) -> usize {
+pub(crate) fn byte_at(text: &str, utf16: usize) -> usize {
     let mut units = 0;
     for (byte, c) in text.char_indices() {
         if units >= utf16 {

@@ -3598,6 +3598,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "qrcode"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
+
+[[package]]
 name = "quick-error"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4290,22 +4296,28 @@ version = "0.0.1"
 dependencies = [
  "alacritty_terminal",
  "async-channel",
+ "base64",
  "block2 0.6.2",
  "chrono",
  "gpui-pre",
  "gpui-pre-apple",
  "gpui-pre-platform",
+ "image",
  "libc",
+ "miniz_oxide",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
  "objc2-web-kit",
  "pulldown-cmark",
+ "qrcode",
  "raw-window-handle",
+ "roxmltree 0.21.1",
  "rquickjs",
  "serde",
  "serde_json",
  "similar",
+ "smallvec",
  "tree-sitter-bash",
  "tree-sitter-css",
  "tree-sitter-go",

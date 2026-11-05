@@ -386,7 +386,10 @@ fn prompt_error(value: &Value) -> Error {
         && value["error"]["data"]["service"] == "session"
         && value["error"]["data"]["errorName"] == "APIError"
     {
-        Error::agent(format!("OpenCode provider API request failed (APIError){}; check the provider CLI and model availability",rpc_code(value)))
+        Error::agent(format!(
+            "OpenCode provider API request failed (APIError){}; check the provider CLI and model availability",
+            rpc_code(value)
+        ))
     } else {
         Error::agent(format!(
             "OpenCode prompt failed{}; see CLI diagnostics",
@@ -1162,6 +1165,7 @@ send({'method':'session/update','params':{'sessionId':'native','update':{'sessio
                 | Event::Activity(_)
                 | Event::Model(_)
                 | Event::Context(_)
+                | Event::Compacted(_)
                 | Event::UsageLimit(_)
                 | Event::Feed(_) => {}
             }

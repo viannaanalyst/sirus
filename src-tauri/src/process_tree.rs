@@ -3,9 +3,11 @@
 //! Each agent CLI runs in its own process group, and stopping it signals that
 //! group. Some descendants leave the group (Claude background shells, MCP
 //! servers and daemons that call `setsid`), so they would outlive Stop and Quit.
-//! `stop_tree` snapshots the descendants of the agent first, kills its group as
-//! before, sends SIGTERM to every escaped descendant and SIGKILLs the survivors
-//! after a short grace. Only processes that descend from the agent are touched.
+//! `stop_tree` snapshots the descendants of the agent first and sends SIGTERM to
+//! the leader and to every escaped descendant. The leader's owner kills the group
+//! when the leader exits; whatever is left after a short grace gets SIGKILL. A CLI
+//! may be saving a rotated OAuth token when it is stopped, and killing it there
+//! signs the account out (ADR-165). Only processes that descend from the agent are touched.
 //!
 //! Agent CLIs start at a lower priority from `process_priority` (ADR-143), set before
 //! exec so nothing they start escapes it.
@@ -13,6 +15,10 @@
 /// Time escaped descendants get to exit after SIGTERM.
 #[cfg(unix)]
 const GRACE: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// Time a stopped agent gets to shut down after SIGTERM before its group is killed.
+#[cfg(unix)]
+pub const LEADER_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// One row of the process table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -132,21 +138,22 @@ mod unix {
         signal(&survivors(processes, &table()), libc::SIGKILL);
     }
 
-    pub(super) fn terminate(processes: Vec<Proc>) {
+    /// SIGTERM to `terminated` now; SIGKILL to what is left of `processes` after `grace`.
+    pub(super) fn terminate(terminated: &[Proc], processes: Vec<Proc>, grace: std::time::Duration) {
+        signal(terminated, libc::SIGTERM);
         if processes.is_empty() {
             return;
         }
-        signal(&processes, libc::SIGTERM);
         let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         PENDING.lock().push(Pending {
             id,
-            deadline: Instant::now() + GRACE,
+            deadline: Instant::now() + grace,
             processes,
         });
         let spawned = std::thread::Builder::new()
             .name("sirus-stop-tree".into())
             .spawn(move || {
-                std::thread::sleep(GRACE);
+                std::thread::sleep(grace);
                 let entry = {
                     let mut pending = PENDING.lock();
                     let index = pending.iter().position(|entry| entry.id == id);
@@ -174,7 +181,7 @@ mod unix {
     pub(super) fn finish_pending() {
         let mut pending = PENDING.lock();
         if let Some(deadline) = pending.iter().map(|entry| entry.deadline).max() {
-            let quit_by = deadline.min(Instant::now() + std::time::Duration::from_millis(500));
+            let quit_by = deadline.min(Instant::now() + super::LEADER_GRACE);
             while !pending.is_empty() {
                 if SETTLED.wait_until(&mut pending, quit_by).timed_out() {
                     break;
@@ -189,9 +196,9 @@ mod unix {
     }
 }
 
-/// Stops an agent: its process group at once, then every descendant that left
-/// the group (SIGTERM now, SIGKILL after `GRACE`). The caller still owns the
-/// unreaped leader, so `pid` cannot have been reused yet.
+/// Stops an agent: SIGTERM to its leader and to every descendant that left the group now,
+/// SIGKILL to whatever remains after `LEADER_GRACE` (`GRACE` for the escaped ones). The caller
+/// still owns the unreaped leader, so `pid` cannot have been reused yet.
 #[cfg(unix)]
 pub fn stop_tree(pid: u32) -> std::io::Result<()> {
     let root = pid as i32;
@@ -199,14 +206,17 @@ pub fn stop_tree(pid: u32) -> std::io::Result<()> {
         return Ok(());
     }
     // Snapshot before signalling: once the leader dies its children are re-parented.
-    let escaped = escaped(&unix::table(), root);
-    let result = unsafe { libc::kill(-root, libc::SIGKILL) };
-    let error = (result != 0).then(std::io::Error::last_os_error);
-    unix::terminate(escaped);
-    match error {
-        Some(error) if error.raw_os_error() != Some(libc::ESRCH) => Err(error),
-        _ => Ok(()),
-    }
+    let table = unix::table();
+    let escaped = escaped(&table, root);
+    let leader = table.iter().find(|process| process.pid == root).copied();
+    let mut group: Vec<Proc> = descendants(&table, root)
+        .into_iter()
+        .filter(|process| process.pgid == root)
+        .collect();
+    group.extend(leader);
+    unix::terminate(&escaped, escaped.clone(), GRACE);
+    unix::terminate(&leader.into_iter().collect::<Vec<_>>(), group, LEADER_GRACE);
+    Ok(())
 }
 
 /// App quit: SIGKILL what earlier stops left running (bounded wait).
@@ -218,6 +228,44 @@ pub fn finish_pending() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Runs `script` in its own group, as agents do, and returns it.
+    #[cfg(unix)]
+    fn group_shell(script: &str) -> std::process::Child {
+        use std::os::unix::process::CommandExt;
+        std::process::Command::new("/bin/sh")
+            .args(["-c", script])
+            .process_group(0)
+            .spawn()
+            .unwrap()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_stopped_agent_finishes_its_write_before_exiting() {
+        let dir = tempfile::tempdir().unwrap();
+        let saved = dir.path().join("token");
+        let mut child = group_shell(&format!(
+            "trap 'sleep 0.3; touch {}; exit 0' TERM; sleep 30 & wait",
+            saved.display()
+        ));
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        stop_tree(child.id()).unwrap();
+        child.wait().unwrap();
+        assert!(saved.exists(), "the shutdown handler ran to its end");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_agent_ignoring_the_signal_is_killed_after_the_grace() {
+        let mut child = group_shell("trap '' TERM; while :; do sleep 0.1; done");
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let started = std::time::Instant::now();
+        stop_tree(child.id()).unwrap();
+        child.wait().unwrap();
+        assert!(started.elapsed() >= std::time::Duration::from_millis(1800));
+        assert!(started.elapsed() < std::time::Duration::from_secs(4));
+    }
 
     fn proc(pid: i32, ppid: i32, pgid: i32) -> Proc {
         Proc { pid, ppid, pgid }

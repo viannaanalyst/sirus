@@ -123,7 +123,7 @@ impl Shell {
             .gap(px(8.))
             .px(px(8.))
             .py(px(5.))
-            .rounded(px(7.))
+            .rounded(px(crate::theme::RADIUS_MD))
             .cursor_pointer()
             .text_size(px(12.))
             .text_color(content(0.6))
@@ -186,7 +186,7 @@ impl Shell {
                 .gap(px(8.))
                 .px(px(6.))
                 .py(px(3.))
-                .rounded(px(6.))
+                .rounded(px(crate::theme::RADIUS_SM))
                 .cursor_pointer()
                 .text_size(px(12.))
                 .text_color(if active { content(0.92) } else { content(0.7) })
@@ -264,7 +264,7 @@ impl Shell {
             .max_h(px(360.))
             .overflow_y_scroll()
             .overflow_x_hidden()
-            .rounded(px(6.))
+            .rounded(px(crate::theme::RADIUS_SM))
             .bg(content(0.03))
             .py(px(4.));
         for line in lines.iter().take(MAX_DIFF_LINES) {

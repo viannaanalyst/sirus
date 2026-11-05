@@ -503,4 +503,4 @@ Commit titles use explicit `commit_title_action` Generate/Cancel with session ow
 
 ## Sirus Native
 
-`native-spike/` is a separate GPUI window, not part of the Tauri build. It starts `sirus-host` and uses the same commands as the phone (ADR-080, ADR-131, ADR-189). With `SIRUS_KEYCHAIN_APP` set, `keychain_scope.rs` gives the host its own Keychain items. See `native-spike/README.md`.
+`native-spike/` is a separate GPUI window, not part of the Tauri build. It starts `sirus-host` and uses the same commands as the phone (ADR-080, ADR-131, ADR-189). With `SIRUS_KEYCHAIN_APP` set, `keychain_scope.rs` gives the host its own Keychain items. See `native-spike/README.md`. Corner sizes come from `RADIUS_SM` to `RADIUS_XL` in `native-spike/src/theme.rs`, hover fills are `content(0.07)`, and `backend.rs` clears inherited `CLAUDE_*` variables before starting the host.

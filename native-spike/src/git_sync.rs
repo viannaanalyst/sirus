@@ -338,7 +338,7 @@ pub fn pill(
         .id("git-incoming")
         .h(px(24.))
         .px(px(6.))
-        .rounded_md()
+        .rounded(px(crate::theme::RADIUS_SM))
         .flex()
         .items_center()
         .gap(px(5.))
@@ -359,7 +359,7 @@ pub fn pill(
                 .text_size(px(10.5))
                 .child(count.to_string()),
         );
-        button = button.cursor_pointer().hover(|s| s.bg(content(0.08))).on_click(on_click);
+        button = button.cursor_pointer().hover(|s| s.bg(content(0.07))).on_click(on_click);
     }
     Some(button.into_any_element())
 }
@@ -424,7 +424,7 @@ pub fn popover(
                 .mx(px(4.))
                 .mt(px(4.))
                 .h(px(28.))
-                .rounded_md()
+                .rounded(px(crate::theme::RADIUS_MD))
                 .flex()
                 .items_center()
                 .justify_center()
@@ -448,10 +448,10 @@ pub fn popover(
             .top(px(top + 2. + (1. - p) * -6.))
             .w(px(340.))
             .p(px(4.))
-            .rounded_lg()
+            .rounded(px(crate::theme::RADIUS_LG))
             .border_1()
             .border_color(content(0.12))
-            .child(crate::theme::floating_surface(8.))
+            .child(crate::theme::floating_surface(crate::theme::RADIUS_MD))
             .shadow_lg()
             .opacity(p)
             .flex()
@@ -529,7 +529,7 @@ pub fn branch_field(draft: &str, error: Option<&str>, can_create: bool, busy: bo
     let mut field: Div = div()
         .h(px(24.))
         .px(px(6.))
-        .rounded(px(6.))
+        .rounded(px(crate::theme::RADIUS_SM))
         .border_1()
         .border_color(content(0.12))
         .flex()
@@ -550,7 +550,7 @@ pub fn branch_field(draft: &str, error: Option<&str>, can_create: bool, busy: bo
         .id("env-branch-create")
         .h(px(22.))
         .px(px(8.))
-        .rounded(px(6.))
+        .rounded(px(crate::theme::RADIUS_SM))
         .flex()
         .items_center()
         .justify_center()

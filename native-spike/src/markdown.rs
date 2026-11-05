@@ -663,7 +663,7 @@ fn block(b: Block, rich: Option<&Rich>) -> AnyElement {
             div()
                 .flex()
                 .flex_col()
-                .rounded(px(8.))
+                .rounded(px(crate::theme::RADIUS_MD))
                 .border_1()
                 .border_color(content(0.08))
                 .overflow_hidden()
@@ -678,7 +678,7 @@ fn block(b: Block, rich: Option<&Rich>) -> AnyElement {
 
 fn code_block(code: &str) -> AnyElement {
     div()
-            .rounded(px(8.))
+            .rounded(px(crate::theme::RADIUS_MD))
             .bg(content(0.05))
             .border_1()
             .border_color(content(0.08))

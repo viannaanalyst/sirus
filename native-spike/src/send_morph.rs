@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 const HEIGHT: f32 = 28.;
 /// The same soft corner square or pill: it widens, it never turns round.
-const RADIUS: f32 = 8.;
+const RADIUS: f32 = RADIUS_MD;
 /// The collapsed square, and the glyph's slot inside the pill.
 const SQUARE: f32 = 28.;
 const GLYPH: f32 = 14.;

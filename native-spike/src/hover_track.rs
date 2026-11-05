@@ -23,7 +23,7 @@ use std::time::Instant;
 
 /// The pill's fill, the same alpha rows used for their own hover.
 pub const FILL: f32 = 0.07;
-const RADIUS: f32 = 7.;
+const RADIUS: f32 = crate::theme::RADIUS_MD;
 /// The web pill: 320 ms moves (--motion-slow), 140 ms fades (--motion-fast), ease-out.
 const SLIDE: f32 = 0.32;
 const FADE: f32 = 0.14;

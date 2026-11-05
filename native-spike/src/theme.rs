@@ -4,6 +4,11 @@ use std::cell::Cell;
 pub const TITLE_BAR: f32 = 40.;
 pub const FOOTER: f32 = 30.;
 pub const PLATE: f32 = 27.;
+/// The app's corners: small controls, buttons and rows, cards and popups, dialogs.
+pub const RADIUS_SM: f32 = 6.;
+pub const RADIUS_MD: f32 = 10.;
+pub const RADIUS_LG: f32 = 14.;
+pub const RADIUS_XL: f32 = 18.;
 pub const TAB_PLATE_HEIGHT: f32 = PLATE;
 pub fn content(alpha: f32) -> Hsla {
     let mut color = current().ink;

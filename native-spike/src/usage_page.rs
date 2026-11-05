@@ -8,6 +8,7 @@
 //! This module is a child of `shell` (`#[path]`), so it reaches the window's private state.
 
 use super::*;
+use crate::motion::{Count, Spin, progress};
 use crate::visuals::dither::{Align, Label, Scale, crosshair, hoverable, pointer, readout};
 use chrono::{Datelike, Local, NaiveDate, NaiveDateTime, TimeZone, Timelike};
 use serde::{Deserialize, Serialize};
@@ -366,11 +367,18 @@ pub(crate) struct Layer {
 
 /// The cumulative total of each provider over the buckets, stacked in provider order. A hidden
 /// provider leaves the stack; one that never used anything has no band.
+#[cfg(test)]
 pub(crate) fn stack(buckets: &[Bucket], metric: Metric, hidden: [bool; 4]) -> (Vec<Layer>, f64) {
+    stack_weighted(buckets, metric, hidden.map(|h| if h { 0. } else { 1. }))
+}
+
+/// `stack` with each provider's share of the stack between 0 (hidden) and 1 (shown), so hiding
+/// or showing one can slide the others instead of jumping.
+pub(crate) fn stack_weighted(buckets: &[Bucket], metric: Metric, weights: [f64; 4]) -> (Vec<Layer>, f64) {
     let mut below = vec![0.; buckets.len()];
     let mut layers = Vec::new();
     for (p, prov) in PROVS.iter().enumerate() {
-        if hidden[p] || buckets.iter().all(|b| b.value(metric, p) <= 0.) {
+        if weights[p] <= 0.0005 || buckets.iter().all(|b| b.value(metric, p) <= 0.) {
             continue;
         }
         let mut running = 0.;
@@ -378,7 +386,7 @@ pub(crate) fn stack(buckets: &[Bucket], metric: Metric, hidden: [bool; 4]) -> (V
             .iter()
             .enumerate()
             .map(|(i, b)| {
-                running += b.value(metric, p);
+                running += b.value(metric, p) * weights[p];
                 below[i] + running
             })
             .collect();
@@ -407,36 +415,33 @@ fn trim_zeros(text: String, decimal: char) -> String {
     }
 }
 
-pub(crate) fn usd(value: f64, en: bool) -> String {
-    let (group, decimal) = separators(en);
-    let cents = (value.abs() * 100.).round() as u64;
-    let whole = (cents / 100).to_string();
-    let mut grouped = String::new();
-    for (i, ch) in whole.chars().enumerate() {
-        if i > 0 && (whole.len() - i) % 3 == 0 {
-            grouped.push(group);
+/// Every digit of a whole number, grouped by thousands: "2.070.123.456" (pt) or "2,070,123,456" (en).
+pub(crate) fn grouped(value: u64, en: bool) -> String {
+    let (group, _) = separators(en);
+    let digits = value.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, ch) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push(group);
         }
-        grouped.push(ch);
+        out.push(ch);
     }
-    let sign = if value < 0. { "-" } else { "" };
-    let prefix = if en { "$" } else { "US$ " };
-    format!("{sign}{prefix}{grouped}{decimal}{:02}", cents % 100)
+    out
 }
 
-/// 1.2 mil / 3.4 mi (pt) or 1.2K / 3.4M (en), up to two decimals from a thousand.
-pub(crate) fn count(value: f64, en: bool) -> String {
+/// Money to the cent: "US$ 1.025,68" (pt) or "$1,025.68" (en).
+pub(crate) fn usd(value: f64, en: bool) -> String {
     let (_, decimal) = separators(en);
-    let (scaled, suffix) = if value >= 1e9 {
-        (value / 1e9, if en { "B" } else { " bi" })
-    } else if value >= 1e6 {
-        (value / 1e6, if en { "M" } else { " mi" })
-    } else if value >= 1e3 {
-        (value / 1e3, if en { "K" } else { " mil" })
-    } else {
-        return format!("{}", value.round() as i64);
-    };
-    let text = format!("{scaled:.2}").replace('.', &decimal.to_string());
-    format!("{}{suffix}", trim_zeros(text, decimal))
+    let cents = (value.abs() * 100.).round() as u64;
+    let sign = if value < 0. { "-" } else { "" };
+    let prefix = if en { "$" } else { "US$ " };
+    format!("{sign}{prefix}{}{decimal}{:02}", grouped(cents / 100, en), cents % 100)
+}
+
+/// A count in full, with no abbreviation: "2.070.123.456" (pt) or "2,070,123,456" (en).
+pub(crate) fn count(value: f64, en: bool) -> String {
+    let sign = if value < -0.5 { "-" } else { "" };
+    format!("{sign}{}", grouped(value.abs().round() as u64, en))
 }
 
 /// A chart axis tick in the same words as `count` ("2 mil", "1,5 mi", "2K"), with only the
@@ -722,7 +727,21 @@ pub(super) struct Card {
 }
 
 pub(super) struct State {
+    /// 0 to 1 while the popup opens, 1 to 0 while it closes; it stays until a close ends.
     pub open: Option<Tween>,
+    closing: bool,
+    /// The body's crossfade after a tab or range change.
+    swap: Tween,
+    /// How much of the chart's area is drawn, left to right.
+    grow: Tween,
+    /// Each provider's share of the stack, 0 when hidden.
+    vis: [Tween; 4],
+    /// Where each segmented control's thumb is, in option indexes.
+    segs: HashMap<&'static str, Tween>,
+    counts: std::cell::RefCell<Counts>,
+    /// When each limit bar was first shown.
+    grown: std::cell::RefCell<HashMap<String, Instant>>,
+    spin: std::cell::Cell<Spin>,
     tab: Tab,
     range: u32,
     entries: Option<Vec<Entry>>,
@@ -738,8 +757,17 @@ pub(super) struct State {
 
 impl Default for State {
     fn default() -> Self {
+        let now = Instant::now();
         Self {
             open: None,
+            closing: false,
+            swap: Tween::still(1., now),
+            grow: Tween::still(1., now),
+            vis: [Tween::still(1., now); 4],
+            segs: HashMap::new(),
+            counts: Default::default(),
+            grown: Default::default(),
+            spin: Default::default(),
             tab: Tab::Cost,
             range: 30,
             entries: None,
@@ -755,10 +783,79 @@ impl Default for State {
     }
 }
 
+/// A motion's length, none under reduced motion.
+fn secs(cx: &Context<Shell>, seconds: f32) -> f32 {
+    if cx.reduce_motion() { 0. } else { seconds }
+}
+
+const OPEN: f32 = 0.22;
+const CLOSE: f32 = 0.15;
+const SLIDE: f32 = 0.18;
+const SWAP: f32 = 0.18;
+/// How long the numbers take to count up from 0 (Expo curve).
+const COUNT: f32 = 0.9;
+const GROW: f32 = 0.4;
+const BAR: f32 = 0.32;
+const STACK: f32 = 0.24;
+
+/// The numbers that count up on the page, by key. Each one counts from 0 after a restart; a
+/// count is still running until its duration has passed, and only then does it stop drawing.
+#[derive(Default)]
+pub(super) struct Counts(HashMap<String, Count>);
+
+impl Counts {
+    /// Every count starts again from 0 at its next sample.
+    pub(super) fn restart(&mut self) {
+        self.0.clear();
+    }
+
+    /// The value to show for `key` at `now` on its way to `target`, and whether it is still
+    /// counting. A zero duration (reduced motion) shows the target at once.
+    pub(super) fn sample(&mut self, key: String, target: f64, now: Instant, duration: f32) -> (f64, bool) {
+        let count = self.0.entry(key).or_insert_with(|| Count::at_rest(0., now));
+        let value = count.sample(target, now, duration);
+        (value, !count.done(now))
+    }
+}
+
+/// Whether a reading that arrives starts the count-up: the first data, or data that differs from
+/// what the page shows. A refresh that changes nothing leaves the numbers where they are.
+pub(crate) fn data_changed(shown: Option<(&[Entry], &HashMap<String, Price>)>, entries: &[Entry], prices: &HashMap<String, Price>) -> bool {
+    match shown {
+        None => true,
+        Some((old, old_prices)) => old != entries || old_prices != prices,
+    }
+}
+
 impl State {
-    /// How much the page covers the window, for the glass fade.
-    pub(super) fn cover(&self, now: Instant) -> f32 {
-        self.open.as_ref().map_or(0., |open| open.at(now).clamp(0., 1.))
+    /// A new tab or range: the body rises in, the chart grows again and the numbers count from 0.
+    fn changed(&mut self, now: Instant, reduced: bool) {
+        let length = if reduced { 0. } else { SWAP };
+        self.swap = Tween::from_to(0., 1., now, length, Curve::Expo);
+        self.counts.borrow_mut().restart();
+        self.restart_chart(now, reduced);
+    }
+
+    fn restart_chart(&mut self, now: Instant, reduced: bool) {
+        self.grow = Tween::from_to(0., 1., now, if reduced { 0. } else { GROW }, Curve::Expo);
+    }
+
+    /// Slides a segmented control's thumb from option `from` to `to`.
+    fn slide(&mut self, id: &'static str, from: usize, to: usize, now: Instant, reduced: bool) {
+        let tween = self.segs.entry(id).or_insert_with(|| Tween::still(from as f32, now));
+        if (tween.to - from as f32).abs() > 0.5 {
+            tween.snap(from as f32, now);
+        }
+        tween.set(to as f32, now, if reduced { 0. } else { SLIDE }, Curve::Expo);
+    }
+
+    /// The number to show for `target` under `key`, counting up from what showed before.
+    fn counted(&self, key: String, target: f64, now: Instant, reduced: bool, moving: &mut bool) -> f64 {
+        let (value, running) = self.counts.borrow_mut().sample(key, target, now, if reduced { 0. } else { COUNT });
+        if running {
+            *moving = true;
+        }
+        value
     }
 }
 
@@ -771,26 +868,56 @@ impl Shell {
         self.usage_page.open.is_some()
     }
 
-    pub(super) fn close_usage_page(&mut self) -> bool {
-        self.usage_accounts = None;
-        self.usage_page.open.take().is_some()
+    /// Starts the close motion; the popup stays mounted until it ends (`usage_settle`).
+    /// Returns whether there was a popup still open to close.
+    pub(super) fn close_usage_page(&mut self, cx: &mut Context<Self>) -> bool {
+        let length = secs(cx, CLOSE);
+        let page = &mut self.usage_page;
+        let Some(open) = page.open.as_mut() else { return false };
+        if page.closing {
+            return false;
+        }
+        page.closing = true;
+        open.set(0., Instant::now(), length, Curve::Expo);
+        // A zero length ends at once; draw it so the settle runs.
+        cx.notify();
+        true
+    }
+
+    /// Unmounts the popup once its close motion has ended.
+    pub(super) fn usage_settle(&mut self, now: Instant) {
+        let page = &mut self.usage_page;
+        if page.closing && page.open.as_ref().is_none_or(|open| open.done(now)) {
+            page.open = None;
+            page.closing = false;
+            self.usage_accounts = None;
+        }
     }
 
     pub(super) fn toggle_usage_page(&mut self, cx: &mut Context<Self>) {
-        if self.usage_page.open.is_some() {
-            self.usage_page.open = None;
-            self.usage_accounts = None;
+        if self.usage_page.open.is_some() && !self.usage_page.closing {
+            self.close_usage_page(cx);
+            return;
+        }
+        let (now, length) = (Instant::now(), secs(cx, OPEN));
+        self.usage_popup = None;
+        // Reopened while closing: turn around from where it is.
+        if let Some(open) = self.usage_page.open.as_mut() {
+            self.usage_page.closing = false;
+            open.set(1., now, length, Curve::Expo);
             cx.notify();
             return;
         }
-        self.usage_popup = None;
-        self.usage_page.open = Some(Tween::from_to(
-            0.,
-            1.,
-            Instant::now(),
-            if cx.reduce_motion() { 0. } else { MENU },
-            Curve::Expo,
-        ));
+        let reduced = cx.reduce_motion();
+        let page = &mut self.usage_page;
+        page.open = Some(Tween::from_to(0., 1., now, length, Curve::Expo));
+        page.closing = false;
+        page.counts.borrow_mut().restart();
+        page.grown.borrow_mut().clear();
+        page.segs.clear();
+        page.swap = Tween::still(1., now);
+        page.restart_chart(now, reduced);
+        page.vis = page.hidden.map(|h| Tween::still(if h { 0. } else { 1. }, now));
         self.usage_load_history(cx);
         if self.usage_page.tab == Tab::Limits {
             self.usage_load_limits(false, cx);
@@ -834,6 +961,16 @@ impl Shell {
                 page.loading = false;
                 match (entries, history) {
                     (Some(entries), _) => {
+                        // The count-up starts here, when the reading arrives, not when the popup opened.
+                        let next_prices = prices.clone().unwrap_or_else(|| page.prices.clone());
+                        let shown = page.entries.as_ref().map(|old| (old.as_slice(), &page.prices));
+                        if data_changed(shown, &entries, &next_prices) {
+                            page.counts.borrow_mut().restart();
+                        }
+                        if page.entries.is_none() {
+                            page.restart_chart(Instant::now(), cx.reduce_motion());
+                        }
+                        page.prices = next_prices;
                         page.entries = Some(entries);
                         page.problems = problems;
                         if let Some(prices) = prices {
@@ -945,6 +1082,14 @@ impl Shell {
         cx.notify();
     }
 
+    fn usage_toggle_provider(&mut self, ix: usize, cx: &mut Context<Self>) {
+        let length = secs(cx, STACK);
+        let page = &mut self.usage_page;
+        page.hidden[ix] = !page.hidden[ix];
+        page.vis[ix].set(if page.hidden[ix] { 0. } else { 1. }, Instant::now(), length, Curve::Expo);
+        cx.notify();
+    }
+
     fn usage_refresh(&mut self, cx: &mut Context<Self>) {
         if self.usage_page.tab == Tab::Limits {
             self.usage_load_limits(true, cx);
@@ -958,6 +1103,10 @@ impl Shell {
             return;
         }
         self.usage_page.tab = tab;
+        self.usage_page.changed(Instant::now(), cx.reduce_motion());
+        if tab == Tab::Limits {
+            self.usage_page.grown.borrow_mut().clear();
+        }
         if tab == Tab::Limits && self.usage_page.cards.is_empty() {
             self.usage_load_limits(false, cx);
         }
@@ -966,13 +1115,20 @@ impl Shell {
 
     // ------------------------------------------------------------ drawing
 
-    pub(super) fn usage_page_view(&self, now: Instant, moving: &mut bool, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(super) fn usage_page_view(
+        &self,
+        now: Instant,
+        moving: &mut bool,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         let open = self.usage_page.open.as_ref()?;
         if !open.done(now) {
             *moving = true;
         }
         let p = open.at(now).clamp(0., 1.);
         let page = &self.usage_page;
+        let reduced = cx.reduce_motion();
         let tabs = [
             (Tab::Cost, t("Custo").to_owned()),
             (Tab::Tokens, t("Tokens").to_owned()),
@@ -982,119 +1138,180 @@ impl Shell {
             .iter()
             .map(|r| (*r, if *r == 1 { t("24 h").to_owned() } else { tf("{} dias", &[r]) }))
             .collect();
+        // The refresh icon turns while anything loads and finishes its turn when it stops.
+        let busy = page.loading || (page.tab == Tab::Limits && page.cards.iter().any(|c| !c.loaded));
+        let turn = if reduced {
+            None
+        } else {
+            let mut spin = page.spin.get();
+            let turn = spin.turn(busy, now);
+            page.spin.set(spin);
+            turn
+        };
+        if turn.is_some() {
+            *moving = true;
+        }
+        let tab_control = segmented(
+            "usage-tab",
+            &tabs,
+            page.tab,
+            page,
+            now,
+            moving,
+            |this, tab, cx| this.usage_set_tab(tab, cx),
+            false,
+            cx,
+        );
+        // On Limits the range group stays where it is, dimmed and inert, so the header does not move.
+        let range_control = segmented(
+            "usage-range",
+            &ranges,
+            page.range,
+            page,
+            now,
+            moving,
+            |this, range, cx| {
+                if this.usage_page.range != range {
+                    this.usage_page.range = range;
+                    this.usage_page.changed(Instant::now(), cx.reduce_motion());
+                }
+                cx.notify();
+            },
+            page.tab == Tab::Limits,
+            cx,
+        );
         let header = div()
+            .flex_shrink_0()
             .flex()
             .items_center()
             .gap(px(10.))
+            .px(px(24.))
+            .h(px(64.))
+            .border_b_1()
+            .border_color(content(0.08))
             .child(
                 div()
                     .flex_1()
-                    .text_size(px(20.))
+                    .text_size(px(18.))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(content(0.95))
                     .child(t("Uso")),
             )
-            .child(segmented("usage-tab", &tabs, page.tab, |this, tab, cx| this.usage_set_tab(tab, cx), cx))
-            .when(page.tab != Tab::Limits, |d| {
-                d.child(segmented(
-                    "usage-range",
-                    &ranges,
-                    page.range,
-                    |this, range, cx| {
-                        this.usage_page.range = range;
-                        cx.notify();
-                    },
-                    cx,
-                ))
-            })
+            .child(tab_control)
+            .child(range_control)
             .child(
                 div()
                     .id("usage-refresh")
                     .size(px(28.))
-                    .rounded_md()
+                    .rounded(px(crate::theme::RADIUS_MD))
                     .flex()
                     .items_center()
                     .justify_center()
                     .cursor_pointer()
-                    .hover(|s| s.bg(content(0.08)))
+                    .hover(|s| s.bg(content(0.07)))
+                    .active(|s| s.opacity(0.7))
                     .on_click(cx.listener(|this, _, _, cx| this.usage_refresh(cx)))
-                    .child(icon("refresh", 14.).text_color(content(if page.loading { 0.3 } else { 0.6 }))),
+                    .child(
+                        icon("refresh", 14.)
+                            .text_color(content(if busy { 0.45 } else { 0.6 }))
+                            .with_transformation(Transformation::rotate(gpui::percentage(turn.unwrap_or(0.)))),
+                    ),
+            )
+            .child(
+                div()
+                    .id("usage-close")
+                    .size(px(28.))
+                    .rounded(px(crate::theme::RADIUS_MD))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(content(0.07)))
+                    .active(|s| s.opacity(0.7))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.close_usage_page(cx);
+                    }))
+                    .child(icon("close", 14.).text_color(content(0.6))),
             );
-        let back = crate::hover_track::list("usage-back").row_named(
-            div()
-                .id("usage-back")
-                .h(px(30.))
-                .px(px(10.))
-                .w(px(150.))
-                .rounded_md()
-                .flex()
-                .items_center()
-                .gap(px(10.))
-                .text_size(px(13.))
-                .text_color(content(0.95))
-                .cursor_pointer()
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.usage_page.open = None;
-                    this.usage_accounts = None;
-                    cx.notify();
-                }))
-                .child(icon("arrow-left", 16.).text_color(content(0.65)))
-                .child(t("Voltar ao app")),
-            "usage-back",
-            false,
-        );
         let body: AnyElement = if page.tab == Tab::Limits {
             self.limits_view(now, moving, cx)
         } else {
-            self.history_view(if page.tab == Tab::Cost { Metric::Cost } else { Metric::Tokens }, cx)
+            self.history_view(if page.tab == Tab::Cost { Metric::Cost } else { Metric::Tokens }, now, moving, cx)
         };
+        // Tab and range changes: the new body fades in with a 4 px rise.
+        let swap = page.swap.at(now).clamp(0., 1.);
+        if !page.swap.done(now) {
+            *moving = true;
+        }
+        // The dialog: min(window - 48, 1120) wide, window - 56 tall. It scales from 0.97 and
+        // rises 6 px while it fades in; GPUI cannot scale a subtree, so its size does the scaling.
+        let size = window.viewport_size();
+        let (vw, vh) = (f32::from(size.width), f32::from(size.height));
+        let scale = 0.97 + 0.03 * p;
+        let width = (vw - 48.).min(1120.).max(320.);
+        let height = (vh - 56.).max(240.);
+        let dialog = div()
+            .id("usage-dialog")
+            .relative()
+            .top(px((1. - p) * 6.))
+            .w(px(width * scale))
+            .h(px(height * scale))
+            .flex()
+            .flex_col()
+            .pb(px(8.))
+            .opacity(p)
+            .rounded(px(crate::theme::RADIUS_XL))
+            .border_1()
+            .border_color(content(0.14))
+            .child(crate::theme::floating_surface(crate::theme::RADIUS_XL))
+            .shadow_lg()
+            // Clicks inside stay inside; one on the dialog itself closes the accounts popover.
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    if this.usage_accounts.take().is_some() {
+                        cx.notify();
+                    }
+                    cx.stop_propagation();
+                }),
+            )
+            .child(header)
+            .child(
+                div()
+                    .id("usage-main")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .child(
+                        div()
+                            .px(px(24.))
+                            .pt(px(20.))
+                            .pb(px(24.))
+                            .relative()
+                            .top(px((1. - swap) * 4.))
+                            .opacity(swap)
+                            .child(body),
+                    ),
+            );
         Some(
             div()
                 .id("usage-page")
                 .occlude()
                 .absolute()
                 .inset_0()
-                .opacity(p)
-                .bg(if pane_fill().a < 0.5 { chrome_wash() } else { pane_opaque() })
                 .flex()
-                .child(
-                    div()
-                        .id("usage-main")
-                        // A click outside the accounts popover closes it; the popover stops its own clicks.
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|this, _, _, cx| {
-                                if this.usage_accounts.take().is_some() {
-                                    cx.notify();
-                                }
-                            }),
-                        )
-                        .flex_1()
-                        .min_w_0()
-                        .h_full()
-                        .bg(pane_fill())
-                        .overflow_y_scroll()
-                        .child(
-                            div()
-                                .mx_auto()
-                                .w_full()
-                                .max_w(px(780.))
-                                .pt(px(TITLE_BAR + 12.))
-                                .pb(px(40.))
-                                .px(px(32.))
-                                .flex()
-                                .flex_col()
-                                .gap(px(18.))
-                                .child(div().ml(px(-10.)).child(crate::hover_track::list("usage-back").pill()).child(back))
-                                .child(header)
-                                .child(body),
-                        ),
-                )
+                .items_center()
+                .justify_center()
+                .bg(gpui::black().opacity(0.32 * p))
+                .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                    this.close_usage_page(cx);
+                }))
+                .child(dialog)
                 .into_any_element(),
         )
     }
 
-    fn history_view(&self, metric: Metric, cx: &mut Context<Self>) -> AnyElement {
+    fn history_view(&self, metric: Metric, now: Instant, moving: &mut bool, cx: &mut Context<Self>) -> AnyElement {
         let page = &self.usage_page;
         let en = is_en();
         let mut column = div().flex().flex_col().gap(px(18.));
@@ -1110,16 +1327,22 @@ impl Shell {
             }
             return column.into_any_element();
         };
-        let now = chrono::Utc::now().timestamp_millis();
-        let summary = summarize(entries, page.range, now, &page.prices);
+        let clock = chrono::Utc::now().timestamp_millis();
+        let summary = summarize(entries, page.range, clock, &page.prices);
+        let reduced = cx.reduce_motion();
+        let tag = if metric == Metric::Cost { "cost" } else { "tokens" };
+        // The hero and the tiles count from what they showed to the new value.
+        let mut counting = false;
+        let mut counted = |name: &str, target: f64| page.counted(format!("{tag}-{name}"), target, now, reduced, &mut counting);
         if summary.tokens <= 0. {
             return column.child(muted(t("Nenhum uso nesse período."))).into_any_element();
         }
         let money = |v: f64| usd(v, en);
         let amount = |v: f64| if metric == Metric::Cost { money(v) } else { count(v, en) };
         let whole = if metric == Metric::Cost { summary.cost } else { summary.tokens };
+        let hero = counted("hero", whole);
         let span = if page.range == 1 { t("últimas 24 horas").to_owned() } else { tf("últimos {} dias", &[&page.range]) };
-        let mut caption = format!("{} · {span}", tf("{} sessões", &[&summary.sessions]));
+        let mut caption = format!("{} · {span}", tf("{} sessões", &[&grouped(summary.sessions as u64, en)]));
         if metric == Metric::Cost {
             caption.push_str(" · ");
             caption.push_str(if summary.partial {
@@ -1133,25 +1356,37 @@ impl Shell {
                 .flex()
                 .flex_col()
                 .gap(px(4.))
-                .child(div().text_size(px(34.)).font_weight(FontWeight::SEMIBOLD).text_color(content(1.)).child(amount(whole)))
+                .child(div().text_size(px(34.)).font_weight(FontWeight::SEMIBOLD).text_color(content(1.)).child(amount(hero)))
                 .child(div().text_size(px(12.)).text_color(content(0.5)).child(caption)),
         );
         // Provider cards. Clicking one hides it from the chart; its colour never changes.
-        column = column.child(div().flex().gap(px(10.)).children(summary.providers.iter().map(|(prov, total)| {
+        let cards = crate::hover_track::list("usage-cards");
+        let card_values: Vec<f64> = summary
+            .providers
+            .iter()
+            .map(|(prov, total)| {
+                let value = if metric == Metric::Cost { total.cost } else { total.tokens };
+                counted(&format!("card{}", prov.index()), value)
+            })
+            .collect();
+        column = column.child(div().relative().flex().gap(px(10.)).child(cards.pill()).children(summary.providers.iter().zip(card_values).enumerate().map(|(row, ((prov, total), number))| {
             let prov = *prov;
-            let value = if metric == Metric::Cost { total.cost } else { total.tokens };
             let other = if metric == Metric::Cost {
                 tf("{} tokens", &[&count(total.tokens, en)])
             } else {
                 money(total.cost)
             };
-            let mut sub = format!("{} · {other}", tf("{} sessões", &[&total.sessions]));
+            let value = if metric == Metric::Cost { total.cost } else { total.tokens };
+            let mut sub = format!("{} · {other}", tf("{} sessões", &[&grouped(total.sessions as u64, en)]));
             if total.unpriced && metric == Metric::Cost {
                 sub.push_str(" · ");
                 sub.push_str(t("sem preço"));
             }
-            let hidden = page.hidden[prov.index()];
-            div()
+            let shown = page.vis[prov.index()].at(now);
+            if !page.vis[prov.index()].done(now) {
+                *moving = true;
+            }
+            cards.row(div()
                 .id(("usage-card", prov.index()))
                 .flex_1()
                 .min_w_0()
@@ -1164,11 +1399,8 @@ impl Shell {
                 .flex_col()
                 .gap(px(6.))
                 .cursor_pointer()
-                .opacity(if hidden { 0.45 } else { 1. })
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.usage_page.hidden[prov.index()] = !this.usage_page.hidden[prov.index()];
-                    cx.notify();
-                }))
+                .opacity(0.45 + 0.55 * shown)
+                .on_click(cx.listener(move |this, _, _, cx| this.usage_toggle_provider(prov.index(), cx)))
                 .child(
                     div()
                         .flex()
@@ -1177,34 +1409,39 @@ impl Shell {
                         .text_size(px(13.))
                         .text_color(content(0.9))
                         .child(div().size(px(9.)).rounded_full().bg(prov.color()))
-                        .child(div().flex_1().truncate().child(prov.name()))
-                        .child(value_text(amount(value))),
+                        .child(div().flex_1().truncate().child(prov.name())),
                 )
+                // Its own line, so the full figure has the card's whole width.
+                .child(value_text(amount(number)))
                 .child(div().text_size(px(11.)).text_color(content(0.5)).child(sub))
                 .child(
                     div().h(px(4.)).rounded_full().bg(content(0.08)).overflow_hidden().child(
                         div().h_full().rounded_full().bg(prov.color()).w(gpui::relative(frac(value, whole))),
                     ),
-                )
+                ), row, false)
         })));
         // The chart: stacked cumulative areas.
         let title = if metric == Metric::Cost { t("Custo acumulado") } else { t("Tokens acumulados") };
-        column = column.child(heading(title)).child(self.area_chart(&summary, metric, en));
-        column = column.child(legend(page, &summary, cx));
+        column = column.child(heading(title)).child(self.area_chart(&summary, metric, en, now, moving));
+        column = column.child(legend(page, &summary, now, cx));
         // Stat tiles.
         let tiles = [
-            (t("Processados"), count(summary.tokens, en)),
-            (t("Entrada em cache"), count(summary.cached, en)),
-            (t("Entrada sem cache"), count(summary.input, en)),
-            (t("Saída"), count(summary.output, en)),
-            (t("Economia do cache"), money(summary.savings)),
+            (t("Processados"), count(counted("tile0", summary.tokens), en)),
+            (t("Entrada em cache"), count(counted("tile1", summary.cached), en)),
+            (t("Entrada sem cache"), count(counted("tile2", summary.input), en)),
+            (t("Saída"), count(counted("tile3", summary.output), en)),
+            (t("Economia do cache"), money(counted("tile4", summary.savings))),
         ];
-        column = column.child(div().flex().gap(px(8.)).children(tiles.into_iter().map(|(label, value)| {
+        if counting {
+            *moving = true;
+        }
+        // Tiles keep a whole figure's width; a narrow window wraps them to a second row.
+        column = column.child(div().flex().flex_wrap().gap(px(8.)).children(tiles.into_iter().map(|(label, value)| {
             div()
                 .flex_1()
-                .min_w_0()
+                .min_w(px(156.))
                 .p(px(10.))
-                .rounded_lg()
+                .rounded(px(crate::theme::RADIUS_LG))
                 .bg(content(0.04))
                 .flex()
                 .flex_col()
@@ -1268,9 +1505,9 @@ impl Shell {
                 .items_center()
                 .gap(px(8.))
                 .child(div().flex_1().min_w_0().child(a))
-                .child(div().w(px(84.)).flex_shrink_0().flex().justify_end().child(b))
+                .child(div().w(px(124.)).flex_shrink_0().flex().justify_end().child(b))
                 .child(div().w(px(76.)).flex_shrink_0().flex().justify_end().child(c))
-                .child(div().w(px(72.)).flex_shrink_0().flex().justify_end().child(d))
+                .child(div().w(px(124.)).flex_shrink_0().flex().justify_end().child(d))
         };
         let head = |text: &'static str| div().text_size(px(11.)).text_color(content(0.45)).child(text).into_any_element();
         column = column
@@ -1280,7 +1517,7 @@ impl Shell {
                 let part = if metric == Metric::Cost { row.cost.unwrap_or(0.) } else { row.tokens };
                 let cost_text = row.cost.map_or_else(|| t("sem preço").to_owned(), |c| usd(c, en));
                 let cell = |text: String, dim: bool| {
-                    div().text_size(px(12.)).text_color(content(if dim { 0.4 } else { 0.8 })).child(text).into_any_element()
+                    div().text_size(px(12.)).whitespace_nowrap().text_color(content(if dim { 0.4 } else { 0.8 })).child(text).into_any_element()
                 };
                 let name = div()
                     .flex()
@@ -1303,7 +1540,7 @@ impl Shell {
                     )
                     .into_any_element();
                 list.row(
-                    div().px(px(10.)).py(px(7.)).rounded_md().child(columns(
+                    div().px(px(10.)).py(px(7.)).rounded(px(crate::theme::RADIUS_MD)).child(columns(
                         name,
                         cell(cost_text, row.cost.is_none()),
                         cell(share(part, whole, en), false),
@@ -1318,8 +1555,15 @@ impl Shell {
 
     /// The stacked cumulative area chart, drawn by hand: a 2 px gap between bands, a recessive
     /// grid, a crosshair and a card with the day's values per provider and the total.
-    fn area_chart(&self, summary: &Summary, metric: Metric, en: bool) -> AnyElement {
-        let (layers, max) = stack(&summary.buckets, metric, self.usage_page.hidden);
+    fn area_chart(&self, summary: &Summary, metric: Metric, en: bool, now: Instant, moving: &mut bool) -> AnyElement {
+        let page = &self.usage_page;
+        // Hiding or showing a provider slides the stack; the area grows in from the left.
+        let weights = page.vis.map(|tween| tween.at(now).clamp(0., 1.) as f64);
+        let grow = page.grow.at(now).clamp(0., 1.);
+        if page.vis.iter().any(|tween| !tween.done(now)) || !page.grow.done(now) {
+            *moving = true;
+        }
+        let (layers, max) = stack_weighted(&summary.buckets, metric, weights);
         let n = summary.buckets.len();
         let scale = Scale::nice([max], true);
         let y_ticks: Vec<(f64, String)> = scale
@@ -1364,7 +1608,7 @@ impl Shell {
                     |_, _, _| {},
                     move |bounds, _, window, cx| {
                         window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
-                            paint_area(bounds, &scale, &y_ticks, &x_ticks, &bands, &tips, n, window, cx)
+                            paint_area(bounds, &scale, &y_ticks, &x_ticks, &bands, &tips, n, grow, window, cx)
                         })
                     },
                 )
@@ -1376,7 +1620,9 @@ impl Shell {
     fn limits_view(&self, at: Instant, moving: &mut bool, cx: &mut Context<Shell>) -> AnyElement {
         let page = &self.usage_page;
         let en = is_en();
-        let mut column = div().flex().flex_col().gap(px(14.));
+        let reduced = cx.reduce_motion();
+        let blocks = crate::hover_track::list("usage-limits");
+        let mut column = div().relative().flex().flex_col().gap(px(14.)).child(blocks.pill());
         if page.cards.is_empty() {
             return column.child(muted(t("Lendo os limites…"))).into_any_element();
         }
@@ -1414,7 +1660,7 @@ impl Shell {
                         .id(("usage-add-account", ix))
                         .h(px(26.))
                         .px(px(9.))
-                        .rounded(px(7.))
+                        .rounded(px(crate::theme::RADIUS_MD))
                         .bg(content(0.04))
                         .flex()
                         .items_center()
@@ -1443,6 +1689,16 @@ impl Shell {
             for w in ordered(&card.windows) {
                 let used = w.used;
                 let left = used.map(|u| (100. - u.round()).max(0.));
+                // The bar grows from 0 the first time it shows; the tick and pace text fade in after.
+                let since = *page.grown.borrow_mut().entry(format!("{key}/{}", w.id)).or_insert(at);
+                let (grow, after) = if reduced {
+                    (1., 1.)
+                } else {
+                    (progress(since, at, 0., BAR, Curve::Expo), progress(since, at, BAR, 0.2, Curve::Quad))
+                };
+                if grow < 1. || after < 1. {
+                    *moving = true;
+                }
                 let mut bar = div().relative().h(px(6.)).rounded_full().bg(content(0.08));
                 if let Some(u) = used {
                     bar = bar.child(
@@ -1450,7 +1706,7 @@ impl Shell {
                             .h_full()
                             .rounded_full()
                             .bg(if u >= 90. { rgb(0xe5675f).into() } else { color })
-                            .w(gpui::relative(frac(u, 100.))),
+                            .w(gpui::relative(frac(u, 100.) * grow)),
                     );
                 }
                 let mut pace_lines: Vec<AnyElement> = Vec::new();
@@ -1468,6 +1724,7 @@ impl Shell {
                             .w(px(2.))
                             .rounded_full()
                             .bg(content(0.85))
+                            .opacity(after)
                             .left(gpui::relative(pace.elapsed as f32)),
                     );
                     let verdict = if pace.ahead { t("acima do ritmo") } else { t("abaixo do ritmo") };
@@ -1505,7 +1762,7 @@ impl Shell {
                                     .h_full()
                                     .rounded_full()
                                     .bg(if pace.over { amber } else { accent() })
-                                    .w(gpui::relative(pace.fill.min(1.) as f32)),
+                                    .w(gpui::relative(pace.fill.min(1.) as f32 * grow)),
                             ),
                         );
                     if !page.readings.has_earlier(&key, &day) {
@@ -1539,7 +1796,7 @@ impl Shell {
                                 .children(reset.map(|r| div().text_size(px(11.)).text_color(content(0.45)).child(r))),
                         )
                         .child(bar)
-                        .children(pace_lines),
+                        .children(pace_lines.into_iter().map(|line| div().opacity(after).child(line))),
                 );
             }
             if card.windows.is_empty() {
@@ -1568,10 +1825,10 @@ impl Shell {
                             .flex()
                             .flex_col()
                             .opacity(shown)
-                            .rounded(px(14.))
+                            .rounded(px(crate::theme::RADIUS_LG))
                             .border_1()
                             .border_color(content(0.12))
-                            .child(crate::theme::floating_surface(14.))
+                            .child(crate::theme::floating_surface(crate::theme::RADIUS_LG))
                             .shadow_lg()
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                             .child(self.accounts_page_view(provider, cx)),
@@ -1579,7 +1836,7 @@ impl Shell {
                     .with_priority(2),
                 );
             }
-            column = column.child(block);
+            column = column.child(blocks.row(block, ix, false));
         }
         column.into_any_element()
     }
@@ -1596,14 +1853,14 @@ fn muted(text: &'static str) -> gpui::Div {
 }
 
 fn value_text(text: String) -> gpui::Div {
-    div().text_size(px(14.)).font_weight(FontWeight::MEDIUM).text_color(content(0.95)).child(text)
+    div().text_size(px(14.)).font_weight(FontWeight::MEDIUM).whitespace_nowrap().text_color(content(0.95)).child(text)
 }
 
 fn notice(text: String, error: bool) -> gpui::Div {
     div()
         .px(px(10.))
         .py(px(7.))
-        .rounded_md()
+        .rounded(px(crate::theme::RADIUS_MD))
         .bg(content(0.05))
         .text_size(px(12.))
         .text_color(if error { rgb(0xe08a8a).into() } else { content(0.6) })
@@ -1611,54 +1868,101 @@ fn notice(text: String, error: bool) -> gpui::Div {
 }
 
 /// The chart's legend: always shown; a click hides or shows that provider, colours stay put.
-fn legend(page: &State, summary: &Summary, cx: &mut Context<Shell>) -> gpui::Div {
+fn legend(page: &State, summary: &Summary, now: Instant, cx: &mut Context<Shell>) -> gpui::Div {
     div().flex().flex_wrap().gap_x(px(14.)).gap_y(px(4.)).children(summary.providers.iter().map(|(prov, _)| {
         let prov = *prov;
-        let hidden = page.hidden[prov.index()];
+        let shown = page.vis[prov.index()].at(now);
         div()
             .id(("usage-legend", prov.index()))
             .flex()
             .items_center()
             .gap(px(6.))
             .text_size(px(12.))
-            .text_color(content(if hidden { 0.35 } else { 0.7 }))
+            .text_color(content(0.35 + 0.35 * shown))
             .cursor_pointer()
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.usage_page.hidden[prov.index()] = !this.usage_page.hidden[prov.index()];
-                cx.notify();
-            }))
-            .child(div().size(px(9.)).rounded_sm().bg(prov.color()).opacity(if hidden { 0.35 } else { 1. }))
+            .active(|s| s.opacity(0.7))
+            .on_click(cx.listener(move |this, _, _, cx| this.usage_toggle_provider(prov.index(), cx)))
+            .child(div().size(px(9.)).rounded(px(crate::theme::RADIUS_SM)).bg(prov.color()).opacity(0.35 + 0.65 * shown))
             .child(prov.name())
     }))
 }
 
+/// A segmented control: one thumb slides between the options, the text colour follows it,
+/// a hovered option lightens and a press dims it. Every option has the same width, so the
+/// thumb's place is a plain offset. Disabled, it keeps its place at 40% and takes no input: no
+/// hover, no press, no thumb movement.
+#[allow(clippy::too_many_arguments)]
 fn segmented<T: Copy + PartialEq + 'static>(
     id: &'static str,
     options: &[(T, String)],
     current: T,
+    page: &State,
+    now: Instant,
+    moving: &mut bool,
     on: fn(&mut Shell, T, &mut Context<Shell>),
+    disabled: bool,
     cx: &mut Context<Shell>,
 ) -> gpui::Div {
-    div().flex().p(px(2.)).gap(px(2.)).rounded_lg().bg(content(0.06)).children(options.iter().enumerate().map(
-        |(ix, (value, label))| {
-            let value = *value;
-            let chosen = value == current;
+    let here = options.iter().position(|(value, _)| *value == current).unwrap_or(0);
+    let tween = page.segs.get(id).filter(|tween| (tween.to - here as f32).abs() < 0.5);
+    // Disabled, the thumb stays on the current option whatever a slide was doing.
+    let tween = tween.filter(|_| !disabled);
+    let place = tween.map_or(here as f32, |tween| tween.at(now));
+    if tween.is_some_and(|tween| !tween.done(now)) {
+        *moving = true;
+    }
+    let chars = options.iter().map(|(_, label)| label.chars().count()).max().unwrap_or(1);
+    let cell = (chars as f32 * 6.6 + 22.).max(48.);
+    div()
+        .relative()
+        .flex()
+        .flex_shrink_0()
+        .p(px(2.))
+        .gap(px(2.))
+        .rounded(px(crate::theme::RADIUS_LG))
+        .bg(content(0.06))
+        .when(disabled, |d| d.opacity(0.4))
+        .child(
             div()
-                .id((id, ix))
+                .absolute()
+                .top(px(2.))
+                .left(px(2. + place * (cell + 2.)))
+                .w(px(cell))
                 .h(px(24.))
-                .px(px(10.))
-                .rounded_md()
+                .rounded(px(crate::theme::RADIUS_SM))
+                .bg(content(0.12)),
+        )
+        .children(options.iter().enumerate().map(|(ix, (value, label))| {
+            let value = *value;
+            // 1 under the thumb, 0 a whole option away.
+            let near = (1. - (place - ix as f32).abs()).clamp(0., 1.);
+            let option = div()
+                .id((id, ix))
+                .relative()
+                .w(px(cell))
+                .h(px(24.))
+                .rounded(px(crate::theme::RADIUS_SM))
                 .flex()
                 .items_center()
+                .justify_center()
                 .text_size(px(12.))
-                .text_color(content(if chosen { 1. } else { 0.6 }))
-                .when(chosen, |d| d.bg(content(0.12)))
-                .when(!chosen, |d| d.hover(|s| s.text_color(content(0.9))))
+                .text_color(content(0.6 + 0.4 * near))
+                .child(label.clone());
+            if disabled {
+                return option.into_any_element();
+            }
+            option
+                .when(near < 0.5, |d| d.hover(|s| s.text_color(content(0.9))))
+                .active(|s| s.opacity(0.7))
                 .cursor_pointer()
-                .on_click(cx.listener(move |this, _, _, cx| on(this, value, cx)))
-                .child(label.clone())
-        },
-    ))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if ix != here {
+                        this.usage_page.slide(id, here, ix, Instant::now(), cx.reduce_motion());
+                    }
+                    on(this, value, cx)
+                }))
+                .into_any_element()
+        }))
 }
 
 fn faded(mut color: gpui::Hsla, alpha: f32) -> gpui::Hsla {
@@ -1675,6 +1979,7 @@ fn paint_area(
     bands: &[(gpui::Hsla, Vec<f64>, Vec<f64>)],
     tips: &[(String, Vec<(gpui::Hsla, String, String)>)],
     n: usize,
+    grow: f32,
     window: &mut gpui::Window,
     cx: &mut gpui::App,
 ) {
@@ -1703,7 +2008,13 @@ fn paint_area(
         };
         axis.paint(label, gpui::point(px(x_of(*i)), px(base + 12.)), align, window, cx);
     }
+    // The area is revealed from the left edge of the plot by `grow`.
+    let reveal = Bounds::new(
+        gpui::point(px(ox + left - 1.), px(oy)),
+        gpui::size(px(plot_w * grow.clamp(0., 1.) + 1.), px(h)),
+    );
     // Each band is inset by 1 px on both edges, so neighbours show a 2 px gap of the surface.
+    window.with_content_mask(Some(gpui::ContentMask { bounds: reveal }), |window| {
     for (k, (color, low, high)) in bands.iter().enumerate() {
         let mut path = gpui::PathBuilder::fill();
         let upper = |i: usize| (y_of(high[i]) + 1.).min(if k == 0 { base } else { y_of(low[i]) - 1. });
@@ -1720,6 +2031,7 @@ fn paint_area(
             window.paint_path(path, faded(*color, 0.92));
         }
     }
+    });
     // The crosshair and its card, while the pointer is over the plot.
     let plot = Bounds::new(gpui::point(px(ox + left), px(oy + top)), gpui::size(px(plot_w), px(plot_h)));
     if let Some((x, _)) = pointer(plot, window)
@@ -2077,11 +2389,22 @@ mod tests {
         assert_eq!(usd(1234.5, true), "$1,234.50");
         assert_eq!(usd(1234.5, false), "US$ 1.234,50");
         assert_eq!(usd(0.006, true), "$0.01");
+        assert_eq!(usd(1025.68, false), "US$ 1.025,68");
+        assert_eq!(usd(1025.68, true), "$1,025.68");
+        assert_eq!(usd(1_025_068.68, false), "US$ 1.025.068,68");
+        assert_eq!(usd(0., false), "US$ 0,00");
+        assert_eq!(usd(-5.5, true), "-$5.50");
         assert_eq!(count(999., true), "999");
-        assert_eq!(count(1_234., true), "1.23K");
-        assert_eq!(count(1_234., false), "1,23 mil");
-        assert_eq!(count(2_000_000., false), "2 mi");
-        assert_eq!(count(3_500_000_000., true), "3.5B");
+        assert_eq!(count(1_234., true), "1,234");
+        assert_eq!(count(1_234., false), "1.234");
+        assert_eq!(count(2_070_123_456., false), "2.070.123.456");
+        assert_eq!(count(2_070_123_456., true), "2,070,123,456");
+        assert_eq!(count(0.4, true), "0");
+        assert_eq!(count(-1_500., false), "-1.500");
+        assert_eq!(grouped(11_216, false), "11.216");
+        assert_eq!(grouped(11_216, true), "11,216");
+        assert_eq!(grouped(1_000, false), "1.000");
+        assert_eq!(grouped(999, true), "999");
         assert_eq!(share(1., 4., true), "25%");
         assert_eq!(share(1., 3., false), "33,3%");
         assert_eq!(share(1., 10_000., true), "<0.1%");
@@ -2109,5 +2432,63 @@ mod tests {
         assert_eq!(axis_label(0.5, 0.5, true, false), "US$ 0,5");
         assert_eq!(axis_label(2_000., 1_000., true, true), "$2K");
         assert_eq!(axis_label(0.25, 0.25, true, true), "$0.25");
+    }
+
+    #[test]
+    fn a_count_starts_from_zero_when_the_reading_arrives() {
+        let arrived = Instant::now();
+        let mut counts = Counts::default();
+        // The first sample after the reading shows 0 and is still counting.
+        let (value, running) = counts.sample("cost-hero".to_owned(), 1_000., arrived, COUNT);
+        assert_eq!(value, 0.);
+        assert!(running);
+        // Halfway through the 900 ms it is somewhere between, and still counting.
+        let (value, running) =
+            counts.sample("cost-hero".to_owned(), 1_000., arrived + std::time::Duration::from_millis(450), COUNT);
+        assert!(value > 0. && value < 1_000., "{value}");
+        assert!(running);
+        // Past the 900 ms it shows the target and stops drawing frames for it.
+        let (value, running) =
+            counts.sample("cost-hero".to_owned(), 1_000., arrived + std::time::Duration::from_millis(950), COUNT);
+        assert_eq!(value, 1_000.);
+        assert!(!running);
+    }
+
+    #[test]
+    fn a_restart_counts_again_from_zero_not_from_what_was_shown() {
+        let arrived = Instant::now();
+        let mut counts = Counts::default();
+        counts.sample("tokens-tile0".to_owned(), 500., arrived, COUNT);
+        let later = arrived + std::time::Duration::from_secs(5);
+        assert_eq!(counts.sample("tokens-tile0".to_owned(), 500., later, COUNT).0, 500.);
+        // A tab or range change restarts it: 0 again at the next sample.
+        counts.restart();
+        assert_eq!(counts.sample("tokens-tile0".to_owned(), 500., later, COUNT), (0., true));
+    }
+
+    #[test]
+    fn reduced_motion_shows_the_final_value_at_once() {
+        let now = Instant::now();
+        let mut counts = Counts::default();
+        assert_eq!(counts.sample("cost-hero".to_owned(), 42.5, now, 0.), (42.5, false));
+    }
+
+    #[test]
+    fn only_new_data_restarts_the_count() {
+        let shown = vec![entry(1, "claude", "claude-sonnet-4-5", 10., 10.)];
+        let prices: HashMap<String, Price> = HashMap::new();
+        // The first reading always starts the count.
+        assert!(data_changed(None, &shown, &prices));
+        // A refresh that brings the same entries and prices changes nothing on the page.
+        assert!(!data_changed(Some((&shown, &prices)), &shown.clone(), &prices));
+        // New entries, or new prices for the same entries, start it again.
+        let more = vec![entry(1, "claude", "claude-sonnet-4-5", 10., 10.), entry(2, "codex", "gpt-x", 1., 1.)];
+        assert!(data_changed(Some((&shown, &prices)), &more, &prices));
+        let mut priced = prices.clone();
+        priced.insert(
+            "claude-sonnet-4-5".to_owned(),
+            Price { rates: Rates { input: 1., cache_read: 0.1, cache_write: 1.25, output: 2. }, fast: None },
+        );
+        assert!(data_changed(Some((&shown, &prices)), &shown, &priced));
     }
 }

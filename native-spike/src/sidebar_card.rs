@@ -253,10 +253,10 @@ impl Shell {
                         .flex_col()
                         .gap(px(8.))
                         .p(px(12.))
-                        .rounded(px(12.))
+                        .rounded(px(crate::theme::RADIUS_LG))
                         .border_1()
                         .border_color(content(0.14))
-                        .child(crate::theme::floating_surface(12.))
+                        .child(crate::theme::floating_surface(crate::theme::RADIUS_LG))
                         .shadow_lg()
                         .child(
                             div()

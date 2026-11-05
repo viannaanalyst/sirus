@@ -142,17 +142,51 @@ impl Sources {
                 _ => {}
             }
         }
-        for list in [
-            &mut sources.claude,
-            &mut sources.codex,
-            &mut sources.opencode,
-        ] {
-            let mut seen = HashSet::new();
-            list.retain(|dir| {
-                seen.insert(std::fs::canonicalize(dir).unwrap_or_else(|_| dir.clone()))
-            });
+        // Sirus Native's host has no account list of its own: its launcher names Sirus Code's
+        // `provider-accounts` folder, which is only read here (logs, never logins or keys).
+        if let Some(root) = env_dir("SIRUS_USAGE_EXTRA_ACCOUNTS") {
+            add_account_profiles(&mut sources, &root);
         }
+        dedupe_dirs(&mut sources);
         sources
+    }
+}
+
+/// Adds each `claude/<id>` and `codex/<id>` profile under a `provider-accounts` folder, as
+/// `provider_accounts::home` lays them out. Only account-id folders count; symlinks are skipped.
+fn add_account_profiles(sources: &mut Sources, root: &Path) {
+    sources.claude.extend(account_profiles(root, "claude"));
+    sources.codex.extend(account_profiles(root, "codex"));
+}
+
+fn account_profiles(root: &Path, provider: &str) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(root.join(provider)) else {
+        return Vec::new();
+    };
+    let mut dirs: Vec<PathBuf> = entries
+        .flatten()
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| uuid::Uuid::parse_str(name).is_ok())
+        })
+        .map(|entry| entry.path())
+        .collect();
+    dirs.sort();
+    dirs
+}
+
+/// Drops a folder already listed (the same path, or a symlink to it), keeping the first.
+fn dedupe_dirs(sources: &mut Sources) {
+    for list in [
+        &mut sources.claude,
+        &mut sources.codex,
+        &mut sources.opencode,
+    ] {
+        let mut seen = HashSet::new();
+        list.retain(|dir| seen.insert(std::fs::canonicalize(dir).unwrap_or_else(|_| dir.clone())));
     }
 }
 
@@ -1159,6 +1193,68 @@ mod tests {
             && e.reported_cost_usd.is_none()
             && e.session.len() == 16
             && !e.session.contains('/')));
+        assert!(history.problems.is_empty());
+    }
+
+    #[test]
+    fn account_profiles_are_listed_by_account_id_only() {
+        let root = tempfile::tempdir().unwrap();
+        let id = "6f1c2b7e-0d8a-4c35-9a4e-2b7d1f0e8c11";
+        std::fs::create_dir_all(root.path().join("claude").join(id)).unwrap();
+        std::fs::create_dir_all(root.path().join("claude/default")).unwrap();
+        std::fs::create_dir_all(root.path().join("codex").join(id)).unwrap();
+        std::fs::write(root.path().join("claude/not-a-profile"), "x").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(
+            root.path().join("codex").join(id),
+            root.path()
+                .join("claude")
+                .join("9b2e4f10-0000-4000-8000-000000000000"),
+        )
+        .unwrap();
+        let mut sources = Sources::default();
+        add_account_profiles(&mut sources, root.path());
+        assert_eq!(sources.claude, vec![root.path().join("claude").join(id)]);
+        assert_eq!(sources.codex, vec![root.path().join("codex").join(id)]);
+
+        let mut missing = Sources::default();
+        add_account_profiles(&mut missing, &root.path().join("missing"));
+        assert!(missing.claude.is_empty() && missing.codex.is_empty());
+    }
+
+    #[test]
+    fn a_response_in_two_profiles_counts_once_and_a_shared_session_id_does_not_merge() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let ms = NOW - HOUR_MS;
+        // Both profiles hold session s-1; msg_1 is the same response in each (a copied log).
+        write(
+            &first.path().join("projects/p/s-1.jsonl"),
+            &[
+                claude(ms, "msg_1", "req_1", 10),
+                claude(ms + 10, "msg_2", "req_2", 20),
+            ],
+        );
+        write(
+            &second.path().join("projects/p/s-1.jsonl"),
+            &[
+                claude(ms, "msg_1", "req_1", 10),
+                claude(ms + 20, "msg_3", "req_3", 30),
+            ],
+        );
+        let mut sources = Sources {
+            claude: vec![
+                first.path().into(),
+                second.path().into(),
+                first.path().into(),
+            ],
+            ..Default::default()
+        };
+        dedupe_dirs(&mut sources);
+        assert_eq!(sources.claude.len(), 2);
+        let history = run(&sources, NOW - DAY_MS);
+        assert_eq!(sum(&history, |e| e.output_tokens), 60);
+        assert_eq!(history.entries.len(), 1);
         assert!(history.problems.is_empty());
     }
 

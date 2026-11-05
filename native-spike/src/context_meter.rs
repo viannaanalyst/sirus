@@ -271,13 +271,13 @@ impl Shell {
                 .relative()
                 .size(px(24.))
                 .flex_shrink_0()
-                .rounded(px(7.))
+                .rounded(px(crate::theme::RADIUS_SM))
                 .flex()
                 .items_center()
                 .justify_center()
                 .cursor_pointer()
                 .when(open, |d| d.bg(content(0.05)))
-                .hover(|s| s.bg(content(0.05)))
+                .hover(|s| s.bg(content(0.07)))
                 .child(
                     canvas(
                         move |bounds, _, _| store.set(Some(bounds)),
@@ -368,10 +368,10 @@ impl Shell {
                 .py(px(8.))
                 .pr(px(8.))
                 .pl(px(12.))
-                .rounded(px(12.))
+                .rounded(px(crate::theme::RADIUS_LG))
                 .border_1()
                 .border_color(content(0.12))
-                .child(crate::theme::floating_surface(12.))
+                .child(crate::theme::floating_surface(crate::theme::RADIUS_LG))
                 .shadow_lg()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(
@@ -416,7 +416,7 @@ impl Shell {
                             .flex_shrink_0()
                             .px(px(10.))
                             .py(px(5.))
-                            .rounded(px(8.))
+                            .rounded(px(crate::theme::RADIUS_MD))
                             .border_1()
                             .text_size(px(12.))
                             .font_weight(FontWeight::MEDIUM)

@@ -30,6 +30,9 @@ Quitting with `pkill` leaves the host running. Kill it too after rebuilding it, 
 - `src/browser_bridge.rs`, `browser_tab.rs`, `browser_js/`: agent control of the browser pane and the sign-in and computer-use approval cards (see ADR-189).
 - `src/attachment_view.rs`, `attachment_doc.rs`, `attachment_pdf.rs`: the composer's attachment chips and the viewer (image gallery, PDF, Word, slides, sheets, web pages, text). `attachment_ooxml.rs` (zip and XML of Office files) and `attachment_html.rs` (DOCX, PPTX and web pages as safe HTML) are pure and tested; `attachment_web.rs` lays a WKWebView or a PDFKit `PDFView` over the viewer's body.
 - `src/theme.rs`: the look (Ink, accent, glass) and its file. `src/send_morph.rs`: the composer's send button.
+- `src/usage_page.rs`: the Usage popup. `src/sidebar_card.rs`: the hover card of a conversation. `src/split_panes.rs`: conversations side by side. `src/hover_track.rs`: the sliding hover.
+- `src/message_actions.rs`, `src/handoff.rs`, `src/transcript_select.rs`, `src/transcript_find.rs`, `src/turn_review.rs`: what a reply offers. `src/reply_rich.rs`, `src/reply_render.rs`, `src/reply_view.rs`: images, video, Mermaid, KaTeX and HTML in replies.
+- `src/file_editor.rs`: the editor in the Files panel. `src/git_sync.rs`, `src/project_scripts.rs`, `src/cli_diagnostics.rs`, `src/delegated_tasks.rs`, `src/agent_resources.rs`, `src/conversation_export.rs`, `src/chat_background.rs`, `src/simulator.rs` (hidden for now).
 - `src/i18n.rs`: English and Portuguese, with the Portuguese text as the key.
 - `src/visuals/`: native visuals, run from a JavaScript program.
 

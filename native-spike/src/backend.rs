@@ -262,6 +262,18 @@ fn ensure_host(dir: &Path) -> Result<(), String> {
     if let Some(ui) = ui_dir() {
         command.arg("--ui-dir").arg(ui);
     }
+    // Started from an agent's shell, the window inherits that session's Claude variables. The
+    // host and its agents must use their own login and folders, not that session's.
+    for (key, _) in std::env::vars_os() {
+        let name = key.to_string_lossy();
+        if name.starts_with("CLAUDE_") || name == "CLAUDECODE" {
+            command.env_remove(&key);
+        }
+    }
+    // Usage history also reads Sirus Code's named account profiles (read-only, logs only).
+    if let Some(accounts) = code_account_profiles() {
+        command.env("SIRUS_USAGE_EXTRA_ACCOUNTS", accounts);
+    }
     let child = command
         .env("SIRUS_KEYCHAIN_APP", "Sirus Native")
         // Agents are offered the browser tools: this window runs them.
@@ -279,6 +291,13 @@ fn ensure_host(dir: &Path) -> Result<(), String> {
         std::thread::sleep(Duration::from_millis(250));
     }
     Err(t("O motor do Sirus não respondeu.").into())
+}
+
+/// Sirus Code's `provider-accounts` folder, when it exists on this computer.
+fn code_account_profiles() -> Option<PathBuf> {
+    let dir = PathBuf::from(std::env::var_os("HOME")?)
+        .join("Library/Application Support/com.siruscode.app/provider-accounts");
+    dir.is_dir().then_some(dir)
 }
 
 /// Pairs this app as a device of its own host, keeping the token in the data folder.

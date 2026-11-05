@@ -377,7 +377,7 @@ impl SimulatorPanel {
             .id(id)
             .h(px(24.))
             .px(px(8.))
-            .rounded(px(6.))
+            .rounded(px(crate::theme::RADIUS_SM))
             .flex()
             .items_center()
             .flex_shrink_0()
@@ -407,7 +407,7 @@ impl SimulatorPanel {
                 .id(id)
                 .h(px(28.))
                 .px(px(12.))
-                .rounded(px(7.))
+                .rounded(px(crate::theme::RADIUS_MD))
                 .flex()
                 .items_center()
                 .justify_center()
@@ -605,7 +605,7 @@ impl Render for SimulatorPanel {
             (Some(image), Some((fw, fh))) => {
                 stage = stage.child(
                     div().absolute().size_full().flex().items_center().justify_center().child(
-                        gpui::img(image.clone()).w(px(fw)).h(px(fh)).rounded(px(18.)).object_fit(ObjectFit::Fill),
+                        gpui::img(image.clone()).w(px(fw)).h(px(fh)).rounded(px(crate::theme::RADIUS_XL)).object_fit(ObjectFit::Fill),
                     ),
                 );
             }
@@ -643,7 +643,7 @@ impl SimulatorPanel {
                 .id(("sim-device", ix))
                 .h(px(30.))
                 .px(px(8.))
-                .rounded(px(7.))
+                .rounded(px(crate::theme::RADIUS_MD))
                 .flex()
                 .items_center()
                 .justify_between()

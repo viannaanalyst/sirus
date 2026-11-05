@@ -436,7 +436,7 @@ impl SideChat {
                                 .max_w(gpui::relative(0.88))
                                 .px(px(10.))
                                 .py(px(6.))
-                                .rounded(px(12.))
+                                .rounded(px(crate::theme::RADIUS_LG))
                                 .bg(accent_wash(0.16))
                                 .text_size(px(13.))
                                 .text_color(content(0.95))
@@ -707,7 +707,7 @@ impl Render for SideChat {
                 div().flex_shrink_0().px(px(10.)).pb(px(10.)).child(
                     div()
                         .w_full()
-                        .rounded(px(14.))
+                        .rounded(px(crate::theme::RADIUS_LG))
                         .border_1()
                         .border_color(if self.focused { accent_wash(0.5) } else { content(0.12) })
                         .bg(field_fill())

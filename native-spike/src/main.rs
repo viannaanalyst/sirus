@@ -95,6 +95,7 @@ impl AssetSource for Assets {
             "pencil-line" => include_bytes!("../assets/pencil-line.svg"),
             "bot" => include_bytes!("../assets/bot.svg"),
             "refresh" => include_bytes!("../assets/refresh.svg"),
+            "chart-column" => include_bytes!("../assets/chart-column.svg"),
             "mic" => include_bytes!("../assets/mic.svg"),
             "arrow-up" => include_bytes!("../assets/arrow-up.svg"),
             "palette" => include_bytes!("../assets/palette.svg"),

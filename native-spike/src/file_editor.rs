@@ -4,9 +4,12 @@
 //! by writing the file through the host. Syntax colors come from syntax.rs and are parsed in the
 //! background after a pause in typing.
 //!
-//! Not here yet: mouse drag selection, word jumps (Option+arrows), wrapping (lines run on, and the
-//! pane does not scroll sideways), find and replace, and auto-indent. Click placement assumes one
-//! advance per character, so tabs and wide characters put the caret a little off.
+//! Also here: drag selection (a drag past the top or bottom edge scrolls one line a move), a double
+//! click for a word, a triple click for a line, and Option+arrows and Option+Backspace by word.
+//!
+//! Not here yet: wrapping (lines run on, and the pane does not scroll sideways), find and replace,
+//! and auto-indent. Click placement assumes one advance per character, so tabs and wide characters
+//! put the caret a little off.
 //!
 //! `Buffer` is the text, its selection and its edits, with no UI, so it is unit-tested on its own.
 //! Positions are byte offsets that always sit on a character boundary.
@@ -16,11 +19,11 @@ use crate::project_files;
 use crate::syntax::{self, Group, LineSpans};
 use crate::theme::{self, CARET_WIDTH, caret_color, content};
 use gpui::{
-    AnyElement, Bounds, ClipboardItem, Context, ElementInputHandler, Entity, EntityInputHandler,
-    EventEmitter, FocusHandle, Font, Hsla, KeyDownEvent, MouseButton, MouseDownEvent, Pixels,
-    Point, Render, ScrollStrategy, ShapedLine, SharedString, TextAlign, TextRun, UTF16Selection,
-    UniformListScrollHandle, Window, canvas, div, fill, point, prelude::*, px, rgb, size,
-    uniform_list,
+    AnyElement, Bounds, ClipboardItem, Context, DispatchPhase, ElementInputHandler, Entity,
+    EntityInputHandler, EventEmitter, FocusHandle, Font, Hsla, KeyDownEvent, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, ScrollStrategy,
+    ShapedLine, SharedString, TextAlign, TextRun, UTF16Selection, UniformListScrollHandle, Window,
+    canvas, div, fill, point, prelude::*, px, rgb, size, uniform_list,
 };
 use std::cell::RefCell;
 use std::ops::Range;
@@ -242,6 +245,120 @@ impl Buffer {
         self.move_to(end, extend);
     }
 
+    /// Option+Left: the caret to the start of the word before it.
+    pub fn move_word_left(&mut self, extend: bool) {
+        self.move_to(self.word_left(self.sel.cursor), extend);
+    }
+
+    /// Option+Right: the caret to the end of the word after it.
+    pub fn move_word_right(&mut self, extend: bool) {
+        self.move_to(self.word_right(self.sel.cursor), extend);
+    }
+
+    /// Option+Backspace: deletes the selection, else the word before the caret.
+    pub fn delete_word_backward(&mut self) {
+        let range = self.selection();
+        if !range.is_empty() {
+            self.replace(range, "");
+        } else if self.sel.cursor > 0 {
+            let from = self.word_left(self.sel.cursor);
+            self.replace(from..self.sel.cursor, "");
+        }
+    }
+
+    /// The start of the word before `byte`: the whitespace before it is passed, then the run of one
+    /// kind of character (a word, or a mark or punctuation).
+    pub fn word_left(&self, byte: usize) -> usize {
+        let mut at = self.floor(byte);
+        while let Some(c) = self.before(at).filter(|c| c.is_whitespace()) {
+            at -= c.len_utf8();
+        }
+        if let Some(kind) = self.before(at).map(class) {
+            while let Some(c) = self.before(at).filter(|c| class(*c) == kind) {
+                at -= c.len_utf8();
+            }
+        }
+        at
+    }
+
+    /// The end of the word after `byte`: the whitespace after it is passed, then the run of one
+    /// kind of character.
+    pub fn word_right(&self, byte: usize) -> usize {
+        let mut at = self.floor(byte);
+        while let Some(c) = self.after(at).filter(|c| c.is_whitespace()) {
+            at += c.len_utf8();
+        }
+        if let Some(kind) = self.after(at).map(class) {
+            while let Some(c) = self.after(at).filter(|c| class(*c) == kind) {
+                at += c.len_utf8();
+            }
+        }
+        at
+    }
+
+    /// The word a double click on `byte` picks: the run of one kind of character around it, within
+    /// its line. Between two characters the word wins over a space or a mark.
+    pub fn word_at(&self, byte: usize) -> Range<usize> {
+        let at = self.floor(byte);
+        let after = self.after(at).filter(|c| *c != '\n');
+        let before = self.before(at).filter(|c| *c != '\n');
+        let picked = match (after, before) {
+            (Some(a), _) if class(a) == 0 => Some((at, a)),
+            (_, Some(b)) if class(b) == 0 => Some((at - b.len_utf8(), b)),
+            (Some(a), _) => Some((at, a)),
+            (None, Some(b)) => Some((at - b.len_utf8(), b)),
+            (None, None) => None,
+        };
+        let Some((mut start, pick)) = picked else {
+            return at..at;
+        };
+        let kind = class(pick);
+        let mut end = start + pick.len_utf8();
+        while let Some(c) = self.before(start).filter(|c| *c != '\n' && class(*c) == kind) {
+            start -= c.len_utf8();
+        }
+        while let Some(c) = self.after(end).filter(|c| *c != '\n' && class(*c) == kind) {
+            end += c.len_utf8();
+        }
+        start..end
+    }
+
+    /// A double click: selects the word on `byte`.
+    pub fn select_word_at(&mut self, byte: usize) {
+        let word = self.word_at(byte);
+        self.sel = Sel {
+            anchor: word.start,
+            cursor: word.end,
+        };
+        self.goal = None;
+    }
+
+    /// A triple click: selects the line on `byte`, its newline included, as the next line starts
+    /// where the selection ends.
+    pub fn select_line_at(&mut self, byte: usize) {
+        let line = self.line_range(self.line_of(byte));
+        let end = if line.end < self.text.len() {
+            line.end + 1
+        } else {
+            line.end
+        };
+        self.sel = Sel {
+            anchor: line.start,
+            cursor: end,
+        };
+        self.goal = None;
+    }
+
+    /// The character before `at`, if any.
+    fn before(&self, at: usize) -> Option<char> {
+        self.text[..at].chars().next_back()
+    }
+
+    /// The character from `at` on, if any.
+    fn after(&self, at: usize) -> Option<char> {
+        self.text[at..].chars().next()
+    }
+
     pub fn select_all(&mut self) {
         self.sel = Sel {
             anchor: 0,
@@ -378,6 +495,18 @@ impl Buffer {
     }
 }
 
+/// What a word is made of, for Option+arrows and double clicks: 0 for letters, digits and `_`
+/// (Unicode letters included), 2 for whitespace, and 1 for everything else, such as punctuation.
+fn class(c: char) -> u8 {
+    if c.is_whitespace() {
+        2
+    } else if c.is_alphanumeric() || c == '_' {
+        0
+    } else {
+        1
+    }
+}
+
 /// Whether `next` is the same kind of change as `last` and continues it: letters typed in a row,
 /// or Backspace or Delete presses in a row over text without spaces.
 fn mergeable(last: &Edit, next: &Edit) -> bool {
@@ -430,6 +559,8 @@ pub enum EditorEvent {
 struct Geometry {
     bounds: Option<Bounds<Pixels>>,
     caret: Option<Bounds<Pixels>>,
+    /// The lines' box, below the error line; a drag past its edge scrolls.
+    list: Option<Bounds<Pixels>>,
 }
 
 pub struct Editor {
@@ -448,6 +579,8 @@ pub struct Editor {
     /// The width of one character in the editor's font.
     advance: f32,
     geometry: Rc<RefCell<Geometry>>,
+    /// The left button went down on the text and the selection follows the pointer.
+    dragging: bool,
 }
 
 impl EventEmitter<EditorEvent> for Editor {}
@@ -465,6 +598,7 @@ impl Editor {
             error: None,
             advance: FONT_SIZE * 0.6,
             geometry: Rc::default(),
+            dragging: false,
         };
         editor.schedule_highlight(cx);
         editor
@@ -542,16 +676,58 @@ impl Editor {
         self.scroll.scroll_to_item(line, ScrollStrategy::Nearest);
     }
 
-    /// Places the caret at the column under `x` on `line`.
-    fn click(&mut self, line: usize, x: f32, extend: bool) {
+    /// The column under `x`, in characters, counted from the text's left edge.
+    fn column_at(&self, x: f32) -> usize {
         let left = self
             .geometry
             .borrow()
             .bounds
             .map_or(0., |bounds| f32::from(bounds.origin.x));
-        let column = ((x - left - GUTTER) / self.advance).round().max(0.) as usize;
-        let byte = self.buffer.byte_of(line, column);
-        self.buffer.move_to(byte, extend);
+        ((x - left - GUTTER) / self.advance).round().max(0.) as usize
+    }
+
+    /// A press on `line`: a click places the caret, a double click selects the word and a triple
+    /// click the line. Only a single click starts a drag.
+    fn press(&mut self, line: usize, event: &MouseDownEvent) {
+        let byte = self
+            .buffer
+            .byte_of(line, self.column_at(f32::from(event.position.x)));
+        match event.click_count {
+            2 => self.buffer.select_word_at(byte),
+            3.. => self.buffer.select_line_at(byte),
+            _ => self.buffer.move_to(byte, event.modifiers.shift),
+        }
+        self.dragging = event.click_count == 1;
+    }
+
+    /// The pointer moved with the button held: the selection's end follows it. Past the top or the
+    /// bottom edge of the lines, the list scrolls one line toward the pointer.
+    fn drag_to(&mut self, position: Point<Pixels>) {
+        let list = self.geometry.borrow().list;
+        let Some(list) = list else {
+            return;
+        };
+        let count = self.buffer.line_count();
+        let (first, inner) = self.scroll.0.borrow().base_handle.logical_scroll_top();
+        let (top, height) = (f32::from(list.origin.y), f32::from(list.size.height));
+        let y = f32::from(position.y);
+        let line = if y < top {
+            let line = first.saturating_sub(1);
+            self.scroll.scroll_to_item(line, ScrollStrategy::Nearest);
+            line
+        } else if y >= top + height {
+            let visible = (height / ROW).ceil().max(1.) as usize;
+            let line = (first + visible).min(count - 1);
+            self.scroll.scroll_to_item(line, ScrollStrategy::Nearest);
+            line
+        } else {
+            let rows = (y - top + f32::from(inner)) / ROW;
+            (first + rows.max(0.) as usize).min(count - 1)
+        };
+        let byte = self
+            .buffer
+            .byte_of(line, self.column_at(f32::from(position.x)));
+        self.buffer.move_to(byte, true);
     }
 
     fn key(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
@@ -599,6 +775,10 @@ impl Editor {
                 self.buffer.insert(INDENT);
                 true
             }
+            "backspace" if keys.modifiers.alt => {
+                self.buffer.delete_word_backward();
+                true
+            }
             "backspace" => {
                 self.buffer.delete_backward();
                 true
@@ -621,6 +801,14 @@ impl Editor {
             }
             "down" if command => {
                 self.buffer.move_to(self.buffer.text().len(), shift);
+                true
+            }
+            "left" if keys.modifiers.alt => {
+                self.buffer.move_word_left(shift);
+                true
+            }
+            "right" if keys.modifiers.alt => {
+                self.buffer.move_word_right(shift);
                 true
             }
             "left" => {
@@ -712,7 +900,7 @@ impl Editor {
             move |event: &MouseDownEvent, window, cx| {
                 click.update(cx, |this, cx| {
                     window.focus(&this.focus, cx);
-                    this.click(line, f32::from(event.position.x), event.modifiers.shift);
+                    this.press(line, event);
                     cx.notify();
                 });
             },
@@ -819,7 +1007,54 @@ impl Render for Editor {
         let entity = cx.entity();
         let focus = self.focus.clone();
         let geometry = self.geometry.clone();
-        column.child(rows).child(
+        // The lines' box records where the drag scrolls from; while a drag is on, the window
+        // listens for the pointer, which may leave the box.
+        let (list_geometry, dragging, drag_view) =
+            (self.geometry.clone(), self.dragging, cx.entity());
+        let lines = div()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .relative()
+            .child(rows)
+            .child(
+                canvas(
+                    move |bounds, _, _| {
+                        list_geometry.borrow_mut().list = Some(bounds);
+                    },
+                    move |_, _, window, _| {
+                        if !dragging {
+                            return;
+                        }
+                        let (moved, released) = (drag_view.clone(), drag_view);
+                        window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
+                            if phase != DispatchPhase::Capture {
+                                return;
+                            }
+                            moved.update(cx, |this, cx| {
+                                if event.pressed_button == Some(MouseButton::Left) {
+                                    this.drag_to(event.position);
+                                } else {
+                                    this.dragging = false;
+                                }
+                                cx.notify();
+                            });
+                        });
+                        window.on_mouse_event(move |_: &MouseUpEvent, phase, _, cx| {
+                            if phase == DispatchPhase::Capture {
+                                released.update(cx, |this, cx| {
+                                    this.dragging = false;
+                                    cx.notify();
+                                });
+                            }
+                        });
+                    },
+                )
+                .absolute()
+                .size_full(),
+            );
+        column.child(lines).child(
             canvas(
                 move |bounds, _, _| {
                     geometry.borrow_mut().bounds = Some(bounds);
@@ -1334,6 +1569,162 @@ mod tests {
     #[test]
     fn pasted_line_endings_become_newlines() {
         assert_eq!(normalize("a\r\nb\rc\n"), "a\nb\nc\n");
+    }
+
+    #[test]
+    fn option_arrows_move_by_word() {
+        let mut b = buffer("one two  three");
+        b.move_word_right(false);
+        assert_eq!(b.cursor(), 3, "the end of the first word");
+        b.move_word_right(false);
+        assert_eq!(b.cursor(), 7);
+        b.move_word_right(false);
+        assert_eq!(b.cursor(), 14, "the end of the last word");
+        b.move_word_left(false);
+        assert_eq!(b.cursor(), 9, "the start of three, past the two spaces");
+        b.move_word_left(false);
+        assert_eq!(b.cursor(), 4);
+        b.move_word_left(false);
+        assert_eq!(b.cursor(), 0);
+        b.move_word_left(false);
+        assert_eq!(b.cursor(), 0, "nothing before the first word");
+    }
+
+    #[test]
+    fn option_arrows_with_shift_extend_the_selection() {
+        let mut b = buffer("alpha beta");
+        b.move_to(0, false);
+        b.move_word_right(true);
+        assert_eq!(b.selected_text(), "alpha");
+        b.move_word_right(true);
+        assert_eq!(b.selected_text(), "alpha beta");
+        b.move_word_left(true);
+        assert_eq!(b.selection(), 0..6);
+    }
+
+    #[test]
+    fn word_jumps_treat_marks_and_punctuation_as_their_own_runs() {
+        let b = buffer("foo.bar(x)");
+        assert_eq!(b.word_right(0), 3, "foo stops before the dot");
+        assert_eq!(b.word_right(3), 4, "the dot is a run of its own");
+        assert_eq!(b.word_right(4), 7);
+        assert_eq!(b.word_right(7), 8, "the parenthesis");
+        assert_eq!(b.word_left(10), 9, "the closing parenthesis is a run");
+        assert_eq!(b.word_left(4), 3);
+        assert_eq!(b.word_left(3), 0);
+    }
+
+    #[test]
+    fn word_jumps_follow_unicode_letters_and_skip_emoji_as_punctuation() {
+        // café (5 bytes), a space, olé (4 bytes), then an emoji and x.
+        let b = buffer("café olé😀x");
+        assert_eq!(b.word_right(0), 5, "é is a letter");
+        assert_eq!(b.word_right(5), 10, "olé ends before the emoji");
+        assert_eq!(b.word_right(10), 14, "the emoji is a run of its own");
+        assert_eq!(b.word_left(14), 10);
+        assert_eq!(b.word_left(10), 6, "back over olé");
+        let cjk = buffer("日本語 テスト");
+        assert_eq!(cjk.word_right(0), 9, "a run of letters, however written");
+        assert_eq!(cjk.word_left(cjk.text().len()), 10);
+    }
+
+    #[test]
+    fn word_jumps_never_stop_inside_a_character() {
+        let b = buffer("é😀");
+        assert_eq!(b.word_right(1), 2, "a byte inside é is floored to its start, then the word is é");
+        // Byte 3 is inside the emoji, so it floors to 2, which is the start of the emoji.
+        assert_eq!(b.word_left(3), 0, "from the emoji's start, back over the é before it");
+        assert_eq!(b.word_right(99), b.text().len());
+        assert_eq!(b.word_left(99), 2, "past the end starts from the end");
+    }
+
+    #[test]
+    fn option_backspace_deletes_a_word_back() {
+        let mut b = buffer("hello big world");
+        b.move_to(15, false);
+        b.delete_word_backward();
+        assert_eq!(b.text(), "hello big ");
+        b.delete_word_backward();
+        assert_eq!(b.text(), "hello ");
+        b.delete_word_backward();
+        assert_eq!(b.text(), "");
+        b.delete_word_backward();
+        assert_eq!(b.text(), "", "nothing before the caret");
+    }
+
+    #[test]
+    fn option_backspace_over_a_selection_deletes_the_selection_only() {
+        let mut b = buffer("keep this word");
+        b.move_to(5, false);
+        b.move_to(9, true);
+        b.delete_word_backward();
+        assert_eq!(b.text(), "keep  word", "the selected 'this' goes, the spaces around stay");
+        assert!(b.undo());
+        assert_eq!(b.text(), "keep this word");
+        assert_eq!(b.selection(), 5..9);
+    }
+
+    #[test]
+    fn option_backspace_is_one_undo_step() {
+        let mut b = buffer("one two");
+        b.move_to(7, false);
+        b.delete_word_backward();
+        assert_eq!(b.text(), "one ");
+        assert!(b.undo());
+        assert_eq!(b.text(), "one two");
+        assert!(!b.undo());
+    }
+
+    #[test]
+    fn a_double_click_selects_the_word_under_it() {
+        let b = buffer("alpha beta_2 gamma");
+        assert_eq!(b.word_at(7), 6..12, "inside beta_2, underscore and digits too");
+        assert_eq!(b.word_at(6), 6..12, "at its first byte");
+        assert_eq!(b.word_at(12), 6..12, "at its end, the word before wins over the space");
+        assert_eq!(b.word_at(0), 0..5);
+        assert_eq!(b.word_at(13), 13..18, "the next word starts at its first byte");
+    }
+
+    #[test]
+    fn a_double_click_on_a_space_selects_the_run_of_spaces() {
+        let b = buffer("a   b");
+        assert_eq!(b.word_at(2), 1..4);
+    }
+
+    #[test]
+    fn a_double_click_at_the_end_of_a_line_takes_the_word_before_it() {
+        let b = buffer("ab\ncd");
+        assert_eq!(b.word_at(2), 0..2, "the newline is never part of a word");
+        assert_eq!(b.word_at(5), 3..5, "the end of the text");
+        let empty = buffer("");
+        assert_eq!(empty.word_at(0), 0..0);
+    }
+
+    #[test]
+    fn a_double_click_selects_a_multibyte_word_in_whole() {
+        let mut b = buffer("naïve café");
+        b.select_word_at(9);
+        assert_eq!(b.selected_text(), "café");
+        b.select_word_at(4);
+        assert_eq!(b.selected_text(), "naïve", "ï is two bytes, the boundary holds");
+    }
+
+    #[test]
+    fn a_triple_click_selects_the_whole_line_with_its_newline() {
+        let mut b = buffer("one\ntwo\nthree");
+        b.select_line_at(5);
+        assert_eq!(b.selected_text(), "two\n");
+        assert_eq!(b.selection(), 4..8);
+        b.select_line_at(9);
+        assert_eq!(b.selected_text(), "three", "the last line has no newline to take");
+    }
+
+    #[test]
+    fn a_selected_line_is_replaced_whole_by_typing() {
+        let mut b = buffer("one\ntwo\nthree");
+        b.select_line_at(5);
+        b.insert("");
+        assert_eq!(b.text(), "one\nthree");
     }
 
     #[test]

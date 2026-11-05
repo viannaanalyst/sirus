@@ -44,12 +44,18 @@ mod delegated_tasks;
 /// What the running agents cost the Mac: the footer's gauge and its panel (agent_resources.rs).
 #[path = "agent_resources.rs"]
 mod agent_resources;
+/// The Usage page: Custo, Tokens and Limites over the window (usage_page.rs).
+#[path = "usage_page.rs"]
+mod usage_page;
 /// Saving a conversation as Markdown from its context menu (conversation_export.rs).
 #[path = "conversation_export.rs"]
 mod conversation_export;
 /// The composer's context ring, its popup, Compact and Compact and send (ADR-057).
 #[path = "context_meter.rs"]
 pub(crate) mod context_meter;
+/// The sidebar's hover card: a conversation's model, work time, title and folder (sidebar_card.rs).
+#[path = "sidebar_card.rs"]
+pub(crate) mod sidebar_card;
 /// ⌘F: the find bar over the open conversation (transcript_find.rs).
 #[path = "transcript_find.rs"]
 pub(crate) mod transcript_find;
@@ -97,7 +103,7 @@ const PANES: [(&str, &str, &str); 6] = [
 ];
 /// The Simulator is built but hidden for now: the owner doesn't need it yet.
 const VISIBLE_PANES: usize = 5;
-const COMMANDS: [&str; 14] = [
+const COMMANDS: [&str; 15] = [
     "Nova conversa",
     "Abrir ou fechar a sidebar",
     "Abrir ou fechar o painel lateral",
@@ -112,6 +118,7 @@ const COMMANDS: [&str; 14] = [
     "Trocar modelo e esforço",
     "Ver uso do provedor",
     "Trocar de projeto",
+    "Abrir Uso",
 ];
 
 /// One line of the palette and what choosing it does.
@@ -301,6 +308,10 @@ struct ProjectMenu {
 /// The usage popup's accounts page, after Sirus Code's `ProviderAccountsPanel`.
 #[derive(Default)]
 struct AccountsPage {
+    /// The provider whose accounts these are.
+    provider: &'static str,
+    /// Set when the page floats over the Limites tab, which fades it in.
+    shown: Option<Tween>,
     /// Who each account is signed in as, from its own usage.
     who: HashMap<String, String>,
     /// The name being typed for a new account.
@@ -499,6 +510,35 @@ fn cursor_preset(id: &str) -> (String, Option<&'static str>, bool) {
         }
     }
     (rest.to_owned(), None, fast)
+}
+
+/// A sidebar title being renamed: the caret follows the text, and a long text keeps its end
+/// (and the caret) in view, clipped at the start with no ellipsis.
+fn inline_name_field(text: &str) -> AnyElement {
+    let caret = div()
+        .flex_shrink_0()
+        .w(px(crate::theme::CARET_WIDTH))
+        .h(px(15.))
+        .rounded_full()
+        .bg(crate::theme::caret_color());
+    div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .items_center()
+        .overflow_hidden()
+        .text_size(px(13.))
+        .when(text.is_empty(), |d| d.justify_start())
+        .when(!text.is_empty(), |d| d.justify_end())
+        .child(
+            div()
+                .flex_shrink_0()
+                .whitespace_nowrap()
+                .text_color(content(0.95))
+                .child(text.to_owned()),
+        )
+        .child(caret)
+        .into_any_element()
 }
 
 /// A field's text with the caret after it, or the caret before a placeholder.
@@ -708,8 +748,8 @@ enum Waiting {
     Worktrees(String),
     ProjectAdded,
     AccountUsage(String),
-    AccountCreated,
-    AccountLogin(String),
+    AccountCreated(&'static str),
+    AccountLogin(&'static str, String),
     Skills,
     Secrets,
     Agents,
@@ -919,8 +959,12 @@ pub struct Shell {
     subagents: subagent_card::State,
     /// The footer's agent gauge and its panel (agent_resources.rs).
     resources: agent_resources::State,
+    /// The Usage page, opened from the footer or the palette (usage_page.rs).
+    usage_page: usage_page::State,
     /// The context ring's popup and its compaction state (context_meter.rs).
     context: context_meter::State,
+    /// The sidebar's hover card for a conversation row (sidebar_card.rs).
+    sidebar_card: sidebar_card::State,
     /// The ⌘F find bar and its hits (transcript_find.rs).
     find: transcript_find::State,
     /// The text selected in a reply, and its menu (transcript_select.rs).
@@ -1195,7 +1239,9 @@ impl Shell {
             queues: composer_queue::Queues::default(),
             subagents: subagent_card::State::default(),
             resources: agent_resources::State::default(),
+            usage_page: usage_page::State::default(),
             context: Default::default(),
+            sidebar_card: Default::default(),
             message_actions: Default::default(),
             turn_review: Default::default(),
             find: Default::default(),
@@ -1426,7 +1472,7 @@ impl Shell {
                         page.who.insert(id, who);
                     }
                 }
-                Some(Waiting::AccountCreated) if ok => {
+                Some(Waiting::AccountCreated(provider)) if ok => {
                     let id = value["id"].as_str().unwrap_or("").to_owned();
                     if let Some(list) = self.provider_accounts.as_array_mut() {
                         list.push(value.clone());
@@ -1434,9 +1480,13 @@ impl Shell {
                     if let Some(page) = self.usage_accounts.as_mut() {
                         page.adding = None;
                     }
-                    self.sign_in_account(id);
+                    // The new account joins the page's list at once, still waiting for its sign-in.
+                    if self.usage_page.open.is_some() {
+                        self.usage_load_limits(false, cx);
+                    }
+                    self.sign_in_account(provider, id);
                 }
-                Some(Waiting::AccountLogin(id)) => {
+                Some(Waiting::AccountLogin(provider, id)) => {
                     if let Some(page) = self.usage_accounts.as_mut() {
                         page.signing_in = None;
                         if !ok {
@@ -1447,9 +1497,12 @@ impl Shell {
                         }
                     }
                     if ok {
-                        self.select_account(id);
+                        self.select_account(provider, id);
                     }
-                    self.load_account_usage();
+                    self.load_account_usage(provider);
+                    if self.usage_page.open.is_some() {
+                        self.usage_load_limits(false, cx);
+                    }
                 }
                 Some(Waiting::SettingsData(key)) if ok => {
                     if key == "connectors" {
@@ -2338,6 +2391,7 @@ impl Shell {
     fn mention(&self) -> Option<Mention> {
         if self.palette_ui.is_some()
             || self.appearance.is_some()
+            || self.usage_page_open()
             || self.secret_entry.is_some()
             || self.grabs_typing()
         {
@@ -2417,8 +2471,7 @@ impl Shell {
         list
     }
 
-    fn load_account_usage(&mut self) {
-        let provider = self.conversations[self.active_conversation()].provider;
+    fn load_account_usage(&mut self, provider: &'static str) {
         for (id, _) in self.accounts_of(provider) {
             let call = self.backend.invoke(
                 "provider_usage",
@@ -2428,8 +2481,7 @@ impl Shell {
         }
     }
 
-    fn sign_in_account(&mut self, id: String) {
-        let provider = self.conversations[self.active_conversation()].provider;
+    fn sign_in_account(&mut self, provider: &'static str, id: String) {
         if let Some(page) = self.usage_accounts.as_mut() {
             page.signing_in = Some(id.clone());
             page.problem = None;
@@ -2438,11 +2490,10 @@ impl Shell {
             "login_provider_account",
             json!({ "provider": provider, "accountId": id }),
         );
-        self.waiting.insert(call, Waiting::AccountLogin(id));
+        self.waiting.insert(call, Waiting::AccountLogin(provider, id));
     }
 
-    fn select_account(&mut self, id: String) {
-        let provider = self.conversations[self.active_conversation()].provider;
+    fn select_account(&mut self, provider: &'static str, id: String) {
         self.backend.invoke(
             "select_provider_account",
             json!({ "provider": provider, "accountId": id }),
@@ -2490,9 +2541,9 @@ impl Shell {
                     .hover(|s| s.bg(content(0.08)))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if signed || target == "default" {
-                            this.select_account(target.clone());
+                            this.select_account(provider, target.clone());
                         } else {
-                            this.sign_in_account(target.clone());
+                            this.sign_in_account(provider, target.clone());
                         }
                         cx.notify();
                     }))
@@ -2594,8 +2645,6 @@ impl Shell {
                                 .cursor_pointer()
                                 .hover(|s| s.bg(content(0.08)))
                                 .on_click(cx.listener(move |this, _, _, cx| {
-                                    let provider =
-                                        this.conversations[this.active_conversation()].provider;
                                     this.backend.invoke(
                                         "cancel_provider_account_login",
                                         json!({ "provider": provider, "accountId": id }),
@@ -2879,8 +2928,9 @@ impl Shell {
             .cursor_pointer()
             .hover(|s| s.bg(content(0.09)).text_color(content(0.95)))
             .on_click(cx.listener(|this, _, _, cx| {
-                this.usage_accounts = Some(AccountsPage::default());
-                this.load_account_usage();
+                let provider = this.conversations[this.active_conversation()].provider;
+                this.usage_accounts = Some(AccountsPage { provider, ..Default::default() });
+                this.load_account_usage(provider);
                 cx.notify();
             }))
             .child(icon("plus", 13.).text_color(content(0.6)))
@@ -3337,6 +3387,9 @@ impl Shell {
             if self.subagents.composing(&c.session_id) {
                 return self.subagents.compose_text(&c.session_id);
             }
+        }
+        if self.usage_page.open.is_some() {
+            return Some(&mut self.ignored_text);
         }
         if self.appearance.is_some() {
             return Some(
@@ -4336,12 +4389,12 @@ impl Shell {
                         .and_then(|p| p.adding.clone())
                         .unwrap_or_default();
                     if !name.trim().is_empty() {
-                        let provider = self.conversations[self.active_conversation()].provider;
+                        let provider = self.usage_accounts.as_ref().map_or("", |p| p.provider);
                         let call = self.backend.invoke(
                             "create_provider_account",
                             json!({ "provider": provider, "name": name.trim() }),
                         );
-                        self.waiting.insert(call, Waiting::AccountCreated);
+                        self.waiting.insert(call, Waiting::AccountCreated(provider));
                     }
                 }
                 _ => return,
@@ -4514,10 +4567,14 @@ impl Shell {
             return;
         }
         if key == "escape"
-            && (self.environment.is_some() || self.appearance.is_some() || self.menu.is_some())
+            && (self.environment.is_some()
+                || self.appearance.is_some()
+                || self.usage_page_open()
+                || self.menu.is_some())
         {
             self.environment = None;
             self.appearance = None;
+            self.close_usage_page();
             self.menu = None;
             cx.notify();
             return;
@@ -4720,19 +4777,11 @@ impl Shell {
         let mut wanted: Vec<(Row, f32, f32)> = Vec::new();
         let mut y = 4.;
         if let Some(project) = self.current_project {
-            let filter = self.checkout_filter.get(&project).cloned();
-            let path = self.projects[project].path.clone();
             let mut listed: Vec<(usize, i64)> = self.projects[project]
                 .conversations
                 .iter()
                 .copied()
-                .filter(|c| {
-                    let conversation = &self.conversations[*c];
-                    filter
-                        .as_ref()
-                        .is_none_or(|wanted| *wanted == checkout_of(conversation, &path))
-                        && self.passes_filter(conversation)
-                })
+                .filter(|c| self.in_sidebar_list(project, *c))
                 .map(|c| (c, days_ago(&self.conversations[c])))
                 .collect();
             listed.sort_by_key(|(_, days)| date_group(*days));
@@ -5805,7 +5854,15 @@ impl Shell {
                             .flex()
                             .flex_col()
                             .child(
-                                div().id(id).flex_1().min_h_0().overflow_y_scroll().child(
+                                div()
+                                    .id(id)
+                                    .flex_1()
+                                    .min_h_0()
+                                    .overflow_y_scroll()
+                                    .on_scroll_wheel(cx.listener(|this, _, _, cx| {
+                                        this.sidebar_card_scrolled(cx)
+                                    }))
+                                    .child(
                                     div()
                                         .relative()
                                         .w_full()
@@ -5868,6 +5925,28 @@ impl Shell {
                     ),
             )
             .into_any_element()
+    }
+
+    /// Whether the project's sidebar list shows this conversation (its checkout and filters pass).
+    fn in_sidebar_list(&self, project: usize, conversation: usize) -> bool {
+        let conversation = &self.conversations[conversation];
+        self.checkout_filter.get(&project).is_none_or(|wanted| {
+            *wanted == checkout_of(conversation, &self.projects[project].path)
+        }) && self.passes_filter(conversation)
+    }
+
+    /// The conversation whose title edits in place in its sidebar row, when a rename is
+    /// open for a conversation the list shows. Otherwise the rename stays in the popup.
+    fn inline_rename_row(&self) -> Option<usize> {
+        let menu = self.context_menu.as_ref()?;
+        let MenuTarget::Session(index) = menu.target else {
+            return None;
+        };
+        menu.renaming.as_ref()?;
+        let project = self.current_project?;
+        (self.projects[project].conversations.contains(&index)
+            && self.in_sidebar_list(project, index))
+        .then_some(index)
     }
 
     fn passes_filter(&self, conversation: &Conversation) -> bool {
@@ -6459,6 +6538,10 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let menu = self.context_menu.as_ref()?;
+        // A rename of a listed conversation edits in its row instead (conversation_row).
+        if self.inline_rename_row().is_some() {
+            return None;
+        }
         if !menu.open.done(now) {
             *moving = true;
         }
@@ -8226,6 +8309,25 @@ impl Shell {
             .into_any_element()
     }
 
+    /// The Usage page, right beside Configurações.
+    fn usage_button(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+        div()
+            .id("sidebar-usage-page")
+            .h(px(22.))
+            .px(px(6.))
+            .rounded_md()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .text_size(px(12.))
+            .text_color(content(0.55))
+            .cursor_pointer()
+            .hover(|s| s.bg(content(0.08)).text_color(content(0.95)))
+            .on_click(cx.listener(|this, _, _, cx| this.toggle_usage_page(cx)))
+            .child(icon("chart-column", 13.).text_color(content(0.55)))
+            .child(t("Uso"))
+    }
+
     /// Settings stay one click away at the footer's right end.
     fn settings_button(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         div()
@@ -8320,6 +8422,15 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let conversation = &self.conversations[index];
+        // The draft title while this row is being renamed in place.
+        let draft: Option<String> = if self.inline_rename_row() == Some(index) {
+            self.context_menu.as_ref().and_then(|m| m.renaming.clone())
+        } else {
+            None
+        };
+        let editing = draft.is_some();
+        // Where the row was painted, for its hover card (sidebar_card.rs).
+        let place = sidebar_card::Place::default();
         let row = div()
             .id(("conversation", index))
             .absolute()
@@ -8335,12 +8446,20 @@ impl Shell {
             .items_center()
             .gap(px(8.))
             .when(active, |d| d.bg(content(0.09)))
-            .cursor_pointer()
-            .on_click(cx.listener(move |this, _, _, cx| this.open(index, cx)))
-            .on_drag(
-                split_panes::ConvDrag { session: conversation.session_id.clone(), title: conversation.title.clone() },
-                |drag, _, _, cx| cx.new(|_| split_panes::DragChip::new(drag.title.clone())),
-            )
+            .when(editing, |d| {
+                d.bg(content(0.05))
+                    .border_1()
+                    .border_color(content(0.3))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            })
+            .when(!editing, |d| {
+                d.cursor_pointer()
+                    .on_click(cx.listener(move |this, _, _, cx| this.open(index, cx)))
+                    .on_drag(
+                        split_panes::ConvDrag { session: conversation.session_id.clone(), title: conversation.title.clone() },
+                        |drag, _, _, cx| cx.new(|_| split_panes::DragChip::new(drag.title.clone())),
+                    )
+            })
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(move |this, event: &MouseDownEvent, _, cx| {
@@ -8348,23 +8467,46 @@ impl Shell {
                     this.open_context_menu(MenuTarget::Session(index), event, cx);
                 }),
             )
-            .child(self.conversation_mark(conversation, now, active))
+            .on_hover({
+                let (view, place) = (cx.entity(), place.clone());
+                move |hovered: &bool, _, cx| {
+                    let hovered = *hovered;
+                    view.update(cx, |this, cx| {
+                        this.sidebar_card_hover(index, place.get(), hovered, cx)
+                    });
+                }
+            })
+            .child(place.probe())
+            // The 2 px gap under the row belongs to it, so the pointer crosses rows unbroken.
             .child(
                 div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .top(px(CONV_ROW - 2.))
+                    .h(px(2.)),
+            )
+            .child(self.conversation_mark(conversation, now, active))
+            .child(match &draft {
+                Some(text) => inline_name_field(text),
+                None => div()
                     .flex_1()
                     .min_w_0()
                     .truncate()
                     .text_size(px(13.))
                     .text_color(content(if active { 1. } else { 0.68 }))
-                    .child(conversation.title.clone()),
-            )
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .text_size(px(11.))
-                    .text_color(content(0.35))
-                    .child(conversation.age()),
-            );
+                    .child(conversation.title.clone())
+                    .into_any_element(),
+            })
+            .when(!editing, |d| {
+                d.child(
+                    div()
+                        .flex_shrink_0()
+                        .text_size(px(11.))
+                        .text_color(content(0.35))
+                        .child(conversation.age()),
+                )
+            });
         crate::hover_track::list("sidebar")
             .row(row, index, active)
             .into_any_element()
@@ -9759,7 +9901,10 @@ impl Shell {
             .any(|r| r["kind"]["type"] != "userInput");
         let queueing = live || self.queues.waiting(&conversation.session_id);
         let queue_card = self.queue_card(ix, cx);
-        let typing = self.palette_ui.is_none() && self.appearance.is_none() && !self.grabs_typing();
+        let typing = self.palette_ui.is_none()
+            && self.appearance.is_none()
+            && !self.usage_page_open()
+            && !self.grabs_typing();
         let styled = styled_tokens(if draft.text.is_empty() {
             " ".to_owned()
         } else {
@@ -10569,6 +10714,7 @@ impl Shell {
             })
             .child(div().flex_1())
             .when_some(self.resources_gauge(cx), |d, gauge| d.child(gauge))
+            .child(self.usage_button(cx))
             .child(self.settings_button(cx))
             .into_any_element()
     }
@@ -11225,6 +11371,7 @@ impl Shell {
                 self.toggle_project_menu(cx);
                 self.open_project_sub(ProjectSub::Projects, cx);
             }
+            PaletteHit::Command(14) => self.toggle_usage_page(cx),
             PaletteHit::Command(pane) => self.open_pane(pane - 5, cx),
         }
         cx.notify();
@@ -13583,12 +13730,18 @@ impl Render for Shell {
         let open = self.sidebar.at(now);
         let footer = self.footer(self.sidebar_width * open, cx);
         let panel = self.appearance_view(now, &mut moving, cx);
-        let settings_cover = self.appearance.as_ref().map_or(0., |open| open.at(now).clamp(0., 1.));
+        let usage_page = self.usage_page_view(now, &mut moving, cx);
+        let settings_cover = self
+            .appearance
+            .as_ref()
+            .map_or(0., |open| open.at(now).clamp(0., 1.))
+            .max(self.usage_page.cover(now));
         self.viewport_width = f32::from(size.width);
         self.viewport_height = f32::from(size.height);
         self.dock_drawn = self.dock.at(now) * self.dock_width;
         crate::panel_browser::set_covered(
             self.appearance.is_some()
+                || self.usage_page_open()
                 || self.palette_ui.is_some()
                 || self.environment.is_some()
                 || self.menu.is_some()
@@ -13601,6 +13754,7 @@ impl Render for Shell {
         let usage_popup = self.usage_popup_view(now, &mut moving, cx);
         let resources_popup = self.resources_popup_view(now, &mut moving, cx);
         let context_popup = self.context_popup_view(now, &mut moving, cx);
+        let sidebar_card = self.sidebar_card_view(now, &mut moving, cx);
         let project_menu = self.project_menu_view(now, &mut moving, cx);
         let filter_menu = self.filter_menu_view(now, &mut moving, cx);
         let context_menu = self.context_menu_view(now, &mut moving, cx);
@@ -13816,10 +13970,12 @@ impl Render for Shell {
             .children(usage_popup)
             .children(resources_popup)
             .children(context_popup)
+            .children(sidebar_card)
             .children(add_menu)
             .children(environment)
             .children(incoming_card)
             .children(panel)
+            .children(usage_page)
             .children(palette_view)
             .children(stats)
     }

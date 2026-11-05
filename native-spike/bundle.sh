@@ -19,12 +19,15 @@ cp target/host/release/sirus-host "$APP/Contents/MacOS/"
 # The host serves it with --ui-dir (backend.rs looks in Contents/Resources/ui, else ../dist).
 mkdir -p "$APP/Contents/Resources"
 ditto "$ROOT/dist" "$APP/Contents/Resources/ui"
+# The same icon as Sirus Code, for the Dock and Finder.
+cp "$ROOT/src-tauri/icons/icon.icns" "$APP/Contents/Resources/AppIcon.icns"
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0"><dict>
 <key>CFBundleExecutable</key><string>sirus-native-spike</string>
 <key>CFBundleIdentifier</key><string>com.siruscode.native</string>
 <key>CFBundleName</key><string>Sirus Native</string>
+<key>CFBundleIconFile</key><string>AppIcon</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>0.0.1</string>
 <key>LSMinimumSystemVersion</key><string>13.0</string>

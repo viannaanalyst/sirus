@@ -300,7 +300,7 @@ pub(crate) fn readout(
 }
 
 /// A dashed vertical guide at `x`, from `top` down `height` px.
-pub(super) fn crosshair(origin: Point<Pixels>, x: f32, height: f32, window: &mut Window) {
+pub(crate) fn crosshair(origin: Point<Pixels>, x: f32, height: f32, window: &mut Window) {
     let mut y = 0.;
     while y < height {
         window.paint_quad(fill(
@@ -315,7 +315,7 @@ pub(super) fn crosshair(origin: Point<Pixels>, x: f32, height: f32, window: &mut
 }
 
 /// A y domain with round ticks covering every value, as charts want.
-pub(super) struct Scale {
+pub(crate) struct Scale {
     pub min: f64,
     pub max: f64,
     pub step: f64,
@@ -379,7 +379,7 @@ impl Scale {
 }
 
 /// 1.2K, 48K, 3.4M; plain numbers keep `step`'s decimals.
-pub(super) fn compact(value: f64, step: f64) -> String {
+pub(crate) fn compact(value: f64, step: f64) -> String {
     let trim = |s: String| {
         if s.contains('.') {
             s.trim_end_matches('0').trim_end_matches('.').to_owned()

@@ -245,6 +245,8 @@ impl HoverTrack {
             },
         )
         .absolute()
+        .top_0()
+        .left_0()
         .size_full()
     }
 
@@ -267,7 +269,11 @@ impl HoverTrack {
                 },
                 |_, _, _, _| {},
             )
+            // Pinned to the corner: left to its static place, it would start after the row's
+            // padding yet keep the row's full width, and the pill would stick out on the right.
             .absolute()
+            .top_0()
+            .left_0()
             .size_full(),
         )
     }

@@ -18,6 +18,7 @@ import { ComposerSend } from "../components/ComposerSend";
 import { ControlPillMenu } from "../components/ControlPillMenu";
 import { GlassSurface } from "../components/GlassSurface";
 import { ListSection } from "../components/ListSection";
+import { ProjectRobot } from "../components/ProjectRobot";
 import { ProviderIcon } from "../components/ProviderIcon";
 import { pickAttachments } from "../data/attachments";
 import { isScratch, SCRATCH_FOLDER } from "../data/scratch";
@@ -25,6 +26,8 @@ import { computerName, type Computer } from "../data/computers";
 import { useSirus } from "../data/store";
 import { createV5SheetStackNavigator } from "../native/createV5StackNavigator";
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../native/StackHeader";
+import { ProjectChip } from "../components/ProjectChip";
+import { useMainTabs } from "./main-tabs-context";
 
 const DEFAULT_MODEL = "m:";
 const Sheet = createV5SheetStackNavigator();
@@ -37,7 +40,7 @@ interface Draft {
   prompt: string;
   files: { name: string; data: string }[];
 }
-interface ProjectRow { readonly key: string; readonly computer: Computer; readonly project: Project }
+export interface ProjectRow { readonly key: string; readonly computer: Computer; readonly project: Project }
 
 const DraftContext = createContext<{ draft: Draft; setDraft: (update: (draft: Draft) => Draft) => void; close: () => void; started: (computerId: string, sessionId: string) => void } | null>(null);
 const useDraft = () => use(DraftContext)!;
@@ -57,7 +60,7 @@ async function scratchProject(computerId: string): Promise<Project> {
 }
 
 /** Every computer's projects, the most recently opened first. */
-function useProjects(): ProjectRow[] {
+export function useProjects(): ProjectRow[] {
   const data = useSirus((state) => state.data);
   const computers = useSirus((state) => state.computers);
   return useMemo(() => computers.flatMap((computer) => (data[computer.id]?.projects ?? []).filter((project) => !isScratch(project)).map((project) => ({ key: `${computer.id}:${project.id}`, computer, project })))
@@ -95,6 +98,29 @@ export function NewThreadScreen() {
   </DraftContext>;
 }
 
+/**
+ * "Novo" in the top bar's pill: the same new-conversation page (project, worktree or folder,
+ * composer, agent and model) living on the main screen. The project comes from the drawer;
+ * without one it starts in the most recently opened. A started conversation opens over it.
+ */
+export function NewThreadTab() {
+  const navigation = useNavigation<NavigationProp<ParamListBase>>();
+  const tabs = useMainTabs();
+  const project = tabs?.project ?? null;
+  const [draft, setDraftState] = useState<Draft>({ projectKey: project, provider: null, model: null, isolated: null, prompt: "", files: [] });
+  useEffect(() => { setDraftState((current) => current.projectKey === project ? current : { ...current, projectKey: project }); }, [project]);
+  const value = {
+    draft,
+    setDraft: (update: (current: Draft) => Draft) => setDraftState(update),
+    close: () => undefined,
+    started: (computerId: string, sessionId: string) => {
+      setDraftState((current) => ({ ...current, prompt: "", files: [] }));
+      navigation.navigate("Thread", { computerId, sessionId });
+    },
+  };
+  return <DraftContext value={value}><MainPage embedded /></DraftContext>;
+}
+
 /** The project's own icon (`project_auto_icon`), else a folder. */
 export function ProjectIcon(props: { readonly computerId: string; readonly projectId: string; readonly size?: number }) {
   const [uri, setUri] = useState<string | null>(null);
@@ -109,8 +135,10 @@ export function ProjectIcon(props: { readonly computerId: string; readonly proje
     : <SymbolView name="folder.fill" size={size - 2} tintColorClassName="accent-foreground-muted" />;
 }
 
-function MainPage() {
+function MainPage(props: { readonly embedded?: boolean }) {
+  const embedded = props.embedded === true;
   const navigation = useNavigation<NavigationProp<ParamListBase>>();
+  const tabs = useMainTabs();
   const insets = useSafeAreaInsets();
   const { draft, setDraft, close, started } = useDraft();
   const projects = useProjects();
@@ -191,23 +219,35 @@ function MainPage() {
   const fromOrigin = settings?.worktreesFromOrigin ?? false;
   const branchLabel = branch ? worktree ? fromOrigin ? `A partir de origin/${branch}` : `A partir de ${branch}` : branch : "…";
 
-  return <View className="flex-1 bg-sheet">
-    <NativeStackScreenOptions options={{ title: "", headerBackVisible: false }} />
-    <NativeHeaderToolbar placement="left">
-      <NativeHeaderToolbar.Button accessibilityLabel="Cancelar" label="Cancelar" onPress={close} />
-    </NativeHeaderToolbar>
+  const openProjects = () => { if (embedded) tabs?.setDrawerOpen(true); else navigation.navigate("NewThreadProject"); };
+  return <View className={embedded ? "flex-1 bg-screen" : "flex-1 bg-sheet"}>
+    {embedded ? null : <>
+      <NativeStackScreenOptions options={{ title: "", headerBackVisible: false }} />
+      <NativeHeaderToolbar placement="left">
+        <NativeHeaderToolbar.Button accessibilityLabel="Cancelar" label="Cancelar" onPress={close} />
+      </NativeHeaderToolbar>
+    </>}
     <View style={{ flex: 1 }}>
-      <ScrollView style={{ flex: 1 }} contentInsetAdjustmentBehavior="automatic" keyboardDismissMode="interactive" keyboardShouldPersistTaps="handled"
-        contentContainerStyle={{ flexGrow: 1, alignItems: "center", paddingHorizontal: 24, paddingTop: 4 }} showsVerticalScrollIndicator={false}>
-        {target ? <View className="w-full items-center gap-1.5">
+      <ScrollView style={{ flex: 1 }} contentInsetAdjustmentBehavior={embedded ? "never" : "automatic"} keyboardDismissMode="interactive" keyboardShouldPersistTaps="handled"
+        contentContainerStyle={{ flexGrow: 1, alignItems: "center", paddingHorizontal: embedded ? 16 : 24, paddingTop: embedded ? tabs?.topInset ?? 60 : 4 }} showsVerticalScrollIndicator={false}>
+        {embedded && target ? <View className="w-full items-center">
+          <ProjectChip projectKey={tabs?.project ?? null} />
+          <View className="flex-1 items-center justify-center gap-1.5 pb-24">
+            <ProjectRobot project={chosen?.project} name={chosen ? undefined : "Sem projeto"} size={76} />
+            <AppText className="mt-3 text-center font-app-medium text-2xl tracking-tight">Em que vamos trabalhar?</AppText>
+            <Pressable onPress={openProjects} accessibilityRole="button" accessibilityLabel="Escolher projeto" className="active:opacity-60">
+              <AppText numberOfLines={1} className="text-center text-sm text-foreground-muted">{chosen ? chosen.project.name : "Sem projeto"}{computers.length > 1 ? ` · ${computerName(target)}` : ""}</AppText>
+            </Pressable>
+          </View>
+        </View> : target ? <View className="w-full items-center gap-1.5">
           <AppText className="text-center font-app-medium text-2xl tracking-tight">{chosen ? "O que vamos construir" : "O que vamos fazer?"}</AppText>
           {chosen ? <View className="max-w-full flex-row items-center justify-center">
             <AppText className="font-app-medium text-2xl tracking-tight">em </AppText>
-            <Pressable onPress={() => navigation.navigate("NewThreadProject")} accessibilityLabel="Escolher projeto" className="min-w-0 max-w-[240px] border-b border-foreground-muted active:opacity-60">
+            <Pressable onPress={openProjects} accessibilityLabel="Escolher projeto" className="min-w-0 max-w-[240px] border-b border-foreground-muted active:opacity-60">
               <AppText numberOfLines={1} className="font-app-medium text-2xl tracking-tight">{chosen.project.name}</AppText>
             </Pressable>
             <AppText className="font-app-medium text-2xl tracking-tight">?</AppText>
-          </View> : <Pressable onPress={() => navigation.navigate("NewThreadProject")} className="border-b border-foreground-muted active:opacity-60">
+          </View> : <Pressable onPress={openProjects} className="border-b border-foreground-muted active:opacity-60">
             <AppText className="text-base text-foreground-muted">Sem projeto</AppText>
           </Pressable>}
           <View className="mt-3 flex-row items-center gap-1.5">
@@ -224,7 +264,7 @@ function MainPage() {
             <SymbolView name={(worktree ? "folder.badge.plus" : "folder") as AppSymbolName} size={14} tintColorClassName="accent-foreground-muted" />
             <AppText className="text-sm text-foreground-muted">{worktree ? "Novo worktree" : "Pasta do projeto"}</AppText>
           </Pressable>
-          <Pressable onPress={worktree ? undefined : () => navigation.navigate("NewThreadBranch")} disabled={worktree} className="min-w-0 flex-row items-center gap-1.5 active:opacity-60" accessibilityRole="button">
+          <Pressable onPress={worktree ? undefined : () => embedded ? navigation.navigate("NewThread", { projectKey: chosen?.key }) : navigation.navigate("NewThreadBranch")} disabled={worktree} className="min-w-0 flex-row items-center gap-1.5 active:opacity-60" accessibilityRole="button">
             <SymbolView name="arrow.triangle.branch" size={13} tintColorClassName="accent-foreground-muted" />
             <AppText numberOfLines={1} className="shrink text-sm text-foreground-muted">{branchLabel}</AppText>
             {worktree ? null : <SymbolView name="chevron.right" size={10} weight="semibold" tintColorClassName="accent-foreground-muted" />}
@@ -240,7 +280,7 @@ function MainPage() {
               </Pressable>
             </View>)}
           </ScrollView> : null}
-          <AppTextInput value={draft.prompt} onChangeText={(prompt) => setDraft((current) => ({ ...current, prompt }))} placeholder="Pergunte qualquer coisa…" multiline autoFocus
+          <AppTextInput value={draft.prompt} onChangeText={(prompt) => setDraft((current) => ({ ...current, prompt }))} placeholder={embedded ? "Peça algo ao Sirus…" : "Pergunte qualquer coisa…"} multiline autoFocus={!embedded}
             {...(returnSends ? { submitBehavior: "submit" as const, returnKeyType: "send" as const, onSubmitEditing: () => void start() } : {})}
             className="max-h-40 min-h-[64px] rounded-none border-0 bg-transparent px-2 py-2 text-base" />
           <View className="flex-row items-center gap-1">
@@ -348,7 +388,7 @@ function ProjectPage() {
  * Adds a project on the computer with the most recent one, as the web app's Add project: a
  * GitHub clone or an existing folder, next to the other projects (their parent folder).
  */
-function addProject(kind: "clone" | "folder", projects: ProjectRow[], choose: (key: string) => void) {
+export function addProject(kind: "clone" | "folder", projects: ProjectRow[], choose: (key: string) => void) {
   const recent = projects[0];
   const computer = recent?.computer ?? useSirus.getState().computers[0];
   if (!computer) return;

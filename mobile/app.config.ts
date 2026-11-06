@@ -5,11 +5,6 @@ import type { ExpoConfig } from "expo/config";
  * Expo, native navigation, Liquid Glass and SF Symbols. Signed with the owner's free Personal
  * Team, so no push, app groups or Sign in with Apple capabilities are requested.
  */
-const dmSans = {
-  regular: "@expo-google-fonts/dm-sans/400Regular/DMSans_400Regular.ttf",
-  medium: "@expo-google-fonts/dm-sans/500Medium/DMSans_500Medium.ttf",
-  bold: "@expo-google-fonts/dm-sans/700Bold/DMSans_700Bold.ttf",
-};
 
 /**
  * Updates come from the owner's own computer (ADR-135 addendum), never from Expo's servers:
@@ -50,7 +45,6 @@ const config: ExpoConfig = {
     },
   },
   plugins: [
-    ["expo-font", { ios: { fonts: [dmSans.regular, dmSans.medium, dmSans.bold] } }],
     "expo-secure-store",
     "expo-web-browser",
     ["expo-speech-recognition", {
@@ -58,6 +52,7 @@ const config: ExpoConfig = {
       speechRecognitionPermission: "O Sirus transcreve o que você fala para escrever mensagens aos agentes.",
     }],
     ["expo-image-picker", { photosPermission: "O Sirus anexa fotos às mensagens que você manda aos agentes.", cameraPermission: false, microphonePermission: false }],
+    ["expo-splash-screen", { image: "./assets/splash.png", imageWidth: 309, backgroundColor: "#0f0f12" }],
     ["expo-build-properties", { ios: { deploymentTarget: "16.4" } }],
   ],
 };

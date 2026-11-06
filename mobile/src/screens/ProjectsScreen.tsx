@@ -20,7 +20,7 @@ import { EmptyState } from "./ConversationsScreen";
 type Diff = { additions: number; deletions: number };
 
 /** Uncommitted line counts by `computerId:projectId` (`project_diff_stats`), refreshed on demand. */
-const useProjectDiffs = create<{ readonly diffs: Record<string, Diff>; load: (computerId: string) => Promise<void> }>()((set) => ({
+export const useProjectDiffs = create<{ readonly diffs: Record<string, Diff>; load: (computerId: string) => Promise<void> }>()((set) => ({
   diffs: {},
   load: async (computerId) => {
     try {
@@ -30,7 +30,7 @@ const useProjectDiffs = create<{ readonly diffs: Record<string, Diff>; load: (co
   },
 }));
 
-interface ProjectSummary {
+export interface ProjectSummary {
   readonly computerId: string;
   readonly project: Project;
   readonly rows: ConversationRow[];
@@ -38,7 +38,7 @@ interface ProjectSummary {
 }
 
 /** Every computer's projects (not the "Sem projeto" folder), most recently opened first. */
-function useProjectSummaries(): ProjectSummary[] {
+export function useProjectSummaries(): ProjectSummary[] {
   const data = useSirus((state) => state.data);
   const computers = useSirus((state) => state.computers);
   const rows = useConversationRows();

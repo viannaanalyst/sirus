@@ -26,7 +26,7 @@ export function linkFileReferences(markdown: string, cwd: string): string {
 /**
  * A reply's markdown drawn natively: selectable
  * text, GitHub flavor, code blocks with syntax colors, tables and task lists, in the theme's
- * markdown colors and DM Sans.
+ * markdown colors and the phone's own font.
  */
 export function Markdown(props: {
   readonly markdown: string;
@@ -38,17 +38,18 @@ export function Markdown(props: {
   const { appearance, themeAppearance } = useAppearancePreferences();
   const markdownStyle = useMemo<MarkdownStyle>(() => {
     const typography = resolveNativeMarkdownTypography(appearance.baseFontSize);
-    const body = { color: theme["--color-md-body"], fontFamily: "DMSans-Regular", fontSize: typography.fontSize, lineHeight: typography.lineHeight, marginTop: 0, marginBottom: 8 };
+    const body = { color: theme["--color-md-body"], fontFamily: "System", fontWeight: "400", fontSize: typography.fontSize, lineHeight: Math.round(typography.fontSize * 1.5), marginTop: 0, marginBottom: 12 };
     // A modest radius: iOS clips square table-cell borders without stroking the corner arcs.
     const block = { marginTop: 4, marginBottom: 12, borderRadius: 8, borderWidth: StyleSheet.hairlineWidth, borderColor: theme["--color-md-hr"] };
     const heading = (level: number) => {
-      const fontSize = typography.headingFontSizes[level - 1] ?? typography.fontSize;
-      return { ...body, color: theme["--color-md-strong"], fontFamily: "DMSans-Bold", fontSize, lineHeight: fontSize * 1.35, marginTop: 8 };
+      // As Monocode's phone: the two top levels a little larger, the rest bold lines of body size.
+      const fontSize = level <= 2 ? typography.fontSize + 2 : typography.fontSize;
+      return { ...body, color: theme["--color-md-strong"], fontFamily: "System", fontWeight: "600", fontSize, lineHeight: Math.round(fontSize * 1.45), marginTop: 4 };
     };
     return {
       paragraph: body,
       h1: heading(1), h2: heading(2), h3: heading(3), h4: heading(4), h5: heading(5), h6: heading(6),
-      strong: { color: theme["--color-md-strong"], fontFamily: "DMSans-Bold", fontWeight: "normal" },
+      strong: { color: theme["--color-md-strong"], fontFamily: "System", fontWeight: "bold" },
       link: { color: theme["--color-md-link"], underline: false },
       code: { fontFamily: MONOSPACE, color: theme["--color-foreground-secondary"], backgroundColor: "transparent", borderColor: "transparent", fontSize: typography.fontSize * 0.9 },
       codeBlock: {
@@ -63,7 +64,7 @@ export function Markdown(props: {
       thematicBreak: { color: theme["--color-md-hr"], height: 1, marginTop: 8, marginBottom: 8 },
       table: {
         ...body, ...block,
-        headerFontFamily: "DMSans-Bold", headerTextColor: theme["--color-md-strong"], headerBackgroundColor: theme["--color-md-code-bg"],
+        headerFontFamily: "System", headerTextColor: theme["--color-md-strong"], headerBackgroundColor: theme["--color-md-code-bg"],
         rowEvenBackgroundColor: "transparent", rowOddBackgroundColor: "transparent", cellPaddingHorizontal: 10, cellPaddingVertical: 7,
       },
       taskList: { checkedColor: theme["--color-md-link"], checkedTextColor: theme["--color-md-body"], borderColor: theme["--color-foreground-muted"], checkedStrikethrough: false },

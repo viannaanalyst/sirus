@@ -8,6 +8,8 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import "../global.css";
 import { useSirus } from "./data/store";
 import { LaunchOverlay } from "./components/LaunchOverlay";
+import { NotificationBanners } from "./components/NotificationBanners";
+import { navigationRef, syncBannerScreen } from "./data/navigation-ref";
 import { checkForAppUpdate } from "./data/app-updates";
 import { accessFromLink, pairComputer } from "./data/computers";
 import { AppearancePreferencesProvider } from "./features/settings/appearance/AppearancePreferencesProvider";
@@ -18,6 +20,7 @@ import { nativeHeaderScrollEdgeEffects, type AppNativeStackNavigationOptions } f
 import { Platform } from "react-native";
 import { ConnectScreen } from "./screens/ConnectScreen";
 import { SearchScreen } from "./screens/ConversationsScreen";
+import { CostScreen } from "./screens/CostScreen";
 import { MainTabs } from "./screens/MainTabs";
 import { ProjectScreen } from "./screens/ProjectsScreen";
 import { PullRequestScreen, PullRequestsScreen } from "./screens/PullRequestsScreen";
@@ -32,15 +35,14 @@ import {
   SettingsAppearanceScreen,
   SettingsKeyboardScreen,
   SettingsOrganizationScreen,
-  SettingsArchivedScreen,
   SettingsSnoozedScreen,
   SettingsNewConversationsScreen,
-  SettingsConversationBehaviorScreen,
   SettingsSourceControlScreen,
   SettingsAgentBehaviorScreen,
   SettingsMaintenanceScreen,
   SettingsUsageScreen,
   SettingsAboutScreen,
+  SettingsScreen,
 } from "./screens/SettingsScreen";
 import { TerminalScreen } from "./screens/TerminalScreen";
 import { ThreadSettingsScreen } from "./screens/ThreadSettingsScreen";
@@ -86,6 +88,7 @@ export default function App() {
       <SafeAreaProvider>
         <AppearancePreferencesProvider>
           <Navigation />
+          <NotificationBanners />
           <LaunchOverlay />
         </AppearancePreferencesProvider>
       </SafeAreaProvider>
@@ -98,11 +101,13 @@ function Navigation() {
   const ready = useSirus((state) => state.ready);
   const paired = useSirus((state) => state.computers.length > 0);
   if (!ready) return null;
-  return <NavigationContainer theme={theme}>
+  return <NavigationContainer theme={theme} ref={navigationRef} onReady={syncBannerScreen} onStateChange={syncBannerScreen}>
     <Stack.Navigator screenOptions={GLASS_HEADER as never}>
       {paired ? <>
-        {/* The main tabs (Início, Conversas, Projetos, Ajustes); everything else opens over them. */}
-        <Stack.Screen name="Home" component={MainTabs} options={{ title: "Sirus" }} />
+        {/* The main screen (top bar: Novo, Conversas, Painel; the Projetos drawer); everything else opens over it. */}
+        <Stack.Screen name="Home" component={MainTabs} options={{ title: "Sirus", headerShown: false }} />
+        <Stack.Screen name="Settings" component={SettingsScreen} options={{ headerShown: false }} />
+        <Stack.Screen name="Cost" component={CostScreen} options={{ headerShown: false }} />
         <Stack.Screen name="Search" component={SearchScreen} />
         <Stack.Screen name="Project" component={ProjectScreen} />
         <Stack.Screen name="PullRequests" component={PullRequestsScreen} />
@@ -112,7 +117,7 @@ function Navigation() {
         <Stack.Screen name="Terminal" component={TerminalScreen} />
         <Stack.Screen name="Files" component={FilesScreen} />
         <Stack.Screen name="File" component={FileScreen} />
-        <Stack.Screen name="Git" component={GitScreen} />
+        <Stack.Screen name="Git" component={GitScreen} options={{ headerShown: false }} />
         <Stack.Screen name="Diff" component={DiffScreen} />
         <Stack.Screen name="ThreadSettings" component={ThreadSettingsScreen} options={FORM_SHEET as never} />
         <Stack.Screen name="SettingsComputers" component={SettingsComputersScreen} />
@@ -122,10 +127,8 @@ function Navigation() {
         <Stack.Screen name="SettingsAppearance" component={SettingsAppearanceScreen} />
         <Stack.Screen name="SettingsKeyboard" component={SettingsKeyboardScreen} />
         <Stack.Screen name="SettingsOrganization" component={SettingsOrganizationScreen} />
-        <Stack.Screen name="SettingsArchived" component={SettingsArchivedScreen} />
         <Stack.Screen name="SettingsSnoozed" component={SettingsSnoozedScreen} />
         <Stack.Screen name="SettingsNewConversations" component={SettingsNewConversationsScreen} />
-        <Stack.Screen name="SettingsConversationBehavior" component={SettingsConversationBehaviorScreen} />
         <Stack.Screen name="SettingsSourceControl" component={SettingsSourceControlScreen} />
         <Stack.Screen name="SettingsAgentBehavior" component={SettingsAgentBehaviorScreen} />
         <Stack.Screen name="SettingsMaintenance" component={SettingsMaintenanceScreen} />

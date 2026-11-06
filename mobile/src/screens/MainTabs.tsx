@@ -1,113 +1,75 @@
 import { useNavigation, type NavigationProp, type ParamListBase } from "@react-navigation/native";
-import * as Haptics from "expo-haptics";
-import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
-import { Keyboard, View, type NativeSyntheticEvent } from "react-native";
-import { Tabs, type TabSelectedEvent, type TabSelectionPreventedEvent, type TabSelectionRejectedEvent } from "react-native-screens";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { Keyboard, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { ProjectsDrawer } from "../components/ProjectsDrawer";
+import { TopBar } from "../components/TopBar";
 import { bucketCounts, useConversationRows } from "../data/use-conversations";
 import { useUniwindTheme } from "../lib/useUniwindTheme";
 import { NativeWorkspaceTabActivityContext } from "../native/v5-workspace-context";
 import { ConversationsScreen } from "./ConversationsScreen";
 import { HomeScreen } from "./HomeScreen";
-import { ProjectsScreen } from "./ProjectsScreen";
-import { SettingsScreen } from "./SettingsScreen";
-import { MainTabContext, type MainTab, type ConversationFilter } from "./main-tabs-context";
+import { NewThreadTab } from "./NewThreadScreen";
+import { MainTabContext, type ConversationFilter, type MainTab } from "./main-tabs-context";
 
-const SEARCH_TAB = "search";
-
-const TABS: readonly { key: MainTab; title: string; icon: string; selected: string }[] = [
-  { key: "home", title: "Início", icon: "house", selected: "house.fill" },
-  { key: "conversations", title: "Conversas", icon: "bubble.left.and.bubble.right", selected: "bubble.left.and.bubble.right.fill" },
-  { key: "projects", title: "Projetos", icon: "folder", selected: "folder.fill" },
-  { key: "settings", title: "Ajustes", icon: "gearshape", selected: "gearshape.fill" },
-];
+/** Height of the top bar's buttons, and the gap below it before content starts. */
+const BAR = 44;
+const GAP = 12;
 
 /**
- * A tab's content, mounted the first time it is chosen and kept afterwards (switching back keeps
- * its scroll). Only the chosen tab writes the shared header (`NativeStackScreenOptions` and
- * `NativeHeaderToolbar` read this context).
+ * A place of the top bar's pill, mounted the first time it is chosen and kept afterwards
+ * (switching back keeps its scroll). Hidden places do not draw and are told they are inactive.
  */
-function RetainedTab(props: { readonly active: boolean; readonly isActive: () => boolean; readonly children: ReactNode }) {
+function Place(props: { readonly active: boolean; readonly children: ReactNode }) {
   const [mounted, setMounted] = useState(props.active);
   if (props.active && !mounted) setMounted(true);
-  const activity = useMemo(() => ({ active: props.active, isActive: props.isActive }), [props.active, props.isActive]);
-  return mounted ? <NativeWorkspaceTabActivityContext value={activity}>{props.children}</NativeWorkspaceTabActivityContext> : null;
+  const activity = useMemo(() => ({ active: props.active, isActive: () => props.active }), [props.active]);
+  if (!mounted) return null;
+  return <View style={{ position: "absolute", top: 0, bottom: 0, left: 0, right: 0, display: props.active ? "flex" : "none" }}>
+    <NativeWorkspaceTabActivityContext value={activity}>{props.children}</NativeWorkspaceTabActivityContext>
+  </View>;
 }
 
 /**
- * The phone's main screen: iOS's own tab bar with Início, Conversas, Projetos and Ajustes, and the
- * detached search button (iOS 26) that opens the search over every conversation. A conversation,
- * a project's page or a settings page opens over the tabs in the main stack.
+ * The phone's main screen (the approved design): a top bar with the sidebar button, a pill with
+ * Novo, Conversas and Painel, and the settings button, over the chosen place. The sidebar
+ * button opens the Projetos drawer; a conversation, a project's page or a settings page opens
+ * over this screen in the main stack.
  */
 export function MainTabs() {
   const navigation = useNavigation<NavigationProp<ParamListBase>>();
-  // The chosen tab is drawn in the text colour (white in dark, black in light), not the system blue.
+  const insets = useSafeAreaInsets();
   const theme = useUniwindTheme();
-  const [selected, setSelected] = useState<MainTab>("home");
+  const [selected, setSelected] = useState<MainTab>("dashboard");
   const [filter, setFilter] = useState<ConversationFilter>("all");
-  const [provenance, setProvenance] = useState(0);
+  const [project, setProject] = useState<string | null>(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
   // The badge counts what waits on the person: approvals and questions.
   const rows = useConversationRows();
   const waiting = useMemo(() => bucketCounts(rows).attention, [rows]);
-  const request = useMemo(() => ({ selectedScreenKey: selected, baseProvenance: provenance }), [selected, provenance]);
-  const selectedRef = useRef(selected);
-  selectedRef.current = selected;
-  const isActive = useCallback((tab: MainTab) => () => selectedRef.current === tab, []);
+  const topInset = insets.top + BAR + GAP + 6;
   const open = useCallback((tab: MainTab, next?: ConversationFilter) => {
     if (next) setFilter(next);
+    Keyboard.dismiss();
     setSelected(tab);
   }, []);
-  const context = useMemo(() => ({ selected, open, filter, setFilter }), [selected, open, filter]);
-  const activeChecks = useMemo(() => Object.fromEntries(TABS.map((tab) => [tab.key, isActive(tab.key)])) as Record<MainTab, () => boolean>, [isActive]);
+  const context = useMemo(() => ({ selected, open, filter, setFilter, project, setProject, drawerOpen, setDrawerOpen, topInset }), [selected, open, filter, project, drawerOpen, topInset]);
+  const screen = theme["--color-screen"];
 
   return <MainTabContext value={context}>
-    <View style={{ flex: 1 }}>
-      <Tabs.Host
-        navStateRequest={request}
-        ios={{ tabBarControllerMode: "tabBar", tabBarMinimizeBehavior: "never", tabBarTintColor: theme["--color-foreground"] }}
-        onTabSelectionPrevented={({ nativeEvent }: NativeSyntheticEvent<TabSelectionPreventedEvent>) => {
-          if (nativeEvent.preventedScreenKey !== SEARCH_TAB) return;
-          void Haptics.selectionAsync().catch(() => undefined);
-          navigation.navigate("Search");
-        }}
-        onTabSelectionRejected={({ nativeEvent }: NativeSyntheticEvent<TabSelectionRejectedEvent>) => setProvenance(nativeEvent.provenance)}
-        onTabSelected={({ nativeEvent }: NativeSyntheticEvent<TabSelectedEvent>) => {
-          const tab = nativeEvent.selectedScreenKey as MainTab;
-          setProvenance(nativeEvent.provenance);
-          if (nativeEvent.actionOrigin === "programmatic-js" || tab === selected) return;
-          Keyboard.dismiss();
-          void Haptics.selectionAsync().catch(() => undefined);
-          setSelected(tab);
-        }}
-      >
-        {TABS.map((tab) => <Tabs.Screen
-          key={tab.key}
-          screenKey={tab.key}
-          title={tab.title}
-          badgeValue={tab.key === "home" && waiting > 0 ? String(waiting) : undefined}
-          tabBarItemAccessibilityLabel={tab.title}
-          specialEffects={{ repeatedTabSelection: { popToRoot: false, scrollToTop: true } }}
-          ios={{
-            icon: { type: "sfSymbol", name: tab.icon },
-            selectedIcon: { type: "sfSymbol", name: tab.selected },
-            overrideScrollViewContentInsetAdjustmentBehavior: false,
-          }}
-        >
-          <RetainedTab active={selected === tab.key} isActive={activeChecks[tab.key]}>
-            {tab.key === "home" ? <HomeScreen /> : tab.key === "conversations" ? <ConversationsScreen /> : tab.key === "projects" ? <ProjectsScreen /> : <SettingsScreen />}
-          </RetainedTab>
-        </Tabs.Screen>)}
-        <Tabs.Screen
-          key={SEARCH_TAB}
-          screenKey={SEARCH_TAB}
-          title="Buscar"
-          preventNativeSelection
-          tabBarItemAccessibilityLabel="Buscar conversas"
-          ios={{ role: "search", automaticallyActivatesSearch: true, icon: { type: "sfSymbol", name: "magnifyingglass" } }}
-        >
-          <View />
-        </Tabs.Screen>
-      </Tabs.Host>
+    <View className="flex-1 bg-screen">
+      <Place active={selected === "new"}><NewThreadTab /></Place>
+      <Place active={selected === "conversations"}><ConversationsScreen /></Place>
+      <Place active={selected === "dashboard"}><HomeScreen /></Place>
+      {/* The bar floats over the content, which scrolls under a fade of the screen's colour. */}
+      <View pointerEvents="box-none" style={{ position: "absolute", top: 0, left: 0, right: 0 }}>
+        <View pointerEvents="none" style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: -14, experimental_backgroundImage: `linear-gradient(${screen} 72%, transparent)` }} />
+        <View style={{ paddingTop: insets.top + 6, paddingHorizontal: 16 }}>
+          <TopBar selected={selected} onSelect={open} onSidebar={() => setDrawerOpen(true)} onSettings={() => navigation.navigate("Settings")} waiting={waiting} />
+        </View>
+      </View>
+      <ProjectsDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} selected={project} onSelect={setProject} />
     </View>
   </MainTabContext>;
 }

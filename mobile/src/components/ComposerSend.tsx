@@ -3,13 +3,14 @@ import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from "expo-spe
 import { useRef, useState } from "react";
 import { ActivityIndicator, Alert, Pressable, View } from "react-native";
 
-import { useUniwindTheme } from "../lib/useUniwindTheme";
+import { inkOn, useMacAccent } from "../data/mac-accent";
 import { SymbolView } from "./AppSymbol";
 
 /**
- * The composer's trailing control: a microphone while the field is empty, a
- * compact white send button once there is text, stop while the agent works. Dictation is the
- * iPhone's own speech recognition: words land in the field as they are spoken.
+ * The composer's trailing controls: the microphone, and a round button filled with the Mac's
+ * accent (ink chosen to contrast): send once there is something to send, stop while the agent
+ * works and the field is empty. Dictation is the iPhone's own speech recognition: words land
+ * in the field as they are spoken.
  */
 export function ComposerSend(props: {
   readonly text: string;
@@ -21,12 +22,16 @@ export function ComposerSend(props: {
   readonly disabled?: boolean;
   /** Whether there is something to send (text by default; attachments count too). */
   readonly canSend?: boolean;
+  /** The Mac's accent colour (`#rrggbb`), the fill of send and stop; the first computer's by default. */
+  readonly accent?: string;
 }) {
-  const theme = useUniwindTheme();
+  const macAccent = useMacAccent();
+  const accent = props.accent ?? macAccent;
   const [listening, setListening] = useState(false);
   // What was in the field when dictation began; the live words follow it.
   const base = useRef("");
   const join = (spoken: string) => [base.current.trimEnd(), spoken.trim()].filter(Boolean).join(" ");
+  const ink = inkOn(accent);
 
   useSpeechRecognitionEvent("result", (event) => {
     const spoken = event.results[0]?.transcript ?? "";
@@ -59,20 +64,20 @@ export function ComposerSend(props: {
   // the microphone and the send button are both always there; while the agent works
   // and nothing is typed, send becomes stop.
   const mic = listening
-    ? <Pressable onPress={stopDictation} accessibilityLabel="Concluir ditado" hitSlop={6} className="size-8 items-center justify-center rounded-full bg-foreground active:opacity-70">
-        <SymbolView name="waveform" size={14} weight="semibold" tintColorClassName="accent-screen" />
+    ? <Pressable onPress={stopDictation} accessibilityLabel="Concluir ditado" hitSlop={6} className="size-9 items-center justify-center rounded-full bg-foreground active:opacity-70">
+        <SymbolView name="waveform" size={15} weight="semibold" tintColorClassName="accent-screen" />
       </Pressable>
     : <Pressable onPress={() => void startDictation()} accessibilityLabel="Ditar" hitSlop={6} disabled={props.disabled}
-        className="size-8 items-center justify-center rounded-full active:bg-row-hover">
-        <SymbolView name="mic" size={17} tintColorClassName="accent-foreground-muted" />
+        className="size-9 items-center justify-center rounded-full active:bg-row-hover">
+        <SymbolView name="mic" size={20} tintColorClassName="accent-foreground-muted" />
       </Pressable>;
   const action = !hasText && props.onStop && !listening
-    ? <Pressable onPress={props.onStop} accessibilityLabel="Parar" hitSlop={6} className="size-8 items-center justify-center rounded-full bg-foreground active:opacity-70">
-        <SymbolView name="stop.fill" size={11} tintColorClassName="accent-screen" />
+    ? <Pressable onPress={props.onStop} accessibilityLabel="Parar" hitSlop={6} className="size-[42px] items-center justify-center rounded-full active:opacity-70" style={{ backgroundColor: accent }}>
+        <View className="size-3.5 rounded" style={{ backgroundColor: ink }} />
       </Pressable>
     : <Pressable onPress={props.onSend} disabled={!canSend || props.disabled || props.sending || listening} accessibilityLabel="Enviar" hitSlop={6}
-        className="size-8 items-center justify-center rounded-full bg-foreground active:opacity-70 disabled:opacity-30">
-        {props.sending ? <ActivityIndicator color={theme["--color-screen"]} size="small" /> : <SymbolView name="arrow.up" size={14} weight="bold" tintColorClassName="accent-screen" />}
+        className="size-[42px] items-center justify-center rounded-full active:opacity-70" style={{ backgroundColor: accent, opacity: !canSend || props.disabled || listening ? 0.35 : 1 }}>
+        {props.sending ? <ActivityIndicator color={ink} size="small" /> : <SymbolView name="arrow.up" size={18} weight="bold" tintColor={ink} />}
       </Pressable>;
-  return <View className="flex-row items-center gap-1.5">{mic}{action}</View>;
+  return <View className="flex-row items-center gap-0.5">{mic}{action}</View>;
 }

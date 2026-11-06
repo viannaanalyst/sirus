@@ -1,7 +1,7 @@
 import { useNavigation, useRoute, type NavigationProp, type ParamListBase, type RouteProp } from "@react-navigation/native";
 import * as Application from "expo-application";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { ActivityIndicator, Alert, Image, Linking, Pressable, ScrollView, View } from "react-native";
+import { ActivityIndicator, Alert, Linking, Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { create } from "zustand";
 
@@ -9,7 +9,7 @@ import type { AppSettings, ProviderUsage, Session } from "@sirus/client/types";
 import { translate } from "@sirus/i18n";
 import { orderedUsageWindows, resetDuration, USAGE_PROVIDER_IDS, usageWindowLabel } from "@sirus/lib/provider-usage";
 import { providerById } from "@sirus/lib/provider-registry";
-import { APPROVAL_CHOICES, AUTO_ARCHIVE_DEFAULT_DAYS, AUTO_ARCHIVE_MAX_DAYS, clampArchiveDays, isProviderEnabled, STREAMING_CHOICES, WORKSPACE_CHOICES } from "@sirus/lib/settings";
+import { APPROVAL_CHOICES, isProviderEnabled, STREAMING_CHOICES, WORKSPACE_CHOICES } from "@sirus/lib/settings";
 import { isSnoozed, snoozeCountdown } from "@sirus/lib/snooze";
 
 import type { AppSymbolName } from "../components/AppSymbol";
@@ -21,6 +21,7 @@ import { ListRowLayout } from "../components/ListRowLayout";
 import { ListSection } from "../components/ListSection";
 import { ListToggleRow } from "../components/ListToggleRow";
 import { ProviderIcon } from "../components/ProviderIcon";
+import { SheetGroup, SheetRow, SheetScreen, SheetSection } from "../components/SheetKit";
 import { computerName } from "../data/computers";
 import { useSirus } from "../data/store";
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../native/StackHeader";
@@ -31,8 +32,6 @@ import { ThemeAppearanceSection } from "../features/settings/appearance/sections
 import { createNativeMailSearchToolbarItem } from "../features/layout/native-mail-search-toolbar";
 import { checkForAppUpdate, runningUpdateLabel } from "../data/app-updates";
 import { ConnectScreen } from "./ConnectScreen";
-import SIRUS_GLYPH from "../../assets/sirus-glyph.png";
-import { useUniwindTheme } from "../lib/useUniwindTheme";
 
 const t = (key: string, params?: Record<string, string | number>) => translate("pt-BR", key, params);
 const icon = (name: string) => name as AppSymbolName;
@@ -60,65 +59,70 @@ function Note(props: { readonly children: string }) {
 }
 
 /**
- * Ajustes (ADR-135), the fourth tab: the Sirus card (this iPhone, its computers and the app
- * version) and the phone web app's sections, each row a white symbol on a coloured square as iOS
- * Settings draws them, opening its page over the tabs.
+ * Ajustes (ADR-135) in the sheet of the approved design: the computer's status row on top, then
+ * grouped rows (icon, value, chevron) that open each settings page over the stack, Reconectar and
+ * Desconectar at the end. Every page the old list reached is still one row away.
  */
 export function SettingsScreen() {
   const navigation = useNavigation<NavigationProp<ParamListBase>>();
-  const insets = useSafeAreaInsets();
-  const theme = useUniwindTheme();
   const computers = useSirus((state) => state.computers);
   const connection = useSirus((state) => state.connection);
   const data = useSirus((state) => state.data);
   const prefs = useSirus((state) => state.prefs);
-  const archived = useMemo(() => Object.values(data).reduce((sum, value) => sum + (value.settings?.archivedSessionIds.length ?? 0), 0), [data]);
   const snoozed = useMemo(() => Object.values(data).reduce((sum, value) => sum + value.sessions.filter((session) => !session.sideChat && !session.pullAsk && isSnoozed(session)).length, 0), [data]);
   const online = computers.filter((computer) => connection[computer.id] === "open").length;
   const go = (screen: string) => () => navigation.navigate(screen);
-  return <>
-    <NativeStackScreenOptions options={{ title: t("mobile.settings"), headerTitle: undefined, headerSearchBarOptions: undefined, unstable_headerLeftItems: () => [], unstable_headerRightItems: () => [] }} />
-    <ScrollView contentInsetAdjustmentBehavior="automatic" showsVerticalScrollIndicator={false} className="flex-1 bg-screen"
-      contentContainerClassName="gap-6 px-4 pt-3" contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}>
-      <Pressable onPress={go("SettingsAbout")} accessibilityRole="button" accessibilityLabel="Sobre o Sirus Code"
-        className="flex-row items-center gap-3.5 rounded-[24px] border-continuous bg-grouped-card px-4 py-3.5 active:bg-row-hover">
-        <View className="size-[54px] items-center justify-center rounded-[15px] border-continuous bg-foreground">
-          <Image source={SIRUS_GLYPH} style={{ width: 32, height: 32, tintColor: theme["--color-screen"] }} />
-        </View>
-        <View className="min-w-0 flex-1 gap-0.5">
-          <AppText className="font-app-bold text-xl">Sirus Code</AppText>
-          <AppText numberOfLines={1} className="text-sm text-foreground-muted">
-            {computers.length === 1 ? computerName(computers[0]!) : `${computers.length} computadores`} · {online === computers.length ? "conectado" : `${online} de ${computers.length} conectado${online === 1 ? "" : "s"}`} · {Application.nativeApplicationVersion ?? ""}
-          </AppText>
-        </View>
-        <SymbolView name="chevron.right" size={14} weight="semibold" tintColorClassName="accent-chevron" />
-      </Pressable>
-      <ListSection title={t("mobile.connections")}>
-        <ListRow icon={icon("desktopcomputer")} tint="#4f8cff" label="Computadores" detail={String(computers.length)} onPress={go("SettingsComputers")} />
-        <ListRow icon={icon("bell.badge.fill")} tint="#e5604d" label={t("mobile.alerts")} onPress={go("SettingsAlerts")} />
-      </ListSection>
-      <ListSection title={t("mobile.interface")}>
-        <ListRow icon={icon("paintbrush.fill")} tint="#a16ae8" label={t("mobile.appearance")} detail={t(`mobile.scheme.${prefs.colorScheme}`)} onPress={go("SettingsAppearance")} />
-        <ListRow icon={icon("keyboard.fill")} tint="#8e8e93" label={t("mobile.keyboard")} onPress={go("SettingsKeyboard")} />
-      </ListSection>
-      <ListSection title={t("mobile.projectsAndConversations")}>
-        <ListRow icon={icon("folder.fill")} tint="#45b8ac" label={t("mobile.organization")} onPress={go("SettingsOrganization")} />
-        <ListRow icon={icon("archivebox.fill")} tint="#ee8a3a" label={t("mobile.archivedConversations")} detail={String(archived)} onPress={go("SettingsArchived")} />
-        <ListRow icon={icon("moon.fill")} tint="#5856d6" label="Conversas adiadas" detail={String(snoozed)} onPress={go("SettingsSnoozed")} />
-      </ListSection>
-      <ListSection title={t("phoneSettings.macSettings")} footer={t("mobile.settingsHere")}>
-        <ListRow icon={icon("plus.bubble.fill")} tint="#30a46c" label={t("phoneSettings.newConversations")} onPress={go("SettingsNewConversations")} />
-        <ListRow icon={icon("text.bubble.fill")} tint="#4f8cff" label={t("phoneSettings.conversationBehavior")} onPress={go("SettingsConversationBehavior")} />
-        <ListRow icon={icon("arrow.triangle.branch")} tint="#e0609a" label={t("phoneSettings.sourceControl")} onPress={go("SettingsSourceControl")} />
-        <ListRow icon={icon("sparkles")} tint="#f0a830" label="Comportamento do agente" onPress={go("SettingsAgentBehavior")} />
-        <ListRow icon={icon("wrench.and.screwdriver.fill")} tint="#6e6e78" label={t("phoneSettings.maintenance")} onPress={go("SettingsMaintenance")} />
-      </ListSection>
-      <ListSection title={t("mobile.app")}>
-        <ListRow icon={icon("chart.bar.fill")} tint="#30a46c" label={t("mobile.usage")} onPress={go("SettingsUsage")} />
-        <ListRow icon={icon("info.circle.fill")} tint="#8e8e93" label={t("mobile.about")} onPress={go("SettingsAbout")} />
-      </ListSection>
-    </ScrollView>
-  </>;
+  const first = computers[0];
+  const status = !computers.length ? "Nenhum computador" : online === computers.length ? "Conectado" : online ? `${online} de ${computers.length} conectados` : connection[first!.id] === "lost" ? "Fora de alcance" : "Conectando…";
+  const reconnect = () => { for (const computer of computers) void useSirus.getState().addComputer(computer); };
+  const disconnect = () => {
+    if (computers.length !== 1 || !first) { navigation.navigate("SettingsComputers"); return; }
+    Alert.alert(`Desconectar de ${computerName(first)}?`, "Este iPhone deixa de ver as conversas dele. Para voltar, pareie de novo com um código.", [
+      { text: "Cancelar", style: "cancel" },
+      { text: "Desconectar", style: "destructive", onPress: () => { void useSirus.getState().forgetComputer(first.id); } },
+    ]);
+  };
+  return <SheetScreen title="Ajustes" onClose={() => navigation.goBack()}>
+    <SheetGroup className="mt-2">
+      <SheetRow icon="desktopcomputer" title={first ? (computers.length > 1 ? `${computerName(first)} +${computers.length - 1}` : computerName(first)) : "Computador"} note={`${status} · Sirus ${Application.nativeApplicationVersion ?? ""}`.trim()}
+        accessory={<View className={`size-2.5 rounded-full ${online ? "bg-adaptive-emerald-600-400" : "bg-warning"}`} />} onPress={go("SettingsComputers")} first />
+    </SheetGroup>
+    <SheetSection>{t("mobile.connections")}</SheetSection>
+    <SheetGroup>
+      <SheetRow first icon="desktopcomputer" title="Computadores" value={String(computers.length)} chevron onPress={go("SettingsComputers")} />
+      <SheetRow icon="bell" title={t("mobile.alerts")} chevron onPress={go("SettingsAlerts")} />
+    </SheetGroup>
+    <SheetSection>{t("mobile.interface")}</SheetSection>
+    <SheetGroup>
+      <SheetRow first icon="paintbrush" title={t("mobile.appearance")} value={t(`mobile.scheme.${prefs.colorScheme}`)} chevron onPress={go("SettingsAppearance")} />
+      <SheetRow icon="keyboard" title={t("mobile.keyboard")} chevron onPress={go("SettingsKeyboard")} />
+    </SheetGroup>
+    <SheetSection>{t("mobile.projectsAndConversations")}</SheetSection>
+    <SheetGroup>
+      <SheetRow first icon="folder" title={t("mobile.organization")} chevron onPress={go("SettingsOrganization")} />
+      <SheetRow icon="moon" title="Conversas adiadas" value={String(snoozed)} chevron onPress={go("SettingsSnoozed")} />
+    </SheetGroup>
+    <SheetSection>{t("phoneSettings.macSettings")}</SheetSection>
+    <SheetGroup>
+      <SheetRow first icon="plus.bubble" title={t("phoneSettings.newConversations")} chevron onPress={go("SettingsNewConversations")} />
+      <SheetRow icon="arrow.triangle.branch" title={t("phoneSettings.sourceControl")} chevron onPress={go("SettingsSourceControl")} />
+      <SheetRow icon="sparkles" title="Comportamento do agente" chevron onPress={go("SettingsAgentBehavior")} />
+      <SheetRow icon="wrench.and.screwdriver" title={t("phoneSettings.maintenance")} chevron onPress={go("SettingsMaintenance")} />
+    </SheetGroup>
+    <AppText className="mt-1.5 px-3 text-xs leading-4 text-foreground-tertiary">{t("mobile.settingsHere")}</AppText>
+    <SheetSection>{t("mobile.app")}</SheetSection>
+    <SheetGroup>
+      <SheetRow first icon="chart.bar" title={t("mobile.usage")} chevron onPress={go("SettingsUsage")} />
+      <SheetRow icon="info.circle" title={t("mobile.about")} value={Application.nativeApplicationVersion ?? undefined} chevron onPress={go("SettingsAbout")} />
+    </SheetGroup>
+    <SheetSection>Espaço de trabalho</SheetSection>
+    <SheetGroup>
+      <SheetRow first icon="arrow.clockwise" title="Reconectar" disabled={!computers.length} onPress={reconnect} />
+    </SheetGroup>
+    <SheetGroup className="mt-3">
+      <SheetRow first destructive icon="xmark" title="Desconectar do Mac" disabled={!computers.length} onPress={disconnect} />
+    </SheetGroup>
+  </SheetScreen>;
 }
 
 export function SettingsComputersScreen() {
@@ -234,8 +238,8 @@ export function SettingsOrganizationScreen() {
   </Page>;
 }
 
-/** Archived or snoozed conversations of every computer, with their way back and delete. */
-function ConversationList(props: { readonly kind: "archived" | "snoozed" }) {
+/** Snoozed conversations of every computer, with their way back and delete. */
+function ConversationList() {
   const data = useSirus((state) => state.data);
   const computers = useSirus((state) => state.computers);
   const [query, setQuery] = useState("");
@@ -243,15 +247,14 @@ function ConversationList(props: { readonly kind: "archived" | "snoozed" }) {
   const all = useMemo(() => {
     const list: { computerId: string; session: Session; project?: string }[] = [];
     for (const [computerId, value] of Object.entries(data)) {
-      const archived = new Set(value.settings?.archivedSessionIds ?? []);
       const projects = new Map(value.projects.map((project) => [project.id, project.name]));
       for (const session of value.sessions) {
         if (session.sideChat || session.pullAsk) continue;
-        if (props.kind === "archived" ? archived.has(session.id) : !archived.has(session.id) && isSnoozed(session)) list.push({ computerId, session, project: projects.get(session.projectId) });
+        if (isSnoozed(session)) list.push({ computerId, session, project: projects.get(session.projectId) });
       }
     }
     return list.sort((a, b) => b.session.lastActivityAt.localeCompare(a.session.lastActivityAt));
-  }, [data, props.kind]);
+  }, [data]);
   const rows = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
     return all.filter((row) => (!computerFilter || row.computerId === computerFilter)
@@ -269,7 +272,7 @@ function ConversationList(props: { readonly kind: "archived" | "snoozed" }) {
     const run = (action: Parameters<ReturnType<typeof useSirus.getState>["rowAction"]>[2]) =>
       void useSirus.getState().rowAction(computerId, session.id, action).catch((reason: unknown) => Alert.alert(session.title, reason instanceof Error ? reason.message : String(reason)));
     Alert.alert(session.title || "Conversa", undefined, [
-      props.kind === "archived" ? { text: t("mobile.unarchive"), onPress: () => run({ type: "unarchive" }) } : { text: t("snooze.return"), onPress: () => run({ type: "snooze", until: null }) },
+      { text: t("snooze.return"), onPress: () => run({ type: "snooze", until: null }) },
       { text: t("mobile.delete"), style: "destructive", onPress: () => Alert.alert("Excluir a conversa?", "Não dá para desfazer.", [
         { text: "Cancelar", style: "cancel" },
         { text: "Excluir", style: "destructive", onPress: () => run({ type: "delete", removeWorktree: false }) },
@@ -277,13 +280,13 @@ function ConversationList(props: { readonly kind: "archived" | "snoozed" }) {
       { text: "Cancelar", style: "cancel" },
     ]);
   };
-  return <Page title={props.kind === "archived" ? t("mobile.archivedConversations") : "Conversas adiadas"}>
-    {/* The archive: filter and search in the bottom glass toolbar. */}
+  return <Page title="Conversas adiadas">
+    {/* The list: filter and search in the bottom glass toolbar. */}
     <NativeStackScreenOptions optionsVersion={[filterMenu.items, computerFilter]} options={{
       headerSearchBarOptions: { autoCapitalize: "none", onCancelButtonPress: () => setQuery("") },
       unstable_headerToolbarItems: () => [createNativeMailSearchToolbarItem({
-        filterMenu, filterButtonId: `${props.kind}-filter`, filterSystemImageName: computerFilter ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle",
-        onSearchTextChange: setQuery, placeholder: "Buscar", searchTextChangeId: `${props.kind}-search-text`, showsSearchDismissButton: true,
+        filterMenu, filterButtonId: "snoozed-filter", filterSystemImageName: computerFilter ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle",
+        onSearchTextChange: setQuery, placeholder: "Buscar", searchTextChangeId: "snoozed-search-text", showsSearchDismissButton: true,
       } as never)],
     }} />
     {rows.length ? <ListSection>
@@ -294,17 +297,16 @@ function ConversationList(props: { readonly kind: "archived" | "snoozed" }) {
             <AppText numberOfLines={1} className="text-base">{row.session.title || "Conversa"}</AppText>
             <AppText numberOfLines={1} className="text-xs text-foreground-muted">
               {[row.project, several ? computerName(computers.find((computer) => computer.id === row.computerId) ?? { hostName: "", kind: "mac" }) : null,
-                props.kind === "snoozed" && row.session.snoozedUntil ? snoozeCountdown(row.session.snoozedUntil, new Date(), t) : null].filter(Boolean).join(" · ")}
+                row.session.snoozedUntil ? snoozeCountdown(row.session.snoozedUntil, new Date(), t) : null].filter(Boolean).join(" · ")}
             </AppText>
           </View>
         </View>
       </Pressable>)}
-    </ListSection> : <AppText className="mt-10 text-center text-sm text-foreground-muted">{query || computerFilter ? "Nada encontrado." : props.kind === "archived" ? "Nenhuma conversa arquivada." : "Nenhuma conversa adiada."}</AppText>}
+    </ListSection> : <AppText className="mt-10 text-center text-sm text-foreground-muted">{query || computerFilter ? "Nada encontrado." : "Nenhuma conversa adiada."}</AppText>}
     <View className="h-16" />
   </Page>;
 }
-export const SettingsArchivedScreen = () => <ConversationList kind="archived" />;
-export const SettingsSnoozedScreen = () => <ConversationList kind="snoozed" />;
+export const SettingsSnoozedScreen = ConversationList;
 
 /**
  * A computer's own settings page (ADR-130): the chosen computer (when there are several), then
@@ -345,29 +347,6 @@ export function SettingsNewConversationsScreen() {
         separated={index > 0} disabled={disabled} onPress={() => save({ defaultApproval: choice.mode })} />)}
     </ListSection>
   </>}</MacPage>;
-}
-
-export function SettingsConversationBehaviorScreen() {
-  return <MacPage title={t("phoneSettings.conversationBehavior")}>{(settings, save, disabled) => {
-    const days = settings.autoArchiveInactiveDays;
-    return <ListSection title={t("settings.autoArchive")}>
-      <ListToggleRow icon={icon("arrow.triangle.merge")} label={t("settings.autoArchiveMerged")} description={t("settings.autoArchiveMergedHelp")} value={settings.autoArchiveMerged} disabled={disabled}
-        onValueChange={(autoArchiveMerged) => save({ autoArchiveMerged })} />
-      <ListToggleRow icon={icon("clock")} label={t("settings.autoArchiveInactive", { days: days ?? AUTO_ARCHIVE_DEFAULT_DAYS })} description={t("settings.autoArchiveInactiveHelp")} value={days !== null} disabled={disabled}
-        onValueChange={(on) => save({ autoArchiveInactiveDays: on ? AUTO_ARCHIVE_DEFAULT_DAYS : null })} />
-      {days !== null ? <ListRowLayout label={t("settings.inactiveDays")} accessory={<View className="flex-row items-center gap-1">
-        <Stepper symbol="minus" disabled={disabled || days <= 1} onPress={() => save({ autoArchiveInactiveDays: clampArchiveDays(days - 1) })} />
-        <AppText className="w-8 text-center text-base">{days}</AppText>
-        <Stepper symbol="plus" disabled={disabled || days >= AUTO_ARCHIVE_MAX_DAYS} onPress={() => save({ autoArchiveInactiveDays: clampArchiveDays(days + 1) })} />
-      </View>} /> : null}
-    </ListSection>;
-  }}</MacPage>;
-}
-
-function Stepper(props: { readonly symbol: "minus" | "plus"; readonly disabled: boolean; readonly onPress: () => void }) {
-  return <Pressable onPress={props.onPress} disabled={props.disabled} hitSlop={6} className="size-8 items-center justify-center rounded-full bg-sheet active:opacity-60 disabled:opacity-30">
-    <SymbolView name={props.symbol} size={12} weight="semibold" tintColorClassName="accent-foreground" />
-  </Pressable>;
 }
 
 export function SettingsSourceControlScreen() {

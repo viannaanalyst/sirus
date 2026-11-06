@@ -13,10 +13,10 @@
 
 /* ─── Typography ────────────────────────────────────────────────────── */
 @theme {
-  /* Keep these native family names aligned with app.config.ts. */
-  --font-sans: "DMSans-Regular";
-  --font-medium: "DMSans-Medium";
-  --font-bold: "DMSans-Bold";
+  /* The phone's own font; the utilities below set the weights. */
+  --font-sans: "System";
+  --font-medium: "System";
+  --font-bold: "System";
 
   /* Keep this scale aligned with src/lib/typography.ts for native style props. */
   --text-3xs: 11px;
@@ -42,13 +42,16 @@
 /* ─── Custom utilities ──────────────────────────────────────────────── */
 @utility font-app-medium {
   font-family: var(--font-medium);
+  font-weight: 500;
 }
 
 @utility font-app-bold {
   font-family: var(--font-bold);
+  font-weight: 700;
 }
 
 @utility font-app-extrabold {
   font-family: var(--font-bold);
+  font-weight: 800;
   font-weight: 800;
 }

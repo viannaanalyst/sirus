@@ -1,6 +1,7 @@
 import { useNavigation, useRoute, type NavigationProp, type ParamListBase, type RouteProp } from "@react-navigation/native";
-import { createContext, use, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, use, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Alert, Pressable, ScrollView, View } from "react-native";
+import { KeyboardStickyView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import type { AgentProviderId, ApprovalMode, ExecutionOptions } from "@sirus/client/types";
@@ -18,6 +19,9 @@ import { ListChoiceRow } from "../components/ListChoiceRow";
 import { ListRow } from "../components/ListRow";
 import { ListSection } from "../components/ListSection";
 import { ProviderIcon } from "../components/ProviderIcon";
+import { SheetGroup, SheetRow, SheetScreen } from "../components/SheetKit";
+import { RoundButton } from "../components/TopBar";
+import { useMacAccent } from "../data/mac-accent";
 import { useSirus } from "../data/store";
 import { createV5SheetStackNavigator } from "../native/createV5StackNavigator";
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../native/StackHeader";
@@ -71,8 +75,8 @@ export function ThreadSettingsScreen() {
   const value = { computerId, sessionId, draft, setDraft: (update: (current: Draft) => Draft) => setDraftState(update), providers, locked, apply, close: () => navigation.goBack() };
   return <DraftContext value={value}>
     <Sheet.Navigator screenOptions={{ headerTransparent: true, headerShadowVisible: false, headerLargeTitle: false, contentStyle: { backgroundColor: "transparent" } } as never}>
+      <Sheet.Screen name="ThreadSettingsModel" component={ModelPage} options={{ headerShown: false }} />
       <Sheet.Screen name="ThreadSettingsMain" component={MainPage} />
-      <Sheet.Screen name="ThreadSettingsModel" component={ModelPage} />
       <Sheet.Screen name="ThreadSettingsEffort" component={EffortPage} />
       <Sheet.Screen name="ThreadSettingsTier" component={TierPage} />
       <Sheet.Screen name="ThreadSettingsAccess" component={AccessPage} />
@@ -145,7 +149,7 @@ function MainPage() {
         <AppText numberOfLines={1} className="font-app-medium text-lg">{summary.name ?? t("models.select")}</AppText>
         <AppText numberOfLines={1} className="text-sm text-foreground-muted">{definition.name}{summary.note ? ` · ${t(summary.note === "switch" ? "phoneChat.switchesAgent" : "phoneChat.default")}` : ""}</AppText>
       </View>
-      <Pressable onPress={go("ThreadSettingsModel")} disabled={locked} className="h-9 justify-center rounded-full bg-sheet px-4 active:opacity-60 disabled:opacity-40">
+      <Pressable onPress={() => navigation.goBack()} disabled={locked} className="h-9 justify-center rounded-full bg-sheet px-4 active:opacity-60 disabled:opacity-40">
         <AppText className="font-app-medium text-sm">{t("phoneChat.change")}</AppText>
       </Pressable>
     </View>
@@ -161,20 +165,75 @@ function MainPage() {
   </Page>;
 }
 
+/** A provider's models as a group that expands: the chosen model checked in the Mac's accent, the count on closed ones. */
+function ProviderGroup(props: { readonly provider: AgentProviderId; readonly open: boolean; readonly onToggle: () => void; readonly accent: string; readonly searching: boolean }) {
+  const { settings, byProvider, draft, setDraft, locked } = useDraftState();
+  const query = useContext(QueryContext);
+  if (!settings) return null;
+  // The unfiltered count is what the closed header shows; the filtered rows are what an open one lists.
+  const all = threadSettingsSections(byProvider, settings, [props.provider], draft.provider, draft.model, "")[0]?.rows ?? [];
+  const rows = props.searching ? threadSettingsSections(byProvider, settings, [props.provider], draft.provider, draft.model, query)[0]?.rows ?? [] : all;
+  const name = providerById(props.provider).name;
+  const pick = (provider: AgentProviderId, id: string) => {
+    if (locked) return;
+    setDraft((current) => ({ provider, model: id, preference: settings.modelExecution[modelKey(provider, id)] ?? {}, save: false, approval: provider === current.provider ? current.approval : null }));
+  };
+  return <SheetGroup className="mt-3">
+    <SheetRow first bold title={name} lead={<ProviderIcon provider={props.provider} size={20} />} onPress={props.onToggle}
+      accessory={<View className="flex-row items-center gap-2">
+        {!props.open && byProvider[props.provider] ? <AppText className="text-[13px] text-foreground-tertiary">{all.length}</AppText> : null}
+        <SymbolView name={props.open ? "chevron.down" : "chevron.right"} size={13} weight="semibold" tintColorClassName="accent-foreground-muted" />
+      </View>} />
+    {props.open ? (rows.length ? rows.map((row) => {
+      const selected = row.provider === draft.provider && row.variantIds.includes(draft.model ?? "");
+      return <SheetRow key={modelKey(row.provider, row.model.id)} title={row.displayName.replace(/^Claude\s+/i, "")} note={isDefaultChoice(settings, row) ? t("phoneChat.default") : undefined}
+        disabled={locked} onPress={() => pick(row.provider, row.model.id)}
+        accessory={selected ? <SymbolView name="checkmark" size={17} weight="semibold" tintColor={props.accent} /> : undefined} />;
+    }) : <View className="border-t border-border-subtle py-3"><AppText className="text-sm text-foreground-muted">{t(byProvider[props.provider] ? "models.noProviderModels" : "models.loading")}</AppText></View>) : null}
+  </SheetGroup>;
+}
+
+const QueryContext = createContext("");
+
+/**
+ * Modelo, the sheet's first page (design "Modelo"): the chosen model on top with its access and
+ * effort and an Options row (the old summary page: reasoning, speed, access), provider groups
+ * that expand, and a fixed field at the bottom filtering models live. The round check applies
+ * the draft as the old Done did; the close button drops it.
+ */
 function ModelPage() {
-  const { providers, computerId, byProvider } = useDraftState();
-  const [query, setQuery] = useState("");
+  const navigation = useNavigation<NavigationProp<ParamListBase>>();
+  const state = useDraftState();
+  const { providers, computerId, byProvider, draft, settings, models, controls, definition, approval, session, apply, close } = state;
+  const accent = useMacAccent(computerId);
   const insets = useSafeAreaInsets();
+  const [query, setQuery] = useState("");
+  const [expanded, setExpanded] = useState<Partial<Record<AgentProviderId, boolean>>>({});
   useEffect(() => { for (const id of providers) if (!byProvider[id]) void useSirus.getState().loadModels(computerId, id).catch(() => undefined); }, [byProvider, computerId, providers]);
-  return <Page title={t("phoneChat.model")} footer={<View className="absolute inset-x-4 flex-row items-center gap-2 rounded-full bg-grouped-card px-4" style={{ bottom: Math.max(insets.bottom, 12), height: 46 }}>
-    <SymbolView name="magnifyingglass" size={15} tintColorClassName="accent-foreground-muted" />
-    <AppTextInput value={query} onChangeText={setQuery} placeholder={t("phoneChat.findModel")} autoCapitalize="none" autoCorrect={false} returnKeyType="search"
-      className="min-h-0 flex-1 rounded-none border-0 bg-transparent px-0 py-0 text-base" />
-    {query ? <Pressable onPress={() => setQuery("")} hitSlop={8}><SymbolView name="xmark.circle.fill" size={16} tintColorClassName="accent-foreground-muted" /></Pressable> : null}
-  </View>}>
-    <ModelRows providers={providers} query={query} grouped />
-    <View className="h-14" />
-  </Page>;
+  const summary = settings ? threadSettingsSummary(settings, models, draft.provider, draft.model, session ? session.agent : null) : { name: null, note: null };
+  const shown = threadSettingsOptions(controls, definition.approvalModes);
+  const note = [shown.access ? t(approval === "ask" && definition.approvalPolicy === "vendor" ? "composer.vendorApproval" : APPROVAL_LABEL[approval]) : null, shown.reasoning ? `esforço ${(controls.effort ? t(`effort.${controls.effort}`) : t("composer.effortAuto")).toLowerCase()}` : null].filter(Boolean).join(" · ");
+  const searching = query.trim().length > 0;
+  return <QueryContext value={query}>
+    <SheetScreen embedded title={t("phoneChat.model")} onClose={close} closeLabel={t("common.cancel")} bottomPadding={64}
+      right={<RoundButton icon="checkmark" label={t("phoneChat.done")} onPress={apply} />}
+      footer={<KeyboardStickyView offset={{ closed: 0, opened: Math.max(insets.bottom, 12) - 8 }} style={{ position: "absolute", left: 0, right: 0, bottom: 0 }}>
+        <View className="mx-4 flex-row items-center gap-2 rounded-full border border-border-subtle bg-grouped-card px-4" style={{ marginBottom: Math.max(insets.bottom, 12), height: 46 }}>
+          <SymbolView name="magnifyingglass" size={15} tintColorClassName="accent-foreground-muted" />
+          <AppTextInput value={query} onChangeText={setQuery} placeholder={t("phoneChat.findModel")} autoCapitalize="none" autoCorrect={false} returnKeyType="search"
+            className="min-h-0 flex-1 rounded-none border-0 bg-transparent px-0 py-0 text-base" />
+          {query ? <Pressable onPress={() => setQuery("")} hitSlop={8}><SymbolView name="xmark.circle.fill" size={16} tintColorClassName="accent-foreground-muted" /></Pressable> : null}
+        </View>
+      </KeyboardStickyView>}>
+      <SheetGroup className="mt-2">
+        <SheetRow first bold lead={<ProviderIcon provider={draft.provider} size={20} />} title={summary.name ?? t("models.select")} note={note || definition.name} noteColor={accent}
+          value={t("phoneChat.options")} chevron onPress={() => navigation.navigate("ThreadSettingsMain")} />
+      </SheetGroup>
+      {state.locked ? <AppText className="mt-2 px-3 text-sm text-foreground-muted">{t("phoneChat.modelLocked")}</AppText> : null}
+      {providers.map((id) => <ProviderGroup key={id} provider={id} accent={accent} searching={searching}
+        open={searching || (expanded[id] ?? id === draft.provider)} onToggle={() => setExpanded((current) => ({ ...current, [id]: !(current[id] ?? id === draft.provider) }))} />)}
+    </SheetScreen>
+  </QueryContext>;
 }
 
 function EffortPage() {

@@ -36,10 +36,9 @@ export interface SessionRow {
 
 /** A conversation's long-press actions, as the phone web app's (`rowMenuItems`). */
 export type RowAction =
-  | { type: "archive" | "unarchive" | "pin" | "unpin" }
+  | { type: "pin" | "unpin" }
   | { type: "rename"; title: string }
   | { type: "snooze"; until: string | null }
-  | { type: "auto-archive"; enabled: boolean }
   | { type: "delete"; removeWorktree: boolean };
 
 /** This iPhone's own preferences (not a computer's). */
@@ -409,19 +408,13 @@ export const useSirus = create<SirusState>()((set, get) => {
         return current ? { data: { ...state.data, [computerId]: { ...current, sessions: current.sessions.map((item) => item.id === session.id ? { ...session, messages: item.messages } : item) } } } : {};
       });
       switch (action.type) {
-        case "archive": case "unarchive": case "pin": case "unpin": {
+        case "pin": case "unpin": {
           const settings = applyRowSettingsAction(data.settings, action.type, sessionId);
           await get().saveSettings(computerId, settings);
-          // As the web app: archiving can hand an isolated worktree back.
-          const session = data.sessions.find((item) => item.id === sessionId);
-          if (action.type === "archive" && settings.releaseWorktreeOnArchive && session?.worktree.isolated) {
-            await get().invoke(computerId, "worktree_cleanup_action", { action: { type: "releaseArchived", sessionId } }).catch(() => undefined);
-          }
           break;
         }
         case "rename": replace(await get().invoke<Session>(computerId, "rename_session", { sessionId, title: action.title.trim() })); break;
         case "snooze": replace(await get().invoke<Session>(computerId, "snooze_session", { sessionId, until: action.until })); break;
-        case "auto-archive": replace(await get().invoke<Session>(computerId, "set_session_auto_archive", { sessionId, enabled: action.enabled })); break;
         case "delete":
           await get().invoke<void>(computerId, "delete_session", { sessionId, removeWorktree: action.removeWorktree, confirm: true });
           set((state) => {
@@ -492,17 +485,16 @@ function mergeMessages(current: Message[], incoming: Message[]): Message[] {
 
 /**
  * Every conversation of every computer: pinned first, then by the chosen order; without
- * archived or snoozed ones and without side chats or pull request Ask conversations.
+ * snoozed ones and without side chats or pull request Ask conversations.
  */
 export function selectRows(state: Pick<SirusState, "data">, order: PhonePrefs["threadOrder"] = "updated_at"): SessionRow[] {
   const rows: SessionRow[] = [];
   for (const [computerId, data] of Object.entries(state.data)) {
-    const archived = new Set(data.settings?.archivedSessionIds ?? []);
     const pinned = new Set(data.settings?.pinnedSessionIds ?? []);
     const projects = new Map(data.projects.map((project) => [project.id, project]));
     const children = childRequests(data.sessions);
     for (const session of data.sessions) {
-      if (archived.has(session.id) || session.sideChat || session.pullAsk || isSnoozed(session)) continue;
+      if (session.sideChat || session.pullAsk || isSnoozed(session)) continue;
       rows.push({ computerId, session, project: projects.get(session.projectId), pinned: pinned.has(session.id), childRequest: children.get(session.id) });
     }
   }

@@ -54,6 +54,24 @@ const GUTTER: f64 = 12.;
 /// panel's resize grip needs ground of its own.
 const GRIP_ROOM: f64 = 6.;
 const NOTICE: Duration = Duration::from_millis(1800);
+/// The address's tools, most used first: the narrower the panel, the fewer stay in it, and the
+/// rest wait in the `⋯` menu.
+const PICK_RANK: usize = 0;
+const SHOT_RANK: usize = 1;
+const DEVICE_RANK: usize = 2;
+const LINK_RANK: usize = 3;
+const RECORD_RANK: usize = 4;
+const PIP_RANK: usize = 5;
+const TOOLS: usize = 6;
+
+/// How many tools fit in a panel this wide. Until it is measured, the usual three.
+fn tools_that_fit(width: f32) -> usize {
+    if width <= 0. {
+        return 3;
+    }
+    (((width - 340.) / 26.).max(0.) as usize).min(TOOLS)
+}
+
 /// How long a menu waits for the page's picture before covering the page anyway.
 const FREEZE_LIMIT: Duration = Duration::from_millis(400);
 
@@ -173,6 +191,8 @@ struct Shared {
     alive: Cell<bool>,
     /// One of the panel's own menus is open over the page.
     menu: Cell<bool>,
+    /// The page's width last drawn, which says how many tools the address has room for.
+    width: Cell<f32>,
     /// The active tab is the blank page: the panel's own start screen shows instead.
     blank: Cell<bool>,
     layout: Cell<Layout>,
@@ -471,6 +491,7 @@ impl Browser {
             visible: Cell::new(false),
             alive: Cell::new(true),
             menu: Cell::new(false),
+            width: Cell::new(0.),
             blank: Cell::new(true),
             layout: Cell::new(Layout {
                 device: None,
@@ -1274,6 +1295,20 @@ impl Browser {
         cx.notify();
     }
 
+    fn toggle_device(&mut self, cx: &mut Context<Self>) {
+        if self.device.is_some() {
+            self.set_device(None);
+        } else {
+            self.set_device(Some(Device {
+                width: 390,
+                height: 844,
+                preset: Some("iphone-12-pro".into()),
+            }));
+            self.device_inputs_stale = true;
+        }
+        cx.notify();
+    }
+
     fn freeze_page(&mut self, web: &WKWebView, cx: &mut Context<Self>) {
         let shot = browser_tab::snapshot(web);
         cx.spawn(async move |this, cx| {
@@ -1628,6 +1663,20 @@ impl Browser {
         cx: &mut Context<Self>,
         action: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
     ) -> AnyElement {
+        self.iconed_item(None, id, label, checked, enabled, cx, action)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn iconed_item(
+        &self,
+        glyph: Option<&'static str>,
+        id: impl Into<SharedString>,
+        label: String,
+        checked: bool,
+        enabled: bool,
+        cx: &mut Context<Self>,
+        action: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+    ) -> AnyElement {
         let row = div()
             .id(id.into())
             .h(px(28.))
@@ -1638,6 +1687,13 @@ impl Browser {
             .gap(px(8.))
             .text_size(px(12.5))
             .text_color(theme::content(if enabled { 0.9 } else { 0.35 }))
+            .when_some(glyph, |d, glyph| {
+                d.child(
+                    theme::icon(glyph, 14.)
+                        .flex_shrink_0()
+                        .text_color(theme::content(if enabled { 0.65 } else { 0.25 })),
+                )
+            })
             .child(div().flex_1().min_w_0().truncate().child(label))
             .when(checked, |d| {
                 d.child(theme::icon("check", 12.).text_color(theme::accent()))
@@ -1670,7 +1726,104 @@ impl Browser {
         let mut width = 236.;
         match menu {
             Menu::More => {
-                rows.push(self.item(
+                let fit = tools_that_fit(self.shared.width.get());
+                if fit <= PICK_RANK {
+                    rows.push(self.iconed_item(
+                        Some("pointer"),
+                        "m-pick",
+                        t("Selecionar elemento").into(),
+                        self.annotating,
+                        page,
+                        cx,
+                        |this, window, cx| {
+                            this.close_menu(cx);
+                            this.toggle_annotate(window, cx);
+                        },
+                    ));
+                }
+                if fit <= SHOT_RANK {
+                    rows.push(self.iconed_item(
+                        Some("browser-camera"),
+                        "m-shot",
+                        t("Capturar a página").into(),
+                        false,
+                        page,
+                        cx,
+                        |this, window, cx| {
+                            this.close_menu(cx);
+                            this.capture_to_composer(window, cx);
+                        },
+                    ));
+                }
+                if fit <= DEVICE_RANK {
+                    rows.push(self.iconed_item(
+                        Some("smartphone"),
+                        "m-device",
+                        t("Tamanho de aparelho").into(),
+                        self.device.is_some(),
+                        page,
+                        cx,
+                        |this, _, cx| {
+                            this.close_menu(cx);
+                            this.toggle_device(cx);
+                        },
+                    ));
+                }
+                if fit <= LINK_RANK {
+                    rows.push(self.iconed_item(
+                        Some("browser-link"),
+                        "m-link",
+                        t("Copiar link").into(),
+                        false,
+                        page,
+                        cx,
+                        |this, _, cx| {
+                            this.copy_link(cx);
+                            this.close_menu(cx);
+                        },
+                    ));
+                }
+                if fit <= RECORD_RANK {
+                    let recording = self.recording.is_some();
+                    rows.push(
+                        self.iconed_item(
+                            Some("browser-record"),
+                            "m-record",
+                            t(if recording {
+                                "Parar a gravação"
+                            } else {
+                                "Gravar a página"
+                            })
+                            .into(),
+                            false,
+                            recording || page,
+                            cx,
+                            |this, _, cx| {
+                                this.toggle_recording(cx);
+                                this.close_menu(cx);
+                            },
+                        ),
+                    );
+                }
+                if fit <= PIP_RANK {
+                    rows.push(self.iconed_item(
+                        Some("browser-pip"),
+                        "m-pip",
+                        t("Janela flutuante").into(),
+                        self.pip.is_some(),
+                        self.pip.is_some() || page,
+                        cx,
+                        |this, _, cx| {
+                            this.toggle_pip(cx);
+                            this.close_menu(cx);
+                        },
+                    ));
+                }
+                if fit < TOOLS {
+                    rows.push(Self::divider());
+                }
+                rows.push(self.iconed_item(
+                    Some("refresh"),
                     "m-hard",
                     t("Recarregar sem cache").into(),
                     false,
@@ -1683,48 +1836,8 @@ impl Browser {
                         this.close_menu(cx);
                     },
                 ));
-                rows.push(self.item(
-                    "m-link",
-                    t("Copiar link").into(),
-                    false,
-                    page,
-                    cx,
-                    |this, _, cx| {
-                        this.copy_link(cx);
-                        this.close_menu(cx);
-                    },
-                ));
-                let recording = self.recording.is_some();
-                rows.push(
-                    self.item(
-                        "m-record",
-                        t(if recording {
-                            "Parar a gravação"
-                        } else {
-                            "Gravar a página"
-                        })
-                        .into(),
-                        false,
-                        recording || page,
-                        cx,
-                        |this, _, cx| {
-                            this.toggle_recording(cx);
-                            this.close_menu(cx);
-                        },
-                    ),
-                );
-                rows.push(self.item(
-                    "m-pip",
-                    t("Janela flutuante").into(),
-                    self.pip.is_some(),
-                    self.pip.is_some() || page,
-                    cx,
-                    |this, _, cx| {
-                        this.toggle_pip(cx);
-                        this.close_menu(cx);
-                    },
-                ));
-                rows.push(self.item(
+                rows.push(self.iconed_item(
+                    Some("bug"),
                     "m-inspect",
                     t("Inspetor da web").into(),
                     false,
@@ -1737,7 +1850,8 @@ impl Browser {
                         this.close_menu(cx);
                     },
                 ));
-                rows.push(self.item(
+                rows.push(self.iconed_item(
+                    Some("globe"),
                     "m-system",
                     t("Abrir no navegador padrão").into(),
                     false,
@@ -1756,7 +1870,12 @@ impl Browser {
                     ("light", t("Páginas claras")),
                     ("dark", t("Páginas escuras")),
                 ] {
-                    rows.push(self.item(
+                    rows.push(self.iconed_item(
+                        Some(match mode {
+                            "light" => "sun",
+                            "dark" => "moon",
+                            _ => "monitor",
+                        }),
                         format!("m-scheme-{mode}"),
                         label.into(),
                         self.appearance == mode,
@@ -1770,7 +1889,8 @@ impl Browser {
                 }
                 rows.push(Self::divider());
                 let zoom = self.user_zoom;
-                rows.push(self.item(
+                rows.push(self.iconed_item(
+                    Some("plus"),
                     "m-zoom-in",
                     t("Aumentar zoom").into(),
                     false,
@@ -1781,7 +1901,8 @@ impl Browser {
                         cx.notify();
                     },
                 ));
-                rows.push(self.item(
+                rows.push(self.iconed_item(
+                    Some("minus"),
                     "m-zoom-out",
                     t("Diminuir zoom").into(),
                     false,
@@ -1792,7 +1913,8 @@ impl Browser {
                         cx.notify();
                     },
                 ));
-                rows.push(self.item(
+                rows.push(self.iconed_item(
+                    Some("search"),
                     "m-zoom-reset",
                     format!("{} · {}%", t("Tamanho real"), (zoom * 100.).round()),
                     false,
@@ -1804,7 +1926,8 @@ impl Browser {
                     },
                 ));
                 rows.push(Self::divider());
-                rows.push(self.item(
+                rows.push(self.iconed_item(
+                    Some("key"),
                     "m-logins",
                     t("Logins salvos…").into(),
                     false,
@@ -1816,7 +1939,8 @@ impl Browser {
                     },
                 ));
                 rows.push(Self::divider());
-                rows.push(self.item(
+                rows.push(self.iconed_item(
+                    Some("trash"),
                     "m-cookies",
                     t("Limpar cookies").into(),
                     false,
@@ -1824,7 +1948,8 @@ impl Browser {
                     cx,
                     |this, _, cx| this.clear_data(true, cx),
                 ));
-                rows.push(self.item(
+                rows.push(self.iconed_item(
+                    Some("trash"),
                     "m-cache",
                     t("Limpar cache").into(),
                     false,
@@ -3706,6 +3831,7 @@ impl Render for Browser {
         );
         let has_tab = active.is_some();
         let blank = has_tab && !has_page;
+        let fit = tools_that_fit(self.shared.width.get());
         // One piece: the address and, at its end, the tools for the page it shows.
         let address = div()
             .flex_1()
@@ -3728,55 +3854,60 @@ impl Render for Browser {
                     |this, _, cx| this.open_menu(Some(Menu::Fill), cx),
                 ))
             })
-            .child(self.button(
-                "browser-shot",
-                "browser-camera",
-                false,
-                has_page,
-                false,
-                cx,
-                |this, window, cx| this.capture_to_composer(window, cx),
-            ))
-            .child(self.button(
-                "browser-pick",
-                "pointer",
-                false,
-                has_page,
-                self.annotating,
-                cx,
-                |this, window, cx| this.toggle_annotate(window, cx),
-            ))
-            .child(self.button(
-                "browser-device",
-                "smartphone",
-                false,
-                has_page && !floating,
-                self.device.is_some(),
-                cx,
-                |this, _, cx| {
-                    if this.device.is_some() {
-                        this.set_device(None);
-                    } else {
-                        this.set_device(Some(Device {
-                            width: 390,
-                            height: 844,
-                            preset: Some("iphone-12-pro".into()),
-                        }));
-                        this.device_inputs_stale = true;
-                    }
-                    cx.notify();
-                },
-            ))
-            .when(self.recording.is_some(), |d| {
+            .when(fit > LINK_RANK, |d| {
+                d.child(self.button(
+                    "browser-link",
+                    "browser-link",
+                    false,
+                    has_page,
+                    false,
+                    cx,
+                    |this, _, cx| this.copy_link(cx),
+                ))
+            })
+            .when(fit > SHOT_RANK, |d| {
+                d.child(self.button(
+                    "browser-shot",
+                    "browser-camera",
+                    false,
+                    has_page,
+                    false,
+                    cx,
+                    |this, window, cx| this.capture_to_composer(window, cx),
+                ))
+            })
+            .when(fit > PICK_RANK, |d| {
+                d.child(self.button(
+                    "browser-pick",
+                    "pointer",
+                    false,
+                    has_page,
+                    self.annotating,
+                    cx,
+                    |this, window, cx| this.toggle_annotate(window, cx),
+                ))
+            })
+            .when(fit > DEVICE_RANK, |d| {
+                d.child(self.button(
+                    "browser-device",
+                    "smartphone",
+                    false,
+                    has_page && !floating,
+                    self.device.is_some(),
+                    cx,
+                    |this, _, cx| this.toggle_device(cx),
+                ))
+            })
+            .when(self.recording.is_some() || fit > RECORD_RANK, |d| {
                 d.child(self.record_button(has_page, cx))
             })
-            .when(self.pip.is_some(), |d| {
+            .when(self.pip.is_some() || fit > PIP_RANK, |d| {
                 d.child(self.button(
                     "browser-pip",
                     "browser-pip",
                     false,
-                    true,
-                    true,
+                    self.pip.is_some() || has_page,
+                    self.pip.is_some(),
                     cx,
                     |this, _, cx| this.toggle_pip(cx),
                 ))
@@ -4227,6 +4358,10 @@ pub fn reclaim_keyboard(window: &Window) {
 }
 
 fn paint_web(shared: &Rc<Shared>, bounds: Bounds<Pixels>, window: &mut Window) {
+    let width = f32::from(bounds.size.width);
+    if tools_that_fit(shared.width.replace(width)) != tools_that_fit(width) {
+        window.refresh();
+    }
     if shared.parent.borrow().is_none() {
         *shared.parent.borrow_mut() = parent_of(window);
     }
@@ -4408,6 +4543,14 @@ impl EntityInputHandler for Browser {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_address_keeps_as_many_tools_as_the_panel_has_room_for() {
+        assert_eq!(tools_that_fit(0.), 3);
+        assert_eq!(tools_that_fit(280.), 0);
+        assert_eq!(tools_that_fit(418.), 3);
+        assert_eq!(tools_that_fit(1200.), TOOLS);
+    }
 
     #[test]
     fn devices_clamp_and_name_known_sizes_either_way_round() {

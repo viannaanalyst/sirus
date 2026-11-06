@@ -49,5 +49,8 @@ A conversation stays on the account that started it, so one on the default accou
 - **Instructions and the answer.** The stretch that fills the view from an instruction on now holds the answer and its cards too. It held only what came before them, which left a hole above the answer of a turn that received an instruction, until the conversation was reopened.
 - **Settings and the peek.** Opening the settings closes a peeking sidebar, and neither it nor the agents' pill shows over their column. The project menu's row is now called Appearance.
 - **Resources in the footer.** The bolt shows only when agents use a lot of CPU or memory or the Mac is under pressure, as Monocode's chip, left of Actions.
+- **Browser bar by width.** The address keeps as many tools as the panel has room for, up to six, and the rest go to the `⋯` menu, whose rows now carry icons.
+- **A narrow panel.** Below 440 pt the title bar shows pane icons without the chosen one's name; below 360 pt the diff leaves it too.
+- **Message trail.** At rest its ticks take the 23 pt before the text, so it no longer covers a turn's tile; pointing at it widens it.
 - **Turn actions.** The `⋯` menu is gone. A reply's row reads Copy, Handoff, Side chat, Fork, with Undo after them. Try again left it: it now sits under the sent message, only on the last turn and only after a failure.
 - **Edge fades.** The transcript's fades are now an alpha mask around the list. The gradients drawn in the conversation's color showed as dark bands once the conversation became translucent black.

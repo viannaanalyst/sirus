@@ -548,6 +548,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Captura da tela", "Screenshot"),
     ("Captura de janela", "Window snap"),
     ("Captura salva em {}", "Screenshot saved to {}"),
+    ("Capturar a página", "Capture the page"),
     ("Capturar uma janela aberta", "Capture an open app window"),
     (
         "Capturas da janela do app aprovado.",
@@ -2435,6 +2436,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Seguir o sistema", "Follow the system"),
     ("Segurança", "Safety"),
+    ("Selecionar elemento", "Select an element"),
     (
         "Selecione um fluxo para adicionar /nome-da-skill ao rascunho.",
         "Select a workflow to add /skill-name to your draft.",
@@ -2550,6 +2552,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Tamanho da fonte de código", "Code font size"),
     ("Tamanho da fonte do terminal", "Terminal font size"),
     ("Tamanho da interface", "Interface size"),
+    ("Tamanho de aparelho", "Device size"),
     ("Tamanho personalizado", "Custom size"),
     ("Tamanho real", "Actual size"),
     (

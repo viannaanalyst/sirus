@@ -6545,22 +6545,24 @@ impl Shell {
                         self.incoming.pulling,
                         cx.listener(|this, _, _, cx| this.incoming_toggle(cx)),
                     ))
-                    .child(
-                        div()
-                            .id("top-diff")
-                            .h(px(24.))
-                            .px(px(6.))
-                            .rounded(px(crate::theme::RADIUS_SM))
-                            .flex()
-                            .items_center()
-                            .gap(px(6.))
-                            .text_size(px(12.))
-                            .cursor_pointer()
-                            .hover(|s| s.bg(content(0.07)))
-                            .on_click(cx.listener(|this, _, _, cx| this.open_pane(2, cx)))
-                            .child(div().text_color(add_color).child(format!("+{added}")))
-                            .child(div().text_color(remove_color).child(format!("-{removed}"))),
-                    )
+                    .when(open_dock < 0.01 || dock_width >= PANEL_WITH_DIFF, |d| {
+                        d.child(
+                            div()
+                                .id("top-diff")
+                                .h(px(24.))
+                                .px(px(6.))
+                                .rounded(px(crate::theme::RADIUS_SM))
+                                .flex()
+                                .items_center()
+                                .gap(px(6.))
+                                .text_size(px(12.))
+                                .cursor_pointer()
+                                .hover(|s| s.bg(content(0.07)))
+                                .on_click(cx.listener(|this, _, _, cx| this.open_pane(2, cx)))
+                                .child(div().text_color(add_color).child(format!("+{added}")))
+                                .child(div().text_color(remove_color).child(format!("-{removed}"))),
+                        )
+                    })
                     .child(
                         icon_button("top-search", "search", 16.)
                             .on_click(cx.listener(|this, _, _, cx| this.toggle_palette(true, cx))),
@@ -6614,6 +6616,7 @@ impl Shell {
             )
             .when(open_dock > 0.01, |d| {
                 let active_pane = self.dock_active;
+                let panel_names = dock_width >= PANEL_WITH_NAMES;
                 d.child(
                     div()
                         .absolute()
@@ -6665,7 +6668,8 @@ impl Shell {
                                     } else {
                                         0.5
                                     })))
-                                    .when(chosen, |d| d.child(crate::i18n::t(*name)))
+                                    .when(chosen && panel_names, |d| d.child(crate::i18n::t(*name)))
+                                    .tooltip(message_actions::name_tip(crate::i18n::t(*name)))
                             },
                         )),
                 )
@@ -7861,6 +7865,9 @@ impl Shell {
             last_visible += 1;
         }
         let hovered = self.trail_hover.map(|h| h.0);
+        // At rest it stays clear of the text, which starts past its ticks: only pointing at it
+        // makes room for the long ones.
+        let wide = hovered.is_some();
         let ticks: Vec<AnyElement> = (0..count)
             .map(|at| {
                 let on_current = at == current;
@@ -7923,7 +7930,7 @@ impl Shell {
                 .top_0()
                 .bottom_0()
                 .left_0()
-                .w(px(44.))
+                .w(px(if wide { 44. } else { 23. }))
                 .flex()
                 .flex_col()
                 .justify_center()
@@ -16145,6 +16152,11 @@ fn other_choice<'a>(options: &[&'a str], current: Option<&str>, seed: usize) -> 
 fn composer_fits(width: f32) -> (bool, bool) {
     (width > 0. && width < 440., width > 0. && width < 390.)
 }
+
+/// How wide the side panel must be for its bar to name the chosen pane, and to also leave the
+/// title bar's diff in place: below that, they would run into the controls beside them.
+const PANEL_WITH_NAMES: f32 = 440.;
+const PANEL_WITH_DIFF: f32 = 360.;
 
 /// What the conversation keeps beside the side panel, and the least the panel takes.
 const CONVERSATION_MIN: f32 = 420.;

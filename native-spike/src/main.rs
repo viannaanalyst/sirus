@@ -97,6 +97,7 @@ impl AssetSource for Assets {
         }
         let bytes: &'static [u8] = match path {
             "plus" => include_bytes!("../assets/plus.svg"),
+            "minus" => include_bytes!("../assets/minus.svg"),
             "comment-add" => include_bytes!("../assets/comment-add.svg"),
             "cursor" => include_bytes!("../assets/cursor.svg"),
             "grok" => include_bytes!("../assets/grok.svg"),

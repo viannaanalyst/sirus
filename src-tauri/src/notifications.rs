@@ -622,6 +622,13 @@ fn window_alert(app: &AppHandle, notice: &Notice, prefs: &Preferences, sound: So
             "title": notice.title,
             "body": notice.body,
             "sound": prefs.sounds.then_some(sound),
+            // Monocode's three sounds: one for finished work, one for a request of the person,
+            // one for activity elsewhere. The window plays them.
+            "cue": match notice.kind {
+                Kind::Permission | Kind::Question => "input",
+                Kind::PullRequest => "linked",
+                _ => "finished",
+            },
             "system": prefs.system,
             "foreground": prefs.foreground,
         }),

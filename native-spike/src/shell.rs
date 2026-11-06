@@ -817,6 +817,8 @@ fn styled_tokens(text: String) -> StyledText {
 
 /// What a reply from the back end is for.
 enum Waiting {
+    /// An account being removed: its id and provider.
+    AccountRemoved(String, &'static str),
     /// A drawn-on picture coming back from the host, and the draft it replaces.
     MarkedUp(usize, String),
     SettingsRestored,
@@ -1106,6 +1108,11 @@ pub struct Shell {
     /// The composer's text scrolls under this, following the caret as it moves.
     composer_scroll: gpui::ScrollHandle,
     composer_caret_seen: Rc<Cell<(usize, usize)>>,
+    /// When the caret last moved (it blinks from there), and whether the last frame drew it.
+    caret_moved: Rc<Cell<Instant>>,
+    caret_drawn: Rc<Cell<bool>>,
+    /// The composer is taking the keys, so its caret blinks.
+    caret_blinks: Cell<bool>,
     selecting: bool,
     tick: u32,
     window_active: bool,
@@ -1316,13 +1323,17 @@ impl Shell {
                     .timer(Duration::from_millis(33))
                     .await;
                 let alive = this.update(cx, |this, cx| {
-                    // An idle window draws nothing: the caret never blinks. Work animates at 15 Hz,
-                    // slower out of focus.
+                    // An idle window draws only the caret's blink, once at each flip. Work animates
+                    // a little slower out of focus.
                     this.tick = this.tick.wrapping_add(1);
                     let every = if this.window_active { 2 } else { 12 };
                     let pulse = this.tick % every == 0
                         && this.conversations.iter().any(Conversation::working);
-                    if pulse {
+                    let flip = this.window_active
+                        && this.caret_blinks.get()
+                        && caret_lit(this.caret_moved.get().elapsed().as_secs_f32())
+                            != this.caret_drawn.get();
+                    if pulse || flip {
                         cx.notify();
                     }
                 });
@@ -1439,6 +1450,9 @@ impl Shell {
             trail_x: 0.,
             composer_scroll: gpui::ScrollHandle::new(),
             composer_caret_seen: Default::default(),
+            caret_moved: Rc::new(Cell::new(Instant::now())),
+            caret_drawn: Rc::new(Cell::new(true)),
+            caret_blinks: Cell::new(false),
             selecting: false,
             tick: 0,
             window_active: true,
@@ -1688,6 +1702,21 @@ impl Shell {
                             .unwrap_or("Sem login")
                             .to_owned();
                         page.who.insert(id, who);
+                    }
+                }
+                Some(Waiting::AccountRemoved(..)) if !ok => {
+                    self.problem = Some(error_text(&value));
+                }
+                Some(Waiting::AccountRemoved(id, provider)) => {
+                    self.problem = None;
+                    if let Some(list) = self.provider_accounts.as_array_mut() {
+                        list.retain(|account| account["id"].as_str() != Some(id.as_str()));
+                    }
+                    if self.selected_accounts[provider].as_str() == Some(id.as_str()) {
+                        self.selected_accounts[provider] = json!("default");
+                    }
+                    if self.usage_page.open.is_some() {
+                        self.usage_load_limits(false, cx);
                     }
                 }
                 Some(Waiting::AccountCreated(provider)) if ok => {
@@ -2576,9 +2605,7 @@ impl Shell {
         match command {
             "native_sound" => crate::native_notify::play(&text("sound")),
             "native_notify_test" => {
-                if let Some(sound) = self.settings["notifications"]["completionSound"].as_str() {
-                    crate::native_notify::play(sound);
-                }
+                crate::native_notify::play("finished");
                 crate::native_notify::banner(
                     "Sirus",
                     crate::i18n::t(
@@ -2966,6 +2993,33 @@ impl Shell {
             .insert(call, Waiting::AccountLogin(provider, id));
     }
 
+    /// Removing an account asks first: its sign-in on this Mac goes with it.
+    fn ask_remove_account(
+        &mut self,
+        provider: &'static str,
+        id: String,
+        name: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.ask(
+            t("Remover conta").to_owned(),
+            tf(
+                "O login de {} sai deste Mac. Conversas que usam esta conta impedem a remoção.",
+                &[&name],
+            ),
+            t("Remover"),
+            move |this: &mut Shell, cx: &mut Context<Shell>| {
+                let call = this.backend.invoke(
+                    "remove_provider_account",
+                    json!({ "provider": provider, "accountId": id }),
+                );
+                this.waiting.insert(call, Waiting::AccountRemoved(id.clone(), provider));
+                cx.notify();
+            },
+            cx,
+        );
+    }
+
     fn select_account(&mut self, provider: &'static str, id: String) {
         self.backend.invoke(
             "select_provider_account",
@@ -2998,6 +3052,8 @@ impl Shell {
                 };
                 let current = id == chosen;
                 let target = id.clone();
+                let removable_id = (id != "default").then(|| id.clone());
+                let removable_name = label.clone();
                 div()
                     .id(("account-row", index))
                     .mt(px(8.))
@@ -3049,6 +3105,28 @@ impl Shell {
                     )
                     .when(current, |d| {
                         d.child(icon("check", 14.).text_color(accent()))
+                    })
+                    // The default account is the Mac's own Claude Code login: not ours to remove.
+                    .when(removable_id.is_some(), |d| {
+                        let id = removable_id.clone().unwrap_or_default();
+                        let name = removable_name.clone();
+                        d.child(
+                            div()
+                                .id(("account-remove", index))
+                                .size(px(24.))
+                                .rounded(px(crate::theme::RADIUS_SM))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .cursor_pointer()
+                                .hover(|s| s.bg(content(0.1)))
+                                .tooltip(message_actions::name_tip(t("Remover conta")))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    this.ask_remove_account(provider, id.clone(), name.clone(), cx);
+                                }))
+                                .child(icon("trash", 13.).text_color(content(0.5))),
+                        )
                     })
                     .into_any_element()
             })
@@ -5833,18 +5911,6 @@ impl Shell {
                 }))
                 .into_any_element(),
                 item(
-                    "add-window",
-                    "window",
-                    crate::i18n::t("Anexar janela"),
-                    crate::i18n::t("Capturar uma janela aberta"),
-                    false,
-                )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.add_menu = None;
-                    this.attach_window(cx);
-                }))
-                .into_any_element(),
-                item(
                     "add-skill",
                     "box",
                     crate::i18n::t("Usar uma skill"),
@@ -5858,6 +5924,18 @@ impl Shell {
                         *page = AddPage::Skills;
                     }
                     cx.notify();
+                }))
+                .into_any_element(),
+                item(
+                    "add-window",
+                    "window",
+                    crate::i18n::t("Anexar janela"),
+                    crate::i18n::t("Capturar uma janela aberta"),
+                    false,
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.add_menu = None;
+                    this.attach_window(cx);
                 }))
                 .into_any_element(),
                 item(
@@ -10891,15 +10969,19 @@ impl Shell {
         let caret_key = (draft.cursor, draft.text.len());
         let composer_scroll = self.composer_scroll.clone();
         let caret_seen = self.composer_caret_seen.clone();
+        let (caret_moved, caret_drawn) = (self.caret_moved.clone(), self.caret_drawn.clone());
+        self.caret_blinks.set(typing && selection.is_empty());
         // The caret and the selection are painted over the laid out text, so the text never moves.
         let overlay = gpui::canvas(
             |_, _, _| {},
             move |bounds, _, window, _| {
                 let line = layout.line_height();
                 // Only a caret that moved pulls the text along, so the wheel stays free.
-                if caret_seen.replace(caret_key) != caret_key
-                    && let Some(at) = layout.position_for_index(caret_at)
-                {
+                let moved = caret_seen.replace(caret_key) != caret_key;
+                if moved {
+                    caret_moved.set(Instant::now());
+                }
+                if moved && let Some(at) = layout.position_for_index(caret_at) {
                     let top = at.y - bounds.origin.y;
                     let seen = composer_scroll.bounds().size.height;
                     let scrolled = -composer_scroll.offset().y;
@@ -10938,6 +11020,13 @@ impl Shell {
                         at = stop;
                     }
                 } else if typing {
+                    // Out of focus it rests lit rather than freezing halfway through a blink.
+                    let lit = !window.is_window_active()
+                        || caret_lit(caret_moved.get().elapsed().as_secs_f32());
+                    caret_drawn.set(lit);
+                    if !lit {
+                        return;
+                    }
                     if let Some(origin) =
                         layout.position_for_index(caret_at).or(Some(bounds.origin))
                     {
@@ -10991,7 +11080,8 @@ impl Shell {
                     div()
                         .absolute()
                         .top_0()
-                        .left_0()
+                        // Clear of the caret, which sits at the very start.
+                        .left(px(3.))
                         .text_color(content(0.4))
                         .child(if approvals_pending {
                             t("Ou diga ao agente o que fazer em vez disso (recusa a aprovação)…")
@@ -11339,8 +11429,7 @@ impl Shell {
                     .child(
                         div()
                             .rounded(px(crate::theme::RADIUS_LG))
-                            .border_b_1()
-                            .border_color(content(0.07))
+                            .pb(px(8.))
                             .pt(px(14.))
                             .px(px(8.))
                             .pb(px(8.))
@@ -11430,6 +11519,14 @@ impl Shell {
                                 div()
                                     .flex()
                                     .items_center()
+                                    .gap(px(6.))
+                                    // Empty space in the row keeps typing in the composer.
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, window, cx| {
+                                            this.keep_typing_focus(window, cx)
+                                        }),
+                                    )
                                     .child(
                                         round("composer-add", "plus")
                                             .on_mouse_down(
@@ -11460,7 +11557,75 @@ impl Shell {
                                                 cx.notify();
                                             })),
                                     )
+                                    // One line of controls, as Monocode's composer.
+                                    .child(
+                                shelf_button("composer-model")
+                                    .relative()
+                                    .h(px(26.))
+                                    .border_1()
+                                    .border_color(content(0.1))
+                                    .max_w(px(300.))
+                                    .child(
+                                        gpui::canvas(
+                                            move |bounds, _, _| trigger_store.set(Some(bounds)),
+                                            |_, _, _, _| {},
+                                        )
+                                        .absolute()
+                                        .size_full(),
+                                    )
+                                    .child(provider_mark(provider, 16.))
+                                    .child(div().min_w_0().truncate().child(model))
+                                    .children(effort.map(|e| {
+                                        div().flex_shrink_0().text_color(content(0.4)).child(e)
+                                    }))
+                                    .when(chosen.fast, |d| {
+                                        d.child(
+                                            theme_icon("zap-fill", 12.)
+                                                .text_color(gpui::rgb(0xf0c43a)),
+                                        )
+                                    })
+                                    .child(chevron_down())
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, window, cx| {
+                                            this.keep_typing_focus(window, cx);
+                                            cx.stop_propagation();
+                                        }),
+                                    )
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.toggle_composer_menu(ComposerMenu::Effort, cx)
+                                    })),
+                            )
+                                    .child(
+                                div()
+                                    .id("composer-access")
+                                    .h(px(26.))
+                                    .px(px(8.))
+                                    .border_1()
+                                    .border_color(content(0.1))
+                                    .rounded(px(crate::theme::RADIUS_SM))
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(6.))
+                                    .text_size(px(12.))
+                                    .text_color(access_color)
+                                    .cursor_pointer()
+                                    .hover(|s| s.bg(content(0.07)))
+                                    .child(icon(access_glyph, 14.).text_color(access_color))
+                                    .child(access)
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, window, cx| {
+                                            this.keep_typing_focus(window, cx);
+                                            cx.stop_propagation();
+                                        }),
+                                    )
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.toggle_composer_menu(ComposerMenu::Access, cx)
+                                    })),
+                            )
                                     .child(div().flex_1())
+                                    .children(ring)
                                     .child(
                                         round("composer-mic", "mic")
                                             .when(dictating, |d| d.bg(rgb(0xe0654d)))
@@ -11548,84 +11713,7 @@ impl Shell {
                                     }),
                             ),
                     )
-                    .child(
-                        div()
-                            .h(px(34.))
-                            .px(px(8.))
-                            .flex()
-                            .items_center()
-                            .gap(px(2.))
-                            // Empty space in the toolbar keeps typing in the composer.
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _, window, cx| {
-                                    this.keep_typing_focus(window, cx)
-                                }),
-                            )
-                            .child(
-                                div()
-                                    .id("composer-access")
-                                    .h(px(24.))
-                                    .px(px(6.))
-                                    .rounded(px(crate::theme::RADIUS_SM))
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(6.))
-                                    .text_size(px(12.))
-                                    .text_color(access_color)
-                                    .cursor_pointer()
-                                    .hover(|s| s.bg(content(0.07)))
-                                    .child(icon(access_glyph, 14.).text_color(access_color))
-                                    .child(access)
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(|this, _, window, cx| {
-                                            this.keep_typing_focus(window, cx);
-                                            cx.stop_propagation();
-                                        }),
-                                    )
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.toggle_composer_menu(ComposerMenu::Access, cx)
-                                    })),
-                            )
-                            .child(div().flex_1())
-                            .children(ring)
-                            .child(
-                                shelf_button("composer-model")
-                                    .relative()
-                                    .max_w(px(300.))
-                                    .child(
-                                        gpui::canvas(
-                                            move |bounds, _, _| trigger_store.set(Some(bounds)),
-                                            |_, _, _, _| {},
-                                        )
-                                        .absolute()
-                                        .size_full(),
-                                    )
-                                    .child(provider_mark(provider, 16.))
-                                    .child(div().min_w_0().truncate().child(model))
-                                    .children(effort.map(|e| {
-                                        div().flex_shrink_0().text_color(content(0.4)).child(e)
-                                    }))
-                                    .when(chosen.fast, |d| {
-                                        d.child(
-                                            theme_icon("zap-fill", 12.)
-                                                .text_color(gpui::rgb(0xf0c43a)),
-                                        )
-                                    })
-                                    .child(chevron_down())
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(|this, _, window, cx| {
-                                            this.keep_typing_focus(window, cx);
-                                            cx.stop_propagation();
-                                        }),
-                                    )
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.toggle_composer_menu(ComposerMenu::Effort, cx)
-                                    })),
-                            ),
-                    ),
+,
             )
             .into_any_element()
     }
@@ -12176,11 +12264,15 @@ impl Shell {
         let mut pill = self.background_pill(turn);
         let mut blocks: Vec<AnyElement> = Vec::new();
         let mut answer_view = None;
+        let mut steer_block_start = None;
         for (section, (steer, range)) in sections.into_iter().enumerate() {
             let last_section = section + 1 == count;
             let working = live && last_section;
             let beats = &turn.beats[range.clone()];
             if let Some(steer) = steer {
+                // From here on, the stretch fills the view while the turn is the anchored one, so
+                // following the end brings the instruction to the top, as a sent message.
+                steer_block_start = Some(blocks.len());
                 blocks.push(self.steer_bubble(index, steer, turn, conversation, cx));
             }
             // What came before the newest words folds under the header, even while the turn works:
@@ -12321,6 +12413,22 @@ impl Shell {
             }
         }
         // Subagents, as one card (subagent_card.rs), and the pill for the ones in the background.
+        let anchored_last = index + 1 == self.conversations[conversation].turns.len()
+            && self.glides.get(&conversation).is_some_and(|glide| glide.anchored);
+        if let Some(start) = steer_block_start.filter(|_| anchored_last) {
+            let stretch: Vec<AnyElement> = blocks.drain(start..).collect();
+            let view = self.view_sizes.get(&conversation).map_or(600., |size| size.1);
+            blocks.push(
+                div()
+                    .w_full()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.))
+                    .min_h(px((view - 28. - ANCHOR_TOP).max(0.)))
+                    .children(stretch)
+                    .into_any_element(),
+            );
+        }
         let prompt_key = (conversation, index);
         let prompt_overflows = !turn.user.is_empty()
             && self
@@ -15146,6 +15254,11 @@ fn prompt_frame(motion: Option<f32>, width: Pixels, collapsed: bool, text: AnyEl
     }
 }
 
+/// Whether the caret shows, `since` seconds after it last moved: the Mac's blink, starting lit.
+fn caret_lit(since: f32) -> bool {
+    since % 1.06 < 0.58
+}
+
 /// How far below the top of the view a sent message comes to rest.
 const ANCHOR_TOP: f32 = 32.;
 
@@ -16167,5 +16280,17 @@ mod composer_follow_tests {
         }
         // 13 lines of 22 px in a 100 px window: the last line stays in view.
         assert_eq!(*offsets.last().unwrap(), px(-(13. * 22. - 100.)));
+    }
+}
+
+#[cfg(test)]
+mod caret_tests {
+    use super::*;
+
+    #[test]
+    fn the_caret_starts_lit_and_blinks() {
+        assert!(caret_lit(0.));
+        assert!(!caret_lit(0.7));
+        assert!(caret_lit(1.1));
     }
 }

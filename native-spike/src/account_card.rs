@@ -26,12 +26,52 @@ pub(crate) fn is_auth_error(error: &str) -> bool {
     .any(|needle| error.contains(needle))
 }
 
+/// The account's usage limit, as the providers word it: another account can carry on.
+pub(crate) fn is_limit_error(error: &str) -> bool {
+    let error = error.to_lowercase();
+    [
+        "usage limit",
+        "limit reached",
+        "hit your",
+        "rate limit",
+        "quota",
+    ]
+    .iter()
+    .any(|needle| error.contains(needle))
+}
+
+/// When a limit comes back, from the provider's words ("resets 2:40pm"), as 14:40.
+pub(crate) fn reset_time(text: &str) -> Option<String> {
+    let after = text
+        .rsplit("resets ")
+        .next()
+        .filter(|_| text.contains("resets "))?;
+    let clock: String = after
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == ':')
+        .collect();
+    let rest = after[clock.len()..].trim_start().to_lowercase();
+    let (hour, minute) = match clock.split_once(':') {
+        Some((hour, minute)) => (hour.parse::<u32>().ok()?, minute.parse::<u32>().ok()?),
+        None => (clock.parse::<u32>().ok()?, 0),
+    };
+    let hour = match (rest.starts_with("pm"), rest.starts_with("am"), hour) {
+        (true, _, 12) => 12,
+        (true, _, h) => h + 12,
+        (_, true, 12) => 0,
+        (_, _, h) => h,
+    };
+    Some(format!("{hour}:{minute:02}"))
+}
+
 /// The error in one short line for the card, or None when the session did not fail.
 pub(crate) fn headline(status: &str, error: &str) -> Option<String> {
     if status != "failed" || error.trim().is_empty() {
         return None;
     }
-    Some(if is_auth_error(error) {
+    Some(if is_limit_error(error) {
+        t("Esta conta atingiu o limite de uso.").to_owned()
+    } else if is_auth_error(error) {
         t("O login desta conta expirou ou foi sobrescrito por outra sessão.").to_owned()
     } else {
         let line = error.lines().next().unwrap_or("").trim();
@@ -53,7 +93,9 @@ impl Shell {
         let session = conversation.session_id.clone();
         let approval = conversation.approval.clone();
         let current = conversation.account.clone();
-        let others: Vec<(String, String)> = if is_auth_error(&conversation.last_error) {
+        let others: Vec<(String, String)> = if is_auth_error(&conversation.last_error)
+            || is_limit_error(&conversation.last_error)
+        {
             self.accounts_of(conversation.provider)
                 .into_iter()
                 .filter(|(id, _)| *id != current)
@@ -64,17 +106,19 @@ impl Shell {
         let button = |id: String, label: String| {
             div()
                 .id(gpui::SharedString::from(id))
-                .h(px(28.))
-                .px(px(10.))
-                .rounded(px(crate::theme::RADIUS_MD))
+                .h(px(24.))
+                .max_w(px(210.))
+                .flex_shrink_0()
+                .px(px(9.))
+                .rounded(px(crate::theme::RADIUS_SM))
                 .flex()
                 .items_center()
-                .text_size(px(12.))
+                .text_size(px(11.5))
                 .text_color(content(0.8))
-                .bg(content(0.08))
+                .bg(content(0.1))
                 .cursor_pointer()
-                .hover(|s| s.bg(content(0.14)))
-                .child(label)
+                .hover(|s| s.bg(content(0.16)))
+                .child(div().min_w_0().truncate().child(label))
         };
         let retry = {
             let (session, approval) = (session.clone(), approval.clone());
@@ -96,39 +140,44 @@ impl Shell {
                 cx.notify();
             }))
         });
+        // A ledge on the composer's top edge, like the queue: one line, the ways on at its end.
+        let answer = conversation
+            .turns
+            .last()
+            .map_or("", |turn| turn.answer.as_str());
+        let headline = match reset_time(answer).filter(|_| is_limit_error(&conversation.last_error))
+        {
+            Some(at) => tf("Esta conta atingiu o limite de uso. Volta às {}.", &[&at]),
+            None => headline,
+        };
+        let warm: gpui::Hsla = rgb(0xee8a96).into();
         Some(
             div()
-                .w_full()
+                .mx(px(8.))
+                .min_h(px(36.))
+                .pl(px(10.))
+                .pr(px(6.))
+                .py(px(4.))
                 .flex()
-                .flex_col()
+                .items_center()
                 .gap(px(8.))
-                .px(px(12.))
-                .py(px(10.))
-                .rounded(px(crate::theme::RADIUS_LG))
-                .bg(content(0.05))
+                .rounded_t(px(10.))
                 .border_1()
-                .border_color(content(0.08))
+                .border_b_0()
+                .border_color(gpui::Hsla { a: 0.22, ..warm })
+                .bg(gpui::Hsla { a: 0.07, ..warm })
+                .child(icon("alert-circle", 14.).text_color(warm))
                 .child(
                     div()
-                        .text_size(px(13.))
-                        .text_color(rgb(0xee8a96))
-                        .child(t("Esta conversa parou por um erro")),
-                )
-                .child(
-                    div()
-                        .text_size(px(12.5))
-                        .line_height(px(18.))
-                        .text_color(content(0.65))
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(px(12.))
+                        .text_color(content(0.75))
                         .child(headline),
                 )
-                .child(
-                    div()
-                        .flex()
-                        .flex_wrap()
-                        .gap(px(6.))
-                        .child(retry)
-                        .children(moves),
-                )
+                .children(moves)
+                .child(retry)
                 .into_any_element(),
         )
     }
@@ -174,6 +223,28 @@ mod tests {
         assert_eq!(
             headline("failed", "disk full\nmore").as_deref(),
             Some("disk full")
+        );
+    }
+
+    #[test]
+    fn the_reset_time_reads_as_a_clock() {
+        assert_eq!(
+            reset_time("You've hit your 5-hour limit · resets 2:40pm (America/Sao_Paulo)")
+                .as_deref(),
+            Some("14:40")
+        );
+        assert_eq!(reset_time("resets 12am").as_deref(), Some("0:00"));
+        assert_eq!(reset_time("nothing here"), None);
+    }
+
+    #[test]
+    fn a_usage_limit_is_recognised_and_said_plainly() {
+        assert!(is_limit_error("Usage limit reached."));
+        assert!(is_limit_error("You've hit your 5-hour limit"));
+        assert!(!is_limit_error("disk full"));
+        assert_eq!(
+            headline("failed", "Usage limit reached.").as_deref(),
+            Some("Esta conta atingiu o limite de uso.")
         );
     }
 

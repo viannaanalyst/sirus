@@ -41,13 +41,13 @@ thread_local! {
     static DELEGATE: RefCell<Option<Retained<Delegate>>> = const { RefCell::new(None) };
 }
 
-/// Which of Monocode's sounds a saved choice stands for: the finished chime, or the one that asks
-/// for attention. An unknown name plays nothing.
+/// Which of Monocode's three sounds a name stands for. An unknown name plays nothing.
 fn cue_of(choice: &str) -> Option<crate::sound::Cue> {
     use crate::sound::Cue;
     Some(match choice {
-        "glass" | "hero" => Cue::Finished,
-        "ping" | "pop" | "submarine" | "tink" => Cue::Input,
+        "finished" => Cue::Finished,
+        "input" => Cue::Input,
+        "linked" => Cue::LinkedActivity,
         _ => return None,
     })
 }
@@ -101,8 +101,11 @@ pub fn deliver(alert: &Value, window_active: bool) {
     if window_active && alert["foreground"].as_bool() != Some(true) {
         return;
     }
-    if let Some(sound) = alert["sound"].as_str() {
-        play(sound);
+    // The host says which sound the event takes, and only when sounds are on.
+    if !alert["sound"].is_null()
+        && let Some(cue) = alert["cue"].as_str()
+    {
+        play(cue);
     }
     if alert["system"].as_bool() == Some(true) {
         banner(
@@ -118,7 +121,7 @@ mod tests {
 
     #[test]
     fn only_the_saved_sounds_have_a_name() {
-        assert!(cue_of("glass").is_some());
+        assert!(cue_of("finished").is_some());
         assert!(cue_of("../evil").is_none());
     }
 }

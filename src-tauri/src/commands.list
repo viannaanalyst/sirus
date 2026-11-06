@@ -46,6 +46,7 @@ commands::load_state
 provider_accounts::create_provider_account
 provider_accounts::select_provider_account
 provider_accounts::rename_provider_account
+provider_accounts::remove_provider_account
 provider_accounts::login_provider_account
 provider_accounts::cancel_provider_account_login
 provider_usage::provider_usage

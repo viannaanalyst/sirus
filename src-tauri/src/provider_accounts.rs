@@ -257,6 +257,62 @@ pub async fn select_provider_account(
     .await
     .map_err(|_| Error::agent("Cannot select account profile"))?
 }
+/// Removes an app-managed account and its folder (its sign-in and its copies of transcripts). The
+/// default account is the machine's own CLI login, and a conversation still on the account would
+/// lose its way back, so both refuse.
+pub async fn remove_provider_account(
+    state: State<'_, Arc<AppState>>,
+    provider: AgentProviderId,
+    account_id: String,
+) -> Result<()> {
+    let state = state.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        let mut data = state.data.lock();
+        state.ensure_running()?;
+        validate(&data, &provider, &account_id)?;
+        if account_id == crate::models::default_account_id() {
+            return Err(Error::agent("The default account cannot be removed here."));
+        }
+        let using = data
+            .sessions
+            .iter()
+            .filter(|session| {
+                (session.agent == provider && session.provider_account_id == account_id)
+                    || session.account_bindings.get(&provider) == Some(&account_id)
+            })
+            .count();
+        if using > 0 {
+            return Err(Error::agent(format!(
+                "{using} conversation(s) still use this account. Move or delete them first."
+            )));
+        }
+        let before = data.provider_accounts.clone();
+        data.provider_accounts
+            .retain(|account| !(account.id == account_id && account.provider == provider));
+        let selected = data.selected_provider_accounts.get(&provider).cloned();
+        if selected.as_deref() == Some(account_id.as_str()) {
+            data.selected_provider_accounts.remove(&provider);
+        }
+        if let Err(error) = crate::persist::save(&state.data_path, &data) {
+            data.provider_accounts = before;
+            if let Some(selected) = selected {
+                data.selected_provider_accounts.insert(provider, selected);
+            }
+            return Err(error);
+        }
+        let root = state
+            .data_path
+            .parent()
+            .ok_or_else(|| Error::agent("Account storage unavailable"))?;
+        if let Ok(folder) = home(root, &provider, &account_id, false) {
+            let _ = std::fs::remove_dir_all(folder);
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|_| Error::agent("Cannot remove account profile"))?
+}
+
 pub async fn rename_provider_account(
     state: State<'_, Arc<AppState>>,
     provider: AgentProviderId,

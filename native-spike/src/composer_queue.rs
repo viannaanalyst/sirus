@@ -763,6 +763,15 @@ impl Shell {
         if !ok {
             self.problem = Some(error_text(value));
         } else {
+            // The instruction glides to the top of the view, as a sent message does.
+            if let Some(ix) = self
+                .conversations
+                .iter()
+                .position(|conversation| conversation.session_id == wait.session_id)
+            {
+                self.list_state(ix, cx).pause_following_tail();
+                self.glides.entry(ix).or_default().follow(true);
+            }
             if let Some(item) = &wait.item {
                 let files = self.queues.cancel(&wait.session_id, item);
                 self.release_unused(files, &wait.session_id);

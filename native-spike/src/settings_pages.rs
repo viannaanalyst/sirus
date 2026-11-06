@@ -1777,14 +1777,6 @@ fn chat(s: &Value) -> Vec<Group> {
 }
 
 fn notifications(s: &Value) -> Vec<Group> {
-    const SOUNDS: &[(&str, &str)] = &[
-        ("glass", "Glass"),
-        ("ping", "Ping"),
-        ("pop", "Pop"),
-        ("submarine", "Submarine"),
-        ("tink", "Tink"),
-        ("hero", "Hero"),
-    ];
     let activity_rows: &[SwitchRow] = &[
         (
             t("Avisos no app"),
@@ -1824,13 +1816,9 @@ fn notifications(s: &Value) -> Vec<Group> {
             title,
             about,
             vec![
-                pick(s, inner("notifications", sound), SOUNDS),
                 Ctl::Button {
                     label: t("Ouvir"),
-                    act: act_run(
-                        "native_sound",
-                        json!({ "sound": current(s, inner("notifications", sound)) }),
-                    ),
+                    act: act_run("native_sound", json!({ "sound": sound })),
                     enabled: true,
                     danger: false,
                 },
@@ -1844,21 +1832,21 @@ fn notifications(s: &Value) -> Vec<Group> {
             t("Pedidos de permissão"),
             t("Quando um agente precisa de aprovação para continuar."),
             "permissions",
-            "permissionSound",
+            "input",
         ),
         event(
             s,
             t("Perguntas do agente"),
             t("Quando um agente pede uma escolha ou resposta."),
             "questions",
-            "questionSound",
+            "input",
         ),
         event(
             s,
             t("Tarefa concluída"),
             t("Quando uma tarefa termina com sucesso. Cancelamentos e falhas não geram avisos."),
             "completion",
-            "completionSound",
+            "finished",
         ),
     ];
     events.extend(switches(

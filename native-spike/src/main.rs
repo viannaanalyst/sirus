@@ -127,6 +127,7 @@ impl AssetSource for Assets {
             "pencil" => include_bytes!("../assets/pencil.svg"),
             "square-pen" => include_bytes!("../assets/square-pen.svg"),
             "square-plus" => include_bytes!("../assets/square-plus.svg"),
+            "alert-circle" => include_bytes!("../assets/alert-circle.svg"),
             "queue-list" => include_bytes!("../assets/queue-list.svg"),
             "queue-steer" => include_bytes!("../assets/queue-steer.svg"),
             "queue-pause" => include_bytes!("../assets/queue-pause.svg"),

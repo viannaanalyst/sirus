@@ -242,3 +242,4 @@ Write an ADR when a change constrains future work, is expensive to reverse, or r
 - [ADR-195: Reveal motion, photos, sounds and "open in" follow Monocode, and sent pictures survive a restart](ADR-195-monocode-motion-photos-sounds-open-in.md)
 - [ADR-196: Hugeicons on Mac and phone, code as pills, ⌘F marks the word](ADR-196-hugeicons-code-pills-find-words.md)
 - [ADR-197: One hover for lists, smaller sent pictures, and the composer's sparks](ADR-197-hover-standard-and-smaller-photos.md)
+- [ADR-198: A one-line composer, limits that offer another account, and removing accounts](ADR-198-one-line-composer-limits-accounts.md)

@@ -1022,6 +1022,8 @@ const ENTRIES: &[(&str, &str)] = &[
         "Esse computador perdeu o pareamento: pareie de novo.",
         "This computer lost its pairing: pair it again.",
     ),
+    ("Esta conta atingiu o limite de uso.", "This account reached its usage limit."),
+    ("Esta conta atingiu o limite de uso. Volta às {}.", "This account reached its usage limit. It returns at {}."),
     (
         "Esta conversa parou por um erro",
         "This conversation stopped on an error",
@@ -1844,6 +1846,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "O link pediu {}, que não está configurado aqui; o seu padrão continua.",
         "The link asked for {}, which is not set up here; your default stays.",
     ),
+    ("O login de {} sai deste Mac. Conversas que usam esta conta impedem a remoção.", "{}'s sign-in leaves this Mac. Conversations using this account prevent removal."),
     (
         "O login desta conta expirou ou foi sobrescrito por outra sessão.",
         "This account's sign-in expired or was overwritten by another session.",
@@ -2269,6 +2272,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Remover", "Remove"),
     ("Remover anexo?", "Remove attachment?"),
+    ("Remover conta", "Remove account"),
     ("Remover da lista", "Remove from list"),
     ("Remover projeto?", "Remove project?"),
     ("Remover {}?", "Remove {}?"),

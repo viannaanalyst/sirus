@@ -351,10 +351,6 @@ fn request(app: &AppHandle, session_id: &str, args: &Value) -> Result<Value, Str
         return Err("another secret request is already waiting for the person".into());
     }
     publish(app);
-    #[cfg(feature = "desktop")]
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.request_user_attention(Some(tauri::UserAttentionType::Informational));
-    }
     let answer = wait.recv_timeout(REQUEST_TIMEOUT).ok().flatten();
     with_vault(|vault| vault.pending.retain(|pending| pending.request.id != id));
     publish(app);
@@ -571,7 +567,6 @@ pub enum Action {
 }
 
 /// Closed secret-card surface: status, provide or decline. Values are never echoed back.
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn secret_action(state: State<'_, Arc<AppState>>, action: Action) -> IpcResult<Snapshot> {
     state.ensure_running()?;
     if let Action::Respond { request_id, value } = action {

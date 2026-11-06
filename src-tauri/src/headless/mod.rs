@@ -1,8 +1,7 @@
-//! `sirus-host` (ADR-131): Sirus Code without a window, for a Linux server reached
-//! over Tailscale. It loads the same state, runs the same agents and serves the
-//! phone app through the same remote access as the Mac app (`remote.rs`); the
-//! window's IPC is replaced by a command table generated from the desktop's own
-//! command list (`build.rs`), so every command takes the same code path.
+//! `sirus-host` (ADR-131): Sirus without a window: the back end the Mac window and the phone
+//! talk to, or a server reached over Tailscale. It loads the state, runs the agents and serves
+//! remote access (`remote.rs`); the command table is generated from `commands.list`
+//! (`build.rs`), so every command takes the same code path.
 
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
@@ -22,7 +21,7 @@ const USAGE: &str = "\
 sirus-host: Sirus Code without a window (ADR-131)
 
 Usage:
-  sirus-host serve [--data-dir DIR] [--bind ADDR] [--port PORT] [--ui-dir DIR] [--url URL]
+  sirus-host serve [--data-dir DIR] [--bind ADDR] [--port PORT] [--assets-dir DIR] [--url URL]
                    [--local-port PORT] [--https-port PORT] [--label NAME]
   sirus-host pair [--data-dir DIR]      one-time six-digit code and QR for a new device
   sirus-host devices [--data-dir DIR]   paired devices
@@ -34,8 +33,8 @@ Options:
   --bind ADDR     address to listen on (default: this machine's Tailscale address,
                   else 127.0.0.1; 0.0.0.0 only when asked)
   --port PORT     default 7710
-  --ui-dir DIR    the built front end (`npm run build` → dist/); default $SIRUS_UI_DIR,
-                  else `ui/` next to the binary
+  --assets-dir DIR  the Mermaid and KaTeX files the Sirus window loads, served at /assets/;
+                  default $SIRUS_ASSETS_DIR, else `reply-render/` next to the binary'
   --url URL       address to show in pairing links (e.g. http://host.tailnet.ts.net:7710)
   --local-port P  a window's own listener on 127.0.0.1:P, always on (Sirus Native, ADR-189).
                   --port is then the listener for other devices, on only while Settings →
@@ -93,7 +92,7 @@ struct Cli {
     data_dir: Option<PathBuf>,
     bind: Option<IpAddr>,
     port: u16,
-    ui_dir: Option<PathBuf>,
+    assets_dir: Option<PathBuf>,
     url: Option<String>,
     local_port: Option<u16>,
     https_port: Option<u16>,
@@ -107,7 +106,7 @@ fn parse(arguments: &[String]) -> Result<Cli, String> {
         data_dir: None,
         bind: None,
         port: crate::remote::DEFAULT_PORT,
-        ui_dir: None,
+        assets_dir: None,
         url: None,
         local_port: None,
         https_port: None,
@@ -122,7 +121,7 @@ fn parse(arguments: &[String]) -> Result<Cli, String> {
         };
         match argument.as_str() {
             "--data-dir" => cli.data_dir = Some(absolute(value("--data-dir")?)?),
-            "--ui-dir" => cli.ui_dir = Some(absolute(value("--ui-dir")?)?),
+            "--assets-dir" => cli.assets_dir = Some(absolute(value("--assets-dir")?)?),
             "--bind" => {
                 cli.bind = Some(
                     value("--bind")?
@@ -212,13 +211,13 @@ fn data_dir(cli: &Cli) -> PathBuf {
     home.join(".local/share/sirus-code")
 }
 
-fn ui_dir(cli: &Cli) -> Option<PathBuf> {
-    cli.ui_dir
+fn assets_dir(cli: &Cli) -> Option<PathBuf> {
+    cli.assets_dir
         .clone()
-        .or_else(|| std::env::var_os("SIRUS_UI_DIR").map(PathBuf::from))
+        .or_else(|| std::env::var_os("SIRUS_ASSETS_DIR").map(PathBuf::from))
         .or_else(|| {
-            let beside = std::env::current_exe().ok()?.parent()?.join("ui");
-            beside.join("index.html").is_file().then_some(beside)
+            let beside = std::env::current_exe().ok()?.parent()?.join("reply-render");
+            beside.join("mermaid.js").is_file().then_some(beside)
         })
 }
 
@@ -281,19 +280,12 @@ fn serve(cli: &Cli) -> i32 {
         eprintln!("sirus-host: cannot use {}: {error}", dir.display());
         return 1;
     }
-    let ui = ui_dir(cli);
-    match &ui {
-        Some(ui) if ui.join("index.html").is_file() => {}
-        Some(ui) => {
-            eprintln!(
-                "sirus-host: {} has no index.html (build the UI with `npm run build`)",
-                ui.display()
-            );
+    let assets = assets_dir(cli);
+    if let Some(assets) = &assets {
+        if !assets.join("mermaid.js").is_file() {
+            eprintln!("sirus-host: {} has no mermaid.js", assets.display());
             return 1;
         }
-        None => eprintln!(
-            "sirus-host: no --ui-dir; devices can connect but there is no app to open. Build it with `npm run build` and pass --ui-dir dist"
-        ),
     }
     let app = match start(&dir) {
         Ok(app) => app,
@@ -321,7 +313,7 @@ fn serve(cli: &Cli) -> i32 {
         bind,
         port: cli.port,
         url: cli.url.clone(),
-        ui_dir: ui,
+        assets_dir: assets,
         local_port: cli.local_port,
         https_port: cli.https_port,
         label: cli.label.clone(),
@@ -583,7 +575,7 @@ mod tests {
     #[test]
     fn the_cli_reads_its_options() {
         let cli = parse(&words(
-            "serve --bind 100.64.1.2 --port 7800 --data-dir /srv/sirus --ui-dir /srv/ui --url https://vps.example.ts.net/",
+            "serve --bind 100.64.1.2 --port 7800 --data-dir /srv/sirus --assets-dir /srv/assets --url https://vps.example.ts.net/",
         ))
         .unwrap();
         assert_eq!(cli.command, "serve");
@@ -645,14 +637,14 @@ mod tests {
         ] {
             assert!(HOST_COMMANDS.contains(&command), "{command}");
         }
-        // …and the window's own stay on the Mac.
+        // …and nothing for a window or for web push (there is no Tauri window any more).
         for command in [
             "browser_open",
             "window_ready",
             "pick_folder",
             "open_external_url",
+            "share_push_identity",
         ] {
-            assert!(DESKTOP_COMMANDS.contains(&command), "{command}");
             assert!(!HOST_COMMANDS.contains(&command), "{command}");
         }
     }

@@ -707,7 +707,6 @@ fn keep(session: &mut Session, message_id: &str) -> Result<TurnReview> {
     review.kept_at.get_or_insert_with(crate::paths::now_rfc3339);
     Ok(review.clone())
 }
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn keep_turn_changes(
     app: AppHandle,
     state: State<'_, std::sync::Arc<AppState>>,

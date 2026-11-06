@@ -1,9 +1,0 @@
-@layer components {
-  .quit-toast { position: fixed; left: 50%; top: 52px; z-index: 120; display: flex; align-items: center; gap: 10px; padding: 9px 16px; translate: -50% 0; border: 1px solid var(--border-default); border-radius: 999px; color: var(--text-primary); font-size: 13px; white-space: nowrap; box-shadow: 0 12px 40px rgb(0 0 0 / .35); pointer-events: none; }
-  .quit-toast kbd { padding: 1px 6px; border: 1px solid var(--border-default); border-radius: 6px; background: color-mix(in srgb, var(--text-primary) 8%, transparent); font: 600 12px var(--font-ui, system-ui); }
-  .quit-toast-ring { width: 16px; height: 16px; rotate: -90deg; }
-  .quit-toast-ring circle { fill: none; stroke-width: 2; }
-  .quit-toast-track { stroke: color-mix(in srgb, var(--text-primary) 15%, transparent); }
-  .quit-toast-time { stroke: var(--text-primary); stroke-linecap: round; stroke-dasharray: 41; animation: quit-toast-time linear forwards; }
-  @keyframes quit-toast-time { from { stroke-dashoffset: 0; } to { stroke-dashoffset: 41; } }
-}

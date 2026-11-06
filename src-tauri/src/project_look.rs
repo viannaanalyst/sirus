@@ -104,7 +104,6 @@ const MAX_LOGO: usize = 96 * 1024;
 
 /// Opens the native image picker and returns the picked image as a small square PNG data
 /// URL, for icons that are not a project's (project folders). `None` when cancelled.
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn pick_look_image(app: AppHandle) -> Result<Option<String>> {
     let Some(path) = pick_image(&app).await else {
         return Ok(None);
@@ -186,22 +185,8 @@ pub(crate) fn valid_emoji(value: &str) -> Result<String> {
 }
 
 /// The headless host has no screen to show a picker on (ADR-131).
-#[cfg(not(feature = "desktop"))]
 async fn pick_image(_app: &AppHandle) -> Option<std::path::PathBuf> {
     None
-}
-
-#[cfg(feature = "desktop")]
-async fn pick_image(app: &AppHandle) -> Option<std::path::PathBuf> {
-    use tauri_plugin_dialog::DialogExt;
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    app.dialog()
-        .file()
-        .add_filter("Image", &["png", "jpg", "jpeg"])
-        .pick_file(move |file| {
-            let _ = tx.send(file.and_then(|path| path.into_path().ok()));
-        });
-    rx.await.ok().flatten()
 }
 
 /// Decodes a bounded PNG/JPEG, crops it to the centre square and returns a small PNG data URL.

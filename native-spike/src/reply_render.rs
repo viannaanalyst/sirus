@@ -1,11 +1,11 @@
 //! Draws Mermaid diagrams and KaTeX formulas for replies. One hidden WKWebView loads a small page
-//! that imports Sirus's own bundled `mermaid` and `katex` chunks from the UI folder (the host
-//! serves it on the window's loopback port), renders the source, reports its size, and the view is
+//! that imports the committed `mermaid.js` and `katex.js` from `assets/reply-render` (the host
+//! serves that folder at `/assets/` on the window's loopback port), renders the source, reports its size, and the view is
 //! snapshotted to a PNG. The result is cached by content key, in memory (`reply_rich`) and on disk,
 //! so each diagram and formula is drawn once.
 //!
 //! Agent output is untrusted: Mermaid runs in `strict` mode, KaTeX with `trust: false`, and the
-//! page's policy lets it load only the UI folder's scripts, styles and fonts and fetch nothing.
+//! page's policy lets it load only that folder's scripts, styles and fonts and fetch nothing.
 //! Monocode's Rust Mermaid was not ported: it needs `mermaid-rs-renderer`, which this build does not
 //! have, and it draws no formulas.
 use crate::reply_rich::Want;
@@ -30,16 +30,6 @@ const POLLS: usize = 170;
 
 // ---- The pages (pure) --------------------------------------------------------------------
 
-/// The file in `names` that starts with `prefix` and ends with `.ext` (the build hashes names).
-pub fn pick_chunk<'a>(names: &'a [String], prefix: &str, ext: &str) -> Option<&'a str> {
-    let suffix = format!(".{ext}");
-    names
-        .iter()
-        .map(String::as_str)
-        .filter(|name| name.starts_with(prefix) && name.ends_with(&suffix))
-        .min()
-}
-
 fn js_string(text: &str) -> String {
     // `</` could end the script early; JSON allows the escaped slash.
     serde_json::to_string(text)
@@ -56,7 +46,7 @@ fn policy(base: &str) -> String {
 const SHELL: &str = "html,body{margin:0;padding:0;background:transparent}#c{display:inline-block;font:14px -apple-system,BlinkMacSystemFont,sans-serif;line-height:1.3}";
 
 /// The page that draws `want`, loading its libraries from `base/assets/`. `ink` is a CSS color.
-pub fn page(want: &Want, names: &[String], base: &str, ink: &str) -> Option<String> {
+pub fn page(want: &Want, base: &str, ink: &str) -> Option<String> {
     let key = js_string(&want.key());
     let head = |style: &str| {
         format!(
@@ -68,26 +58,23 @@ pub fn page(want: &Want, names: &[String], base: &str, ink: &str) -> Option<Stri
     let tail = "const c=document.getElementById('c');const out=(v)=>{window.__r=KEY+':'+JSON.stringify(v)};";
     match want {
         Want::Diagram { source, light } => {
-            let module = pick_chunk(names, "mermaid.core-", "js")?;
             let theme = if *light { "default" } else { "dark" };
             Some(format!(
                 "{}<script type=\"module\">{}try{{const m=(await import({})).default;m.initialize({{startOnLoad:false,securityLevel:'strict',suppressErrorRendering:true,theme:'{theme}',htmlLabels:false,flowchart:{{htmlLabels:false}},maxTextSize:{MAX_SOURCE},fontFamily:'-apple-system, sans-serif'}});const {{svg}}=await m.render('m1',{});c.innerHTML=svg;const s=c.querySelector('svg');const b=s.viewBox.baseVal;s.style.maxWidth='none';s.setAttribute('width',b.width);s.setAttribute('height',b.height);s.style.width=b.width+'px';s.style.height=b.height+'px';await document.fonts.ready;const r=c.getBoundingClientRect();out({{w:r.width,h:r.height}})}}catch(e){{out({{error:String(e)}})}}</script></body></html>",
                 head(""),
                 tail.replace("KEY", &key),
-                js_string(&format!("{base}/assets/{module}")),
+                js_string(&format!("{base}/assets/mermaid.js")),
                 js_string(source)
             ))
         }
         Want::Math { tex, display, .. } => {
-            let module = pick_chunk(names, "katex-", "js")?;
-            let css = pick_chunk(names, "katex-", "css")?;
             let font = if *display { "17px" } else { "15px" };
             Some(format!(
                 "{}<script type=\"module\">{}try{{await new Promise((ok,no)=>{{const l=document.createElement('link');l.rel='stylesheet';l.href={};l.onload=ok;l.onerror=no;document.head.append(l)}});const k=await import({});c.style.fontSize='{font}';c.innerHTML=k.renderToString({},{{displayMode:{display},throwOnError:true,trust:false,strict:'ignore',output:'html',maxSize:50,maxExpand:500}});c.offsetWidth;await document.fonts.ready;const r=c.getBoundingClientRect();out({{w:r.width,h:r.height}})}}catch(e){{out({{error:String(e)}})}}</script></body></html>",
                 head(".katex-display{margin:0!important}"),
                 tail.replace("KEY", &key),
-                js_string(&format!("{base}/assets/{css}")),
-                js_string(&format!("{base}/assets/{module}")),
+                js_string(&format!("{base}/assets/katex.css")),
+                js_string(&format!("{base}/assets/katex.js")),
                 js_string(tex),
             ))
         }
@@ -245,13 +232,8 @@ pub async fn draw(
     if let Some(hit) = cache_read(&dir, &key) {
         return Ok(hit);
     }
-    let (ui, base) = crate::backend::ui_assets().ok_or("the UI folder is missing")?;
-    let names: Vec<String> = std::fs::read_dir(ui.join("assets"))
-        .map_err(|e| e.to_string())?
-        .flatten()
-        .filter_map(|e| e.file_name().into_string().ok())
-        .collect();
-    let page = page(want, &names, &base, ink).ok_or("the bundled library is missing")?;
+    let (_, base) = crate::backend::reply_assets().ok_or("the bundled libraries are missing")?;
+    let page = page(want, &base, ink).ok_or("not drawable")?;
     let web = engine()?;
     unsafe {
         web.setFrameSize(NSSize::new(900., 600.));
@@ -287,29 +269,74 @@ pub async fn draw(
 mod tests {
     use super::*;
 
-    fn names() -> Vec<String> {
-        [
-            "index-a.js",
-            "mermaid-B.js",
-            "mermaid.core-zbbo.js",
-            "katex--I9w.js",
-            "katex-DEc.css",
-            "katex-DEc2.js",
-        ]
-        .map(String::from)
-        .to_vec()
-    }
-
+    /// Every file the entry files reach (static and dynamic imports in either quote style,
+    /// `url(...)` in the CSS) is in the committed folder, and every file in it is reached: a clean
+    /// load never meets a missing chunk, and nothing stale is shipped.
     #[test]
-    fn bundled_chunks_are_found_by_prefix() {
-        let names = names();
-        assert_eq!(
-            pick_chunk(&names, "mermaid.core-", "js"),
-            Some("mermaid.core-zbbo.js")
-        );
-        assert_eq!(pick_chunk(&names, "katex-", "css"), Some("katex-DEc.css"));
-        assert_eq!(pick_chunk(&names, "katex-", "js"), Some("katex--I9w.js"));
-        assert_eq!(pick_chunk(&names, "nope-", "js"), None);
+    fn the_committed_libraries_are_complete() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/reply-render");
+        let mut pending: Vec<PathBuf> = ["mermaid.js", "katex.js", "katex.css"]
+            .iter()
+            .map(|name| root.join(name))
+            .collect();
+        let mut seen = std::collections::HashSet::new();
+        while let Some(path) = pending.pop() {
+            assert!(path.is_file(), "{} is missing", path.display());
+            if !seen.insert(path.clone()) || path.extension().is_some_and(|x| x == "woff2") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            let mut targets: Vec<&str> = Vec::new();
+            for quote in ["\"", "`"] {
+                let opening = format!("{quote}./");
+                let mut before = String::new();
+                for (index, part) in text.split(opening.as_str()).enumerate() {
+                    if index > 0 {
+                        let before = before.trim_end();
+                        if before.ends_with("from")
+                            || before.ends_with("import")
+                            || before.ends_with("import(")
+                        {
+                            targets.extend(part.split(quote).next());
+                        }
+                    }
+                    before = part
+                        .chars()
+                        .rev()
+                        .take(12)
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                        .rev()
+                        .collect();
+                }
+            }
+            targets.extend(
+                text.split("url(./")
+                    .skip(1)
+                    .filter_map(|rest| rest.split(')').next()),
+            );
+            for target in targets {
+                pending.push(path.parent().unwrap().join(target));
+            }
+        }
+        let mut shipped = Vec::new();
+        let mut folders = vec![root.clone()];
+        while let Some(folder) = folders.pop() {
+            for entry in std::fs::read_dir(&folder).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() && entry.file_name() != "build" {
+                    folders.push(path);
+                } else if path.is_file() && entry.file_name() != "LICENSES.txt" {
+                    shipped.push(path);
+                }
+            }
+        }
+        let unreached: Vec<_> = shipped
+            .iter()
+            .filter(|path| !seen.contains(*path))
+            .collect();
+        assert!(unreached.is_empty(), "never loaded: {unreached:?}");
+        assert!(seen.len() > 100, "only {} files reached", seen.len());
     }
 
     #[test]
@@ -318,25 +345,24 @@ mod tests {
             source: "graph TD\nA[\"</script><b>\"]".into(),
             light: false,
         };
-        let html = page(&want, &names(), "http://127.0.0.1:7811", "white").unwrap();
+        let html = page(&want, "http://127.0.0.1:7811", "white").unwrap();
         assert!(!html.contains("</script><b>"));
         assert!(html.contains("securityLevel:'strict'") && html.contains("theme:'dark'"));
         assert!(html.contains("default-src 'none'") && !html.contains("connect-src"));
-        assert!(html.contains("http://127.0.0.1:7811/assets/mermaid.core-zbbo.js"));
+        assert!(html.contains("http://127.0.0.1:7811/assets/mermaid.js"));
         let math = Want::Math {
             tex: "x^2".into(),
             display: true,
             light: true,
         };
-        let html = page(&math, &names(), "http://127.0.0.1:7811", "black").unwrap();
+        let html = page(&math, "http://127.0.0.1:7811", "black").unwrap();
         assert!(html.contains("trust:false") && html.contains("displayMode:true"));
-        assert!(html.contains("katex-DEc.css"));
-        assert!(page(&math, &[], "http://127.0.0.1:7811", "black").is_none());
+        assert!(html.contains("/assets/katex.css") && html.contains("/assets/katex.js"));
         let image = Want::Image {
             session: "s".into(),
             path: "p".into(),
         };
-        assert!(page(&image, &names(), "b", "c").is_none());
+        assert!(page(&image, "b", "c").is_none());
     }
 
     #[test]

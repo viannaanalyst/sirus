@@ -1,7 +1,6 @@
-//! `sirus-host`: Sirus Code without a window, for a Linux server (ADR-131).
-//! Build with `cargo build --release --no-default-features --features host --bin sirus-host`.
+//! `sirus-host`: the back end of Sirus without a window (ADR-131): the Mac window and the phone
+//! talk to it. Build with `cargo build --release --no-default-features --features host --bin sirus-host`.
 
-#[cfg(not(feature = "desktop"))]
 fn main() {
     #[cfg(target_os = "macos")]
     connect_window_server();
@@ -11,7 +10,7 @@ fn main() {
 /// Window screenshots abort the process when it has no connection to the window server, which a
 /// process with no window never opens by itself. Opens one on the main thread and stays out of
 /// the Dock.
-#[cfg(all(not(feature = "desktop"), target_os = "macos"))]
+#[cfg(target_os = "macos")]
 fn connect_window_server() {
     use objc2::runtime::AnyObject;
     use objc2::{class, msg_send};
@@ -26,10 +25,4 @@ fn connect_window_server() {
         let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
         let _: bool = msg_send![app, setActivationPolicy: PROHIBITED];
     }
-}
-
-#[cfg(feature = "desktop")]
-fn main() {
-    eprintln!("sirus-host is built without the desktop app: --no-default-features --features host");
-    std::process::exit(2);
 }

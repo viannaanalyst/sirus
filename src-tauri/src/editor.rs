@@ -3,8 +3,6 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::runtime::{AppHandle, State};
-#[cfg(feature = "desktop")]
-use tauri_plugin_opener::OpenerExt;
 
 use crate::commands::{native_task, session_path, AppState};
 use crate::error::{Error, Result};
@@ -64,7 +62,6 @@ pub(crate) fn is_reserved_path(path: &Path) -> bool {
     })
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn detect_editors() -> Vec<EditorInstall> {
     EDITORS
         .iter()
@@ -78,7 +75,6 @@ pub fn detect_editors() -> Vec<EditorInstall> {
 
 /// Real app icons for the fixed editor allowlist. The renderer receives a bounded
 /// base64 PNG per installed editor and never chooses the bundle path.
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn editor_app_icons() -> Vec<EditorAppIcon> {
     EDITORS
         .iter()
@@ -89,32 +85,10 @@ pub fn editor_app_icons() -> Vec<EditorAppIcon> {
         .collect()
 }
 
-#[cfg(all(target_os = "macos", feature = "desktop"))]
-fn app_icon_png(bundle: &str) -> Option<String> {
-    use base64::{engine::general_purpose::STANDARD, Engine};
-    use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSWorkspace};
-    use objc2_foundation::{NSDictionary, NSString};
-
-    if !Path::new(bundle).exists() {
-        return None;
-    }
-    unsafe {
-        let workspace = NSWorkspace::sharedWorkspace();
-        let image = workspace.iconForFile(&NSString::from_str(bundle));
-        let tiff = image.TIFFRepresentation()?;
-        let rep = NSBitmapImageRep::imageRepWithData(&tiff)?;
-        let png = rep
-            .representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new())?;
-        Some(STANDARD.encode(png.to_vec()))
-    }
-}
-
-#[cfg(not(all(target_os = "macos", feature = "desktop")))]
 fn app_icon_png(_bundle: &str) -> Option<String> {
     None
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn open_in_editor(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
@@ -143,22 +117,10 @@ pub async fn open_in_editor(
         target
     };
     // Finder cannot "open" a file as an editor would (macOS refuses it); it shows the file instead.
-    #[cfg(feature = "desktop")]
-    if spec.id == "finder" && target.is_file() {
-        app.opener()
-            .reveal_item_in_dir(&target)
-            .map_err(|err| Error::new("opener", err.to_string()))?;
-    } else {
-        app.opener()
-            .open_path(target.display().to_string(), Some(spec.name.to_string()))
-            .map_err(|err| Error::new("opener", err.to_string()))?;
-    }
-    #[cfg(not(feature = "desktop"))]
     let _ = (app, target);
     Ok(())
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn read_text_file(
     state: State<'_, Arc<AppState>>,
     session_id: String,
@@ -207,7 +169,6 @@ pub async fn read_text_file(
     .await
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn write_text_file(
     state: State<'_, Arc<AppState>>,
     session_id: String,

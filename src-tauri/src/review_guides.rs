@@ -572,7 +572,6 @@ pub enum Action {
     Delete { target: GuideTarget },
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn review_guide_action(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,

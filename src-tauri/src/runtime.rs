@@ -1,20 +1,12 @@
-//! The runtime the back end runs in (ADR-131). The desktop app runs inside Tauri;
-//! the headless `sirus-host` has no window, no WebKit and no Tauri at all. Shared
-//! modules name `crate::runtime::{AppHandle, Emitter, Manager, State, async_runtime}`
-//! instead of `tauri::…`: in the desktop build these are Tauri's own items, in the
-//! host build they are the small stand-ins below with the same shape (managed
-//! state, events by name, a global tokio runtime). Commands keep their signatures,
-//! so one implementation serves the window, the phone and the host.
+//! The runtime the back end runs in (ADR-131). The code was written against Tauri's `AppHandle`,
+//! `Emitter`, `Manager`, `State` and `async_runtime`; the host (there is no Tauri any more) offers
+//! the small stand-ins below with the same shape: managed state, events by name and a global tokio
+//! runtime. Modules name `crate::runtime::…`, so one implementation serves the window, the phone
+//! and the host.
 
-#[cfg(feature = "desktop")]
-pub use tauri::{async_runtime, http, AppHandle, Emitter, EventId, Listener, Manager, State};
-
-#[cfg(not(feature = "desktop"))]
 pub use axum::http;
-#[cfg(not(feature = "desktop"))]
 pub use headless::{async_runtime, AppHandle, Emitter, EventId, Listener, Manager, State};
 
-#[cfg(not(feature = "desktop"))]
 mod headless {
     use std::any::{Any, TypeId};
     use std::collections::HashMap;

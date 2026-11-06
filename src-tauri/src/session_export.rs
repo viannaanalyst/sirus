@@ -12,7 +12,6 @@ use crate::error::{Error, Result};
 const MAX_MARKDOWN: usize = 8 * 1024 * 1024;
 
 /// Returns `false` when the person cancelled the save dialog.
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn export_conversation(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
@@ -68,23 +67,8 @@ fn file_name(title: &str) -> String {
 }
 
 /// The headless host has no screen to show a picker on (ADR-131).
-#[cfg(not(feature = "desktop"))]
 async fn pick_destination(_app: &AppHandle, _name: &str) -> Option<std::path::PathBuf> {
     None
-}
-
-#[cfg(feature = "desktop")]
-async fn pick_destination(app: &AppHandle, name: &str) -> Option<std::path::PathBuf> {
-    use tauri_plugin_dialog::DialogExt;
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    app.dialog()
-        .file()
-        .set_file_name(name)
-        .add_filter("Markdown", &["md"])
-        .save_file(move |file| {
-            let _ = tx.send(file.and_then(|path| path.into_path().ok()));
-        });
-    rx.await.ok().flatten()
 }
 
 /// Writes through a temporary sibling and renames, so a failed write never truncates an existing file.

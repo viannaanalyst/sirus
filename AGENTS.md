@@ -1,48 +1,48 @@
 # AGENTS.md
 
-Sirus Code is a desktop app for running coding agents (Claude Code, Codex, OpenCode, Cursor, Grok and more) side by side: **projects → sessions → agents → worktrees → reviewable changes**. It is a Tauri 2 app with a React 19 + TypeScript front end and a Rust back end.
+Sirus is a Mac app for running coding agents (Claude Code, Codex, OpenCode, Cursor, Grok and more) side by side: **projects → sessions → agents → worktrees → reviewable changes**. It has three parts: a native GPUI window (`native-spike/`), the Rust back end it drives, `sirus-host` (`src-tauri/`), and an iPhone app (`mobile/`). The earlier Tauri + React app is gone (ADR-191).
 
 Small and focused changes land best. Use your judgement; when something looks wrong, fix it or say so.
 
 ## Get it running
 
-You need Node.js 22.18+, a current stable Rust toolchain, Xcode command line tools on macOS, and at least one provider CLI installed and logged in.
+You need a current stable Rust toolchain, Xcode command line tools on macOS, Node.js 22.18+ (release script and phone app), and at least one provider CLI installed and logged in.
 
 ```bash
-npm install
-npm run tauri dev       # the real app
-npm run build:desktop   # local macOS debug app bundle
+cd src-tauri && CARGO_TARGET_DIR=../native-spike/target/host cargo build --release --no-default-features --features host --bin sirus-host
+cd native-spike && cargo build --release && ./bundle.sh     # Sirus.app
 ```
 
 ## Where things live
 
-- `src/client/` — the client the UI talks to (`SirusClient`) and its transport; `LocalTransport` is the only place that calls Tauri directly.
-- `src/store/app-store.ts` — the Zustand store (projects, sessions, layout, realtime events).
-- `src/components/` — product UI, grouped by surface (`mobile/`, `pull-requests/`, `tasks/`, `settings/`, …).
-- `src/lib/` — pure helpers and shared logic, with tests in `tests/`.
-- `src/styles/` — design tokens (`index.css`) and per-surface styles.
-- `src-tauri/src/` — the Rust side: one module per area (`commands.rs` for IPC, `agent.rs` / `codex.rs` / `claude.rs` / `opencode.rs` for providers, `git*.rs`, `worktree.rs`, `persist.rs`, `launch.rs`, …).
+- `native-spike/src/` — the window: `shell.rs` (title bar, tabs, sidebar, transcript, composer), `backend.rs` (starts and pairs the host, WebSocket client), `settings_pages.rs`, `panel_*.rs`, `reply_render.rs` (Mermaid and KaTeX in replies). `native-spike/README.md` has the map.
+- `native-spike/assets/reply-render/` — the committed Mermaid and KaTeX files the window loads; `build/build.sh` rebuilds them.
+- `src-tauri/src/` — the host's Rust modules, one per area (`commands.rs` and `commands.list` for the command table, `agent.rs` / `codex.rs` / `claude.rs` / `opencode.rs` for providers, `git*.rs`, `worktree.rs`, `persist.rs`, `remote.rs` for the socket and pairing, …).
+- `mobile/` — the iPhone app (React Native / Expo). `mobile/src/shared/` is the protocol code it shares with the Mac, a cut-down copy imported as `@sirus/*`.
+- `scripts/release-sirus.ts` — releases; `native-spike/updater.pub` is the update key's public half.
 
-For the full map — every module, the domain model, IPC commands and events, provider argv, Git and security choices, design system and performance notes — see [`docs/development/architecture.md`](docs/development/architecture.md). Decisions and their reasons are in [`docs/decisions/`](docs/decisions/README.md).
+For the full map — every module, the domain model, commands and events, provider argv, Git and security choices — see [`docs/development/architecture.md`](docs/development/architecture.md). Decisions and their reasons are in [`docs/decisions/`](docs/decisions/README.md).
 
 ## Before you push
 
 ```bash
-npm run typecheck && npm run lint && npm test
-cd src-tauri && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
+cd native-spike && cargo test --features gpui/test-support && cargo build --release
+cd src-tauri && cargo fmt --check && cargo clippy --no-default-features --features host --all-targets -- -D warnings && cargo test --lib --no-default-features --features host
+cd mobile && npx tsc --noEmit && npm test
+node --test tests/*.test.ts     # release script helpers
 ```
 
-`npm run build` checks the production bundle when the UI changed. If structure changed, refresh the code map with `graphify update .` (outputs in `graphify-out/`; `graphify query "…"` answers architecture questions).
+Use `CARGO_TARGET_DIR=../native-spike/target/host-check` for the `src-tauri` commands so they do not touch the release host build.
 
 ## Working notes
 
-- Keep shared types aligned between Rust `models.rs` and `src/client/types.ts` (`camelCase` JSON).
-- The back end also builds without Tauri as the headless `sirus-host` (ADR-131): shared Rust code imports `AppHandle`, `Emitter`, `Manager`, `State` and `async_runtime` from `crate::runtime`, never `tauri::`, and window-only APIs sit behind `#[cfg(feature = "desktop")]`. Check it with `cargo clippy --no-default-features --features host --all-targets -- -D warnings`.
-- Persistence is one SQLite database in the app data folder (`state.db`: settings, projects, sessions, one row per message, …; ADR-114). `persist.rs` is the interface; `store.rs` implements it. The older JSON layout (`state.json` plus `sessions/<id>.json`) is only the migration source and fallback.
+- Keep shared types aligned between Rust `models.rs` and `mobile/src/shared/client/types.ts` (`camelCase` JSON); a protocol change updates the phone's copy by hand.
+- Shared Rust code imports `AppHandle`, `Emitter`, `Manager`, `State` and `async_runtime` from `crate::runtime`, never from a UI framework (ADR-131). A new host command goes in its module and in `src-tauri/src/commands.list`.
+- Persistence is one SQLite database in the app data folder (`state.db`: settings, projects, sessions, one row per message, …; ADR-114). `persist.rs` is the interface; `store.rs` implements it.
 - The owner often works in the repo at the same time: format only the files you touched.
 - Ask before destructive Git operations (force-push, `reset --hard`, deleting branches or worktrees).
 - Notable features get a short ADR in `docs/decisions/`, and the architecture reference is updated when the map changes.
-- UI follows the tokens in `src/styles/index.css` and the motion and popup patterns described in the architecture reference; new popups animate in and out. Labels are never forced into capital letters (no `uppercase`).
+- Labels are never forced into capital letters (no `uppercase`).
 - Documentation is in English; the product UI is localized (English and Portuguese).
 - Project skills live in `.sirus/skills/`.
 - Design previews (HTML mockups to choose a direction) are temporary: build them outside the repo (for example under `/tmp`), never commit them, and delete them once the owner has chosen. `previews/` is ignored.

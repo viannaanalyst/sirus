@@ -1136,7 +1136,6 @@ async fn fetch_detail(namespace: &str, name: &str) -> Result<Option<Resolved>> {
 
 const SORTS: [&str; 4] = ["downloadCount", "rating", "timestamp", "relevance"];
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn vscode_themes_search(
     query: String,
     sort: Option<String>,
@@ -1213,7 +1212,6 @@ pub async fn vscode_themes_search(
     Ok(found)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn vscode_themes_fetch(namespace: String, name: String) -> Result<Vec<VsCodeTheme>> {
     let Some(resolved) = fetch_detail(&namespace, &name).await? else {
         return Err(invalid(
@@ -1264,7 +1262,6 @@ pub async fn vscode_themes_fetch(namespace: String, name: String) -> Result<Vec<
 }
 
 /// Opens the native picker for a `.vsix` or `.json` theme; none when cancelled.
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn vscode_themes_import_local(
     app: crate::runtime::AppHandle,
 ) -> Result<Option<Vec<VsCodeTheme>>> {
@@ -1275,22 +1272,8 @@ pub async fn vscode_themes_import_local(
 }
 
 /// The headless host has no screen to show a picker on (ADR-131).
-#[cfg(not(feature = "desktop"))]
 async fn pick_theme_file(_app: &crate::runtime::AppHandle) -> Option<std::path::PathBuf> {
     None
-}
-
-#[cfg(feature = "desktop")]
-async fn pick_theme_file(app: &crate::runtime::AppHandle) -> Option<std::path::PathBuf> {
-    use tauri_plugin_dialog::DialogExt;
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    app.dialog()
-        .file()
-        .add_filter("VS Code theme", &["vsix", "json", "jsonc"])
-        .pick_file(move |file| {
-            let _ = tx.send(file.and_then(|path| path.into_path().ok()));
-        });
-    rx.await.ok().flatten()
 }
 
 #[cfg(test)]

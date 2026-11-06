@@ -13,8 +13,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::runtime::State;
-#[cfg(feature = "desktop")]
-use crate::runtime::{AppHandle, Emitter};
 use reqwest::Url;
 use serde::Serialize;
 
@@ -399,45 +397,6 @@ static PENDING: parking_lot::Mutex<Option<String>> = parking_lot::Mutex::new(Non
 static LAST: parking_lot::Mutex<Option<(String, Instant)>> = parking_lot::Mutex::new(None);
 const DUPLICATE_WINDOW: Duration = Duration::from_secs(2);
 
-/// Registers the handler and takes a link that started the app.
-#[cfg(feature = "desktop")]
-pub fn install(app: &AppHandle) {
-    use tauri_plugin_deep_link::DeepLinkExt;
-    let handle = app.clone();
-    app.deep_link().on_open_url(move |event| {
-        for url in event.urls() {
-            receive(&handle, &url);
-        }
-    });
-    if let Ok(Some(urls)) = app.deep_link().get_current() {
-        for url in urls {
-            receive(app, &url);
-        }
-    }
-}
-
-#[cfg(feature = "desktop")]
-fn receive(app: &AppHandle, url: &Url) {
-    if url.scheme() != SCHEME {
-        return;
-    }
-    let raw = url.as_str().to_string();
-    {
-        let mut last = LAST.lock();
-        if last
-            .as_ref()
-            .is_some_and(|(seen, at)| *seen == raw && at.elapsed() < DUPLICATE_WINDOW)
-        {
-            return;
-        }
-        *last = Some((raw.clone(), Instant::now()));
-    }
-    *PENDING.lock() = Some(raw);
-    let _ = app.emit(EVENT, ());
-    let handle = app.clone();
-    let _ = app.run_on_main_thread(move || crate::window_reveal::bring_forward(&handle));
-}
-
 /// A link read and matched to the projects of `state`.
 fn outcome_of(state: &AppState, raw: &str) -> PromptLinkOutcome {
     let link = match parse(raw) {
@@ -454,7 +413,6 @@ fn outcome_of(state: &AppState, raw: &str) -> PromptLinkOutcome {
 }
 
 /// The waiting link, read and matched to a project; none when nothing is waiting.
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn take_prompt_link(
     state: State<'_, Arc<AppState>>,
 ) -> Result<Option<PromptLinkOutcome>> {
@@ -468,7 +426,6 @@ pub async fn take_prompt_link(
 /// A link the caller received itself, read and matched to a project exactly as a waiting one is.
 /// Sirus Native hears `sirus://` links from macOS in its own process and has no pending slot to
 /// take from. Nothing is stored and nothing is opened: the answer is the checked outcome.
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn resolve_prompt_link(
     state: State<'_, Arc<AppState>>,
     url: String,
@@ -479,7 +436,6 @@ pub async fn resolve_prompt_link(
 
 /// A link to the given draft: the project's GitHub repository when it has one, otherwise
 /// the project's name.
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn build_prompt_link(
     state: State<'_, Arc<AppState>>,
     project_id: Option<String>,

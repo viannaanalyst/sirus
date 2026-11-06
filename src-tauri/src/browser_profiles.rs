@@ -4,7 +4,7 @@
 //! and custom profiles are persistent stores of their own (`WKWebsiteDataStore` with an
 //! identifier, macOS 14 and later). The list lives in settings and is validated here.
 
-#![cfg_attr(not(all(target_os = "macos", feature = "desktop")), allow(dead_code))]
+#![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
 
@@ -119,36 +119,6 @@ pub fn resolve(
         .ok_or_else(|| Error::not_found("There is no browser profile with that name."))
 }
 
-/// The profile list and default from the app's settings.
-#[cfg(feature = "desktop")]
-pub fn from_settings(app: &crate::runtime::AppHandle) -> (Vec<BrowserProfile>, String) {
-    use crate::runtime::Manager;
-    let state = app.state::<std::sync::Arc<crate::commands::AppState>>();
-    let data = state.data.lock();
-    (
-        data.settings.browser_profiles.clone(),
-        data.settings.default_browser_profile.clone(),
-    )
-}
-
-/// Resolves a requested profile against settings; custom profiles need macOS 14.
-#[cfg(feature = "desktop")]
-pub fn resolve_for(app: &crate::runtime::AppHandle, requested: Option<&str>) -> Result<String> {
-    let (profiles, default) = from_settings(app);
-    let explicit = requested.is_some_and(|value| !value.trim().is_empty());
-    let id = resolve(&profiles, &default, requested)?;
-    if matches!(store_of(&id), Some(Store::Custom(_))) && !custom_supported() {
-        if explicit {
-            return Err(Error::new(
-                "unsupported",
-                "Custom browser profiles need macOS 14 or later.",
-            ));
-        }
-        return Ok(DEFAULT_PROFILE.into());
-    }
-    Ok(id)
-}
-
 /// `WKWebsiteDataStore(forIdentifier:)` arrived in macOS 14.
 pub fn custom_supported() -> bool {
     #[cfg(target_os = "macos")]
@@ -163,62 +133,6 @@ pub fn custom_supported() -> bool {
     #[cfg(not(target_os = "macos"))]
     {
         false
-    }
-}
-
-#[cfg(all(target_os = "macos", feature = "desktop"))]
-pub(crate) mod platform {
-    use objc2::rc::Retained;
-    use objc2_foundation::{MainThreadMarker, NSUUID};
-    use objc2_web_kit::WKWebsiteDataStore;
-
-    use super::{store_of, Store};
-
-    /// The data store for a tab of this profile. Private tabs of one session share
-    /// `private` (created on first use), so a sign-in popup keeps its cookies.
-    pub fn store(
-        profile: &str,
-        private: &mut Option<Retained<WKWebsiteDataStore>>,
-        mtm: MainThreadMarker,
-    ) -> Retained<WKWebsiteDataStore> {
-        unsafe {
-            match store_of(profile) {
-                Some(Store::Private) => private
-                    .get_or_insert_with(|| WKWebsiteDataStore::nonPersistentDataStore(mtm))
-                    .clone(),
-                Some(Store::Custom(id)) if super::custom_supported() => {
-                    let uuid = NSUUID::from_bytes(*id.as_bytes());
-                    WKWebsiteDataStore::dataStoreForIdentifier(&uuid, mtm)
-                }
-                _ => WKWebsiteDataStore::defaultDataStore(mtm),
-            }
-        }
-    }
-
-    /// Deletes a custom profile's data from disk; every tab using it must be closed first.
-    pub fn remove(
-        profile: &str,
-        done: impl Fn(Option<String>) + 'static,
-        mtm: MainThreadMarker,
-    ) -> bool {
-        let Some(Store::Custom(id)) = store_of(profile) else {
-            return false;
-        };
-        if !super::custom_supported() {
-            return false;
-        }
-        let uuid = NSUUID::from_bytes(*id.as_bytes());
-        let handler = block2::RcBlock::new(move |error: *mut objc2_foundation::NSError| {
-            let message =
-                unsafe { error.as_ref() }.map(|error| error.localizedDescription().to_string());
-            done(message);
-        });
-        unsafe {
-            WKWebsiteDataStore::removeDataStoreForIdentifier_completionHandler(
-                &uuid, &handler, mtm,
-            );
-        }
-        true
     }
 }
 

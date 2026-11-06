@@ -115,7 +115,6 @@ pub struct CheckRequest {
 }
 
 /// Read-only: the reason undo would be refused, or `None`. The UI asks before the person confirms.
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn check_turn_undo(
     state: State<'_, Arc<AppState>>,
     request: CheckRequest,
@@ -130,7 +129,6 @@ pub async fn check_turn_undo(
     crate::commands::native_task(move || Ok(plan(&state, &request)?.block)).await
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn undo_turn_changes(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,

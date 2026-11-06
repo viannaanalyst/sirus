@@ -453,7 +453,6 @@ fn confirmed_alerts(
     alerts
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn pull_request_action(
     state: State<'_, Arc<AppState>>,
     action: Action,

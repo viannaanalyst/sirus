@@ -727,7 +727,6 @@ fn snapshot(data: &AppData, session_id: &str) -> Vec<Session> {
     sessions
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn team_action(
     app: AppHandle,
     state: crate::runtime::State<'_, Arc<AppState>>,

@@ -1,9 +1,0 @@
-@layer components {
-  .mermaid-diagram { margin: 0; overflow: hidden; border: 1px solid var(--border-subtle); border-radius: 12px; background: color-mix(in srgb, var(--background-2) 60%, transparent); }
-  .mermaid-diagram-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px 6px 12px; border-bottom: 1px solid var(--border-subtle); color: var(--text-muted); }
-  .mermaid-diagram-toggle { padding: 2px 8px; border-radius: 6px; color: var(--text-secondary); }
-  .mermaid-diagram-toggle:hover { background: var(--navigation-hover); color: var(--text-primary); }
-  .mermaid-diagram-toggle:focus-visible { outline: 1px solid var(--focus-ring); outline-offset: -1px; }
-  .mermaid-diagram-canvas { display: flex; justify-content: center; min-height: 72px; max-height: 640px; padding: 14px; overflow: auto; }
-  .mermaid-diagram-canvas > svg { max-width: 100%; height: auto; }
-}

@@ -153,9 +153,8 @@ if (!keyThere) {
   }
   console.log(`  ${keyPath}`);
 }
-const tauriConf = JSON.parse(readFileSync(path.join(tauriDir, "tauri.conf.json"), "utf8")) as { plugins?: { updater?: { pubkey?: string } } };
-const pubkey = tauriConf.plugins?.updater?.pubkey;
-if (!pubkey) fail("tauri.conf.json has no plugins.updater.pubkey.");
+const pubkey = readFileSync(path.join(nativeDir, "updater.pub"), "utf8").trim();
+if (!pubkey) fail("native-spike/updater.pub is empty.");
 
 // 3. Release notes.
 const notes = options.notes?.trim() || notesFromCommits(
@@ -207,8 +206,8 @@ try {
     run("npx", ["tauri", "signer", "sign", "--private-key-path", keyPath, "--password", process.env.SIRUS_UPDATER_KEY_PASSWORD ?? "", archive]);
     signature = readFileSync(`${archive}.sig`, "utf8").trim();
     const checked = verifyUpdateSignature(readFileSync(archive), signature, pubkey);
-    if (!checked.ok) throw new Error(`The update signature does not verify against tauri.conf.json's public key: ${checked.reason}.`);
-    console.log("  The signature verifies against tauri.conf.json's public key.");
+    if (!checked.ok) throw new Error(`The update signature does not verify against updater.pub: ${checked.reason}.`);
+    console.log("  The signature verifies against updater.pub.");
     const feed = updateFeed({ version, notes, date: new Date(), signature });
     // The archive lives under the version's own release, not under the shared `v<version>` tag.
     feed.platforms[PLATFORM].url = `https://github.com/${REPOSITORY}/releases/download/${tag}/${UPDATE_ASSET}`;

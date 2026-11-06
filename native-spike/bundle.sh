@@ -1,26 +1,21 @@
 #!/bin/sh
-# Wraps the release binary, the Sirus host and the phone's web UI as "Sirus.app" (app id
+# Wraps the release binary, the Sirus host and the Mermaid and KaTeX files as "Sirus.app" (app id
 # com.siruscode.native, kept from "Sirus Native" so its data and macOS permissions stay), signed
 # with the local identity. The version is the one in Cargo.toml.
-# The web UI (dist/) is built from this checkout; it is what a phone or browser on the tailnet
-# opens when Settings -> Conexoes allows other devices. BUILD_UI=1 rebuilds it even when a dist/
-# exists; it is built when missing. It adds about 97 MB to the bundle (about 34 MB compressed).
+# assets/reply-render holds the committed libraries the window's hidden page loads to draw
+# diagrams and formulas in replies (reply_render.rs); nothing is built here, no npm or dist/.
 set -e
 cd "$(dirname "$0")"
-ROOT="$(cd .. && pwd)"
-if [ "${BUILD_UI:-0}" = 1 ] || [ ! -f "$ROOT/dist/index.html" ]; then
-  [ -d "$ROOT/node_modules" ] || (cd "$ROOT" && npm ci --no-audit --no-fund)
-  (cd "$ROOT" && npm run build)
-fi
 APP="Sirus.app"
 VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
 cp target/release/sirus-native-spike "$APP/Contents/MacOS/"
 cp target/host/release/sirus-host "$APP/Contents/MacOS/"
-# The host serves it with --ui-dir (backend.rs looks in Contents/Resources/ui, else ../dist).
+# The host serves it at /assets/ with --assets-dir (backend.rs looks in Contents/Resources/reply-render).
 mkdir -p "$APP/Contents/Resources"
-ditto "$ROOT/dist" "$APP/Contents/Resources/ui"
+ditto assets/reply-render "$APP/Contents/Resources/reply-render"
+rm -rf "$APP/Contents/Resources/reply-render/build"
 # Its own icon, for the Dock and Finder.
 cp assets/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 cat > "$APP/Contents/Info.plist" <<PLIST

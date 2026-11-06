@@ -598,7 +598,6 @@ pub fn reports_usage(provider: &AgentProviderId) -> bool {
     )
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn provider_usage(
     state: State<'_, Arc<AppState>>,
     provider: AgentProviderId,
@@ -746,7 +745,6 @@ pub struct ResetResult {
     usage: ProviderUsage,
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn consume_codex_reset(
     state: State<'_, Arc<AppState>>,
     offer: String,

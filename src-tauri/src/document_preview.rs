@@ -497,7 +497,6 @@ fn parse_bytes(bytes: Vec<u8>, name: &str, plain: bool) -> Result<DocumentPrevie
     }
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn attachment_preview(
     state: crate::runtime::State<'_, Arc<crate::commands::AppState>>,
     owner: String,
@@ -540,7 +539,6 @@ pub async fn attachment_preview(
 
 /// A document inside a session's workspace (a project file or one an agent wrote), read with
 /// the same 10 MiB bound, regular-file rule and archive preflight as an attachment snapshot.
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn workspace_document(
     state: crate::runtime::State<'_, Arc<crate::commands::AppState>>,
     session_id: String,

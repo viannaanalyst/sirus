@@ -79,7 +79,6 @@ fn loaded() -> &'static tokio::sync::Mutex<Loaded> {
     LOADED.get_or_init(Default::default)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn usage_prices(
     state: State<'_, Arc<AppState>>,
     models: Vec<String>,

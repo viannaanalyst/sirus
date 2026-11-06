@@ -408,7 +408,6 @@ async fn capture(
         _ => Err(Error::agent("Commit title generation failed")),
     }
 }
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn commit_title_action(
     state: crate::runtime::State<'_, Arc<AppState>>,
     action: Action,

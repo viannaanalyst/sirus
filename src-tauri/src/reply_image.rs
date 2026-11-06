@@ -84,7 +84,6 @@ pub fn sniff_file(path: &Path) -> Result<&'static str> {
     image_type(&head).ok_or_else(|| Error::invalid_path("not an image file"))
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn reply_image(
     state: State<'_, Arc<AppState>>,
     session_id: String,

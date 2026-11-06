@@ -56,7 +56,7 @@ test("latest.json has the shape the updater reads", () => {
     version: "0.1.1",
     notes: "- Fix",
     pub_date: "2026-10-18T12:00:00Z",
-    platforms: { [PLATFORM]: { signature: "c2ln", url: "https://github.com/viannaanalyst/sirus-code/releases/download/v0.1.1/SirusCode-arm64.app.tar.gz" } },
+    platforms: { [PLATFORM]: { signature: "c2ln", url: "https://github.com/viannaanalyst/sirus/releases/download/v0.1.1/SirusCode-arm64.app.tar.gz" } },
   });
   assert.deepEqual(feedProblems(feed), []);
   assert.ok(feedProblems({ ...feed, version: "v0.1.1", platforms: {} }).length === 2);

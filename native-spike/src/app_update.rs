@@ -1,7 +1,7 @@
 //! In-app updates of Sirus (ADR-140, ADR-190). A release publishes `Sirus-arm64.app.tar.gz`, its
 //! minisign signature and `sirus-latest.json` under a fixed release tag, so this app reads its
 //! own feed and never the one Sirus Code installs read. Nothing is installed that the key in
-//! `tauri.conf.json` did not sign. Installing swaps the bundle on disk; the relaunch happens only
+//! `updater.pub` did not sign. Installing swaps the bundle on disk; the relaunch happens only
 //! when the person asks, and the shell puts it behind the running-agents confirmation first.
 //!
 //! The network and the unpacking use the tools macOS ships (`curl`, `tar`), so this adds no HTTP
@@ -19,9 +19,9 @@ use std::time::{Duration, Instant};
 /// Sirus Code installs read `releases/latest/download/latest.json` and never see this one.
 pub const FEED_URL: &str =
     "https://github.com/viannaanalyst/sirus/releases/download/sirus-channel/sirus-latest.json";
-/// The updater key's public half, as in `src-tauri/tauri.conf.json` (`plugins.updater.pubkey`);
-/// a test keeps the two equal.
-pub const PUBLIC_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZGNDdGMUM5M0JBOEVDMjgKUldRbzdLZzd5ZkZIYjRHWVNZcHA4NjdXK2lWUXdpTUlKRnNGWmhhWWV0MStrTTdRY1Q4VGZmdWEK";
+/// The updater key's public half: `native-spike/updater.pub`, which `scripts/release-sirus.ts`
+/// verifies every signature against. Installed apps check updates with this key, so it never changes.
+pub const PUBLIC_KEY: &str = include_str!("../updater.pub");
 const PLATFORM: &str = "darwin-aarch64";
 /// The bundle every release holds, and the one an update leaves in place.
 pub const BUNDLE_NAME: &str = "Sirus.app";
@@ -461,12 +461,10 @@ mod tests {
     const TEST_PAYLOAD: &[u8] = b"sirus update test payload";
 
     #[test]
-    fn public_key_is_the_one_in_tauri_conf() {
-        let conf: Value =
-            serde_json::from_str(include_str!("../../src-tauri/tauri.conf.json")).unwrap();
+    fn the_public_key_file_is_the_key_installed_apps_trust() {
         assert_eq!(
-            conf["plugins"]["updater"]["pubkey"].as_str(),
-            Some(PUBLIC_KEY)
+            PUBLIC_KEY,
+            "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZGNDdGMUM5M0JBOEVDMjgKUldRbzdLZzd5ZkZIYjRHWVNZcHA4NjdXK2lWUXdpTUlKRnNGWmhhWWV0MStrTTdRY1Q4VGZmdWEK"
         );
         assert!(PublicKey::decode(&minisign_text(PUBLIC_KEY).unwrap()).is_ok());
     }

@@ -291,7 +291,6 @@ async fn owned(pid: u32) -> bool {
     false
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn local_server_action(
     state: State<'_, std::sync::Arc<AppState>>,
     action: Action,
@@ -401,7 +400,6 @@ async fn snapshot() -> Snapshot {
 
 /// The local servers worth opening for a session (ADR-151). Read on demand only: the
 /// browser's empty state, the Environment card's row and a starting script or terminal.
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn local_servers_list(
     state: State<'_, std::sync::Arc<AppState>>,
     session_id: String,

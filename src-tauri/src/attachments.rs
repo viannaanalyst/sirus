@@ -106,8 +106,6 @@ impl PreparedAttachment {
 }
 #[derive(Default)]
 pub struct AttachmentState {
-    #[cfg(all(target_os = "macos", feature = "desktop"))]
-    paste_admission: parking_lot::Mutex<Option<(std::time::Instant, isize)>>,
     /// Paths of the last Finder drop on the window, taken once by the composer.
     dropped: parking_lot::Mutex<Option<(std::time::Instant, Vec<std::path::PathBuf>)>>,
     entries: parking_lot::Mutex<HashMap<String, (String, Arc<PreparedAttachment>)>>,
@@ -143,19 +141,6 @@ impl AttachmentState {
             Some((at, paths)) if at.elapsed() < std::time::Duration::from_secs(5) => paths,
             _ => Vec::new(),
         }
-    }
-    #[cfg(all(target_os = "macos", feature = "desktop"))]
-    pub fn admit_paste(&self, count: isize) {
-        *self.paste_admission.lock() = Some((std::time::Instant::now(), count));
-    }
-    #[cfg(all(target_os = "macos", feature = "desktop"))]
-    pub fn take_paste(&self, count: isize) -> bool {
-        self.paste_admission
-            .lock()
-            .take()
-            .is_some_and(|(time, admitted)| {
-                time.elapsed() < std::time::Duration::from_secs(3) && count == admitted
-            })
     }
     pub fn clear(&self) {
         let mut entries = self.entries.lock();
@@ -693,7 +678,6 @@ pub(crate) fn admit_native_capture(
         .insert(owner, vec![file], &state.data.lock())
 }
 /// Selection is made in the OS picker. The renderer cannot name a window or app.
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn capture_prompt_window(
     app: crate::runtime::AppHandle,
     state: crate::runtime::State<'_, Arc<crate::commands::AppState>>,
@@ -723,7 +707,6 @@ pub async fn capture_prompt_window(
         .attachments
         .insert(&owner, vec![file], &state.data.lock())
 }
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn pick_prompt_attachments(
     app: crate::runtime::AppHandle,
     state: crate::runtime::State<'_, Arc<crate::commands::AppState>>,
@@ -767,7 +750,6 @@ pub struct PastedFile {
     name: String,
     data: String,
 }
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn paste_prompt_attachments(
     app: crate::runtime::AppHandle,
     state: crate::runtime::State<'_, Arc<crate::commands::AppState>>,
@@ -832,7 +814,6 @@ pub async fn paste_prompt_attachments(
 }
 /// Files and folders dragged from Finder onto the composer (ADR-073). The window's native
 /// drop keeps their paths here; the renderer never supplies a path.
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn drop_prompt_attachments(
     state: crate::runtime::State<'_, Arc<crate::commands::AppState>>,
     owner: String,
@@ -858,7 +839,6 @@ pub async fn drop_prompt_attachments(
         .attachments
         .insert(&owner, prepared, &state.data.lock())
 }
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn release_prompt_attachments(
     state: crate::runtime::State<'_, Arc<crate::commands::AppState>>,
     owner: String,
@@ -1182,23 +1162,6 @@ mod tests {
         png.extend_from_slice(&100_000u32.to_be_bytes());
         assert!(from_bytes("huge.png".into(), png).is_err());
     }
-    #[cfg(all(target_os = "macos", feature = "desktop"))]
-    #[test]
-    fn native_clipboard_admission_is_single_use_fresh_and_matches_change_count() {
-        let state = AttachmentState::default();
-        assert!(!state.take_paste(10));
-        state.admit_paste(10);
-        assert!(!state.take_paste(11));
-        assert!(!state.take_paste(10));
-        state.admit_paste(10);
-        assert!(state.take_paste(10));
-        assert!(!state.take_paste(10));
-        *state.paste_admission.lock() = Some((
-            std::time::Instant::now() - std::time::Duration::from_secs(4),
-            10,
-        ));
-        assert!(!state.take_paste(10));
-    }
     #[test]
     fn binary_pdf_is_not_misclassified_as_utf8_reference_text() {
         let file = from_bytes("report.pdf".into(), b"%PDF-1.7\n%%EOF".to_vec()).unwrap();
@@ -1300,7 +1263,6 @@ fn bounded_decode(bytes: &[u8]) -> Option<image::DynamicImage> {
 }
 
 /// The full image of a composer attachment, for the viewer and the annotator.
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn attachment_image(
     state: crate::runtime::State<'_, Arc<crate::commands::AppState>>,
     owner: String,
@@ -1410,34 +1372,4 @@ mod drop_tests {
             "the same drop is never taken twice"
         );
     }
-}
-
-/// Forwards a native window drop to the UI without paths (they stay in `AttachmentState`).
-#[cfg(feature = "desktop")]
-pub fn window_drop(app: &crate::runtime::AppHandle, event: &tauri::DragDropEvent) {
-    use crate::runtime::{Emitter, Manager};
-    let scale = app
-        .get_webview_window("main")
-        .and_then(|window| window.scale_factor().ok())
-        .unwrap_or(1.0);
-    let point = |position: &tauri::PhysicalPosition<f64>| (position.x / scale, position.y / scale);
-    let payload = match event {
-        tauri::DragDropEvent::Enter { paths, position } => {
-            let (x, y) = point(position);
-            serde_json::json!({ "kind": "over", "x": x, "y": y, "count": paths.len() })
-        }
-        tauri::DragDropEvent::Over { position } => {
-            let (x, y) = point(position);
-            serde_json::json!({ "kind": "over", "x": x, "y": y })
-        }
-        tauri::DragDropEvent::Drop { paths, position } => {
-            app.state::<Arc<crate::commands::AppState>>()
-                .attachments
-                .set_drop(paths.clone());
-            let (x, y) = point(position);
-            serde_json::json!({ "kind": "drop", "x": x, "y": y, "count": paths.len() })
-        }
-        _ => serde_json::json!({ "kind": "leave" }),
-    };
-    let _ = app.emit("file-drop", payload);
 }

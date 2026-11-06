@@ -30,28 +30,20 @@ use axum::extract::{ConnectInfo, Request, State as AxumState};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode, Uri};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post, put};
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::Engine;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-#[cfg(feature = "desktop")]
-use tauri::ipc::{CallbackFn, InvokeBody, InvokeResponse, InvokeResponseBody};
-#[cfg(feature = "desktop")]
-use tauri::webview::InvokeRequest;
-#[cfg(feature = "desktop")]
-use tokio::sync::oneshot;
 use tokio::sync::{broadcast, mpsc, watch};
 
 use crate::error::{Error, Result};
 
 mod app_update;
 /// The headless host's side of remote access (ADR-131).
-#[cfg(not(feature = "desktop"))]
 pub mod host;
-mod push;
 mod tailscale;
 
 pub const DEFAULT_PORT: u16 = 7710;
@@ -84,7 +76,6 @@ const DENIED: &[&str] = &[
     "window_ready",
     "chat_background_action",
     "vscode_themes_import_local",
-    "share_push_identity",
     // Updating replaces and restarts this Mac's app (ADR-140).
     "app_update_action",
     // Saved browser logins stay on this Mac (ADR-186).
@@ -99,8 +90,6 @@ const DENIED: &[&str] = &[
     "login_vault_autofill",
 ];
 
-const CSP: &str = "default-src 'self'; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self' https://*.ts.net wss://*.ts.net; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; frame-ancestors 'none'";
-
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Config {
@@ -113,13 +102,6 @@ struct Config {
     /// Keep the Mac awake on power while remote access is on (ADR-083).
     #[serde(default)]
     keep_awake: bool,
-    /// The VAPID private key for web push (ADR-082), base64url.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    vapid_private: Option<String>,
-    /// The key above is the Mac's, shared so this computer can alert the phone app installed
-    /// from that Mac (ADR-132 addendum); alerts then leave the app icon's count to the Mac.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    vapid_adopted: bool,
     /// This computer's id for the phone's list of computers (ADR-132), made once.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     host_id: Option<String>,
@@ -138,9 +120,6 @@ struct Device {
     created_at: DateTime<Utc>,
     #[serde(default)]
     last_seen: Option<DateTime<Utc>>,
-    /// The browser's push subscription when the device turned alerts on.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    push: Option<Value>,
     /// The page origin of a device that paired from another Sirus's page (ADR-132); only
     /// these origins may call the API cross-origin, and only with this device's token.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -154,10 +133,9 @@ pub struct DeviceInfo {
     name: String,
     created_at: DateTime<Utc>,
     last_seen: Option<DateTime<Utc>>,
-    push: bool,
 }
 
-/// `tailscale serve` in front of the port, for HTTPS and so for web push (ADR-082).
+/// `tailscale serve` in front of the port, for HTTPS (ADR-082).
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Https {
@@ -224,10 +202,6 @@ pub enum Action {
     DisableHttps,
     /// Opens Tailscale's page that allows HTTPS on the tailnet.
     OpenHttpsSetup,
-    #[serde(rename_all = "camelCase")]
-    TestPush {
-        device_id: String,
-    },
     SetKeepAwake {
         enabled: bool,
     },
@@ -266,9 +240,8 @@ struct Listen {
     bind: Option<IpAddr>,
     /// Shown in pairing links instead of the addresses found on this machine.
     url: Option<String>,
-    /// The built front end (`dist/`) when there is no Tauri asset resolver.
-    #[cfg_attr(feature = "desktop", allow(dead_code))]
-    ui_dir: Option<PathBuf>,
+    /// The folder served at `/assets/` (Mermaid and KaTeX for the Sirus window).
+    assets_dir: Option<PathBuf>,
     /// Sirus Native (ADR-189): the window's own connection listens here on loopback, always on,
     /// and `enabled` in `remote.json` only controls the listener for other devices.
     local_port: Option<u16>,
@@ -338,8 +311,7 @@ pub fn shutdown() {
 /// `-w` releases it if Sirus quits without cleaning up.
 fn sync_awake(remote: &Remote) {
     // `caffeinate` is the Mac's; a server stays awake on its own (ADR-131).
-    let mac = cfg!(target_os = "macos")
-        && (cfg!(feature = "desktop") || remote.listen.lock().local_port.is_some());
+    let mac = cfg!(target_os = "macos") && remote.listen.lock().local_port.is_some();
     let wanted = mac && awake_wanted(&remote.config.lock());
     let mut awake = remote.awake.lock();
     if let Some(child) = awake.as_mut() {
@@ -386,7 +358,6 @@ fn caffeinate_args(pid: u32) -> Vec<String> {
     vec!["-s".into(), "-w".into(), pid.to_string()]
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn remote_action(app: AppHandle, action: Action) -> Result<Status> {
     let remote = remote()?;
     match action {
@@ -413,51 +384,7 @@ pub async fn remote_action(app: AppHandle, action: Action) -> Result<Status> {
             refresh_https(&remote).await;
         }
         // The host prints the setup page instead (`sirus-host serve`).
-        #[cfg(not(feature = "desktop"))]
         Action::OpenHttpsSetup => {}
-        #[cfg(feature = "desktop")]
-        Action::OpenHttpsSetup => {
-            use tauri_plugin_opener::OpenerExt;
-            let url = remote.https.lock().setup_url.clone();
-            if let Some(url) = url.filter(|url| tailscale::is_setup_url(url)) {
-                app.opener()
-                    .open_url(url, None::<&str>)
-                    .map_err(|error| Error::new("remote", error.to_string()))?;
-            }
-        }
-        Action::TestPush { device_id } => {
-            let portuguese = app
-                .try_state::<Arc<crate::commands::AppState>>()
-                .is_some_and(|state| state.data.lock().settings.locale == "pt-BR");
-            let title = if remote.listen.lock().local_port.is_some() {
-                "Sirus Native"
-            } else {
-                "Sirus Code"
-            };
-            let body = if portuguese {
-                "Os alertas deste aparelho estão funcionando."
-            } else {
-                "Alerts on this device are working."
-            };
-            let only = remote
-                .config
-                .lock()
-                .devices
-                .iter()
-                .any(|device| device.id == device_id && device.push.is_some());
-            if !only {
-                return Err(Error::new(
-                    "remote",
-                    "This device has not turned alerts on.",
-                ));
-            }
-            push::send_to(
-                &remote,
-                &device_id,
-                push::payload(title, body, "", None, None),
-            )
-            .await;
-        }
         Action::SetEnabled { enabled } => {
             remote.config.lock().enabled = enabled;
             save(&remote)?;
@@ -552,7 +479,6 @@ fn owner_device_name(name: &str) -> Result<String> {
 }
 
 /// A fresh one-time code; it replaces any earlier one.
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn remote_pair() -> Result<Pairing> {
     let remote = remote()?;
     if remote.server.lock().is_none() {
@@ -711,7 +637,6 @@ fn status(remote: &Remote) -> Status {
                 name: device.name,
                 created_at: device.created_at,
                 last_seen: device.last_seen,
-                push: device.push.is_some(),
             })
             .collect(),
         error: remote.error.lock().clone(),
@@ -846,11 +771,6 @@ fn start_kind(
         let router = Router::new()
             .route("/api/health", get(health))
             .route("/api/pair", post(pair))
-            .route(
-                "/api/push",
-                get(push_key).put(push_subscribe).delete(push_unsubscribe),
-            )
-            .route("/api/push/identity", put(push_identity))
             .route("/api/app-update/manifest", get(app_update_manifest))
             .route(
                 "/api/app-update/file/{platform}/{runtime}/{*path}",
@@ -863,8 +783,6 @@ fn start_kind(
             .layer(tower_http::compression::CompressionLayer::new());
         // Device streams (ADR-128) are added after compression so they are never buffered.
         // The Simulator pane is the Mac app's; the headless host has none (ADR-131).
-        #[cfg(feature = "desktop")]
-        let router = router.route("/api/device-hub/{*path}", get(device_hub));
         let router = router.layer(middleware::from_fn(guard)).with_state(shared);
         crate::runtime::async_runtime::spawn(async move {
             let served = axum::serve(
@@ -1084,7 +1002,7 @@ fn host_identity(remote: &Remote) -> Value {
     json!({
         "id": id,
         "hostName": host_name,
-        "kind": if cfg!(feature = "desktop") || remote.listen.lock().local_port.is_some() { "mac" } else { "server" },
+        "kind": if remote.listen.lock().local_port.is_some() { "mac" } else { "server" },
     })
 }
 
@@ -1139,24 +1057,6 @@ fn same_origin(headers: &HeaderMap, https_host: Option<&str>) -> bool {
         .ok()
         .and_then(|origin| origin.split_once("://"))
         .is_some_and(|(_, rest)| rest.eq_ignore_ascii_case(host))
-}
-
-/// One file of the bundled UI with its MIME type.
-struct Asset {
-    bytes: Vec<u8>,
-    mime_type: String,
-}
-
-#[cfg(feature = "desktop")]
-fn load_asset(shared: &Shared, path: &str) -> Option<Asset> {
-    shared
-        .app
-        .asset_resolver()
-        .get(path.to_string())
-        .map(|asset| Asset {
-            bytes: asset.bytes,
-            mime_type: asset.mime_type,
-        })
 }
 
 /// The app's data folder (where `state.db` lives), for published app updates.
@@ -1244,33 +1144,42 @@ async fn app_update_file(
     response
 }
 
-/// The host serves the built front end from `--ui-dir` (ADR-131).
-#[cfg(not(feature = "desktop"))]
-fn load_asset(shared: &Shared, path: &str) -> Option<Asset> {
-    let dir = shared.remote.listen.lock().ui_dir.clone()?;
-    let (bytes, mime_type) = host::read_asset(&dir, path)?;
-    Some(Asset { bytes, mime_type })
-}
-
+/// The host has no web app. It serves only the committed Mermaid and KaTeX files the Mac window's
+/// hidden page loads (`--assets-dir`, at `/assets/`); anything else gets a short plain-text reply.
 async fn asset(AxumState(shared): AxumState<Shared>, uri: Uri) -> Response {
     let path = uri.path().to_string();
-    // Tauri answers unknown paths with the app shell; that suits client-side routes,
-    // but a missing script or image must stay missing.
-    let file = path.rsplit('/').next().unwrap_or_default();
-    let Some(mut asset) = load_asset(&shared, &path) else {
-        return StatusCode::NOT_FOUND.into_response();
+    let dir = shared.remote.listen.lock().assets_dir.clone();
+    let found = match dir {
+        Some(dir) if path.starts_with("/assets/") => {
+            crate::runtime::async_runtime::spawn_blocking(move || host::read_asset(&dir, &path))
+                .await
+                .ok()
+                .flatten()
+        }
+        _ => None,
     };
-    if is_static_file(file) && asset.mime_type.starts_with("text/html") {
-        return StatusCode::NOT_FOUND.into_response();
-    }
-    // Tauri does not know the web app manifest's type.
-    if file.ends_with(".webmanifest") {
-        asset.mime_type = "application/manifest+json".into();
-    }
-    let html = asset.mime_type.starts_with("text/html");
-    let mut response = asset.bytes.into_response();
+    let Some((bytes, mime_type)) = found else {
+        let (status, text) = if uri.path() == "/" {
+            (
+                StatusCode::OK,
+                "Sirus host. Pair this computer from the Sirus app.\n",
+            )
+        } else {
+            (StatusCode::NOT_FOUND, "Not found.\n")
+        };
+        return (
+            status,
+            [
+                (header::CONTENT_TYPE, "text/plain; charset=utf-8"),
+                (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            ],
+            text,
+        )
+            .into_response();
+    };
+    let mut response = bytes.into_response();
     let headers = response.headers_mut();
-    if let Ok(value) = HeaderValue::from_str(&asset.mime_type) {
+    if let Ok(value) = HeaderValue::from_str(&mime_type) {
         headers.insert(header::CONTENT_TYPE, value);
     }
     headers.insert(
@@ -1281,30 +1190,12 @@ async fn asset(AxumState(shared): AxumState<Shared>, uri: Uri) -> Response {
         header::REFERRER_POLICY,
         HeaderValue::from_static("no-referrer"),
     );
-    if html {
-        headers.insert(
-            header::CONTENT_SECURITY_POLICY,
-            HeaderValue::from_static(CSP),
-        );
-        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
-    } else if path.starts_with("/assets/") {
-        // Built files carry a content hash in their names: they never change.
-        headers.insert(
-            header::CACHE_CONTROL,
-            HeaderValue::from_static("public, max-age=31536000, immutable"),
-        );
-    }
+    // The files are committed and change only with a release.
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=3600"),
+    );
     response
-}
-
-/// Files a browser asks for by name; the app shell in their place means they are missing.
-fn is_static_file(file: &str) -> bool {
-    const EXTENSIONS: &[&str] = &[
-        "js", "mjs", "css", "map", "json", "png", "jpg", "jpeg", "gif", "webp", "svg", "ico",
-        "woff", "woff2", "ttf", "wasm", "bcmap", "pfb",
-    ];
-    file.rsplit_once('.')
-        .is_some_and(|(_, extension)| EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str()))
 }
 
 #[derive(Deserialize)]
@@ -1371,7 +1262,6 @@ fn redeem(
         token_hash: hash(&token),
         created_at: Utc::now(),
         last_seen: None,
-        push: None,
         origins: origin.into_iter().collect(),
     };
     let id = device.id.clone();
@@ -1410,158 +1300,6 @@ fn bearer_device(remote: &Remote, headers: &HeaderMap) -> Option<String> {
         .ok()?
         .strip_prefix("Bearer ")?;
     authenticate(remote, token.trim())
-}
-
-async fn push_key(AxumState(shared): AxumState<Shared>, headers: HeaderMap) -> Response {
-    if bearer_device(&shared.remote, &headers).is_none() {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    match push::public_key(&shared.remote) {
-        Ok(key) => Json(json!({ "publicKey": key })).into_response(),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    }
-}
-
-async fn push_subscribe(
-    AxumState(shared): AxumState<Shared>,
-    headers: HeaderMap,
-    Json(subscription): Json<Value>,
-) -> Response {
-    let Some(device_id) = bearer_device(&shared.remote, &headers) else {
-        return StatusCode::UNAUTHORIZED.into_response();
-    };
-    if !push::valid_subscription(&subscription) {
-        return StatusCode::BAD_REQUEST.into_response();
-    }
-    set_push(&shared, &device_id, Some(subscription))
-}
-
-async fn push_unsubscribe(AxumState(shared): AxumState<Shared>, headers: HeaderMap) -> Response {
-    let Some(device_id) = bearer_device(&shared.remote, &headers) else {
-        return StatusCode::UNAUTHORIZED.into_response();
-    };
-    set_push(&shared, &device_id, None)
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct PushIdentity {
-    private_key: String,
-}
-
-/// Another of the owner's computers (the Mac the phone app was installed from) hands over its
-/// alert key, so this one can alert that app too while the Mac is off (ADR-132 addendum).
-async fn push_identity(
-    AxumState(shared): AxumState<Shared>,
-    headers: HeaderMap,
-    Json(identity): Json<PushIdentity>,
-) -> Response {
-    if bearer_device(&shared.remote, &headers).is_none() {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    if !push::valid_private_key(&identity.private_key) {
-        return StatusCode::BAD_REQUEST.into_response();
-    }
-    {
-        let mut config = shared.remote.config.lock();
-        if config.vapid_private.as_deref() == Some(identity.private_key.as_str())
-            && config.vapid_adopted
-        {
-            return StatusCode::NO_CONTENT.into_response();
-        }
-        config.vapid_private = Some(identity.private_key);
-        config.vapid_adopted = true;
-    }
-    if save(&shared.remote).is_err() {
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-    }
-    StatusCode::NO_CONTENT.into_response()
-}
-
-/// The desktop hands this Mac's alert key to another of the owner's computers it is paired
-/// with (ADR-132 addendum): the key goes Rust to Rust over the tailnet, never to the page.
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn share_push_identity(base_url: String, token: String) -> Result<()> {
-    let remote = remote()?;
-    let url = base_url.trim_end_matches('/');
-    let host = url
-        .strip_prefix("https://")
-        .ok_or_else(|| Error::new("invalid", "not a tailnet address"))?;
-    if tailnet_origin_host(&format!("https://{host}")).is_none() || token.trim().is_empty() {
-        return Err(Error::new("invalid", "not a tailnet address"));
-    }
-    // A computer that adopted another's key does not pass it on.
-    if remote.config.lock().vapid_adopted {
-        return Ok(());
-    }
-    let pair = push::key_pair(&remote)?;
-    let private_key = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(pair.to_bytes());
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|error| Error::new("remote", error.to_string()))?;
-    let response = client
-        .put(format!("{url}/api/push/identity"))
-        .bearer_auth(token.trim())
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(json!({ "privateKey": private_key }).to_string())
-        .send()
-        .await
-        .map_err(|error| Error::new("remote", error.to_string()))?;
-    if response.status().is_success() {
-        Ok(())
-    } else {
-        Err(Error::new(
-            "remote",
-            format!("the computer answered {}", response.status().as_u16()),
-        ))
-    }
-}
-
-fn set_push(shared: &Shared, device_id: &str, subscription: Option<Value>) -> Response {
-    if let Some(device) = shared
-        .remote
-        .config
-        .lock()
-        .devices
-        .iter_mut()
-        .find(|device| device.id == device_id)
-    {
-        device.push = subscription;
-    }
-    if save(&shared.remote).is_err() {
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-    }
-    let _ = shared.app.emit(CHANGED, ());
-    StatusCode::NO_CONTENT.into_response()
-}
-
-/// Sends a session alert to every device that turned alerts on (ADR-082); `badge` is the
-/// app icon's "needs you" count when the sender knows it (ADR-124).
-pub fn notify(
-    title: &str,
-    body: &str,
-    session_id: &str,
-    badge: Option<usize>,
-    group: Option<(&str, &str)>,
-) {
-    let Some(remote) = REMOTE.get().cloned() else {
-        return;
-    };
-    if !remote
-        .config
-        .lock()
-        .devices
-        .iter()
-        .any(|device| device.push.is_some())
-    {
-        return;
-    }
-    // With the Mac's key, the app icon's count stays the Mac's to set.
-    let badge = badge.filter(|_| !remote.config.lock().vapid_adopted);
-    let payload = push::payload(title, body, session_id, badge, group);
-    crate::runtime::async_runtime::spawn(async move { push::send_all(&remote, payload).await });
 }
 
 #[derive(Deserialize)]
@@ -1603,34 +1341,6 @@ async fn thumbnail(
     .flatten();
     let (parts, body) = crate::thumbnails::response(bytes).into_parts();
     (parts.status, parts.headers, body).into_response()
-}
-
-/// The Devices pane's stream and input routes (ADR-128) for a paired device. Media
-/// elements and sockets cannot send a header, so the token comes in the query; the
-/// device proxy forwards only its allowlist and never passes the query on.
-#[cfg(feature = "desktop")]
-async fn device_hub(
-    AxumState(shared): AxumState<Shared>,
-    axum::extract::Path(path): axum::extract::Path<String>,
-    axum::extract::Query(query): axum::extract::Query<DeviceHubQuery>,
-    method: axum::http::Method,
-    uri: Uri,
-    upgrade: std::result::Result<
-        WebSocketUpgrade,
-        axum::extract::ws::rejection::WebSocketUpgradeRejection,
-    >,
-) -> Response {
-    if !paired(&shared.remote, &query.token) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    crate::devices::proxy::forward(&format!("/{path}"), uri.query(), &method, upgrade.ok()).await
-}
-
-#[cfg(feature = "desktop")]
-#[derive(Deserialize)]
-struct DeviceHubQuery {
-    #[serde(default)]
-    token: String,
 }
 
 /// Whether a token belongs to a paired device (no side effects).
@@ -1877,7 +1587,7 @@ fn allowed_command(command: &str) -> bool {
 
 enum Reply {
     Json(String),
-    #[cfg_attr(not(feature = "desktop"), allow(dead_code))]
+    #[allow(dead_code)]
     Raw(Vec<u8>),
 }
 
@@ -1899,7 +1609,6 @@ async fn invoke(
 }
 
 /// The host has no window: its command table calls the same functions (ADR-131).
-#[cfg(not(feature = "desktop"))]
 async fn dispatch(
     app: &AppHandle,
     command: String,
@@ -1909,46 +1618,6 @@ async fn dispatch(
     crate::headless::invoke(app, &command, &args)
         .await
         .map(Reply::Json)
-}
-
-/// The window's own IPC entry point runs the command, on the main thread.
-#[cfg(feature = "desktop")]
-async fn dispatch(
-    app: &AppHandle,
-    command: String,
-    args: Value,
-) -> std::result::Result<Reply, Value> {
-    let refuse = |message: &str| json!({ "code": "remote", "message": message });
-    let window = app
-        .get_webview_window("main")
-        .ok_or_else(|| refuse("The Sirus window is not open on the Mac."))?;
-    let url = window.url().map_err(|error| refuse(&error.to_string()))?;
-    let webview: tauri::Webview = window.as_ref().clone();
-    let request = InvokeRequest {
-        cmd: command,
-        callback: CallbackFn(0),
-        error: CallbackFn(1),
-        url,
-        body: InvokeBody::Json(if args.is_null() { json!({}) } else { args }),
-        headers: Default::default(),
-        invoke_key: app.invoke_key().to_string(),
-    };
-    let (sender, receiver) = oneshot::channel();
-    app.run_on_main_thread(move || {
-        webview.on_message(
-            request,
-            Box::new(move |_, _, response, _, _| {
-                let _ = sender.send(response);
-            }),
-        );
-    })
-    .map_err(|error| refuse(&error.to_string()))?;
-    match receiver.await {
-        Ok(InvokeResponse::Ok(InvokeResponseBody::Json(body))) => Ok(Reply::Json(body)),
-        Ok(InvokeResponse::Ok(InvokeResponseBody::Raw(bytes))) => Ok(Reply::Raw(bytes)),
-        Ok(InvokeResponse::Err(error)) => Err(error.0),
-        Err(_) => Err(refuse("The Mac did not answer this action.")),
-    }
 }
 
 fn result_message(id: u64, result: std::result::Result<Reply, Value>) -> String {
@@ -2195,7 +1864,6 @@ mod tests {
         assert!(cross_origin_allowed(vps, "/api/health", own, &[]));
         // Without a device paired from that page, the API stays closed.
         assert!(!cross_origin_allowed(vps, "/api/socket", own, &[]));
-        assert!(!cross_origin_allowed(vps, "/api/push", own, &[]));
         // Other tailnets, plain HTTP, ports, paths and other domains never pass.
         for refused in [
             "https://sirus-vps.tail000000.ts.net",
@@ -2229,7 +1897,7 @@ mod tests {
         assert!(cross_origin_allowed(vps, "/api/socket", own, &devices));
         assert!(cross_origin_allowed(
             "https://SIRUS-VPS.tail6e87c3.ts.net",
-            "/api/push",
+            "/api/socket",
             own,
             &devices
         ));
@@ -2369,11 +2037,6 @@ mod tests {
         let first = host_identity(&host);
         assert_eq!(first["id"], host_identity(&host)["id"]);
         assert!(matches!(first["kind"].as_str(), Some("mac" | "server")));
-    }
-
-    #[test]
-    fn the_phone_page_may_connect_to_other_tailnet_computers() {
-        assert!(CSP.contains("connect-src 'self' https://*.ts.net wss://*.ts.net;"));
     }
 
     #[test]
@@ -2522,15 +2185,6 @@ mod tests {
             own_https_authority(&remote).as_deref()
         ));
         assert!(!same_origin(&headers, Some("mac.tail6e87c3.ts.net")));
-    }
-
-    #[test]
-    fn missing_files_are_told_apart_from_routes() {
-        assert!(is_static_file("index-abc.js"));
-        assert!(is_static_file("logo.PNG"));
-        assert!(!is_static_file("manifest.webmanifest"));
-        assert!(!is_static_file("route"));
-        assert!(!is_static_file("index.html"));
     }
 
     #[test]

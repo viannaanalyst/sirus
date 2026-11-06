@@ -423,7 +423,6 @@ fn discover(state: &AppState, context: &Context) -> Result<(Catalog, Vec<Allowed
     let allowed = roots.iter().filter_map(admitted_root).collect();
     Ok((scan(&roots, &portable), allowed))
 }
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn skill_action(state: State<'_, Arc<AppState>>, action: Action) -> Result<Response> {
     let state = state.inner().clone();
     crate::commands::native_task(move || {

@@ -202,7 +202,6 @@ fn last_line(bytes: &[u8]) -> String {
     line.chars().take(MAX_MESSAGE_CHARS).collect()
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn provider_updates(
     state: State<'_, Arc<AppState>>,
     refresh: bool,
@@ -259,7 +258,6 @@ pub async fn provider_updates(
     Ok(updates)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn update_providers(
     state: State<'_, Arc<AppState>>,
     providers: Vec<AgentProviderId>,

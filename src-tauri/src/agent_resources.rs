@@ -469,7 +469,6 @@ fn memory_info() -> (Option<u64>, Option<MemoryPressure>) {
     }
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_resources(
     state: State<'_, std::sync::Arc<AppState>>,
 ) -> Result<ResourceSnapshot> {
@@ -511,7 +510,6 @@ pub async fn agent_resources(
     })
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_resource_action(
     state: State<'_, std::sync::Arc<AppState>>,
     action: Action,

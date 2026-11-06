@@ -1919,15 +1919,13 @@ pub struct HostCapabilities {
 
 impl HostCapabilities {
     pub fn current() -> Self {
-        let desktop = cfg!(feature = "desktop");
-        let mac_app = desktop && cfg!(target_os = "macos");
         Self {
             platform: std::env::consts::OS.into(),
-            headless: !desktop,
-            browser: mac_app,
-            computer_use: mac_app,
-            dictation: mac_app,
-            pickers: desktop,
+            headless: true,
+            browser: false,
+            computer_use: false,
+            dictation: false,
+            pickers: false,
         }
     }
 }

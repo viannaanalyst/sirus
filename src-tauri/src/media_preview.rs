@@ -52,7 +52,6 @@ pub struct MediaPreview {
 }
 
 /// A token for a video inside the session's workspace.
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn media_preview(
     state: State<'_, Arc<AppState>>,
     session_id: String,
@@ -115,7 +114,6 @@ pub fn authorize_reply_media(
 }
 
 /// A token for an image or video a reply links to, shown inline in the transcript (ADR-119).
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn reply_media(
     state: State<'_, Arc<AppState>>,
     session_id: String,
@@ -132,7 +130,6 @@ pub async fn reply_media(
 }
 
 /// Forgets a token when its preview closes.
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn media_release(token: String) {
     TOKENS.lock().retain(|(known, _, _)| *known != token);
 }

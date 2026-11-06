@@ -83,7 +83,6 @@ pub struct UsageHistory {
     pub generated_at: i64,
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn usage_history(state: State<'_, Arc<AppState>>, days: i64) -> Result<UsageHistory> {
     state.ensure_running()?;
     read_days(&state, days.clamp(1, MAX_DAYS)).await

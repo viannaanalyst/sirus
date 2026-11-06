@@ -915,7 +915,6 @@ fn run(state: &AppState, action: Action) -> Result<Response> {
     })
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mcp_action(state: State<'_, Arc<AppState>>, action: Action) -> Result<Response> {
     let state = state.inner().clone();
     crate::commands::native_task(move || {

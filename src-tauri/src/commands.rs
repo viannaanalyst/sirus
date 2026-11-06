@@ -232,13 +232,11 @@ fn same_run(session: &Session, snapshot: &Session) -> bool {
         .is_some_and(|(current, previous)| current.id == previous.id)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn load_state(state: State<Arc<AppState>>) -> Result<serde_json::Value> {
     // Metadata only; transcripts load per session through `transcript_action` (ADR-048).
     crate::transcript_view::state_meta(&state.data.lock())
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn transcript_action(
     state: State<'_, Arc<AppState>>,
     action: crate::transcript_view::Action,
@@ -285,7 +283,6 @@ pub async fn transcript_action(
     .await
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn save_settings(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
@@ -328,7 +325,6 @@ fn save_settings_native(state: &AppState, mut settings: AppSettings) -> Result<A
     Ok(settings)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn save_composer_draft(
     state: State<'_, Arc<AppState>>,
     key: String,
@@ -350,7 +346,6 @@ pub async fn save_composer_draft(
     .await
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn save_context_text(
     state: State<'_, Arc<AppState>>,
     key: String,
@@ -376,7 +371,6 @@ fn save_context_text_native(state: &AppState, key: &str, value: String, flush: b
     Ok(())
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn add_project(state: State<Arc<AppState>>, path: String) -> Result<Project> {
     // Paths typed in the "New project" dialog (or on the phone, ADR-131) may start with `~`;
     // they must be absolute existing folders.
@@ -387,7 +381,6 @@ pub fn add_project(state: State<Arc<AppState>>, path: String) -> Result<Project>
 
 /// New project from a name: creates `<parent>/<slug>` with Git, a README and a
 /// first commit (`new_project.rs`), then adds it like an opened folder, named as typed.
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn create_project(
     state: State<'_, Arc<AppState>>,
     name: String,
@@ -403,7 +396,6 @@ pub async fn create_project(
 
 /// Clone from GitHub (or any https / ssh remote) into `<parent>/<folder or repo name>`, then
 /// add it like an opened folder (`new_project::clone`). `folder` is the phone's optional name.
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn clone_project(
     state: State<'_, Arc<AppState>>,
     source: String,
@@ -460,7 +452,6 @@ fn add_project_native(
     Ok(project)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn remove_project(state: State<'_, Arc<AppState>>, project_id: String) -> Result<()> {
     let state = state.inner().clone();
     native_task(move || remove_project_native(&state, project_id)).await
@@ -521,7 +512,6 @@ fn remove_project_native(state: &AppState, project_id: String) -> Result<()> {
     killed
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn open_project(state: State<Arc<AppState>>, project_id: String) -> Result<Project> {
     let mut data = state.data.lock();
     let project = data
@@ -537,7 +527,6 @@ pub fn open_project(state: State<Arc<AppState>>, project_id: String) -> Result<P
     Ok(clone)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn rename_project(
     state: State<'_, Arc<AppState>>,
     project_id: String,
@@ -555,7 +544,6 @@ pub async fn rename_project(
 }
 
 /// Saves a project's avatar choices, or clears them with `null` (ADR-175).
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn set_project_appearance(
     state: State<'_, Arc<AppState>>,
     project_id: String,
@@ -592,7 +580,6 @@ pub(crate) fn session_path(state: &AppState, id: &str) -> Result<PathBuf> {
     session_cwd(&data, session)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_identity(path: String) -> Result<crate::models::GitIdentity> {
     native_task(move || {
         let canonical = paths::ensure_dir(&PathBuf::from(path))?;
@@ -610,7 +597,6 @@ pub struct ProjectDiff {
 }
 
 /// Uncommitted `+N -M` of every project checkout, for the sidebar's project rows.
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn project_diff_stats(state: State<'_, Arc<AppState>>) -> Result<Vec<ProjectDiff>> {
     let projects: Vec<(String, String)> = state
         .data
@@ -639,7 +625,6 @@ pub async fn project_diff_stats(state: State<'_, Arc<AppState>>) -> Result<Vec<P
     .await
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_status(state: State<'_, Arc<AppState>>, session_id: String) -> Result<GitStatus> {
     let state = state.inner().clone();
     // Refreshed after every change and on focus: polling, so it runs below the person.
@@ -649,7 +634,6 @@ pub async fn git_status(state: State<'_, Arc<AppState>>, session_id: String) -> 
     .await
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_diff(
     state: State<'_, Arc<AppState>>,
     session_id: String,
@@ -659,7 +643,6 @@ pub async fn git_diff(
     native_task(move || git::diff_file(&session_path(&state, &session_id)?, &path)).await
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn list_branches(
     state: State<'_, Arc<AppState>>,
     project_id: String,
@@ -679,7 +662,6 @@ pub async fn list_branches(
     .await
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn checkout_branch(
     state: State<'_, Arc<AppState>>,
     project_id: String,
@@ -707,7 +689,6 @@ pub async fn checkout_branch(
     .await
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn create_branch(
     state: State<'_, Arc<AppState>>,
     project_id: String,
@@ -735,7 +716,6 @@ pub async fn create_branch(
     .await
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_workspace_action(
     state: State<'_, Arc<AppState>>,
     action: crate::git_workspace::Action,
@@ -825,7 +805,6 @@ pub async fn git_workspace_action(
     .await
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_commit(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
@@ -879,7 +858,6 @@ pub async fn git_commit(
     .await
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_push(
     state: State<'_, Arc<AppState>>,
     session_id: String,
@@ -888,7 +866,6 @@ pub async fn git_push(
     native_task(move || git::push(&session_path(&state, &session_id)?)).await
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn project_remote_url(
     state: State<'_, Arc<AppState>>,
     project_id: String,
@@ -930,7 +907,6 @@ fn validate_pull_request_context(
     Ok(())
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn session_pull_request(
     state: State<'_, Arc<AppState>>,
     session_id: String,
@@ -948,7 +924,6 @@ pub async fn session_pull_request(
     .await
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn list_worktrees(
     state: State<'_, Arc<AppState>>,
     project_id: String,
@@ -968,7 +943,6 @@ pub async fn list_worktrees(
     .await
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn list_dir(
     state: State<'_, Arc<AppState>>,
     session_id: String,
@@ -984,7 +958,6 @@ pub async fn list_dir(
 }
 
 /// Read-only text search in the session's workspace for the Files pane (ADR-095).
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn search_workspace_text(
     state: State<'_, Arc<AppState>>,
     session_id: String,
@@ -1005,7 +978,6 @@ pub async fn search_workspace_text(
     .await
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn create_workspace_entry(
     state: State<'_, Arc<AppState>>,
     session_id: String,
@@ -1022,7 +994,6 @@ pub async fn create_workspace_entry(
 
 /// Moves one session-owned workspace entry to the system Trash (recoverable). Explicit and
 /// confirmed in the UI; never a permanent delete.
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn trash_workspace_entry(
     state: State<'_, Arc<AppState>>,
     session_id: String,
@@ -1101,7 +1072,6 @@ fn workspace_files_root(data: &AppData, owner: &crate::skills::Owner) -> Result<
     paths::ensure_dir(std::path::Path::new(&project.path))
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn workspace_files(
     state: State<'_, Arc<AppState>>,
     owner: crate::skills::Owner,
@@ -1121,7 +1091,6 @@ pub async fn workspace_files(
     .await
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn detect_agents(state: State<'_, Arc<AppState>>) -> Result<Vec<AgentInstall>> {
     let overrides = state.data.lock().settings.provider_paths.clone();
     let installs = crate::runtime::async_runtime::spawn_blocking(move || {
@@ -1166,7 +1135,6 @@ pub async fn detect_agents(state: State<'_, Arc<AppState>>) -> Result<Vec<AgentI
     Ok(result)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn create_session(
     state: State<'_, Arc<AppState>>,
     request: CreateSessionRequest,
@@ -1357,7 +1325,6 @@ pub(crate) fn create_session_locked(
     Ok(session)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn fork_session(
     state: State<'_, Arc<AppState>>,
     session_id: String,
@@ -1448,7 +1415,6 @@ fn fork_session_native(state: &AppState, session_id: &str, message_id: &str) -> 
     Ok(fork)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn handoff_session(
     state: State<'_, Arc<AppState>>,
     session_id: String,
@@ -1572,7 +1538,6 @@ fn handoff_session_native(
     Ok(handoff)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn dismiss_handoff(
     state: State<'_, Arc<AppState>>,
     session_id: String,
@@ -1592,7 +1557,6 @@ pub async fn dismiss_handoff(
     .await
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn set_message_pinned(
     state: State<'_, Arc<AppState>>,
     session_id: String,
@@ -1622,7 +1586,6 @@ fn set_message_pinned_native(
     Ok(result)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_session_agent(
     state: State<Arc<AppState>>,
     session_id: String,
@@ -1647,7 +1610,6 @@ pub fn set_session_agent(
     Ok(clone)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn rename_session(
     state: State<Arc<AppState>>,
     session_id: String,
@@ -1672,7 +1634,6 @@ pub fn rename_session(
     Ok(meta)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn delete_session(
     state: State<'_, Arc<AppState>>,
     session_id: String,
@@ -1785,7 +1746,6 @@ pub(crate) fn delete_session_native(
 /// "Send again" (a turn that ended without a reply): the conversation's last message
 /// goes out once more with the same execution options and, while the app still holds
 /// them, the same attachments.
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn retry_last_turn(
     app: crate::runtime::AppHandle,
     state: State<'_, Arc<AppState>>,
@@ -1844,7 +1804,6 @@ fn replayed_send(
     }
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn send_prompt(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
@@ -2377,7 +2336,6 @@ pub async fn send_prompt(
 }
 
 /// Typed response to an existing callback. Renderer cannot supply vendor protocol IDs or tool inputs.
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn respond_agent_request(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
@@ -2451,7 +2409,6 @@ const STEER_LIMIT: usize = 64 * 1024;
 /// of `attachment_owner`, resolved as `send_prompt` does). The running turn keeps its model
 /// and approvals. Once the provider accepts it, the instruction is recorded on the reply at
 /// its current length, with its attachments, and the attachments count as sent.
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn steer_turn(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
@@ -2584,7 +2541,6 @@ pub async fn steer_turn(
 
 /// Queues a message for one running subagent of the session's Claude turn (ADR-113); a
 /// PreToolUse hook hands it over before the subagent's next tool call.
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn steer_subagent(
     state: State<'_, Arc<AppState>>,
     session_id: String,
@@ -2635,7 +2591,6 @@ pub async fn steer_subagent(
 
 /// Moves one running foreground subagent of the session's Claude turn to the background
 /// (ADR-111): the turn continues and the subagent reports when it finishes.
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn background_subagent(
     state: State<'_, Arc<AppState>>,
     session_id: String,
@@ -2682,7 +2637,6 @@ pub async fn background_subagent(
 
 /// Stops one background subagent of the session's running Claude turn (ADR-097). The CLI's
 /// own notification settles its row; the rest of the turn keeps running.
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn stop_background_task(
     state: State<'_, Arc<AppState>>,
     session_id: String,
@@ -2719,7 +2673,6 @@ pub async fn stop_background_task(
         .map_err(|_| Error::agent("The reply ended before stopping the task."))?
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn stop_agent(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
@@ -2804,7 +2757,6 @@ fn owned_terminal<'a>(
         .ok_or_else(|| Error::not_found("terminal is not running"))
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn start_terminal(
     app: AppHandle,
     state: State<Arc<AppState>>,
@@ -2853,7 +2805,6 @@ pub fn start_terminal(
     Ok(())
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn write_terminal(
     state: State<Arc<AppState>>,
     session_id: String,
@@ -2864,7 +2815,6 @@ pub fn write_terminal(
     writer.write(&data)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn resize_terminal(
     state: State<Arc<AppState>>,
     session_id: String,
@@ -2876,7 +2826,6 @@ pub fn resize_terminal(
     owned_terminal(&ptys, &session_id, &terminal_id)?.resize(cols, rows)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn stop_terminal(
     state: State<'_, Arc<AppState>>,
     session_id: String,
@@ -2899,7 +2848,6 @@ pub async fn stop_terminal(
     .await
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn host_info(state: State<'_, Arc<AppState>>) -> Result<HostInfo> {
     // Report the Git binary native operations actually run.
     let git_path = which::which(crate::git::git_binary())
@@ -2951,7 +2899,6 @@ fn tidy_host_name(name: &str) -> String {
     name.strip_suffix(".local").unwrap_or(name).to_string()
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn probe_provider(
     state: State<'_, Arc<AppState>>,
     id: AgentProviderId,
@@ -3004,7 +2951,6 @@ fn apply_session_selection(session: &mut Session, agent: AgentProviderId, model:
     session.last_activity_at = now_rfc3339();
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn set_session_model(
     state: State<Arc<AppState>>,
     session_id: String,
@@ -3103,7 +3049,6 @@ fn keeps_previous(
     known == path && reported(previous) && !reported(next)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn list_provider_models(
     state: State<'_, Arc<AppState>>,
     id: AgentProviderId,

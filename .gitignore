@@ -12,7 +12,6 @@ dist-ssr
 *.local
 
 src-tauri/target
-src-tauri/gen/schemas
 
 .vscode/*
 !.vscode/extensions.json
@@ -51,7 +50,7 @@ research_notes/
 reports/
 
 # Update signing keys never enter the repository (ADR-140). The private key lives outside it,
-# in ~/.config/sirus-code/updater.key; only its public half is in tauri.conf.json.
+# in ~/.config/sirus-code/updater.key; only its public half is in native-spike/updater.pub.
 *.key
 *.key.pub
 *.pem

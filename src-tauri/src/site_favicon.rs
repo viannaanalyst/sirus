@@ -54,7 +54,6 @@ static GATES: LazyLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
     LazyLock::new(Default::default);
 
 /// The host's favicon as a data URL, or none (unknown site, local host, offline).
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn site_favicon(state: State<'_, Arc<AppState>>, host: String) -> Result<Option<String>> {
     let Some(host) = normalize_host(&host) else {
         return Ok(None);

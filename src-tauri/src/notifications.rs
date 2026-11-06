@@ -14,10 +14,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[cfg(all(target_os = "macos", feature = "desktop"))]
-#[path = "notifications_macos.rs"]
-mod platform;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Sound {
@@ -236,57 +232,6 @@ fn copy(kind: Kind, portuguese: bool) -> &'static str {
         (Kind::PullRequest, false) => "New pull request",
     }
 }
-/// The phone alert's status line and the plural phrase its grouped form uses.
-fn phone_status(kind: Kind, portuguese: bool) -> (&'static str, &'static str) {
-    match (kind, portuguese) {
-        (Kind::Completion, true) => ("✓ Concluída", "conversas concluídas"),
-        (Kind::Completion, false) => ("✓ Finished", "conversations finished"),
-        (Kind::Permission, true) => ("⚠︎ Precisa de aprovação", "conversas pedem aprovação"),
-        (Kind::Permission, false) => ("⚠︎ Approval needed", "conversations need approval"),
-        (Kind::Question, true) => ("? Pergunta para você", "perguntas para você"),
-        (Kind::Question, false) => ("? Question for you", "questions for you"),
-        (Kind::Failure, true) => ("✕ Falhou", "conversas falharam"),
-        (Kind::Failure, false) => ("✕ Failed", "conversations failed"),
-        (Kind::Reminder, true) => ("⏰ De volta", "conversas de volta"),
-        (Kind::Reminder, false) => ("⏰ Back from snooze", "conversations back"),
-        (Kind::PullRequest, true) => ("Pull request", "novos pull requests"),
-        (Kind::PullRequest, false) => ("Pull request", "new pull requests"),
-    }
-}
-fn kind_name(kind: Kind) -> &'static str {
-    match kind {
-        Kind::Permission => "permission",
-        Kind::Question => "question",
-        Kind::Completion => "completion",
-        Kind::Failure => "failure",
-        Kind::Reminder => "reminder",
-        Kind::PullRequest => "pullRequest",
-    }
-}
-/// A phone alert: the conversation as the title, then what happened and
-/// where, then its detail after a dash. iOS joins the lines of a web alert, so nothing relies
-/// on a line break.
-fn phone_alert(
-    kind: Kind,
-    portuguese: bool,
-    project: &str,
-    session: &str,
-    detail: Option<&str>,
-) -> (String, String) {
-    let (project, session) = (bounded_label(project), bounded_label(session));
-    let titled = !session.trim().is_empty() && !session.trim().eq_ignore_ascii_case(project.trim());
-    let title = if titled { session } else { project.clone() };
-    let mut body = phone_status(kind, portuguese).0.to_owned();
-    if titled && !project.trim().is_empty() {
-        body.push_str(" · ");
-        body.push_str(&project);
-    }
-    if let Some(detail) = detail.map(str::trim).filter(|detail| !detail.is_empty()) {
-        body.push_str(" — ");
-        body.push_str(detail);
-    }
-    (title, body)
-}
 /// What a phone alert adds under the title (ADR-086): the command or files awaiting
 /// approval, the question asked, the start of the final answer or the error.
 fn detail(session: &Session, key: &str, kind: Kind, portuguese: bool) -> Option<String> {
@@ -377,20 +322,9 @@ pub fn announce(app: &AppHandle, state: &Arc<AppState>, title: String, body: Str
         title: bounded_label(&title),
         body: bounded_label(&body),
     };
-    crate::remote::notify(&notice.title, &notice.body, "", None, None);
     if prefs.toasts {
         let _ = app.emit("notification-activity", &notice);
     }
-    #[cfg(all(target_os = "macos", feature = "desktop"))]
-    if prefs.system && (!foreground || prefs.foreground) {
-        let app = app.clone();
-        crate::runtime::async_runtime::spawn(async move {
-            if let Err(error) = platform::show(&app, &notice).await {
-                tracing::debug!(%error, "system status alert unavailable");
-            }
-        });
-    }
-    #[cfg(not(all(target_os = "macos", feature = "desktop")))]
     {
         let _ = foreground;
         let sound = prefs.completion_sound;
@@ -445,7 +379,6 @@ pub fn remind(app: &AppHandle, state: &Arc<AppState>, session_id: &str) {
             title: copy(Kind::Reminder, portuguese).into(),
             body: notice_body(&project.name, &session.title),
         };
-        let (project_name, session_title) = (project.name.clone(), session.title.clone());
         drop(data);
         if !remember(
             &mut app.state::<NotificationState>().seen.lock(),
@@ -457,41 +390,9 @@ pub fn remind(app: &AppHandle, state: &Arc<AppState>, session_id: &str) {
             .get_webview_window("main")
             .is_some_and(|window| window.is_focused().unwrap_or(true));
         let eligible = !foreground || prefs.foreground;
-        let (title, body) = phone_alert(
-            Kind::Reminder,
-            portuguese,
-            &project_name,
-            &session_title,
-            None,
-        );
-        crate::remote::notify(
-            &title,
-            &body,
-            &notice.session_id,
-            None,
-            Some((
-                kind_name(Kind::Reminder),
-                phone_status(Kind::Reminder, portuguese).1,
-            )),
-        );
         if prefs.toasts {
             let _ = app.emit("notification-activity", &notice);
         }
-        #[cfg(all(target_os = "macos", feature = "desktop"))]
-        {
-            if prefs.sounds && eligible {
-                let _ = platform::play(choice(&prefs, Kind::Reminder).1);
-            }
-            if prefs.system && eligible {
-                let app = app.clone();
-                crate::runtime::async_runtime::spawn(async move {
-                    if let Err(error) = platform::show(&app, &notice).await {
-                        tracing::debug!(%error, "system reminder unavailable");
-                    }
-                });
-            }
-        }
-        #[cfg(not(all(target_os = "macos", feature = "desktop")))]
         if eligible {
             window_alert(&app, &notice, &prefs, choice(&prefs, Kind::Reminder).1);
         }
@@ -525,7 +426,6 @@ pub fn publish(app: &AppHandle, state: &Arc<AppState>, snapshot: &Session) {
         let current = candidates(session);
         let prefs = data.settings.notifications.clone();
         let body = notice_body(&project.name, &session.title);
-        let (project_name, session_title) = (project.name.clone(), session.title.clone());
         let portuguese = data.settings.locale == "pt-BR";
         let foreground = app
             .get_webview_window("main")
@@ -535,16 +435,6 @@ pub fn publish(app: &AppHandle, state: &Arc<AppState>, snapshot: &Session) {
             .into_iter()
             .filter(|candidate| current.contains(candidate))
             .collect();
-        // The phone's app icon shows how many conversations need the person (ADR-124).
-        let waiting = data
-            .sessions
-            .iter()
-            .filter(|session| {
-                !session.is_auxiliary()
-                    && (session.status == SessionStatus::Waiting
-                        || !session.pending_requests.is_empty())
-            })
-            .count();
         let details: std::collections::HashMap<String, Option<String>> = notices
             .iter()
             .map(|(key, kind)| (key.clone(), detail(session, key, *kind, portuguese)))
@@ -569,41 +459,9 @@ pub fn publish(app: &AppHandle, state: &Arc<AppState>, snapshot: &Session) {
                 title: copy(kind, portuguese).into(),
                 body: body.clone(),
             };
-            // Paired phones get the alert whether or not the Mac window has focus (ADR-082):
-            // the conversation, then what happened and where, then its detail (ADR-086).
-            let (phone_title, phone_body) = phone_alert(
-                kind,
-                portuguese,
-                &project_name,
-                &session_title,
-                details.get(&notice.id).and_then(Option::as_deref),
-            );
-            crate::remote::notify(
-                &phone_title,
-                &phone_body,
-                &notice.session_id,
-                Some(waiting),
-                Some((kind_name(kind), phone_status(kind, portuguese).1)),
-            );
             if prefs.toasts {
                 let _ = app.emit("notification-activity", &notice);
             }
-            #[cfg(all(target_os = "macos", feature = "desktop"))]
-            {
-                if prefs.sounds && eligible {
-                    let _ = platform::play(sound);
-                }
-                if prefs.system && eligible {
-                    let app = app.clone();
-                    let notice = notice.clone();
-                    crate::runtime::async_runtime::spawn(async move {
-                        if let Err(error) = platform::show(&app, &notice).await {
-                            tracing::debug!(%error, "system activity alert unavailable");
-                        }
-                    });
-                }
-            }
-            #[cfg(not(all(target_os = "macos", feature = "desktop")))]
             if eligible {
                 window_alert(&app, &notice, &prefs, sound);
             }
@@ -737,40 +595,19 @@ fn announce_pulls(
     }
     for notice in notices {
         // Paired phones get it too (ADR-082); a tap opens the app.
-        crate::remote::notify(&notice.title, &notice.body, "", None, None);
         if prefs.toasts {
             let _ = app.emit("notification-activity", &notice);
         }
-        #[cfg(not(all(target_os = "macos", feature = "desktop")))]
         if eligible {
             window_alert(app, &notice, &prefs, choice(&prefs, Kind::PullRequest).1);
         }
-        #[cfg(all(target_os = "macos", feature = "desktop"))]
-        if prefs.system && eligible {
-            let app = app.clone();
-            crate::runtime::async_runtime::spawn(async move {
-                if let Err(error) = platform::show(&app, &notice).await {
-                    tracing::debug!(%error, "system pull request alert unavailable");
-                }
-            });
-        }
     }
-    #[cfg(all(target_os = "macos", feature = "desktop"))]
-    if prefs.sounds && eligible {
-        let sound = choice(&prefs, Kind::PullRequest).1;
-        let _ = app.run_on_main_thread(move || {
-            let _ = platform::play(sound);
-        });
-    }
-    #[cfg(not(all(target_os = "macos", feature = "desktop")))]
     let _ = eligible;
     Ok(())
 }
 
 pub fn install(app: &AppHandle) {
     app.manage(NotificationState::default());
-    #[cfg(all(target_os = "macos", feature = "desktop"))]
-    platform::install(app);
 }
 
 /// Final admission happens on the main thread after the OS permission lookup.
@@ -778,7 +615,6 @@ pub fn install(app: &AppHandle) {
 /// race this gate. Explicit tests have no session and do not impersonate work.
 /// The headless host has no notification center of its own: the window that drives it plays the
 /// sound and shows the banner (`native_notify.rs`), by these rules.
-#[cfg(not(all(target_os = "macos", feature = "desktop")))]
 fn window_alert(app: &AppHandle, notice: &Notice, prefs: &Preferences, sound: Sound) {
     let _ = app.emit(
         "notification-native",
@@ -792,24 +628,7 @@ fn window_alert(app: &AppHandle, notice: &Notice, prefs: &Preferences, sound: So
     );
 }
 
-#[cfg(all(target_os = "macos", feature = "desktop"))]
-pub(super) fn deliver_if_current(app: &AppHandle, notice: &Notice, deliver: impl FnOnce()) -> bool {
-    let state = app.state::<Arc<AppState>>();
-    let data = state.data.lock();
-    if state.ensure_running().is_err() {
-        return false;
-    }
-    let foreground = app
-        .get_webview_window("main")
-        .is_some_and(|window| window.is_focused().unwrap_or(true));
-    if !current_notice(&data, notice, foreground) {
-        return false;
-    }
-    deliver();
-    true
-}
-
-#[cfg(any(all(target_os = "macos", feature = "desktop"), test))]
+#[cfg(test)]
 fn current_notice(data: &crate::models::AppData, notice: &Notice, foreground: bool) -> bool {
     let prefs = &data.settings.notifications;
     if notice.kind == Kind::PullRequest {
@@ -838,7 +657,6 @@ fn current_notice(data: &crate::models::AppData, notice: &Notice, foreground: bo
         && (!foreground || prefs.foreground)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn notification_action(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
@@ -851,17 +669,6 @@ pub async fn notification_action(
                 &app.state::<NotificationState>().previewed,
                 Duration::from_millis(300),
             )?;
-            #[cfg(all(target_os = "macos", feature = "desktop"))]
-            {
-                let (tx, rx) = tokio::sync::oneshot::channel();
-                app.run_on_main_thread(move || {
-                    let _ = tx.send(platform::play(sound));
-                })
-                .map_err(|_| notification_error("Sound preview unavailable."))?;
-                rx.await
-                    .map_err(|_| notification_error("Sound preview unavailable."))??;
-            }
-            #[cfg(not(all(target_os = "macos", feature = "desktop")))]
             {
                 let _ = sound;
                 return Err(notification_error(
@@ -879,8 +686,6 @@ pub async fn notification_action(
                     "Notification permission request is already open.",
                 ));
             }
-            #[cfg(all(target_os = "macos", feature = "desktop"))]
-            platform::request().await;
             notification_state
                 .requesting
                 .store(false, std::sync::atomic::Ordering::Release);
@@ -907,18 +712,6 @@ pub async fn notification_action(
                 }
                 .into(),
             };
-            #[cfg(all(target_os = "macos", feature = "desktop"))]
-            {
-                platform::show(&app, &notice).await?;
-                if settings.notifications.sounds {
-                    let sound = settings.notifications.completion_sound;
-                    app.run_on_main_thread(move || {
-                        let _ = platform::play(sound);
-                    })
-                    .map_err(|_| notification_error("Sound preview unavailable."))?;
-                }
-            }
-            #[cfg(not(all(target_os = "macos", feature = "desktop")))]
             {
                 let _ = notice;
                 return Err(notification_error(
@@ -928,17 +721,8 @@ pub async fn notification_action(
         }
         Action::Status {} => {}
         Action::PullRequests { items } => announce_pulls(&app, state.inner(), items)?,
-        Action::Settings {} => {
-            #[cfg(all(target_os = "macos", feature = "desktop"))]
-            app.run_on_main_thread(platform::open_settings)
-                .map_err(|_| notification_error("Notification service unavailable."))?;
-        }
+        Action::Settings {} => {}
     }
-    #[cfg(all(target_os = "macos", feature = "desktop"))]
-    {
-        platform::permission().await
-    }
-    #[cfg(not(all(target_os = "macos", feature = "desktop")))]
     {
         Ok(Permission::Unsupported)
     }
@@ -947,29 +731,6 @@ pub async fn notification_action(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn phone_alerts_lead_with_the_conversation_and_never_need_a_line_break() {
-        let (title, body) = phone_alert(
-            Kind::Completion,
-            true,
-            "newlex",
-            "Novo Astro",
-            Some("De nada! 👍"),
-        );
-        assert_eq!(title, "Novo Astro");
-        assert_eq!(body, "✓ Concluída · newlex — De nada! 👍");
-        assert!(!body.contains('\n'));
-        // A conversation titled like its project shows the name once.
-        let (title, body) = phone_alert(Kind::Permission, false, "newlex", "newlex", Some("  "));
-        assert_eq!(
-            (title.as_str(), body.as_str()),
-            ("newlex", "⚠︎ Approval needed")
-        );
-        let (title, body) = phone_alert(Kind::Failure, false, "api", "", None);
-        assert_eq!((title.as_str(), body.as_str()), ("api", "✕ Failed"));
-        assert_eq!(phone_status(Kind::Question, true).1, "perguntas para você");
-    }
 
     #[test]
     fn a_session_named_like_its_project_shows_the_name_once() {
@@ -1013,37 +774,6 @@ mod tests {
         assert_eq!(failed.len(), 1);
         assert_eq!(failed[0].1, Kind::Failure);
         assert!(failed[0].0.contains(":failed:"));
-    }
-    #[test]
-    fn phone_alerts_say_what_they_are_about() {
-        let mut session = session();
-        session.status = SessionStatus::Waiting;
-        session
-            .pending_requests
-            .push(crate::models::PendingRequest {
-                request_id: "r1".into(),
-                generation: "g".into(),
-                turn_id: "t".into(),
-                item_id: "i".into(),
-                kind: PendingRequestKind::Command {
-                    command: "vercel deploy --prod\n--yes".into(),
-                    cwd: None,
-                    reason: None,
-                },
-            });
-        assert_eq!(
-            detail(&session, "s:g:t:r1", Kind::Permission, true).as_deref(),
-            Some("$ vercel deploy --prod")
-        );
-        session.last_error = Some("Usage limit reached".into());
-        assert_eq!(
-            detail(&session, "", Kind::Failure, true).as_deref(),
-            Some("Usage limit reached")
-        );
-        assert_eq!(
-            detail(&session, "s:g:t:missing", Kind::Permission, true),
-            None
-        );
     }
     #[test]
     fn pending_identity_includes_generation_and_classifies_real_questions() {

@@ -388,7 +388,6 @@ fn busy_or_folders(data: &AppData, session_id: &str) -> (bool, Vec<String>) {
 
 /// What the selected conversation's workspace branch can pull; null when there is nothing to
 /// compare with (no repository, detached HEAD, no upstream on a remote).
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_incoming(
     state: State<'_, Arc<AppState>>,
     session_id: String,
@@ -405,7 +404,6 @@ pub async fn git_incoming(
 }
 
 /// The header's Pull: `git pull --ff-only` from the branch's upstream.
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_pull_ff(
     state: State<'_, Arc<AppState>>,
     session_id: String,

@@ -103,7 +103,6 @@ pub fn apply(
 
 /// Snoozes a session until `until` (RFC 3339), or returns it now with `None`.
 /// Replies with the session's metadata.
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn snooze_session(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,

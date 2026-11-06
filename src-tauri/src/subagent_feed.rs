@@ -538,7 +538,6 @@ pub fn forget(session_id: &str) {
 
 /// One subagent's feed: what this run of the app saw stream, else (Claude) the end of the
 /// CLI's own transcript for it, else nothing.
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn subagent_feed(
     state: State<'_, Arc<AppState>>,
     session_id: String,

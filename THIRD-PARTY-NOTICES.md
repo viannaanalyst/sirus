@@ -1,6 +1,6 @@
 # Third-party notices
 
-Sirus Code is released under the MIT License (see `LICENSE`). Some portions of it are derived from the following software, released under the MIT License, whose notices are reproduced here as that license requires.
+Sirus is released under the MIT License (see `LICENSE`). Some portions of it are derived from the following software, released under the MIT License, whose notices are reproduced here as that license requires.
 
 ## T3 Code
 
@@ -15,10 +15,6 @@ Copyright (c) 2026 Emanuele Di Pietro
 
 Copyright (c) 2026 Nick
 
-## Ghostty (`libghostty-vt`, compiled to WebAssembly for the terminal)
-
-Copyright (c) 2024 Mitchell Hashimoto, Ghostty contributors
-
 ## Nerd Fonts (Symbols Nerd Font Mono, the terminal's icon glyphs)
 
 Copyright (c) 2014 Ryan L McIntyre
@@ -30,13 +26,6 @@ Copyright (c) Microsoft Corporation.
 ## Zeron (adjusted Solar icon drawings used for the interface icons)
 
 Copyright (c) 2026 Wing
-
-## Markdown in replies (ADR-179)
-
-Replies are rendered with `react-markdown` (Copyright (c) Espen Hovlandsdal), `remark-gfm` and
-`remark-breaks` (Copyright (c) Titus Wormer) and `remark-math` (Copyright (c) Junyoung Choi), all MIT, and the
-`unified`, `remark` and `micromark` packages they build on (MIT). The pipeline follows T3 Code's
-`ChatMarkdown` (MIT, listed above). The licence texts are kept in `public/licenses/markdown/`.
 
 ## MIT License (applies to all of the above)
 
@@ -66,13 +55,13 @@ Attribution 4.0 International license (CC BY 4.0, https://creativecommons.org/li
 The icons are taken from the `@iconify-json/solar` package and from Zeron's adjusted copies
 (https://github.com/zeronsh/comet, MIT, listed above); their stroke width is normalized to 1.7 and
 some coordinates are rounded. Those changes were made by Sirus Code. The attribution and license
-texts are kept in `public/licenses/solar-icons/`.
+texts are kept in `native-spike/ICONS-NOTICE.md`.
 
-## Word, PowerPoint and Excel previews (ADR-184)
+## Mermaid and KaTeX (diagrams and formulas in replies)
 
-Office files are drawn by `@betteroffice/docx`, `@betteroffice/pptx`, `@betteroffice/xlsx` (Apache License 2.0; Copyright 2026 The
-OpenOOXML contributors and Elia Hilse) and `@betteroffice/fonts` (Apache-2.0 for the package, SIL Open Font License 1.1 for the
-bundled font faces: Carlito, Caladea, Liberation, Open Sans, Roboto, Inter and others), with `effect` (MIT) in the workers.
-The integration (the worker protocol, painting and text layers under `src/components/office/`) is adapted from T3 Code's
-Office previews (MIT, listed above), which in turn adapt opencode (MIT, Copyright (c) 2025 opencode). The licence texts are
-kept in `public/licenses/office/`.
+The window draws Mermaid diagrams and KaTeX formulas with the files committed in
+`native-spike/assets/reply-render/`: Mermaid 12.1.0 (MIT, Copyright (c) 2014 - 2022 Knut Sveidqvist), KaTeX 0.16.47
+(MIT, Copyright (c) 2013-2020 Khan Academy and other contributors; its fonts are MIT and SIL Open Font License) and the
+npm packages they are built from (mostly MIT and ISC, with some Apache-2.0, BSD-3-Clause, MPL-2.0 or Apache-2.0,
+EPL-2.0 for ELK, and Unlicense). The licence text of every package is kept in
+`native-spike/assets/reply-render/LICENSES.txt`, which `bundle.sh` ships inside the app.

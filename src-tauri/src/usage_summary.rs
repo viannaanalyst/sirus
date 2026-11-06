@@ -291,7 +291,6 @@ fn summarize(
     }
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn usage_summary(state: State<'_, Arc<AppState>>, days: i64) -> Result<UsageSummary> {
     state.ensure_running()?;
     let days = days.clamp(1, MAX_DAYS);
@@ -331,12 +330,10 @@ fn stored_accent(path: &std::path::Path) -> String {
         .unwrap_or_else(|| DEFAULT_ACCENT.to_owned())
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn phone_look_get(state: State<'_, Arc<AppState>>) -> Result<serde_json::Value> {
     Ok(serde_json::json!({ "accent": stored_accent(&look_path(&state)) }))
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn phone_look_set(
     state: State<'_, Arc<AppState>>,
     accent: String,

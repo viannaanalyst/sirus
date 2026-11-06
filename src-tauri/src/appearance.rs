@@ -2,14 +2,12 @@
 use crate::commands::AppState;
 use crate::error::{Error, Result};
 use crate::models::{AppSettings, AppearanceSupport, ThemePref};
-#[cfg(feature = "desktop")]
-use crate::runtime::Manager;
 use std::sync::Arc;
 
 pub fn support() -> AppearanceSupport {
     AppearanceSupport {
-        translucency: cfg!(all(target_os = "macos", feature = "desktop")),
-        dock_icon: cfg!(all(target_os = "macos", feature = "desktop")),
+        translucency: false,
+        dock_icon: false,
     }
 }
 
@@ -85,7 +83,7 @@ pub fn normalize(settings: &mut AppSettings) {
     }
 }
 
-#[cfg_attr(not(feature = "desktop"), allow(dead_code))]
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct WindowIntent {
     glass: bool,
@@ -94,7 +92,7 @@ struct WindowIntent {
     background: [u8; 3],
 }
 
-#[cfg_attr(not(feature = "desktop"), allow(dead_code))]
+#[allow(dead_code)]
 fn window_intent(settings: &AppSettings, system_light: bool) -> WindowIntent {
     let light =
         settings.theme == ThemePref::Light || (settings.theme == ThemePref::System && system_light);
@@ -115,259 +113,8 @@ pub fn schedule(app: &crate::runtime::AppHandle, state: Arc<AppState>) {
     schedule_current(app, state, false);
 }
 
-#[cfg(feature = "desktop")]
-pub fn ready(app: &crate::runtime::AppHandle, state: Arc<AppState>) {
-    // Tauri can assign its embedded Dock image after setup; restore our choice
-    // once on Ready, while ordinary settings saves remain idempotent.
-    schedule_current(app, state, true);
-}
-
 /// The headless host has no window to dress (ADR-131).
-#[cfg(not(feature = "desktop"))]
 fn schedule_current(_app: &crate::runtime::AppHandle, _state: Arc<AppState>, _force_dock: bool) {}
-
-#[cfg(feature = "desktop")]
-fn schedule_current(app: &crate::runtime::AppHandle, state: Arc<AppState>, force_dock: bool) {
-    let app_handle = app.clone();
-    // Never capture the submitted settings: delayed callbacks read the latest
-    // successfully persisted state, so an older save cannot replay old glass.
-    if let Err(error) = app.run_on_main_thread(move || apply_now(&app_handle, &state, force_dock)) {
-        tracing::warn!(%error, "cannot schedule native appearance");
-    }
-}
-
-/// Applies the latest persisted appearance to the main window. Main thread only;
-/// the launch reveal calls it right before the hidden window is shown (ADR-098).
-#[cfg(feature = "desktop")]
-pub fn apply_now(app: &crate::runtime::AppHandle, state: &AppState, force_dock: bool) {
-    #[cfg(not(all(target_os = "macos", feature = "desktop")))]
-    let _ = force_dock;
-    let data = state.data.lock();
-    if state.ensure_running().is_err() {
-        return;
-    }
-    let Some(window) = app.get_webview_window("main") else {
-        return;
-    };
-    // Keep admission excluded while native effects apply; the next save
-    // queues its own latest-state callback after this one completes.
-    #[cfg(all(target_os = "macos", feature = "desktop"))]
-    macos::apply(&window, &data.settings, force_dock);
-    #[cfg(not(all(target_os = "macos", feature = "desktop")))]
-    {
-        let theme = match data.settings.theme {
-            ThemePref::System => None,
-            ThemePref::Light => Some(tauri::Theme::Light),
-            _ => Some(tauri::Theme::Dark),
-        };
-        let _ = window.set_theme(theme);
-        let intent = window_intent(
-            &data.settings,
-            window
-                .theme()
-                .is_ok_and(|theme| theme == tauri::Theme::Light),
-        );
-        let [r, g, b] = intent.background;
-        if let Err(error) = window.set_background_color(Some(tauri::window::Color(r, g, b, 255))) {
-            tracing::warn!(%error, "cannot apply opaque appearance");
-        }
-    }
-}
-
-#[cfg(all(target_os = "macos", feature = "desktop"))]
-mod macos {
-    use super::*;
-    use crate::models::DockIcon;
-    use objc2::{AnyThread, MainThreadMarker, MainThreadOnly};
-    use objc2_app_kit::NSAppearanceCustomization;
-    use objc2_app_kit::{
-        NSAppearance, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSApplication,
-        NSAutoresizingMaskOptions, NSColor, NSImage, NSUserInterfaceItemIdentification,
-        NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState,
-        NSVisualEffectView, NSWindow, NSWindowOrderingMode,
-    };
-    use objc2_foundation::{NSArray, NSData, NSString};
-    use std::cell::RefCell;
-    use std::ffi::{c_int, c_void};
-    use std::sync::OnceLock;
-
-    const BACKING_ID: &str = "sirus.appearance-glass-backing";
-    const BLUR_RADIUS: c_int = 24;
-    const SMOKED_DOCK: &[u8] = include_bytes!("../icons/dock-smoked-glass.png");
-    const WHITE_DOCK: &[u8] = include_bytes!("../icons/dock-white.png");
-
-    thread_local! {
-        static LAST_APPLIED: RefCell<Option<(WindowIntent, DockIcon)>> = const { RefCell::new(None) };
-        /// The private blur needs a window number, which a never-shown window may lack:
-        /// the next apply (right after the launch reveal shows it) tries again.
-        static BLUR_PENDING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    }
-
-    type ConnectionFn = unsafe extern "C" fn() -> usize;
-    type BlurFn = unsafe extern "C" fn(usize, c_int, c_int) -> c_int;
-
-    pub(super) fn apply(window: &tauri::WebviewWindow, settings: &AppSettings, force_dock: bool) {
-        let Some(mtm) = MainThreadMarker::new() else {
-            return;
-        };
-        let Ok(raw) = window.ns_window() else {
-            return;
-        };
-        // Tauri owns this NSWindow; the pointer is only borrowed in this
-        // main-thread callback and never retained by a renderer-selected value.
-        let Some(native) = (unsafe { raw.cast::<NSWindow>().as_ref() }) else {
-            return;
-        };
-        // NSApplication inherits the OS palette; an explicit window override must
-        // not turn the System choice into the previous forced Light/Dark choice.
-        let app = NSApplication::sharedApplication(mtm);
-        let system_light = unsafe {
-            app.effectiveAppearance()
-                .bestMatchFromAppearancesWithNames(&NSArray::from_slice(&[
-                    NSAppearanceNameAqua,
-                    NSAppearanceNameDarkAqua,
-                ]))
-                .is_some_and(|name| &*name == NSAppearanceNameAqua)
-        };
-        let intent = window_intent(settings, system_light);
-        let previous = LAST_APPLIED.with(|slot| slot.borrow().clone());
-        if BLUR_PENDING.get() || previous.as_ref().is_none_or(|(old, _)| *old != intent) {
-            BLUR_PENDING.set(false);
-            // AppKit exports these immutable appearance-name constants.
-            let appearance_name = unsafe {
-                if intent.light {
-                    NSAppearanceNameAqua
-                } else {
-                    NSAppearanceNameDarkAqua
-                }
-            };
-            let appearance = if intent.follows_system {
-                None
-            } else {
-                NSAppearance::appearanceNamed(appearance_name)
-            };
-            native.setAppearance(appearance.as_deref());
-            if intent.glass {
-                native.setOpaque(false);
-                // A tiny nonzero alpha keeps native shadows/corners intact.
-                native
-                    .setBackgroundColor(Some(&NSColor::clearColor().colorWithAlphaComponent(0.01)));
-                let private_blur = apply_blur(native, BLUR_RADIUS);
-                BLUR_PENDING.set(!private_blur && !native.isVisible());
-                set_backing(native, true, private_blur);
-            } else {
-                apply_blur(native, 0);
-                set_backing(native, false, false);
-                native.setOpaque(true);
-                let [r, g, b] = intent.background;
-                native.setBackgroundColor(Some(&NSColor::colorWithRed_green_blue_alpha(
-                    f64::from(r) / 255.0,
-                    f64::from(g) / 255.0,
-                    f64::from(b) / 255.0,
-                    1.0,
-                )));
-            }
-            native.setHasShadow(true);
-            native.invalidateShadow();
-        }
-        if force_dock
-            || previous
-                .as_ref()
-                .is_none_or(|(_, old)| *old != settings.dock_icon)
-        {
-            let app = NSApplication::sharedApplication(mtm);
-            let bytes = match settings.dock_icon {
-                DockIcon::Default => None,
-                DockIcon::SmokedGlass => Some(SMOKED_DOCK),
-                DockIcon::White => Some(WHITE_DOCK),
-            };
-            if let Some(bytes) = bytes {
-                let data = NSData::with_bytes(bytes);
-                if let Some(image) = NSImage::initWithData(NSImage::alloc(), &data) {
-                    // Fixed embedded artwork only; no renderer paths/images.
-                    unsafe { app.setApplicationIconImage(Some(&image)) };
-                }
-            } else {
-                // nil restores the original bundle icon. Do not replace
-                // the platform's default with a raw PNG.
-                unsafe { app.setApplicationIconImage(None) };
-            }
-        }
-        LAST_APPLIED.with(|slot| *slot.borrow_mut() = Some((intent, settings.dock_icon)));
-    }
-
-    fn set_backing(window: &NSWindow, enabled: bool, private_blur: bool) {
-        let Some(content) = window.contentView() else {
-            return;
-        };
-        let identifier = NSString::from_str(BACKING_ID);
-        if let Some(backing) = content
-            .subviews()
-            .iter()
-            .find(|view| view.identifier().as_deref() == Some(&identifier))
-        {
-            // Full-strength standard AppKit blur when WindowServer is absent
-            // or fails. The 1% backing otherwise stabilizes WKWebView repaints.
-            backing.setAlphaValue(if private_blur { 0.01 } else { 1.0 });
-            backing.setHidden(!enabled);
-            return;
-        }
-        if !enabled {
-            return;
-        }
-        let backing = NSVisualEffectView::initWithFrame(
-            NSVisualEffectView::alloc(window.mtm()),
-            content.bounds(),
-        );
-        backing.setIdentifier(Some(&identifier));
-        backing.setMaterial(NSVisualEffectMaterial::UnderWindowBackground);
-        backing.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
-        backing.setState(NSVisualEffectState::Active);
-        backing.setAlphaValue(if private_blur { 0.01 } else { 1.0 });
-        backing.setAutoresizingMask(
-            NSAutoresizingMaskOptions::ViewWidthSizable
-                | NSAutoresizingMaskOptions::ViewHeightSizable,
-        );
-        // Keep Wry's parent, responder and webview intact. Sidebar/full glass
-        // share this backing; the renderer controls which panes remain opaque.
-        content.addSubview_positioned_relativeTo(&backing, NSWindowOrderingMode::Below, None);
-    }
-
-    fn apply_blur(window: &NSWindow, radius: c_int) -> bool {
-        static BLUR: OnceLock<Option<BlurFn>> = OnceLock::new();
-        static CONNECTION: OnceLock<Option<ConnectionFn>> = OnceLock::new();
-        let blur = *BLUR.get_or_init(|| {
-            let pointer = unsafe {
-                libc::dlsym(
-                    libc::RTLD_DEFAULT,
-                    c"CGSSetWindowBackgroundBlurRadius".as_ptr(),
-                )
-            };
-            (!pointer.is_null())
-                .then(|| unsafe { std::mem::transmute::<*mut c_void, BlurFn>(pointer) })
-        });
-        let connection = *CONNECTION.get_or_init(|| {
-            for name in [c"CGSDefaultConnectionForThread", c"CGSMainConnectionID"] {
-                let pointer = unsafe { libc::dlsym(libc::RTLD_DEFAULT, name.as_ptr()) };
-                if !pointer.is_null() {
-                    return Some(unsafe {
-                        std::mem::transmute::<*mut c_void, ConnectionFn>(pointer)
-                    });
-                }
-            }
-            None
-        });
-        let (Some(blur), Some(connection)) = (blur, connection) else {
-            return false;
-        };
-        let number = window.windowNumber();
-        let connection = unsafe { connection() };
-        if number <= 0 || number > c_int::MAX as isize || connection == 0 {
-            return false;
-        }
-        unsafe { blur(connection, number as c_int, radius) == 0 }
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -519,10 +266,7 @@ mod tests {
                 ..AppSettings::default()
             };
             let intent = window_intent(&settings, false);
-            assert_eq!(
-                intent.glass,
-                cfg!(all(target_os = "macos", feature = "desktop")) && glass
-            );
+            assert!(!intent.glass, "{glass}");
             assert_eq!(intent.light, settings.theme == ThemePref::Light);
             assert_eq!(intent.background, background);
         }
@@ -536,10 +280,7 @@ mod tests {
         let light = window_intent(&settings, true);
         assert!(dark.follows_system && light.follows_system);
         assert!(!dark.light && light.light);
-        assert_eq!(
-            dark.glass,
-            cfg!(all(target_os = "macos", feature = "desktop"))
-        );
+        assert!(!dark.glass);
         assert!(!light.glass);
         settings.theme = ThemePref::Dark;
         assert!(!window_intent(&settings, true).follows_system);
@@ -552,9 +293,6 @@ mod tests {
         assert!(settings.dark_window_translucent);
         assert_eq!(settings.dark_window_opacity, 43);
         assert!(validate(&settings).is_ok());
-        assert_eq!(
-            support().dock_icon,
-            cfg!(all(target_os = "macos", feature = "desktop"))
-        );
+        assert!(!support().dock_icon);
     }
 }

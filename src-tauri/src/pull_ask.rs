@@ -85,7 +85,6 @@ pub enum Action {
     },
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn pull_ask_action(
     state: State<'_, Arc<AppState>>,
     action: Action,

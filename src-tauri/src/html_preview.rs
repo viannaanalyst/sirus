@@ -57,7 +57,6 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 /// Registers an HTML page for the transcript and returns its id.
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn html_preview(
     state: crate::runtime::State<'_, HtmlPreviews>,
     html: String,

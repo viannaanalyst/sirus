@@ -544,15 +544,21 @@ fn host_binary() -> Result<PathBuf, String> {
         .ok_or_else(|| t("O sirus-host não foi encontrado.").into())
 }
 
-/// First launch: a consistent copy of the app's state, with everything automatic turned off.
+/// First launch: a consistent copy of Sirus Code's state, when this computer has it, with
+/// everything automatic turned off. Without it (a new computer, or Sirus Code's folder deleted)
+/// the host starts with an empty state of its own.
 fn seed(dir: &Path) -> Result<(), String> {
-    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let database = dir.join("state.db");
-    if database.exists() {
-        return Ok(());
-    }
     let source = PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
         .join("Library/Application Support/com.siruscode.app");
+    seed_from(dir, &source)
+}
+
+fn seed_from(dir: &Path, source: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let database = dir.join("state.db");
+    if database.exists() || !source.join("state.db").is_file() {
+        return Ok(());
+    }
     let backup = format!(".backup '{}'", database.display());
     let status = Command::new("sqlite3")
         .arg(format!(
@@ -624,20 +630,20 @@ fn stop_old_host() {
     }
 }
 
-/// The phone's web app, built from this checkout: in the bundle, else the repository's `dist`.
-fn ui_dir() -> Option<PathBuf> {
+/// The committed Mermaid and KaTeX files (`assets/reply-render`): in the bundle, else the checkout.
+fn reply_assets_dir() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
-    let bundled = exe.parent()?.parent()?.join("Resources/ui");
-    let built = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../dist");
+    let bundled = exe.parent()?.parent()?.join("Resources/reply-render");
+    let built = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/reply-render");
     [bundled, built]
         .into_iter()
-        .find(|dir| dir.join("index.html").is_file())
+        .find(|dir| dir.join("mermaid.js").is_file())
 }
 
-/// The web UI's folder and the address the window's own host serves it at: the hidden page that
-/// draws diagrams and formulas loads Sirus's bundled Mermaid and KaTeX from there.
-pub fn ui_assets() -> Option<(PathBuf, String)> {
-    ui_dir().map(|dir| (dir, format!("http://127.0.0.1:{PORT}")))
+/// That folder and the address the window's own host serves it at (`/assets/`): the hidden page
+/// that draws diagrams and formulas loads the libraries from there.
+pub fn reply_assets() -> Option<(PathBuf, String)> {
+    reply_assets_dir().map(|dir| (dir, format!("http://127.0.0.1:{PORT}")))
 }
 
 fn http(address: SocketAddr, line: &str, body: Option<&str>) -> Option<String> {
@@ -672,8 +678,8 @@ fn ensure_host(dir: &Path) -> Result<(), String> {
             "--data-dir",
         ])
         .arg(dir);
-    if let Some(ui) = ui_dir() {
-        command.arg("--ui-dir").arg(ui);
+    if let Some(assets) = reply_assets_dir() {
+        command.arg("--assets-dir").arg(assets);
     }
     // Started from an agent's shell, the window inherits that session's Claude variables. The
     // host and its agents must use their own login and folders, not that session's.
@@ -864,6 +870,16 @@ pub fn git(path: &str, args: &[&str]) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_missing_sirus_code_folder_leaves_an_empty_start() {
+        let root = std::env::temp_dir().join(format!("sirus-seed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let data = root.join("data");
+        assert!(seed_from(&data, &root.join("no-such-sirus-code")).is_ok());
+        assert!(data.is_dir() && !data.join("state.db").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     use super::*;
 
     fn backend() -> (Backend, async_channel::Receiver<Incoming>) {

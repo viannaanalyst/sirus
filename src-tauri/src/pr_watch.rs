@@ -906,7 +906,6 @@ pub enum Action {
     },
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn pr_watch_action(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,

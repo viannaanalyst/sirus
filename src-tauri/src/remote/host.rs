@@ -16,7 +16,8 @@ pub struct Options {
     pub port: u16,
     /// The URL to put in pairing links when the host is reached under another name.
     pub url: Option<String>,
-    pub ui_dir: Option<PathBuf>,
+    /// The Mermaid and KaTeX files served at `/assets/`.
+    pub assets_dir: Option<PathBuf>,
     /// Sirus Native (ADR-189): the window's own listener on this loopback port, always on.
     /// `port` is then the listener for other devices, on only while `remote.json` says so.
     pub local_port: Option<u16>,
@@ -63,7 +64,7 @@ pub async fn start_host(app: AppHandle, data_dir: &Path, options: Options) -> Re
         listen: parking_lot::Mutex::new(Listen {
             bind: Some(options.bind),
             url: options.url,
-            ui_dir: options.ui_dir,
+            assets_dir: options.assets_dir,
             local_port: options.local_port,
             https_port: options.https_port,
             label: options.label,
@@ -108,21 +109,19 @@ pub fn https_url() -> Option<String> {
     REMOTE.get()?.https.lock().url.clone()
 }
 
-/// A file of the built UI. Unknown paths answer the app shell, as Tauri's resolver does,
-/// so client-side routes load; nothing outside the folder is ever read.
+/// A file under `/assets/` in `dir`; nothing outside the folder is ever read.
 pub(super) fn read_asset(dir: &Path, path: &str) -> Option<(Vec<u8>, String)> {
     let root = dir.canonicalize().ok()?;
-    let relative = path.trim_start_matches('/');
+    let relative = path.strip_prefix("/assets/")?;
     let safe = !relative.is_empty()
         && relative.len() <= 512
         && relative.split('/').all(|part| {
             !part.is_empty() && !part.starts_with('.') && !part.contains(['\\', '\0', '%'])
         });
-    let file = safe
-        .then(|| root.join(relative))
-        .and_then(|file| file.canonicalize().ok())
-        .filter(|file| file.starts_with(&root) && file.is_file())
-        .unwrap_or_else(|| root.join("index.html"));
+    let file = root.join(relative).canonicalize().ok().filter(|_| safe)?;
+    if !file.starts_with(&root) || !file.is_file() {
+        return None;
+    }
     let bytes = std::fs::read(&file).ok()?;
     Some((bytes, mime_type(&file).into()))
 }
@@ -277,7 +276,6 @@ pub fn saved_devices(data_dir: &Path) -> Vec<DeviceInfo> {
             name: device.name,
             created_at: device.created_at,
             last_seen: device.last_seen,
-            push: device.push.is_some(),
         })
         .collect()
 }
@@ -330,12 +328,11 @@ impl DeviceInfo {
             .map(|at| at.format("%Y-%m-%d %H:%M UTC").to_string())
             .unwrap_or_else(|| "never".into());
         format!(
-            "{}  {}  paired {}  last seen {}{}",
+            "{}  {}  paired {}  last seen {}",
             self.id,
             self.name,
             self.created_at.format("%Y-%m-%d"),
-            seen,
-            if self.push { "  alerts on" } else { "" }
+            seen
         )
     }
 }
@@ -345,38 +342,43 @@ mod tests {
     use super::*;
 
     #[test]
-    fn assets_stay_inside_the_ui_folder() {
+    fn assets_stay_inside_the_assets_folder() {
         let dir = tempfile::tempdir().unwrap();
-        let ui = dir.path().join("dist");
-        std::fs::create_dir_all(ui.join("assets")).unwrap();
-        std::fs::write(ui.join("index.html"), "<html>shell</html>").unwrap();
-        std::fs::write(ui.join("assets/app-1.js"), "js").unwrap();
+        let root = dir.path().join("reply-render");
+        std::fs::create_dir_all(root.join("chunks")).unwrap();
+        std::fs::write(root.join("mermaid.js"), "js").unwrap();
+        std::fs::write(root.join("chunks/a.js"), "js").unwrap();
+        std::fs::write(root.join("katex.css"), "css").unwrap();
         std::fs::write(dir.path().join("secret.txt"), "secret").unwrap();
-        let (bytes, mime) = read_asset(&ui, "/assets/app-1.js").unwrap();
+        let (bytes, mime) = read_asset(&root, "/assets/mermaid.js").unwrap();
         assert_eq!(
             (bytes.as_slice(), mime.as_str()),
             (&b"js"[..], "text/javascript; charset=utf-8")
         );
-        // Routes and anything outside the folder get the app shell, never the file.
+        assert!(read_asset(&root, "/assets/chunks/a.js").is_some());
+        assert_eq!(
+            read_asset(&root, "/assets/katex.css").unwrap().1,
+            "text/css; charset=utf-8"
+        );
+        // Routes and anything outside the folder are missing, never another file.
         for path in [
             "/",
+            "/index.html",
             "/sessions/42",
-            "/../secret.txt",
-            "/assets/../../secret.txt",
-            "/%2e%2e/secret.txt",
-            "/.env",
+            "/assets/",
+            "/assets/missing.js",
+            "/assets/../secret.txt",
+            "/assets/chunks/../../secret.txt",
+            "/assets/%2e%2e/secret.txt",
+            "/assets/.env",
         ] {
-            let (bytes, mime) = read_asset(&ui, path).unwrap();
-            assert_eq!(bytes, b"<html>shell</html>", "{path}");
-            assert!(mime.starts_with("text/html"));
+            assert!(read_asset(&root, path).is_none(), "{path}");
         }
         #[cfg(unix)]
         {
-            std::os::unix::fs::symlink(dir.path().join("secret.txt"), ui.join("link.txt")).unwrap();
-            assert_eq!(
-                read_asset(&ui, "/link.txt").unwrap().0,
-                b"<html>shell</html>"
-            );
+            std::os::unix::fs::symlink(dir.path().join("secret.txt"), root.join("link.txt"))
+                .unwrap();
+            assert!(read_asset(&root, "/assets/link.txt").is_none());
         }
     }
 
@@ -423,7 +425,7 @@ mod tests {
             listen: parking_lot::Mutex::new(Listen {
                 bind: Some("100.90.1.2".parse().unwrap()),
                 url: None,
-                ui_dir: None,
+                assets_dir: None,
                 ..Listen::default()
             }),
         };

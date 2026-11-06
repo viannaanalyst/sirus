@@ -327,7 +327,6 @@ fn login_cancel() {
     cancelled().notify_waiters();
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn github_account_action(action: Action) -> Result<Response> {
     match action {
         Action::List => accounts().await,

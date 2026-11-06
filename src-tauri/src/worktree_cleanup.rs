@@ -74,7 +74,6 @@ pub enum Response {
     Cleaned(Cleaned),
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn worktree_cleanup_action(
     state: State<'_, Arc<AppState>>,
     action: Action,

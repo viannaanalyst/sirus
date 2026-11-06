@@ -242,7 +242,6 @@ pub enum Action {
 
 /// Closed project-script surface. `Save` returns the project; the other actions
 /// publish the session through `session-updated`.
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn project_scripts_action(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,

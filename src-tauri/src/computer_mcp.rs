@@ -497,7 +497,6 @@ fn authorize(
     target: &AppInfo,
     provider: &str,
 ) -> Result<(), String> {
-    #[cfg(not(feature = "desktop"))]
     let _ = app;
     if target.pid == std::process::id() as i32 || is_blocked(&target.bundle_id) {
         record(session_id, &target.name, "access", "blocked");
@@ -522,10 +521,6 @@ fn authorize(
     with_bridge(|bridge| bridge.pending.push(Pending { request, reply }));
     publish();
     // The host has no window to bounce; its window client shows the request from `computer-state`.
-    #[cfg(feature = "desktop")]
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.request_user_attention(Some(tauri::UserAttentionType::Informational));
-    }
     let allowed = wait.recv_timeout(APPROVAL_TIMEOUT).unwrap_or(false);
     with_bridge(|bridge| bridge.pending.retain(|pending| pending.request.id != id));
     if allowed && enabled() {
@@ -553,40 +548,10 @@ fn authorize(
 
 fn hide_overlay() {
     // The indicator is the window app's; the host has no AppKit main thread (ADR-189).
-    #[cfg(all(target_os = "macos", feature = "desktop"))]
-    if let Some((app, _)) = APP.get() {
-        OVERLAY_GENERATION.fetch_add(1, Ordering::SeqCst);
-        let _ = app.run_on_main_thread(computer::overlay::hide);
-    }
 }
 
 /// Shows the indicator over the controlled window and hides it after a quiet period.
 fn show_overlay(provider: &str, target: &AppInfo, locale: &str, frame: Option<computer::Frame>) {
-    #[cfg(all(target_os = "macos", feature = "desktop"))]
-    if let Some((app, _)) = APP.get() {
-        let portuguese = locale.starts_with("pt");
-        let text = if portuguese {
-            format!("{provider} está usando {} · Esc para parar", target.name)
-        } else {
-            format!("{provider} is using {} · Esc to stop", target.name)
-        };
-        let stop = if portuguese { "Parar" } else { "Stop" }.to_string();
-        let generation = OVERLAY_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
-        let _ = app.run_on_main_thread(move || {
-            if let Some(mtm) = objc2::MainThreadMarker::new() {
-                computer::overlay::install_escape_monitor();
-                computer::overlay::show(mtm, &text, &stop, frame);
-            }
-        });
-        let handle = app.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_secs(6));
-            if OVERLAY_GENERATION.load(Ordering::SeqCst) == generation {
-                let _ = handle.run_on_main_thread(computer::overlay::hide);
-            }
-        });
-    }
-    #[cfg(not(all(target_os = "macos", feature = "desktop")))]
     let _ = (provider, target, locale, frame);
 }
 
@@ -891,7 +856,6 @@ pub enum Action {
 
 /// Closed computer-use control surface for the renderer: status, fixed
 /// permission prompts/panes, approval answers, revocation and stop.
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn computer_action(
     state: State<'_, Arc<AppState>>,
     action: Action,

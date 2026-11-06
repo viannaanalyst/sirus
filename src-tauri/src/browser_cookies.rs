@@ -5,7 +5,7 @@
 //! and the decrypted values are dropped when the import returns. The one thing written to disk is
 //! a temporary copy of Chrome's cookie database (Chrome locks the original), deleted after the read.
 
-#![cfg_attr(not(all(target_os = "macos", feature = "desktop")), allow(dead_code))]
+#![allow(dead_code)]
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};

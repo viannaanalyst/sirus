@@ -215,7 +215,6 @@ fn label(value: &str) -> Result<String> {
     }
     Ok(value.into())
 }
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn create_provider_account(
     state: State<'_, Arc<AppState>>,
     provider: AgentProviderId,
@@ -232,7 +231,6 @@ pub async fn create_provider_account(
         Ok(account)
     }).await.map_err(|_| Error::agent("Cannot create account profile"))?
 }
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn select_provider_account(
     state: State<'_, Arc<AppState>>,
     provider: AgentProviderId,
@@ -259,7 +257,6 @@ pub async fn select_provider_account(
     .await
     .map_err(|_| Error::agent("Cannot select account profile"))?
 }
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn rename_provider_account(
     state: State<'_, Arc<AppState>>,
     provider: AgentProviderId,
@@ -317,7 +314,6 @@ async fn drain(reader: impl tokio::io::AsyncRead + Unpin) -> Result<()> {
     }
     Ok(())
 }
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn login_provider_account(
     state: State<'_, Arc<AppState>>,
     provider: AgentProviderId,
@@ -418,7 +414,6 @@ async fn login(state: Arc<AppState>, provider: AgentProviderId, account_id: Stri
     drop(guard);
     result
 }
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn cancel_provider_account_login(
     state: State<Arc<AppState>>,
     provider: AgentProviderId,

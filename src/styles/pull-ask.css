@@ -1,6 +1,0 @@
-/* Ask about a pull request or issue, beside its detail (ADR-050). */
-@layer components {
-  .pulls-ask { position: relative; display: flex; flex-shrink: 0; min-height: 0; overflow: hidden; border-left: 1px solid var(--border-subtle); }
-  .pulls-ask-body { display: flex; height: 100%; min-height: 0; min-width: 0; flex-shrink: 0; flex-direction: column; }
-  .pulls-ask-header { display: flex; flex-shrink: 0; align-items: center; gap: 4px; min-height: 52px; padding: 8px 10px 8px 16px; border-bottom: 1px solid var(--border-subtle); }
-}

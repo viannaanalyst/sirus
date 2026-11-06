@@ -11,7 +11,6 @@
 //! filled (never values) go back to the agent.
 
 // The Mac app runs its own browser; the bridge is for hosts with a window client.
-#![cfg_attr(feature = "desktop", allow(dead_code))]
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -208,15 +207,9 @@ pub fn token_is_local(file_contents: &str, token: &str) -> bool {
 
 /// Whether a connection that said hello with `token` is the local window.
 pub fn is_local_window(app: &AppHandle, token: &str) -> bool {
-    #[cfg(not(feature = "desktop"))]
     {
         std::fs::read_to_string(app.data_dir().join("native-token"))
             .is_ok_and(|contents| token_is_local(&contents, token))
-    }
-    #[cfg(feature = "desktop")]
-    {
-        let _ = (app, token);
-        false
     }
 }
 

@@ -54,7 +54,6 @@ fn remove_all_except(state: &AppState, keep: Option<&str>) {
     }
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn chat_background_action(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
@@ -89,7 +88,6 @@ pub async fn chat_background_action(
 }
 
 /// The saved background as a data URL for the renderer, or none.
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn chat_background_image(
     state: State<'_, Arc<AppState>>,
     name: String,
@@ -111,22 +109,8 @@ pub async fn chat_background_image(
 }
 
 /// The headless host has no screen to show a picker on (ADR-131).
-#[cfg(not(feature = "desktop"))]
 async fn pick_image(_app: &AppHandle) -> Option<PathBuf> {
     None
-}
-
-#[cfg(feature = "desktop")]
-async fn pick_image(app: &AppHandle) -> Option<PathBuf> {
-    use tauri_plugin_dialog::DialogExt;
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    app.dialog()
-        .file()
-        .add_filter("Image", &["png", "jpg", "jpeg"])
-        .pick_file(move |file| {
-            let _ = tx.send(file.and_then(|path| path.into_path().ok()));
-        });
-    rx.await.ok().flatten()
 }
 
 fn scaled_jpeg(path: &std::path::Path) -> Result<Vec<u8>> {

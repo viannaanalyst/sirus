@@ -953,7 +953,6 @@ fn statuses(state: &AppState) -> Vec<ConnectorStatus> {
     list.iter().map(status_of).collect()
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn connector_action(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
@@ -1004,15 +1003,6 @@ pub async fn connector_action(
     crate::commands::native_task(move || Ok(statuses(&state))).await
 }
 
-#[cfg(feature = "desktop")]
-fn open_browser(app: &AppHandle, url: &str) -> Result<()> {
-    use tauri_plugin_opener::OpenerExt;
-    app.opener()
-        .open_url(url, None::<&str>)
-        .map_err(|error| Error::new("connector", error.to_string()))
-}
-
-#[cfg(not(feature = "desktop"))]
 fn open_browser(_app: &AppHandle, _url: &str) -> Result<()> {
     // The redirect comes back to this machine's loopback, which a phone cannot reach.
     Err(Error::new(

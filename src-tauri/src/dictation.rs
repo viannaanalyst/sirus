@@ -356,18 +356,15 @@ mod platform {
     }
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn dictation_status() -> String {
     platform::status().to_string()
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn start_dictation(locale: String) -> Result<()> {
     let locale = if locale == "en" { "en-US" } else { "pt-BR" }.to_string();
     crate::commands::native_task(move || platform::start(&locale)).await
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn stop_dictation(cancel: bool) -> Result<Option<String>> {
     crate::commands::native_task(move || platform::stop(cancel)).await
 }
@@ -376,7 +373,6 @@ pub async fn stop_dictation(cancel: bool) -> Result<Option<String>> {
 const MAX_RECORDING_BYTES: usize = 12 * 1024 * 1024;
 
 /// Whether this computer can transcribe a recording sent to it (`transcribe_audio`).
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn transcription_status() -> String {
     if platform::transcription_available() {
         "available"
@@ -387,7 +383,6 @@ pub fn transcription_status() -> String {
 }
 
 /// Transcribes a recording a phone made (AAC in MP4) with this Mac's speech recognition.
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn transcribe_audio(locale: String, audio: String) -> Result<Option<String>> {
     use base64::Engine as _;
     let locale = if locale == "en" { "en-US" } else { "pt-BR" }.to_string();

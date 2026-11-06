@@ -240,7 +240,6 @@ fn worktree_parent(state: &AppState, data: &AppData, project: &Project) -> PathB
 /// Source side: snapshots the session's work, pushes it to `origin` as `sirus/move-<id>` and
 /// returns what the target needs. Refused while the session runs, without confirmation, or
 /// when the project has no GitHub `origin` (the other computer could not get the files).
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn prepare_session_move(
     state: State<'_, Arc<AppState>>,
     session_id: String,
@@ -313,7 +312,6 @@ pub async fn prepare_session_move(
 
 /// Target side: the project here whose GitHub `origin` is `remote_url` (compared as GitHub web
 /// addresses, case-insensitively), if any.
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn find_project_by_remote(
     state: State<'_, Arc<AppState>>,
     remote_url: String,
@@ -336,7 +334,6 @@ pub async fn find_project_by_remote(
 
 /// Target side: checks the moved branch out in a new isolated worktree and creates a session
 /// with the same provider and model, the copied transcript and a pending handoff recap.
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn import_session(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
@@ -452,7 +449,6 @@ pub fn offline_note(from_computer: &str, start: &str) -> String {
 }
 
 /// Source side, after the target took the conversation: notes where it went.
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn mark_session_moved(
     app: AppHandle,
     state: State<Arc<AppState>>,

@@ -5,54 +5,25 @@ description = "Desktop workspace for AI-assisted software development"
 authors = ["Sirus Code"]
 license = "MIT"
 edition = "2021"
-# `tauri dev` calls `cargo run` without `--bin`; run the headless host with `--bin sirus-host`.
-default-run = "sirus-code"
 
 [lib]
 name = "sirus_code_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+crate-type = ["rlib"]
 
-# Two builds of the same back end (ADR-131): the desktop app (default) and the
-# headless `sirus-host` for Linux servers, which does not link Tauri or WebKit:
-# `cargo build --no-default-features --features host --bin sirus-host`.
+# The headless `sirus-host` (ADR-131): the back end the Sirus window and the phone talk to.
 [features]
-default = ["desktop"]
-desktop = [
-    "dep:tauri",
-    "dep:tauri-build",
-    "dep:tauri-plugin-opener",
-    "dep:tauri-plugin-dialog",
-    "dep:tauri-plugin-window-state",
-    "dep:tauri-plugin-deep-link",
-    "dep:tauri-plugin-updater",
-]
+default = ["host"]
 # The host checks native visual programs with the real interpreter (visual_check).
 host = ["dep:rquickjs"]
-
-[[bin]]
-name = "sirus-code"
-path = "src/main.rs"
-required-features = ["desktop"]
 
 [[bin]]
 name = "sirus-host"
 path = "src/bin/sirus-host.rs"
 required-features = ["host"]
 
-[build-dependencies]
-tauri-build = { version = "2", features = [], optional = true }
-
 [dependencies]
-tauri = { version = "2", features = ["macos-private-api", "image-png"], optional = true }
-tauri-plugin-opener = { version = "2", optional = true }
-tauri-plugin-dialog = { version = "2", optional = true }
 # The file pane follows changes on disk (ADR-109).
 notify = { version = "8.2", default-features = false, features = ["macos_fsevent"] }
-tauri-plugin-window-state = { version = "2", optional = true }
-# `sirus://new?prompt=…` prompt links (ADR-122).
-tauri-plugin-deep-link = { version = "2", optional = true }
-# In-app updates, driven from Rust only (ADR-140); the renderer gets no updater permission.
-tauri-plugin-updater = { version = "2", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rquickjs = { version = "0.14.0", optional = true }
@@ -85,22 +56,16 @@ toml_edit = "0.25"
 regex = "1"
 axum = { version = "0.8.9", default-features = false, features = ["ws", "http1", "tokio", "json", "query"] }
 qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
-web-push-native = "0.5"
 tower-http = { version = "0.6", default-features = false, features = ["compression-gzip", "compression-br"] }
-# The Devices pane relays the device hub's input socket (ADR-128).
-tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect"] }
-futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-avf-audio = { version = "0.3.2", default-features = false, features = ["AVAudioEngine", "AVAudioNode", "AVAudioFormat", "AVAudioBuffer", "AVAudioFile", "AVAudioTime", "AVAudioTypes", "AVAudioIONode", "AVAudioApplication", "block2"] }
 objc2 = "0.6.4"
 # Connector sign-ins in the Keychain (already in the tree through TLS).
 security-framework = "3"
-global-hotkey = "0.8"
 objc2-user-notifications = { version = "0.3.2", default-features = false, features = ["std", "block2", "bitflags", "UNUserNotificationCenter", "UNNotification", "UNNotificationContent", "UNNotificationRequest", "UNNotificationTrigger", "UNNotificationResponse", "UNNotificationSettings", "UNNotificationSound"] }
 speech = "0.9"
 block2 = "0.6.2"
-objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std", "objc2-core-foundation", "objc2-app-kit", "block2", "WKWebView", "WKWebViewConfiguration", "WKWebsiteDataStore", "WKHTTPCookieStore", "WKNavigation", "WKNavigationDelegate", "WKNavigationAction", "WKNavigationResponse", "WKPreferences", "WKScriptMessage", "WKUserContentController", "WKUserScript", "WKSnapshotConfiguration", "WKUIDelegate", "WKWindowFeatures", "WKUserScript", "WKUserContentController", "WKContentWorld", "WKFrameInfo", "WKWebsiteDataRecord", "WKScriptMessageHandler"] }
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["block2", "NSSound", "NSEvent", "NSOpenPanel", "NSSavePanel", "NSPasteboard", "NSPasteboardItem", "NSBitmapImageRep", "NSImageRep", "NSImage", "NSResponder", "NSWindow", "NSWorkspace", "NSView", "NSApplication", "NSAppearance", "NSColor", "NSVisualEffectView", "NSUserInterfaceItemIdentification", "NSPanel", "NSButton", "NSButtonCell", "NSControl", "NSCell", "NSTextField", "NSText", "NSBox", "NSScreen", "NSRunningApplication", "NSFont", "NSGraphics", "NSGlassEffectView", "NSFontDescriptor", "NSLayoutConstraint", "libc"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSBundle", "NSEnumerator", "NSArray", "NSDictionary", "NSData", "NSString", "NSURL", "NSURLRequest", "NSGeometry", "NSProcessInfo", "NSError", "NSValue", "NSFileManager", "NSUserDefaults", "NSNotification", "NSSet", "NSDate", "NSHTTPCookie"] }
 # Computer use: Accessibility, per-process input, window screenshots.
@@ -112,11 +77,9 @@ objc2-screen-capture-kit = { version = "0.3.2", default-features = false, featur
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
-# The debug app decodes and encodes pasted screenshots: keep the image codecs fast there too.
-# The daily desktop app is built with this profile (`npm run build:desktop`), so it is
-# optimized: the app at opt-level 1 (quick incremental rebuilds), every dependency at 2,
-# and only line tables for debug info (smaller binary, less memory).
-# which ships optimized builds; the full release profile stays for distribution.
+# The debug host decodes and encodes pasted screenshots: keep the image codecs fast there too.
+# Dependencies build at opt-level 2 and the host itself at 1 (quick incremental rebuilds), with
+# only line tables for debug info (smaller binary, less memory).
 [profile.dev]
 opt-level = 1
 debug = "line-tables-only"

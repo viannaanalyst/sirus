@@ -1,7 +1,0 @@
-@layer components {
-  /* ⌘F find bar: floats over the top of the current conversation. */
-  .find-bar { position: absolute; z-index: 25; top: 8px; right: 16px; display: flex; align-items: center; gap: 4px; width: min(420px, calc(100% - 32px)); height: 40px; padding: 0 6px 0 12px; border: 1px solid var(--border-default); border-radius: 12px; background: var(--floating-material, var(--background-elevated)); backdrop-filter: blur(24px); box-shadow: var(--shadow-float); transform-origin: top right; }
-  .find-bar-input { flex: 1; min-width: 0; height: 100%; padding: 0 4px; background: transparent; border: 0; outline: none; color: var(--text-primary); }
-  .find-bar-input::-webkit-search-cancel-button { display: none; }
-  .find-bar-input::placeholder { color: var(--text-muted); }
-}

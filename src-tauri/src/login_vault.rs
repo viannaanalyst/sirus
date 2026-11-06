@@ -837,38 +837,31 @@ fn ipc(error: String) -> Error {
     Error::new("login-vault", error)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn login_vault_list() -> IpcResult<Vec<LoginSummary>> {
     with_vault(|vault| vault.list()).map_err(ipc)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn login_vault_save(input: LoginInput) -> IpcResult<LoginSummary> {
     with_vault(|vault| vault.upsert(input)).map_err(ipc)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn login_vault_delete(id: String) -> IpcResult<()> {
     with_vault(|vault| vault.delete(&id)).map_err(ipc)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn login_vault_set_agent_use(id: String, enabled: bool) -> IpcResult<LoginSummary> {
     with_vault(|vault| vault.set_agent_use(&id, enabled)).map_err(ipc)
 }
 
 /// Logins that exactly match a page's origin (the key icon in the address bar).
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn login_vault_matches(url: String) -> IpcResult<Vec<LoginSummary>> {
     with_vault(|vault| vault.matching(&url)).map_err(ipc)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn login_vault_prompts() -> IpcResult<LoginPrompts> {
     Ok(prompts())
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn login_vault_answer_offer(
     app: AppHandle,
     id: String,
@@ -878,7 +871,6 @@ pub async fn login_vault_answer_offer(
     answer_offer(&app, &id, save, agent_use).map_err(ipc)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn login_vault_answer_approval(app: AppHandle, id: String, allow: bool) -> IpcResult<()> {
     answer_approval(&app, &id, allow).map_err(ipc)
 }

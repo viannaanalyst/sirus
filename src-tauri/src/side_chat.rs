@@ -41,7 +41,6 @@ pub enum Action {
     Open { parent_session_id: String },
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn side_chat_action(
     state: State<'_, Arc<AppState>>,
     action: Action,

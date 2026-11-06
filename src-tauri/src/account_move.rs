@@ -77,7 +77,6 @@ impl Drop for MoveGuard {
 
 /// Moves a stopped Claude or Codex session to another signed-in account of the same provider.
 /// The caller then sends the continue turn through `send_prompt`, which clears the usage limit.
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn move_session_account(
     state: State<'_, Arc<AppState>>,
     request: MoveSessionAccountRequest,

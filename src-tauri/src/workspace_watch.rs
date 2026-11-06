@@ -58,7 +58,6 @@ pub fn relevant(root: &Path, changed: &Path) -> bool {
         .any(|part| IGNORED.iter().any(|name| part.as_os_str() == *name))
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 /// Starts (or stops) following a session's workspace; returns the path its events carry.
 pub async fn workspace_watch(
     app: AppHandle,

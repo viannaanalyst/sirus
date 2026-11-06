@@ -26,8 +26,8 @@ const BAR: f32 = 40.;
 /// The side of a picture waiting in the composer.
 const DRAFT_PICTURE: f32 = 36.;
 /// The longest side of a sent picture.
-const PHOTO_SIDE: f32 = 240.;
-const PHOTO_RADIUS: f32 = 16.;
+const PHOTO_SIDE: f32 = 120.;
+const PHOTO_RADIUS: f32 = 12.;
 
 // ---- State -------------------------------------------------------------------------------
 
@@ -2675,7 +2675,7 @@ fn picture_tile(
         })
 }
 
-/// A sent picture's size: its own shape, its longest side at `PHOTO_SIDE` (Monocode's `photo`).
+/// A sent picture's size: its own shape, its longest side at `PHOTO_SIDE`.
 fn photo_size(thumb: Option<&Arc<gpui::Image>>) -> (f32, f32) {
     thread_local! {
         static SHAPES: RefCell<HashMap<usize, Option<(u32, u32)>>> = RefCell::new(HashMap::new());

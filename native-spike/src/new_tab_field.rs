@@ -118,14 +118,40 @@ thread_local! {
     static GLYPHS: OnceCell<(FontId, Vec<GlyphId>)> = const { OnceCell::new() };
 }
 
-/// The line of letters along the composer's top edge while the agent works: faint everywhere,
-/// lit and raised around the robot walking over it. `width` hands the line's width to the robot.
-pub fn ledge(
-    color: u32,
-    robot_x: f32,
-    clock: f32,
-    width: std::rc::Rc<std::cell::Cell<f32>>,
-) -> AnyElement {
+/// Seconds between the robot's hops, and how long a spark lives.
+const BEAT: f32 = std::f32::consts::PI / 6.8;
+const SPARK_LIFE: f32 = 0.9;
+const SPARKS: u32 = 4;
+
+/// A steady number from 0 to 1 for two inputs, so a spark needs no state between frames.
+fn noise(a: f32, b: f32) -> f32 {
+    ((a * 12.9898 + b * 78.233).sin() * 43758.547).rem_euclid(1.)
+}
+
+/// One spark at `clock`: where it is from the robot's starting line (x, rise above it) and how
+/// visible, or None once it has landed or faded. `beat` is the hop that threw it.
+fn spark_at(beat: u32, spark: u32, width: f32, clock: f32) -> Option<(f32, f32, f32)> {
+    let born = beat as f32 * BEAT;
+    let age = clock - born;
+    if !(0. ..SPARK_LIFE).contains(&age) {
+        return None;
+    }
+    let (b, s) = (beat as f32, spark as f32);
+    let (robot, _) = walk(width, born);
+    // Thrown back, away from the way the robot is going.
+    let back = if walk(width, born + 0.01).0 >= robot {
+        -1.
+    } else {
+        1.
+    };
+    let x = robot + 13. + (noise(b, s) - 0.5) * 10. + back * (10. + noise(s, b) * 26.) * age;
+    let rise = 3. + (22. + noise(b, s + 9.) * 26.) * age - 58. * age * age;
+    (rise > 1.).then_some((x, rise, (1. - age / SPARK_LIFE) * 0.9))
+}
+
+/// The letters that jump as the robot hops along the composer's top edge while the agent works.
+/// `width` hands the line's width to the robot's walk.
+pub fn sparks(color: u32, clock: f32, width: std::rc::Rc<std::cell::Cell<f32>>) -> AnyElement {
     let tint = Hsla::from(Rgba {
         r: ((color >> 16) & 0xff) as f32 / 255.,
         g: ((color >> 8) & 0xff) as f32 / 255.,
@@ -136,26 +162,28 @@ pub fn ledge(
         |_, _, _| {},
         move |bounds: Bounds<Pixels>, _, window: &mut Window, _: &mut App| {
             let (left, bottom) = (f32::from(bounds.origin.x), f32::from(bounds.bottom()));
-            width.set(f32::from(bounds.size.width));
+            let across = f32::from(bounds.size.width);
+            width.set(across);
             let (font_id, ids) = GLYPHS.with(|cell| cell.get_or_init(|| glyphs(window)).clone());
             if ids.is_empty() {
                 return;
             }
-            let mut x = 10.;
-            while x < f32::from(bounds.size.width) - 8. {
-                let (near, lift) = ledge_cell(x, robot_x, clock);
-                let at = ((near * ids.len() as f32) as usize).min(ids.len() - 1);
-                let _ = window.paint_glyph(
-                    point(px(left + x), px(bottom - 4. - lift)),
-                    font_id,
-                    ids[at],
-                    px(FONT_SIZE),
-                    Hsla {
-                        a: 0.1 + near * 0.8,
-                        ..tint
-                    },
-                );
-                x += LEDGE_STEP;
+            let now = (clock / BEAT) as u32;
+            for beat in now.saturating_sub((SPARK_LIFE / BEAT) as u32 + 1)..=now {
+                for spark in 0..SPARKS {
+                    let Some((x, rise, alpha)) = spark_at(beat, spark, across, clock) else {
+                        continue;
+                    };
+                    let letter =
+                        (noise(spark as f32 + 2., beat as f32) * ids.len() as f32) as usize;
+                    let _ = window.paint_glyph(
+                        point(px(left + x), px(bottom - rise)),
+                        font_id,
+                        ids[letter.min(ids.len() - 1)],
+                        px(FONT_SIZE),
+                        Hsla { a: alpha, ..tint },
+                    );
+                }
             }
         },
     )
@@ -164,14 +192,6 @@ pub fn ledge(
     .left_0()
     .size_full()
     .into_any_element()
-}
-
-const LEDGE_STEP: f32 = 6.;
-
-/// How lit a letter of the ledge is, 0 to 1, and how far it rises, from its distance to the robot.
-fn ledge_cell(x: f32, robot_x: f32, clock: f32) -> (f32, f32) {
-    let near = (-(x - (robot_x + 13.)).powi(2) / 2600.).exp();
-    (near, near * 9. + (x * 0.09 + clock * 2.).sin() * 0.5)
 }
 
 /// Where the robot walks along a line `width` wide, there and back at 110 px/s, and its hop.
@@ -384,9 +404,13 @@ mod tests {
     }
 
     #[test]
-    fn the_ledge_is_lit_near_the_robot_only() {
-        assert!(ledge_cell(113., 100., 0.).0 > 0.9);
-        assert!(ledge_cell(400., 100., 0.).0 < 0.01);
+    fn a_spark_rises_fades_and_lands() {
+        let beat = 40;
+        let born = beat as f32 * BEAT;
+        assert!(spark_at(beat, 0, 600., born - 0.1).is_none());
+        let (_, rise, alpha) = spark_at(beat, 0, 600., born + 0.1).unwrap();
+        assert!(rise > 1. && alpha > 0.7);
+        assert!(spark_at(beat, 0, 600., born + SPARK_LIFE).is_none());
     }
 
     #[test]

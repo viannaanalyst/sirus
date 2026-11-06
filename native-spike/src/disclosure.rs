@@ -46,6 +46,8 @@ pub(crate) fn ease(t: f32) -> f32 {
 pub(crate) struct Disclosure {
     child: AnyElement,
     width: Pixels,
+    /// The height at progress 0, for a fold that never closes fully.
+    floor: Pixels,
     progress: f32,
 }
 
@@ -54,7 +56,21 @@ impl Disclosure {
         Self {
             child: child.into_any_element(),
             width,
+            floor: gpui::px(0.),
             progress,
+        }
+    }
+
+    /// Between `floor` (or the child's height, if shorter) and the child's full height.
+    pub(crate) fn from_height(
+        child: impl IntoElement,
+        width: Pixels,
+        floor: Pixels,
+        progress: f32,
+    ) -> Self {
+        Self {
+            floor,
+            ..Self::new(child, width, progress)
         }
     }
 }
@@ -92,7 +108,8 @@ impl Element for Disclosure {
         );
         let mut style = Style::default();
         style.size.width = self.width.into();
-        style.size.height = (natural.height * self.progress).into();
+        let floor = self.floor.min(natural.height);
+        style.size.height = (floor + (natural.height - floor) * self.progress).into();
         (window.request_layout(style, [], cx), ())
     }
     fn prepaint(

@@ -1,4 +1,6 @@
-//! One sliding hover highlight per list, after the web app's SidebarHoverTrack.
+//! One sliding hover highlight per list, after the web app's SidebarHoverTrack. This is the app's
+//! hover for anything in a list: 130 ms between rows, 110 ms to appear or leave (ADR-197). A lone
+//! button has no neighbour to slide from, so it keeps a plain `.hover` fill.
 //!
 //! A list owns one quiet pill that glides between hovered rows instead of each row lighting
 //! up on its own. The first hover appears in place and only later moves slide, so the list
@@ -25,8 +27,8 @@ use std::time::Instant;
 pub const FILL: f32 = 0.07;
 const RADIUS: f32 = crate::theme::RADIUS_MD;
 /// The web pill: 320 ms moves (--motion-slow), 140 ms fades (--motion-fast), ease-out.
-const SLIDE: f32 = 0.32;
-const FADE: f32 = 0.14;
+const SLIDE: f32 = 0.13;
+const FADE: f32 = 0.11;
 const CURVE: Curve = Curve::Expo;
 
 #[derive(Clone, Copy, PartialEq, Debug, Default)]

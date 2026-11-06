@@ -1093,6 +1093,9 @@ pub struct Shell {
     composer_layout: std::cell::RefCell<Option<TextLayout>>,
     /// Groups of steps the person opened or closed: (conversation, turn, first step).
     phase_open: HashMap<(usize, usize, usize), bool>,
+    /// When each prompt last folded or unfolded, and its bubble's width.
+    prompt_moved: HashMap<(usize, usize), Instant>,
+    prompt_widths: std::cell::RefCell<HashMap<(usize, usize), Rc<Cell<Pixels>>>>,
     /// When each group of steps last changed between open and closed, and those running now.
     phase_moved: std::cell::RefCell<HashMap<(usize, usize, usize), Instant>>,
     phase_live: std::cell::RefCell<HashSet<(usize, usize, usize)>>,
@@ -1428,6 +1431,8 @@ impl Shell {
             ignored_text: String::new(),
             composer_layout: Default::default(),
             phase_open: HashMap::new(),
+            prompt_moved: HashMap::new(),
+            prompt_widths: Default::default(),
             phase_moved: Default::default(),
             phase_live: Default::default(),
             turn_width: Rc::new(Cell::new(px(0.))),
@@ -6459,8 +6464,14 @@ impl Shell {
                 .flex()
                 .flex_col()
                 .child(this.project_header(cx))
-                .children(this.sidebar_new(cx))
-                .children(this.sidebar_pulls(cx))
+                .child(
+                    div()
+                        .relative()
+                        .flex_shrink_0()
+                        .child(crate::hover_track::list("sidebar-nav").pill())
+                        .children(this.sidebar_new(cx))
+                        .children(this.sidebar_pulls(cx)),
+                )
                 .child(
                     div()
                         .relative()
@@ -8961,7 +8972,7 @@ impl Shell {
             .text_color(content(if active { 1. } else { 0.5 }))
             .cursor_pointer()
             .when(active, |d| d.bg(content(0.1)))
-            .hover(|s| s.bg(content(0.1)).text_color(content(1.)))
+            .hover(|s| s.text_color(content(1.)))
     }
 
     /// "New" (⌘T), at the top of the sidebar: opens a new conversation.
@@ -8975,7 +8986,8 @@ impl Shell {
                 .px(px(6.))
                 .pt(px(4.))
                 .child(
-                    Self::sidebar_nav_row("sidebar-new", false)
+                    crate::hover_track::list("sidebar-nav")
+                        .row_named(Self::sidebar_nav_row("sidebar-new", false), "new", false)
                         .on_click(cx.listener(|this, _, _, cx| this.new_conversation(None, cx)))
                         .child(icon("square-plus", 16.).text_color(content(0.35)))
                         .child(div().flex_1().min_w_0().truncate().child(t("Novo")))
@@ -9004,7 +9016,8 @@ impl Shell {
                 .px(px(6.))
                 .pb(px(6.))
                 .child(
-                    Self::sidebar_nav_row("sidebar-pulls", active)
+                    crate::hover_track::list("sidebar-nav")
+                        .row_named(Self::sidebar_nav_row("sidebar-pulls", active), "pulls", active)
                         .on_click(cx.listener(|this, _, _, cx| this.open_pull_requests(cx)))
                         .child(icon("git-pull-request", 16.).text_color(content(if active {
                             0.7
@@ -9098,7 +9111,7 @@ impl Shell {
             .map(|(at, item)| {
                 let on = self.sidebar_items.shown(item.id);
                 let id = item.id;
-                div()
+                let row = div()
                     .id(("sidebar-option", at))
                     .h(px(28.))
                     .px(px(8.))
@@ -9109,7 +9122,6 @@ impl Shell {
                     .text_size(px(13.))
                     .text_color(content(0.92))
                     .cursor_pointer()
-                    .hover(|s| s.bg(content(0.07)))
                     .child(icon(item.icon, 14.).text_color(content(0.65)))
                     .child(div().flex_1().min_w_0().truncate().child(t(item.label)))
                     // Monocode's menu switch: neutral, never the accent.
@@ -9135,7 +9147,8 @@ impl Shell {
                         this.sidebar_items.toggle(id);
                         crate::sidebar_items::save(&this.sidebar_items);
                         cx.notify();
-                    }))
+                    }));
+                crate::hover_track::list("sidebar-options").row(row, at, false)
             });
         const WIDTH: f32 = 184.;
         Some(
@@ -9156,6 +9169,7 @@ impl Shell {
                 .child(crate::theme::floating_surface(crate::theme::RADIUS_LG))
                 .shadow_lg()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(crate::hover_track::list("sidebar-options").pill())
                 .children(rows)
                 .into_any_element(),
         )
@@ -10804,9 +10818,8 @@ impl Shell {
                 .left_0()
                 .right_0()
                 .h(px(34.))
-                .child(crate::new_tab_field::ledge(
+                .child(crate::new_tab_field::sparks(
                     color,
-                    x,
                     clock,
                     self.runner_width.clone(),
                 ))
@@ -12317,6 +12330,24 @@ impl Shell {
         let prompt_collapsed = prompt_overflows && !self.expanded_prompts.contains(&prompt_key);
         let agents = self.subagent_card(conversation, index, turn, provider, now, moving, cx);
         let width_store = self.turn_width.clone();
+        // Show more slides the bubble open and closed.
+        let prompt_motion = self
+            .prompt_moved
+            .get(&prompt_key)
+            .map(|at| now.duration_since(*at).as_secs_f32())
+            .filter(|since| *since < crate::disclosure::REVEAL)
+            .map(|since| {
+                *moving = true;
+                let eased = crate::disclosure::settle(since / crate::disclosure::REVEAL);
+                if prompt_collapsed { 1. - eased } else { eased }
+            });
+        let width_cell = self
+            .prompt_widths
+            .borrow_mut()
+            .entry(prompt_key)
+            .or_insert_with(|| Rc::new(Cell::new(px(0.))))
+            .clone();
+        let bubble_width = width_cell.get() - px(24.);
         div()
             .group(format!("turn-actions-{index}"))
             .relative()
@@ -12357,7 +12388,8 @@ impl Shell {
                                     .child(
                                         gpui::canvas(
                                             |_, _, _| {},
-                                            |bounds, _, window, _| {
+                                            move |bounds, _, window, _| {
+                                                width_cell.set(bounds.size.width);
                                                 let radius = if bounds.size.height <= px(37.) {
                                                     f32::from(bounds.size.height) * 0.5
                                                 } else {
@@ -12374,10 +12406,8 @@ impl Shell {
                                         .left_0()
                                         .size_full(),
                                     )
-                                    // Four lines while folded; Show more stays inside the bubble.
-                                    .child(div().when(prompt_collapsed, |d| {
-                                        d.max_h(px(80.)).overflow_hidden()
-                                    }).child(transcript_select::user_text(
+// Four lines while folded; Show more stays inside the bubble.
+                                    .child(prompt_frame(prompt_motion, bubble_width, prompt_collapsed, transcript_select::user_text(
                                         &self.select,
                                         transcript_select::Reply {
                                             conversation,
@@ -12411,6 +12441,7 @@ impl Shell {
                                         if !this.expanded_prompts.remove(&prompt_key) {
                                             this.expanded_prompts.insert(prompt_key);
                                         }
+                                        this.prompt_moved.insert(prompt_key, Instant::now());
                                         cx.notify();
                                     }))))
                         })
@@ -13175,20 +13206,25 @@ impl Shell {
         let (added, removed) = self.diff_stat();
         let (add_color, remove_color) = diff_colors(self.look.diff);
         let row = |id: &'static str, glyph: &'static str, label: String| {
-            div()
-                .id(id)
-                .h(px(26.))
-                .px(px(7.))
-                .rounded(px(crate::theme::RADIUS_MD))
-                .flex()
-                .items_center()
-                .gap(px(7.))
-                .text_size(px(12.5))
-                .text_color(content(0.75))
-                .hover(|s| s.bg(content(0.07)).text_color(content(1.)))
-                .cursor_pointer()
-                .child(icon(glyph, 14.).text_color(content(0.5)))
-                .child(div().flex_1().min_w_0().truncate().child(label))
+            crate::hover_track::list("environment").row_named(
+                div()
+                    .id(id)
+                    .relative()
+                    .h(px(26.))
+                    .px(px(7.))
+                    .rounded(px(crate::theme::RADIUS_MD))
+                    .flex()
+                    .items_center()
+                    .gap(px(7.))
+                    .text_size(px(12.5))
+                    .text_color(content(0.75))
+                    .hover(|s| s.text_color(content(1.)))
+                    .cursor_pointer()
+                    .child(icon(glyph, 14.).text_color(content(0.5)))
+                    .child(div().flex_1().min_w_0().truncate().child(label)),
+                id,
+                false,
+            )
         };
         let value = |text: String| {
             div()
@@ -13548,6 +13584,7 @@ impl Shell {
                 .flex()
                 .flex_col()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(crate::hover_track::list("environment").pill())
                 .children(rows)
                 .into_any_element(),
         )
@@ -14018,6 +14055,7 @@ impl Shell {
                                             .opacity(page_t)
                                             .w_full()
                                             .max_w(px(crate::settings_pages::CONTENT_WIDTH))
+                                            .mx_auto()
                                             .pt(px(16.))
                                             .pb(px(40.))
                                             .px(px(crate::settings_pages::CONTENT_INSET))
@@ -15088,6 +15126,25 @@ fn step_line(step: &data::Step) -> crate::step_lines::Line {
 }
 
 /// What a tool acted on, in the tree: a small mono chip.
+/// A prompt's text: four lines when folded, whole when not, and in between while it slides.
+fn prompt_frame(motion: Option<f32>, width: Pixels, collapsed: bool, text: AnyElement) -> AnyElement {
+    match motion {
+        Some(progress) if width > px(0.) => div()
+            .overflow_hidden()
+            .child(crate::disclosure::Disclosure::from_height(
+                text,
+                width,
+                px(80.),
+                progress,
+            ))
+            .into_any_element(),
+        _ => div()
+            .when(collapsed, |d| d.max_h(px(80.)).overflow_hidden())
+            .child(text)
+            .into_any_element(),
+    }
+}
+
 /// The first fold key among `phase_open`'s (conversation, turn, key); below it are step indexes.
 const FOLD_KEY: usize = 1 << 40;
 

@@ -99,6 +99,9 @@ impl Shell {
     }
 
     fn show_bottom(&mut self, cx: &mut Context<Self>) {
+        if self.this_mac_only(cx) {
+            return;
+        }
         self.ensure_pane_view(0, cx);
         self.term.bottom_open = true;
         cx.notify();
@@ -106,6 +109,9 @@ impl Shell {
 
     /// ⌘J and ⇧⌘J (Split Terminal Right).
     pub(super) fn term_shortcut(&mut self, split: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.this_mac_only(cx) {
+            return;
+        }
         let focused = self.term.active.is_some();
         match terminal_place::shortcut(self.term.placement, split, focused) {
             Action::OpenSide => self.open_pane(0, cx),
@@ -163,6 +169,9 @@ impl Shell {
     }
 
     fn new_title_terminal(&mut self, window: Option<&mut Window>, cx: &mut Context<Self>) {
+        if self.this_mac_only(cx) {
+            return;
+        }
         let cwd = self.conversations[self.active_conversation()].worktree.clone();
         let view = cx.new(|cx| TerminalGroup::new(cwd, cx));
         let id = self.term.next_id;

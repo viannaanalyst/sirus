@@ -79,6 +79,10 @@ pub(crate) mod handoff;
 
 #[path = "prompt_link.rs"]
 pub(crate) mod prompt_link;
+#[path = "computer_switch.rs"]
+pub(crate) mod computer_switch;
+#[path = "computer_ui.rs"]
+pub(crate) mod computer_ui;
 /// The changed files under a finished reply, opened in place (turn_review.rs).
 #[path = "turn_review.rs"]
 mod turn_review;
@@ -1152,6 +1156,8 @@ pub struct Shell {
     frames: VecDeque<Instant>,
     show_stats: bool,
     first_run: first_run::State,
+    /// The computers of the window and the active one (computer_switch.rs).
+    computers: computer_switch::State,
 }
 
 impl Shell {
@@ -1181,6 +1187,14 @@ impl Shell {
         cx.spawn(async move |this, cx| {
             while let Ok((key, value)) = native_rx.recv().await {
                 let done = this.update(cx, |this, cx| {
+                    if key == "computer_pair" {
+                        this.computer_paired(&value, cx);
+                        return;
+                    }
+                    if key == "computer_move" {
+                        this.computer_moved(&value, cx);
+                        return;
+                    }
                     this.settings_data.insert(key, value);
                     cx.notify();
                 });
@@ -1432,6 +1446,7 @@ impl Shell {
             frames: VecDeque::new(),
             show_stats: false,
             first_run: Default::default(),
+            computers: computer_switch::State::new(),
         };
         shell.tabs.push(Tab {
             id: 1,
@@ -1469,7 +1484,11 @@ impl Shell {
     fn receive(&mut self, message: Incoming, cx: &mut Context<Self>) {
         match message {
             Incoming::Problem(problem) => self.problem = Some(problem),
-            Incoming::Ready(state) => self.load_state(state, cx),
+            Incoming::Ready(state) => {
+                self.load_state(state, cx);
+                self.computer_arrived(cx);
+            }
+            Incoming::Link { id, status } => self.computer_link(&id, status, cx),
             Incoming::Reply { id, ok, value } => match self.waiting.remove(&id) {
                 Some(Waiting::CliAgents) if ok => self.cli_agents_arrived(value, cx),
                 Some(Waiting::CliAgents) => self.problem = Some(error_text(&value)),
@@ -1856,13 +1875,18 @@ impl Shell {
         self.connected = true;
         self.problem = None;
         self.settings = state["settings"].clone();
-        let repaired = crate::settings_pages::repair_provider_paths(&mut self.settings);
-        if crate::chat_background::seed_monocode_default(&mut self.settings) || repaired {
+        // These two fix up this Mac's own settings; another computer's are left as they are.
+        let remote = self.on_remote();
+        let repaired = !remote && crate::settings_pages::repair_provider_paths(&mut self.settings);
+        if !remote && (crate::chat_background::seed_monocode_default(&mut self.settings) || repaired) {
             self.backend
                 .invoke("save_settings", json!({ "settings": self.settings }));
         }
         crate::panel_browser::note_settings(&self.settings);
-        crate::i18n::set_locale(self.settings["locale"].as_str().unwrap_or("pt-BR"));
+        // The window keeps this Mac's language and look whichever computer it shows.
+        if !remote {
+            crate::i18n::set_locale(self.settings["locale"].as_str().unwrap_or("pt-BR"));
+        }
         self.provider_accounts = state["providerAccounts"].clone();
         self.selected_accounts = if state["selectedProviderAccounts"].is_object() {
             state["selectedProviderAccounts"].clone()
@@ -2228,6 +2252,7 @@ impl Shell {
     }
 
     fn load_settings_page(&mut self) {
+        self.publish_computers();
         if self.settings_page == "Provedores" {
             self.refresh_cli_diagnostics();
         }
@@ -2505,6 +2530,7 @@ impl Shell {
                 let id = self.backend.invoke(command, args);
                 self.waiting.insert(id, Waiting::SettingsData("remote"));
             }
+            name if name.starts_with("native_computer_") => self.computer_command(name, &args, cx),
             name if name.starts_with("native_pair_") => {
                 let known = self.settings_data["remote"]["devices"]
                     .as_array()
@@ -3563,6 +3589,10 @@ impl Shell {
     }
 
     fn refresh_diff(&self) {
+        // This Mac's `git` cannot read a path on another computer.
+        if self.on_remote() {
+            return;
+        }
         let path = self.conversations[self.active_conversation()]
             .worktree
             .clone();
@@ -3586,6 +3616,9 @@ impl Shell {
     }
 
     fn refresh_files(&self) {
+        if self.on_remote() {
+            return;
+        }
         let path = self.conversations[self.active_conversation()]
             .worktree
             .clone();
@@ -5260,6 +5293,9 @@ impl Shell {
     }
 
     fn pick_attachments(&mut self, cx: &mut Context<Self>) {
+        if self.this_mac_only(cx) {
+            return;
+        }
         let paths = cx.prompt_for_paths(gpui::PathPromptOptions {
             files: true,
             directories: true,
@@ -5277,6 +5313,9 @@ impl Shell {
     /// The microphone: records on the back end; stopping brings the text into the composer.
     /// Screenshots a window the person picks, then attaches it (`screencapture -iw`).
     fn attach_window(&mut self, cx: &mut Context<Self>) {
+        if self.this_mac_only(cx) {
+            return;
+        }
         let path = std::env::temp_dir().join(format!("sirus-janela-{}.png", uuid()));
         let (tx, rx) = async_channel::bounded(1);
         let shot = path.clone();
@@ -7042,6 +7081,7 @@ impl Shell {
                                 fork.opacity(0.4).into_any_element()
                             }
                         })
+                        .children(self.move_menu_items(index, cx))
                         .child(divider())
                         .child(
                             div()
@@ -7560,6 +7600,9 @@ impl Shell {
 
     fn add_new_project(&mut self, cx: &mut Context<Self>) {
         self.close_project_menu();
+        if self.this_mac_only(cx) {
+            return;
+        }
         let paths = cx.prompt_for_paths(gpui::PathPromptOptions {
             files: false,
             directories: true,
@@ -8176,6 +8219,7 @@ impl Shell {
                             .child(crate::hover_track::list("project-list").pill())
                             .children(list),
                     )
+                    .children(self.computers_menu(cx))
                     .child(
                         div()
                             .border_t_1()
@@ -8206,7 +8250,7 @@ impl Shell {
                 (
                     300.,
                     40.,
-                    42. + 8. + 40. * count + 42.,
+                    42. + 8. + 40. * count + 42. + self.computers_menu_height(),
                     body.into_any_element(),
                 )
             }
@@ -8396,7 +8440,9 @@ impl Shell {
                         let session = session.clone();
                         sub_row(("project-editor", at), label, false)
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                this.backend.invoke("open_in_editor", json!({ "sessionId": session, "editor": editor, "path": Value::Null }));
+                                if !this.this_mac_only(cx) {
+                                    this.backend.invoke("open_in_editor", json!({ "sessionId": session, "editor": editor, "path": Value::Null }));
+                                }
                                 this.close_project_menu();
                                 cx.notify();
                             })).into_any_element()
@@ -11280,6 +11326,7 @@ impl Shell {
                         |(text, _)| text.clone(),
                     )),
             )
+            .when_some(self.computer_chip(cx), |d, chip| d.child(chip))
             .when_some(self.problem.clone(), |d, problem| {
                 d.child(
                     div()
@@ -11707,6 +11754,10 @@ impl Shell {
     }
 
     fn open_pane(&mut self, kind: usize, cx: &mut Context<Self>) {
+        // Terminal, Files and Changes work on this Mac's folders.
+        if kind <= 2 && self.this_mac_only(cx) {
+            return;
+        }
         if kind == 0 && self.term_redirect(cx) {
             return;
         }
@@ -12653,7 +12704,9 @@ impl Shell {
                 let (editor, editor_session) = (id.clone(), session.clone());
                 div().id(("env-editor", i)).h(px(26.)).px(px(6.)).rounded(px(crate::theme::RADIUS_SM)).flex().items_center().gap(px(7.)).text_size(px(12.)).text_color(content(0.8)).cursor_pointer().hover(|s| s.bg(content(0.07)))
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.backend.invoke("open_in_editor", json!({ "sessionId": editor_session, "editor": editor, "path": Value::Null }));
+                        if !this.this_mac_only(cx) {
+                            this.backend.invoke("open_in_editor", json!({ "sessionId": editor_session, "editor": editor, "path": Value::Null }));
+                        }
                         this.environment = None;
                         cx.notify();
                     }))

@@ -5,14 +5,14 @@
 //! Old Claude conversations start a fresh CLI thread here; their history still shows.
 use crate::i18n::{t, tf};
 use serde_json::{Value, json};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 use tungstenite::Message;
 
 /// The window's own connection: loopback only, always on.
@@ -39,23 +39,119 @@ pub enum Incoming {
         payload: Value,
     },
     Problem(String),
+    /// Where the connection to another computer is.
+    Link {
+        id: String,
+        status: crate::computers::Status,
+    },
 }
 
-type Waiters = std::sync::Arc<Mutex<HashMap<u64, async_channel::Sender<Result<Value, Value>>>>>;
+type Waiter = async_channel::Sender<Result<Value, Value>>;
 type Listeners = std::sync::Arc<Mutex<Vec<(String, async_channel::Sender<Value>)>>>;
+
+/// One connection's queue of frames to send and the callers waiting for replies.
+#[derive(Default)]
+struct Link {
+    outgoing: Mutex<VecDeque<String>>,
+    waiters: Mutex<HashMap<u64, Waiter>>,
+    /// Ids of this Mac's own commands (`computers::runs_here`) sent while another computer is
+    /// active: their replies still reach the window.
+    always: Mutex<HashSet<u64>>,
+    /// Another computer's link only: connected and past `hello`.
+    open: AtomicBool,
+}
+
+impl Link {
+    fn push(&self, frame: String) {
+        self.outgoing.lock().unwrap().push_back(frame);
+    }
+
+    /// Fails everything waiting and forgets what was queued: a command never outlives the
+    /// connection it was meant for.
+    fn drop_pending(&self) {
+        self.outgoing.lock().unwrap().clear();
+        self.always.lock().unwrap().clear();
+        let waiters: Vec<Waiter> = self.waiters.lock().unwrap().drain().map(|(_, w)| w).collect();
+        for waiter in waiters {
+            let _ = waiter.try_send(Err(lost()));
+        }
+    }
+}
+
+fn lost() -> Value {
+    json!({ "code": "remote", "message": t("A conexão com o computador caiu.") })
+}
+
+/// The one connection to another computer, and the signal that ends it.
+struct Remote {
+    stop: std::sync::Arc<AtomicBool>,
+}
 
 #[derive(Clone)]
 pub struct Backend {
-    outgoing: std::sync::Arc<Mutex<VecDeque<String>>>,
-    waiters: Waiters,
+    local: std::sync::Arc<Link>,
+    /// The link of the current connection to another computer; each connection gets a fresh
+    /// one, so a connection that is ending can never send what was queued for the next.
+    remote: std::sync::Arc<Mutex<std::sync::Arc<Link>>>,
+    /// The active computer's id; `None` is this Mac. Commands go to its link, except this
+    /// Mac's own (`computers::runs_here`), which always go to the local one.
+    active: std::sync::Arc<Mutex<Option<String>>>,
+    control: std::sync::Arc<Mutex<Option<Remote>>>,
     listeners: Listeners,
+    notify: async_channel::Sender<Incoming>,
+}
+
+/// Whether an event from a connection reaches the window: this Mac's own events always come
+/// from it, everything else from the active computer's connection only.
+fn event_accepted(active_is_remote: bool, from_remote: bool, event: &str) -> bool {
+    if crate::computers::event_is_local(event) {
+        !from_remote
+    } else {
+        from_remote == active_is_remote
+    }
 }
 
 impl Backend {
+    /// The link a command runs on, and whether it is another computer's.
+    fn route(&self, cmd: &str) -> (std::sync::Arc<Link>, bool) {
+        let remote = self.active.lock().unwrap().is_some() && !crate::computers::runs_here(cmd);
+        if remote {
+            (self.remote_link(), true)
+        } else {
+            (self.local.clone(), false)
+        }
+    }
+
+    fn remote_link(&self) -> std::sync::Arc<Link> {
+        self.remote.lock().unwrap().clone()
+    }
+
+    fn frame(id: u64, cmd: &str, args: Value) -> String {
+        json!({ "type": "invoke", "id": id, "cmd": cmd, "args": args }).to_string()
+    }
+
+    /// Queues a frame; false (and nothing queued) when another computer's link is not open.
+    fn send(&self, cmd: &str, id: u64, frame: String) -> bool {
+        let (link, remote) = self.route(cmd);
+        if remote && !link.open.load(Ordering::SeqCst) {
+            return false;
+        }
+        if !remote && crate::computers::runs_here(cmd) {
+            link.always.lock().unwrap().insert(id);
+        }
+        link.push(frame);
+        true
+    }
+
     pub fn invoke(&self, cmd: &str, args: Value) -> u64 {
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-        let frame = json!({ "type": "invoke", "id": id, "cmd": cmd, "args": args }).to_string();
-        self.outgoing.lock().unwrap().push_back(frame);
+        if !self.send(cmd, id, Self::frame(id, cmd, args)) {
+            let _ = self.notify.try_send(Incoming::Reply {
+                id,
+                ok: false,
+                value: lost(),
+            });
+        }
         id
     }
 
@@ -63,9 +159,25 @@ impl Backend {
     pub fn request(&self, cmd: &str, args: Value) -> async_channel::Receiver<Result<Value, Value>> {
         let (tx, rx) = async_channel::bounded(1);
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-        self.waiters.lock().unwrap().insert(id, tx);
-        let frame = json!({ "type": "invoke", "id": id, "cmd": cmd, "args": args }).to_string();
-        self.outgoing.lock().unwrap().push_back(frame);
+        let (link, _) = self.route(cmd);
+        link.waiters.lock().unwrap().insert(id, tx.clone());
+        if !self.send(cmd, id, Self::frame(id, cmd, args)) {
+            link.waiters.lock().unwrap().remove(&id);
+            let _ = tx.try_send(Err(lost()));
+        }
+        rx
+    }
+
+    /// Runs a command on this Mac whatever computer is active (a move's target).
+    pub fn request_local(
+        &self,
+        cmd: &str,
+        args: Value,
+    ) -> async_channel::Receiver<Result<Value, Value>> {
+        let (tx, rx) = async_channel::bounded(1);
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        self.local.waiters.lock().unwrap().insert(id, tx);
+        self.local.push(Self::frame(id, cmd, args));
         rx
     }
 
@@ -73,26 +185,312 @@ impl Backend {
     pub fn subscribe(&self, event: &str) -> async_channel::Receiver<Value> {
         let (tx, rx) = async_channel::unbounded();
         self.listeners.lock().unwrap().push((event.to_owned(), tx));
-        self.outgoing
-            .lock()
-            .unwrap()
-            .push_back(json!({ "type": "listen", "event": event }).to_string());
+        let listen = json!({ "type": "listen", "event": event }).to_string();
+        self.local.push(listen.clone());
+        let remote = self.remote_link();
+        if remote.open.load(Ordering::SeqCst) && !crate::computers::event_is_local(event) {
+            remote.push(listen);
+        }
         rx
+    }
+
+    /// Makes `id` the active computer (`None`: this Mac). Does not connect.
+    pub fn activate(&self, id: Option<&str>) {
+        *self.active.lock().unwrap() = id.map(str::to_owned);
+    }
+
+    pub fn active(&self) -> Option<String> {
+        self.active.lock().unwrap().clone()
+    }
+
+    /// Asks the active computer for its state again; `Incoming::Ready` follows.
+    pub fn reload(&self) {
+        let (link, remote) = self.route("load_state");
+        if remote && !link.open.load(Ordering::SeqCst) {
+            return;
+        }
+        link.push(Self::frame(STATE, "load_state", json!({})));
+    }
+
+    /// Connects to another computer's socket with its token and keeps it up, retrying after a
+    /// drop, until `disconnect_remote` or the host no longer accepts the token. The token stays
+    /// in this thread's memory.
+    pub fn connect_remote(&self, id: &str, address: crate::remote_tls::Address, token: String) {
+        self.disconnect_remote();
+        let stop = std::sync::Arc::new(AtomicBool::new(false));
+        *self.control.lock().unwrap() = Some(Remote { stop: stop.clone() });
+        let link = std::sync::Arc::new(Link::default());
+        *self.remote.lock().unwrap() = link.clone();
+        let backend = self.clone();
+        let id = id.to_owned();
+        std::thread::spawn(move || backend.remote_loop(&id, &address, &token, &stop, &link));
+    }
+
+    /// Ends the connection to the other computer and fails what was waiting on it.
+    pub fn disconnect_remote(&self) {
+        if let Some(remote) = self.control.lock().unwrap().take() {
+            remote.stop.store(true, Ordering::SeqCst);
+        }
+        let link = self.remote_link();
+        link.open.store(false, Ordering::SeqCst);
+        link.drop_pending();
+    }
+
+    fn remote_loop(
+        &self,
+        id: &str,
+        address: &crate::remote_tls::Address,
+        token: &str,
+        stop: &AtomicBool,
+        link: &Link,
+    ) {
+        use crate::computers::Status;
+        let status = |status| {
+            if !stop.load(Ordering::SeqCst) {
+                let _ = self.notify.try_send(Incoming::Link {
+                    id: id.to_owned(),
+                    status,
+                });
+            }
+        };
+        let mut delay = 2;
+        while !stop.load(Ordering::SeqCst) {
+            status(Status::Connecting);
+            link.drop_pending();
+            match self.remote_session(address, token, stop, link, &status) {
+                Err(Failure::Unauthorized) => {
+                    status(Status::Unauthorized);
+                    break;
+                }
+                Err(Failure::Lost) if stop.load(Ordering::SeqCst) => break,
+                Ok(()) => break,
+                Err(Failure::Lost) => {}
+            }
+            link.open.store(false, Ordering::SeqCst);
+            link.drop_pending();
+            status(Status::Lost);
+            // Back off 2, 4, 8 up to 15 seconds, checking the stop flag as it waits.
+            for _ in 0..delay * 4 {
+                if stop.load(Ordering::SeqCst) {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(250));
+            }
+            delay = (delay * 2).min(15);
+        }
+    }
+
+    fn remote_session(
+        &self,
+        address: &crate::remote_tls::Address,
+        token: &str,
+        stop: &AtomicBool,
+        link: &Link,
+        status: &dyn Fn(crate::computers::Status),
+    ) -> Result<(), Failure> {
+        let mut socket = crate::remote_tls::open_socket(address).map_err(|_| Failure::Lost)?;
+        socket
+            .send(Message::text(
+                json!({ "type": "hello", "token": token }).to_string(),
+            ))
+            .map_err(|_| Failure::Lost)?;
+        loop {
+            if stop.load(Ordering::SeqCst) {
+                return Ok(());
+            }
+            match socket.read().map_err(|_| Failure::Lost)? {
+                Message::Text(text) => {
+                    let message: Value = serde_json::from_str(text.as_str()).unwrap_or(Value::Null);
+                    match message["type"].as_str() {
+                        Some("ready") => break,
+                        Some("unauthorized") => return Err(Failure::Unauthorized),
+                        _ => {}
+                    }
+                }
+                Message::Close(_) => return Err(Failure::Lost),
+                _ => {}
+            }
+        }
+        let mut events: Vec<String> = LISTEN.iter().map(|e| (*e).to_owned()).collect();
+        events.extend(self.listeners.lock().unwrap().iter().map(|(e, _)| e.clone()));
+        events.sort();
+        events.dedup();
+        for event in events.iter().filter(|e| !crate::computers::event_is_local(e)) {
+            socket
+                .send(Message::text(
+                    json!({ "type": "listen", "event": event }).to_string(),
+                ))
+                .map_err(|_| Failure::Lost)?;
+        }
+        socket
+            .send(Message::text(
+                Self::frame(STATE, "load_state", json!({})),
+            ))
+            .map_err(|_| Failure::Lost)?;
+        socket
+            .get_ref()
+            .sock
+            .set_read_timeout(Some(Duration::from_millis(15)))
+            .map_err(|_| Failure::Lost)?;
+        link.open.store(true, Ordering::SeqCst);
+        status(crate::computers::Status::Open);
+        let result = self.pump(&mut socket, link, true, Some(stop));
+        link.open.store(false, Ordering::SeqCst);
+        result.map_err(|_| Failure::Lost)
+    }
+
+    /// Sends queued frames and delivers what arrives, until the connection ends.
+    fn pump<S: Read + Write>(
+        &self,
+        socket: &mut tungstenite::WebSocket<S>,
+        link: &Link,
+        from_remote: bool,
+        stop: Option<&AtomicBool>,
+    ) -> Result<(), String> {
+        let mut heard = Instant::now();
+        let mut pinged = Instant::now();
+        loop {
+            if stop.is_some_and(|stop| stop.load(Ordering::SeqCst)) {
+                return Ok(());
+            }
+            while let Some(frame) = {
+                let next = link.outgoing.lock().unwrap().pop_front();
+                next
+            } {
+                socket
+                    .send(Message::text(frame))
+                    .map_err(|e| e.to_string())?;
+            }
+            if from_remote {
+                // A silent connection is told apart from a quiet host with a ping every 20
+                // seconds; a minute without hearing anything ends it.
+                if heard.elapsed() > Duration::from_secs(60) {
+                    return Err(t("A conexão com o computador caiu.").into());
+                }
+                if pinged.elapsed() > Duration::from_secs(20) {
+                    pinged = Instant::now();
+                    socket
+                        .send(Message::Ping(Vec::new().into()))
+                        .map_err(|e| e.to_string())?;
+                }
+            }
+            match socket.read() {
+                Ok(Message::Text(text)) => {
+                    heard = Instant::now();
+                    let message: Value =
+                        serde_json::from_str(text.as_str()).unwrap_or(Value::Null);
+                    if !self.deliver(link, from_remote, message) {
+                        return Ok(());
+                    }
+                }
+                Ok(Message::Close(_)) if from_remote => {
+                    return Err(t("A conexão com o computador caiu.").into());
+                }
+                Ok(_) => heard = Instant::now(),
+                Err(tungstenite::Error::Io(error))
+                    if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
+                Err(error) => return Err(tf("A conexão com o motor caiu: {}", &[&error])),
+            }
+        }
+    }
+
+    /// Routes one frame to its waiter, listeners and the window; false once the window is gone.
+    fn deliver(&self, link: &Link, from_remote: bool, mut message: Value) -> bool {
+        let active_is_remote = self.active.lock().unwrap().is_some();
+        if message["type"] == "result" {
+            let id = message["id"].as_u64();
+            let waiter = id.and_then(|id| link.waiters.lock().unwrap().remove(&id));
+            if let Some(waiter) = waiter {
+                let ok = message["ok"].as_bool().unwrap_or(false);
+                let _ = waiter.try_send(if ok {
+                    Ok(message["value"].take())
+                } else {
+                    Err(message["error"].take())
+                });
+                return true;
+            }
+            let own = id.is_some_and(|id| link.always.lock().unwrap().remove(&id));
+            // The state of a computer that is no longer the active one, or a reply to a command
+            // meant for it, is dropped rather than shown on the wrong computer.
+            let wanted = own || from_remote == active_is_remote;
+            if !wanted {
+                return true;
+            }
+        }
+        if message["type"] == "event" {
+            let name = message["event"].as_str().unwrap_or("").to_owned();
+            if !event_accepted(active_is_remote, from_remote, &name) {
+                return true;
+            }
+            self.listeners.lock().unwrap().retain(|(event, tx)| {
+                if *event == name {
+                    tx.try_send(message["payload"].clone()).is_ok()
+                } else {
+                    !tx.is_closed()
+                }
+            });
+        }
+        let incoming = match message["type"].as_str() {
+            Some("result") if message["id"] == STATE => Incoming::Ready(message["value"].take()),
+            Some("result") => {
+                let ok = message["ok"].as_bool().unwrap_or(false);
+                let value = if ok {
+                    message["value"].take()
+                } else {
+                    message["error"].take()
+                };
+                Incoming::Reply {
+                    id: message["id"].as_u64().unwrap_or(0),
+                    ok,
+                    value,
+                }
+            }
+            Some("event") => Incoming::Event {
+                name: message["event"].as_str().unwrap_or("").to_owned(),
+                payload: message["payload"].take(),
+            },
+            _ => return true,
+        };
+        self.notify.send_blocking(incoming).is_ok()
     }
 }
 
+/// Why a connection to another computer ended.
+enum Failure {
+    Lost,
+    Unauthorized,
+}
+
+/// The id `load_state` is asked with: its reply becomes `Incoming::Ready`.
+const STATE: u64 = 0;
+
+/// Events listened to on every connection, before anything subscribes.
+const LISTEN: &[&str] = &[
+    "session-updated",
+    "agent-output",
+    "agent-exit",
+    "subagent-feed",
+    "secret-state",
+    "browser_tool_request",
+    "login-vault-state",
+    "computer-state",
+    "remote-changed",
+];
+
 pub fn start() -> (Backend, async_channel::Receiver<Incoming>) {
     let (tx, rx) = async_channel::unbounded();
-    let outgoing = std::sync::Arc::new(Mutex::new(VecDeque::new()));
     let backend = Backend {
-        outgoing: outgoing.clone(),
-        waiters: Default::default(),
+        local: Default::default(),
+        remote: Default::default(),
+        active: Default::default(),
+        control: Default::default(),
         listeners: Default::default(),
+        notify: tx.clone(),
     };
-    let (waiters, listeners) = (backend.waiters.clone(), backend.listeners.clone());
+    let local = backend.clone();
     std::thread::spawn(move || {
         loop {
-            if let Err(problem) = session(&tx, &outgoing, &waiters, &listeners) {
+            if let Err(problem) = local.session() {
                 if tx.send_blocking(Incoming::Problem(problem)).is_err() {
                     return;
                 }
@@ -371,150 +769,69 @@ pub fn background_path(name: &str) -> PathBuf {
     data_dir().join("backgrounds").join(name)
 }
 
-fn session(
-    tx: &async_channel::Sender<Incoming>,
-    outgoing: &Mutex<VecDeque<String>>,
-    waiters: &Waiters,
-    listeners: &Listeners,
-) -> Result<(), String> {
-    let dir = data_dir();
-    seed(&dir)?;
-    ensure_host(&dir)?;
-    let mut token = match std::fs::read_to_string(dir.join("native-token")) {
-        Ok(token) => token,
-        Err(_) => pair(&dir)?,
-    };
-    let (mut socket, _) = tungstenite::connect(format!("ws://127.0.0.1:{PORT}/api/socket"))
-        .map_err(|e| e.to_string())?;
-    let hello = |socket: &mut tungstenite::WebSocket<_>, token: &str| {
-        socket.send(Message::text(
-            json!({ "type": "hello", "token": token }).to_string(),
-        ))
-    };
-    hello(&mut socket, &token).map_err(|e| e.to_string())?;
-    loop {
-        match socket.read().map_err(|e| e.to_string())? {
-            Message::Text(text) => {
-                let message: Value = serde_json::from_str(text.as_str()).unwrap_or(Value::Null);
-                match message["type"].as_str() {
-                    Some("ready") => break,
-                    Some("unauthorized") => {
-                        token = pair(&dir)?;
-                        let (again, _) =
-                            tungstenite::connect(format!("ws://127.0.0.1:{PORT}/api/socket"))
-                                .map_err(|e| e.to_string())?;
-                        socket = again;
-                        hello(&mut socket, &token).map_err(|e| e.to_string())?;
-                    }
-                    _ => {}
-                }
-            }
-            _ => {}
-        }
-    }
-    for event in [
-        "session-updated",
-        "agent-output",
-        "agent-exit",
-        "subagent-feed",
-        "secret-state",
-        "browser_tool_request",
-        "login-vault-state",
-        "computer-state",
-        "remote-changed",
-    ] {
-        socket
-            .send(Message::text(
-                json!({ "type": "listen", "event": event }).to_string(),
+impl Backend {
+    /// This Mac's own host: starts it if needed, pairs, and serves the window until it drops.
+    fn session(&self) -> Result<(), String> {
+        let dir = data_dir();
+        seed(&dir)?;
+        ensure_host(&dir)?;
+        let mut token = match std::fs::read_to_string(dir.join("native-token")) {
+            Ok(token) => token,
+            Err(_) => pair(&dir)?,
+        };
+        let (mut socket, _) = tungstenite::connect(format!("ws://127.0.0.1:{PORT}/api/socket"))
+            .map_err(|e| e.to_string())?;
+        let hello = |socket: &mut tungstenite::WebSocket<_>, token: &str| {
+            socket.send(Message::text(
+                json!({ "type": "hello", "token": token }).to_string(),
             ))
-            .map_err(|e| e.to_string())?;
-    }
-    // This window is the host's browser: agents' browser tools run here (browser_bridge.rs).
-    socket
-        .send(Message::text(
-            json!({ "type": "invoke", "id": u64::MAX, "cmd": "register_browser_client", "args": {} })
-                .to_string(),
-        ))
-        .map_err(|e| e.to_string())?;
-    const STATE: u64 = 0;
-    socket
-        .send(Message::text(
-            json!({ "type": "invoke", "id": STATE, "cmd": "load_state", "args": {} }).to_string(),
-        ))
-        .map_err(|e| e.to_string())?;
-    if let tungstenite::stream::MaybeTlsStream::Plain(stream) = socket.get_ref() {
-        stream
-            .set_read_timeout(Some(Duration::from_millis(15)))
-            .map_err(|e| e.to_string())?;
-    }
-    loop {
-        while let Some(frame) = {
-            let next = outgoing.lock().unwrap().pop_front();
-            next
-        } {
+        };
+        hello(&mut socket, &token).map_err(|e| e.to_string())?;
+        loop {
+            match socket.read().map_err(|e| e.to_string())? {
+                Message::Text(text) => {
+                    let message: Value =
+                        serde_json::from_str(text.as_str()).unwrap_or(Value::Null);
+                    match message["type"].as_str() {
+                        Some("ready") => break,
+                        Some("unauthorized") => {
+                            token = pair(&dir)?;
+                            let (again, _) = tungstenite::connect(format!(
+                                "ws://127.0.0.1:{PORT}/api/socket"
+                            ))
+                            .map_err(|e| e.to_string())?;
+                            socket = again;
+                            hello(&mut socket, &token).map_err(|e| e.to_string())?;
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+        for event in LISTEN {
             socket
-                .send(Message::text(frame))
+                .send(Message::text(
+                    json!({ "type": "listen", "event": event }).to_string(),
+                ))
                 .map_err(|e| e.to_string())?;
         }
-        match socket.read() {
-            Ok(Message::Text(text)) => {
-                let mut message: Value = serde_json::from_str(text.as_str()).unwrap_or(Value::Null);
-                if message["type"] == "result" {
-                    let waiter = message["id"]
-                        .as_u64()
-                        .and_then(|id| waiters.lock().unwrap().remove(&id));
-                    if let Some(waiter) = waiter {
-                        let ok = message["ok"].as_bool().unwrap_or(false);
-                        let _ = waiter.try_send(if ok {
-                            Ok(message["value"].take())
-                        } else {
-                            Err(message["error"].take())
-                        });
-                        continue;
-                    }
-                }
-                if message["type"] == "event" {
-                    let name = message["event"].as_str().unwrap_or("");
-                    listeners.lock().unwrap().retain(|(event, tx)| {
-                        if event == name {
-                            tx.try_send(message["payload"].clone()).is_ok()
-                        } else {
-                            !tx.is_closed()
-                        }
-                    });
-                }
-                let incoming = match message["type"].as_str() {
-                    Some("result") if message["id"] == STATE => {
-                        Incoming::Ready(message["value"].take())
-                    }
-                    Some("result") => {
-                        let ok = message["ok"].as_bool().unwrap_or(false);
-                        let value = if ok {
-                            message["value"].take()
-                        } else {
-                            message["error"].take()
-                        };
-                        Incoming::Reply {
-                            id: message["id"].as_u64().unwrap_or(0),
-                            ok,
-                            value,
-                        }
-                    }
-                    Some("event") => Incoming::Event {
-                        name: message["event"].as_str().unwrap_or("").to_owned(),
-                        payload: message["payload"].take(),
-                    },
-                    _ => continue,
-                };
-                if tx.send_blocking(incoming).is_err() {
-                    return Ok(());
-                }
-            }
-            Ok(_) => {}
-            Err(tungstenite::Error::Io(error))
-                if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
-            Err(error) => return Err(tf("A conexão com o motor caiu: {}", &[&error])),
+        // This window is the host's browser: agents' browser tools run here (browser_bridge.rs).
+        socket
+            .send(Message::text(
+                json!({ "type": "invoke", "id": u64::MAX, "cmd": "register_browser_client", "args": {} })
+                    .to_string(),
+            ))
+            .map_err(|e| e.to_string())?;
+        socket
+            .send(Message::text(Self::frame(STATE, "load_state", json!({}))))
+            .map_err(|e| e.to_string())?;
+        if let tungstenite::stream::MaybeTlsStream::Plain(stream) = socket.get_ref() {
+            stream
+                .set_read_timeout(Some(Duration::from_millis(15)))
+                .map_err(|e| e.to_string())?;
         }
+        self.pump(&mut socket, &self.local, false, None)
     }
 }
 
@@ -530,4 +847,95 @@ pub fn git(path: &str, args: &[&str]) -> String {
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn backend() -> (Backend, async_channel::Receiver<Incoming>) {
+        let (tx, rx) = async_channel::unbounded();
+        let backend = Backend {
+            local: Default::default(),
+            remote: Default::default(),
+            active: Default::default(),
+            control: Default::default(),
+            listeners: Default::default(),
+            notify: tx,
+        };
+        (backend, rx)
+    }
+
+    #[test]
+    fn events_come_from_the_active_computer_and_this_macs_own_from_this_mac() {
+        // Local active: local events pass, a stray remote one does not.
+        assert!(event_accepted(false, false, "session-updated"));
+        assert!(!event_accepted(false, true, "session-updated"));
+        // Remote active: its session events pass, this Mac's do not.
+        assert!(event_accepted(true, true, "session-updated"));
+        assert!(!event_accepted(true, false, "session-updated"));
+        // This Mac's own events keep coming from it, never from a server.
+        assert!(event_accepted(true, false, "browser_tool_request"));
+        assert!(!event_accepted(true, true, "browser_tool_request"));
+    }
+
+    #[test]
+    fn commands_stay_local_until_a_remote_is_active_and_never_fall_back() {
+        let (backend, replies) = backend();
+        backend.invoke("send_prompt", json!({}));
+        assert_eq!(backend.local.outgoing.lock().unwrap().len(), 1);
+
+        backend.activate(Some("pc-vps"));
+        // This Mac's own commands still go to this Mac.
+        backend.invoke("browser_tool_result", json!({}));
+        backend.invoke("pick_folder", json!({}));
+        assert_eq!(backend.local.outgoing.lock().unwrap().len(), 3);
+        // A data command with the remote link not open fails; it is not queued locally.
+        let id = backend.invoke("send_prompt", json!({}));
+        assert_eq!(backend.local.outgoing.lock().unwrap().len(), 3);
+        assert!(backend.remote_link().outgoing.lock().unwrap().is_empty());
+        match replies.try_recv() {
+            Ok(Incoming::Reply { id: got, ok: false, .. }) => assert_eq!(got, id),
+            _ => panic!("expected a failed reply"),
+        }
+        let waiting = backend.request("load_state", json!({}));
+        assert!(matches!(waiting.try_recv(), Ok(Err(_))));
+
+        // Once the link is open, data commands go there.
+        backend.remote_link().open.store(true, Ordering::SeqCst);
+        backend.invoke("send_prompt", json!({}));
+        assert_eq!(backend.remote_link().outgoing.lock().unwrap().len(), 1);
+        assert_eq!(backend.local.outgoing.lock().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn dropping_the_link_fails_waiters_and_forgets_queued_frames() {
+        let (backend, _replies) = backend();
+        backend.activate(Some("pc"));
+        backend.remote_link().open.store(true, Ordering::SeqCst);
+        let waiting = backend.request("git_status", json!({}));
+        backend.disconnect_remote();
+        assert!(matches!(waiting.try_recv(), Ok(Err(_))));
+        assert!(backend.remote_link().outgoing.lock().unwrap().is_empty());
+        assert!(!backend.remote_link().open.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn the_state_of_a_computer_that_is_not_active_is_dropped() {
+        let (backend, replies) = backend();
+        let ready = json!({ "type": "result", "id": STATE, "ok": true, "value": { "projects": [] } });
+        // Active is this Mac: a remote state is dropped, a local one is delivered.
+        assert!(backend.deliver(&backend.remote_link(), true, ready.clone()));
+        assert!(replies.try_recv().is_err());
+        assert!(backend.deliver(&backend.local, false, ready.clone()));
+        assert!(matches!(replies.try_recv(), Ok(Incoming::Ready(_))));
+        // Active is a remote: the reverse, but a reply to this Mac's own command still arrives.
+        backend.activate(Some("pc"));
+        assert!(backend.deliver(&backend.local, false, ready));
+        assert!(replies.try_recv().is_err());
+        backend.local.always.lock().unwrap().insert(77);
+        let own = json!({ "type": "result", "id": 77, "ok": true, "value": null });
+        assert!(backend.deliver(&backend.local, false, own));
+        assert!(matches!(replies.try_recv(), Ok(Incoming::Reply { id: 77, .. })));
+    }
 }

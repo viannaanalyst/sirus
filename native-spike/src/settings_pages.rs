@@ -505,7 +505,7 @@ fn build(page: &str, s: &Value, d: &HashMap<&'static str, Value>) -> Page {
             t(
                 "Use o Sirus pelo celular ou por outro computador. O trabalho continua rodando neste Mac; o outro aparelho só controla, pela sua rede privada da Tailscale.",
             ),
-            connections(d),
+            computers_groups(d).into_iter().chain(connections(d)).collect(),
         ),
         other => page_of(other, "", soon()),
     }
@@ -3121,6 +3121,83 @@ fn permission(
     row(title, about, controls)
 }
 
+/// Computadores: this Mac and the Sirus hosts paired with this window (computers.rs). The whole
+/// window shows the one in use.
+fn computers_groups(d: &HashMap<&'static str, Value>) -> Vec<Group> {
+    let c = get_data(d, "computers");
+    let active = c["active"].as_str().unwrap_or("home");
+    let use_button = |id: &str| Ctl::Button {
+        label: t("Usar"),
+        act: act_run("native_computer_use", json!({"id": id})),
+        enabled: true,
+        danger: false,
+    };
+    let mut rows = vec![row(
+        t("Este Mac"),
+        t("O motor desta janela, com seus projetos e arquivos."),
+        vec![if active == "home" {
+            Ctl::Read(t("Em uso").to_string())
+        } else {
+            use_button("home")
+        }],
+    )];
+    for computer in c["list"].as_array().into_iter().flatten() {
+        let id = computer["id"].as_str().unwrap_or("");
+        let status = if id == active { c["status"].as_str().unwrap_or("") } else { "" };
+        let about = [computer["address"].as_str().unwrap_or(""), status]
+            .iter()
+            .filter(|part| !part.is_empty())
+            .copied()
+            .collect::<Vec<_>>()
+            .join(" · ");
+        rows.push(row(
+            computer["name"].as_str().unwrap_or(id).to_string(),
+            about,
+            vec![
+                if id == active { Ctl::Read(t("Em uso").to_string()) } else { use_button(id) },
+                Ctl::Button {
+                    label: t("Remover"),
+                    act: act_run("native_computer_remove", json!({"id": id})),
+                    enabled: true,
+                    danger: true,
+                },
+            ],
+        ));
+    }
+    let busy = yes(&c["busy"]);
+    let field = |key: &'static str, width: f32| Ctl::Field {
+        key,
+        text: c[if key == crate::shell::computer_ui::ADDRESS { "address" } else { "code" }]
+            .as_str()
+            .unwrap_or("")
+            .to_string(),
+        width,
+        button: None,
+    };
+    rows.push(row(
+        t("Adicionar um computador"),
+        t("O endereço HTTPS dele na Tailscale, como https://nome.rede.ts.net"),
+        vec![field(crate::shell::computer_ui::ADDRESS, 280.)],
+    ));
+    rows.push(row(
+        t("Código de pareamento"),
+        t("Os seis dígitos de `sirus-host pair`, ou do QR code da página Conexões do outro Mac."),
+        vec![
+            field(crate::shell::computer_ui::CODE, 96.),
+            Ctl::Button {
+                label: t("Parear"),
+                act: act_run("native_computer_pair", json!({})),
+                enabled: !busy,
+                danger: false,
+            },
+        ],
+    ));
+    if let Some(note) = c["note"].as_str().filter(|n| !n.is_empty()) {
+        rows.push(row("", note.to_string(), Vec::new()));
+    }
+    vec![group(t("Computadores"), rows)]
+}
+
 fn connections(d: &HashMap<&'static str, Value>) -> Vec<Group> {
     let r = get_data(d, "remote");
     let enabled = yes(&r["enabled"]);
@@ -3380,6 +3457,12 @@ pub fn commit(settings: &Value, key: &str, text: &str) -> Option<Commit> {
     }
     if crate::settings_pair::commit(key, text) {
         return None;
+    }
+    if crate::shell::computer_ui::is_field(key) {
+        return Some(Commit::Run {
+            cmd: "native_computer_field",
+            args: json!({"key": key, "text": text}),
+        });
     }
     if let Some(device) = key.strip_prefix("device-rename:") {
         if text.is_empty() {

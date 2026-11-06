@@ -1389,7 +1389,6 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Logs de desenvolvimento", "Developer logs"),
     ("Luminosidade da cor", "Color lightness"),
     ("Mais antigas", "Older"),
-    ("Mais ações", "More actions"),
     ("Mais escura ou mais clara.", "Darker or lighter."),
     ("Mais {} não exibidos", "{} more not shown"),
     (

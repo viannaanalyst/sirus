@@ -213,13 +213,6 @@ impl Draft {
     }
 }
 
-/// Whether a conversation's composer holds text that was not sent: its tab is dashed.
-fn tab_has_draft(drafts: &HashMap<usize, Draft>, conversation: usize) -> bool {
-    drafts
-        .get(&conversation)
-        .is_some_and(|d| !d.text.trim().is_empty())
-}
-
 /// The host's key for a conversation's composer draft, as Sirus Code's `session:<id>`.
 fn draft_key(session_id: &str) -> String {
     format!("session:{session_id}")
@@ -1090,6 +1083,9 @@ pub struct Shell {
     viewer: attachment_view::Files,
     /// Ditado: since when it records.
     dictating: Option<Instant>,
+    /// The microphone's loudness the host last gave, and what the listening robot shows of it.
+    dictation_level: f32,
+    dictation_shown: Cell<f32>,
     viewport_width: f32,
     dock_drawn: f32,
     ignored_text: String,
@@ -1450,6 +1446,8 @@ impl Shell {
             attachments: HashMap::new(),
             viewer: Default::default(),
             dictating: None,
+            dictation_level: 0.,
+            dictation_shown: Default::default(),
             viewport_width: 0.,
             dock_drawn: 0.,
             ignored_text: String::new(),
@@ -5137,10 +5135,6 @@ impl Shell {
             cx.notify();
             return;
         }
-        if key == "escape" && self.message_actions.more.take().is_some() {
-            cx.notify();
-            return;
-        }
         if key == "escape" && self.usage_popup.take().is_some() {
             cx.notify();
             return;
@@ -6141,9 +6135,40 @@ impl Shell {
         } else {
             self.backend
                 .invoke("start_dictation", json!({ "locale": crate::i18n::code() }));
-            self.dictating = Some(Instant::now());
+            let started = Instant::now();
+            self.dictating = Some(started);
+            self.dictation_level = 0.;
+            self.dictation_shown.set(0.);
+            self.poll_dictation_level(started, cx);
         }
         cx.notify();
+    }
+
+    /// Asks the host how loud the microphone is, for as long as this recording lasts.
+    fn poll_dictation_level(&mut self, started: Instant, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(50))
+                    .await;
+                let Ok(Some(reply)) = this.update(cx, |this, _| {
+                    (this.dictating == Some(started))
+                        .then(|| this.backend.request("dictation_level", json!({})))
+                }) else {
+                    return;
+                };
+                if let Ok(Ok(value)) = reply.recv().await {
+                    let level = value.as_f64().unwrap_or(0.) as f32;
+                    if this
+                        .update(cx, |this, _| this.dictation_level = level)
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+            }
+        })
+        .detach();
     }
 
     fn stop(&mut self, cx: &mut Context<Self>) {
@@ -6164,7 +6189,6 @@ impl Shell {
         let mark = mark_tile(&TAB_TILE, face, glyph);
         let closable = active || width >= 72.;
         let title = ((width - PIN_WIDTH) / 60.).clamp(0., 1.);
-        let draft = tab_has_draft(&self.drafts, tab.conversation);
         div()
             .id(("tab", id))
             .group(group.clone())
@@ -6206,21 +6230,6 @@ impl Shell {
                 }),
             )
             .child(mark)
-            // A conversation with a composer draft dashes its tab, as Monocode's title tabs do.
-            // Overlaid so the dashes take no room from the content.
-            .when(draft, |d| {
-                d.child(
-                    div()
-                        .absolute()
-                        .top_0()
-                        .left_0()
-                        .size_full()
-                        .rounded(px(crate::theme::RADIUS_MD))
-                        .border_1()
-                        .border_dashed()
-                        .border_color(content(if active { 0.3 } else { 0.25 })),
-                )
-            })
             // The title keeps its width while the plate narrows, so pinning clips it instead of rewrapping.
             .when(title > 0., |d| {
                 d.child(
@@ -6241,17 +6250,16 @@ impl Shell {
                     div()
                         .id(("close", id))
                         .absolute()
-                        .right(px(4.))
-                        .top(px(4.5))
-                        .size(px(18.))
+                        .right(px(3.5))
+                        .top(px(3.5))
+                        .size(px(20.))
                         .rounded(px(crate::theme::RADIUS_SM))
                         .flex()
                         .items_center()
                         .justify_center()
-                        .when(!active, |d| {
-                            d.opacity(0.).group_hover(group, |s| s.opacity(1.))
-                        })
-                        .hover(|s| s.bg(content(0.12)))
+                        .opacity(0.)
+                        .group_hover(group, |s| s.opacity(1.))
+                        .hover(|s| s.bg(content(0.1)))
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .on_click(cx.listener(move |this, _, _, cx| this.close(id, cx)))
                         .child(icon("close", 12.).text_color(content(0.6))),
@@ -6547,7 +6555,23 @@ impl Shell {
                             .children(tabs),
                     )
                     .child(
-                        icon_button("new-tab", "plus", 14.)
+                        div()
+                            .id("new-tab")
+                            .group("new-tab")
+                            .size(px(PLATE))
+                            .rounded(px(crate::theme::RADIUS_MD))
+                            .bg(content(0.04))
+                            .opacity(0.65)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .hover(|s| s.opacity(1.).bg(content(0.07)))
+                            .child(
+                                icon("plus", 14.)
+                                    .text_color(content(0.8))
+                                    .group_hover("new-tab", |s| s.text_color(content(1.))),
+                            )
                             .absolute()
                             .left(px(add_x))
                             .top(px((TITLE_BAR - PLATE) / 2.))
@@ -11256,6 +11280,9 @@ impl Shell {
     /// While the agent works, the project's robot walks along the composer's top edge over a line
     /// of letters in its colour. Reduce Motion leaves it out.
     fn composer_runner(&self, ix: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.dictating.is_some() {
+            return self.composer_listener(ix, cx);
+        }
         let conversation = &self.conversations[ix];
         if !conversation.working() || cx.reduce_motion() {
             return None;
@@ -11285,6 +11312,66 @@ impl Shell {
                         clock,
                     ),
                 ))
+                .into_any_element(),
+        )
+    }
+
+    /// While the microphone records, the project's robot stands over the composer and hops with
+    /// the voice, with bars on both sides. Reduce Motion keeps it still and the bars steady.
+    fn composer_listener(&self, ix: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let project = self.projects.get(self.project_of(ix)?)?;
+        let (_, color) = crate::project_avatar::look_of(&project.name, &project.appearance);
+        let level = listen_smoothed(self.dictation_shown.get(), self.dictation_level);
+        self.dictation_shown.set(level);
+        self.send_moving.set(true);
+        let reduced = cx.reduce_motion();
+        let clock = if reduced {
+            0.
+        } else {
+            Instant::now().duration_since(self.epoch).as_secs_f32()
+        };
+        let hop = if reduced {
+            0.
+        } else {
+            level * 8. * (clock * 6.8).sin().abs()
+        };
+        let tint = gpui::Hsla::from(rgb(color));
+        let bars = |side: f32| {
+            (0..LISTEN_BARS).map(move |bar| {
+                div()
+                    .flex_shrink_0()
+                    .w(px(2.5))
+                    .h(px(listen_bar(bar, side, clock, level)))
+                    .rounded_full()
+                    .bg(gpui::Hsla {
+                        a: 0.75 * (1. - bar as f32 / LISTEN_BARS as f32),
+                        ..tint
+                    })
+            })
+        };
+        Some(
+            div()
+                .absolute()
+                .top(px(-34.))
+                .left_0()
+                .right_0()
+                .h(px(34.))
+                .pb(px(4.))
+                .flex()
+                .items_end()
+                .justify_center()
+                .gap(px(3.5))
+                .children(bars(-1.).collect::<Vec<_>>().into_iter().rev())
+                .child(div().mx(px(8.)).relative().top(px(-hop)).child(
+                    crate::project_avatar::project_avatar_state(
+                        &project.name,
+                        &project.appearance,
+                        26.,
+                        crate::project_avatar::AvatarState::Idle,
+                        clock,
+                    ),
+                ))
+                .children(bars(1.))
                 .into_any_element(),
         )
     }
@@ -15731,6 +15818,20 @@ fn rail_step(at: usize, count: usize, forward: bool) -> usize {
     }
 }
 
+/// The bars on each side of the listening robot.
+const LISTEN_BARS: usize = 14;
+
+/// The shown loudness one frame on: it rises fast and falls slowly, as a voice meter does.
+fn listen_smoothed(shown: f32, level: f32) -> f32 {
+    shown + (level - shown) * if level > shown { 0.45 } else { 0.14 }
+}
+
+/// A bar's height: a wave along the bars on `side`, scaled by the voice and shorter outwards.
+fn listen_bar(bar: usize, side: f32, clock: f32, level: f32) -> f32 {
+    let wave = 0.5 + 0.5 * (clock * 8. + bar as f32 * 0.9 * side).sin();
+    2. + wave * level * 20. * (1. - bar as f32 / (LISTEN_BARS as f32 + 1.))
+}
+
 /// Seconds the project rail takes to slide, and how quiet a swipe must go before it settles (ms).
 const RAIL_SLIDE: f32 = 0.28;
 const RAIL_QUIET: u64 = 110;
@@ -16294,7 +16395,6 @@ impl Render for Shell {
         let context_menu = self.context_menu_view(now, &mut moving, cx);
         let select_menu = self.select_menu_view(now, &mut moving, cx);
         let handoff_popup = self.handoff_popup_view(now, &mut moving, cx);
-        let more_menu = self.more_menu_view(now, &mut moving, cx);
         let confirm_dialog = self.confirm_view(now, &mut moving, cx);
         let term_plus_menu = self.term_plus_menu_view(now, &mut moving, cx);
         let title_tab = self.title_tab_view(cx);
@@ -16503,7 +16603,6 @@ impl Render for Shell {
             .children(context_menu)
             .children(select_menu)
             .children(handoff_popup)
-            .children(more_menu)
             .children(trail_card)
             .children(project_switch)
             .children(attachment_modal)
@@ -16553,28 +16652,6 @@ mod tests {
     fn bulk_close_marks_nothing_when_only_pinned_tabs_are_left() {
         let tabs = [(1, true), (2, true)];
         assert!(bulk_close_marks(&tabs, 1, |_, _| true).is_empty());
-    }
-
-    #[test]
-    fn a_tab_is_dashed_only_for_unsent_text() {
-        let mut drafts = HashMap::new();
-        drafts.insert(
-            0,
-            Draft {
-                text: "hello".into(),
-                ..Default::default()
-            },
-        );
-        drafts.insert(
-            1,
-            Draft {
-                text: " \n".into(),
-                ..Default::default()
-            },
-        );
-        assert!(tab_has_draft(&drafts, 0));
-        assert!(!tab_has_draft(&drafts, 1));
-        assert!(!tab_has_draft(&drafts, 2));
     }
 
     #[test]
@@ -16859,6 +16936,9 @@ mod rail_tests {
 
     #[test]
     fn the_current_project_stays_in_the_window() {
+        assert_eq!(listen_bar(3, 1., 2., 0.), 2.);
+        assert!(listen_bar(0, 1., 0.2, 1.) > listen_bar(0, 1., 0.2, 0.2));
+        assert!(listen_smoothed(0., 1.) > 1. - listen_smoothed(1., 0.));
         assert_eq!(rail_swiped(2., 39., 39., 5.), 1.);
         assert_eq!(rail_swiped(2., -78., 39., 5.), 4.);
         assert_eq!(rail_swiped(0., 39., 39., 5.), 0.);

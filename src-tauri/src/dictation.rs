@@ -11,7 +11,7 @@ use crate::error::Result;
 mod platform {
     use std::path::PathBuf;
     use std::ptr::NonNull;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
     use std::sync::mpsc;
     use std::sync::Arc;
     use std::time::Duration;
@@ -52,6 +52,15 @@ mod platform {
     unsafe impl Send for Session {}
 
     static SESSION: Mutex<Option<Session>> = Mutex::new(None);
+    /// The newest buffer's loudness, as `f32` bits: the tap writes it, the window reads it.
+    static LEVEL: AtomicU32 = AtomicU32::new(0);
+
+    pub fn level() -> f32 {
+        if SESSION.lock().is_none() {
+            return 0.;
+        }
+        f32::from_bits(LEVEL.load(Ordering::Relaxed))
+    }
 
     fn denied_message() -> Error {
         Error::new(
@@ -168,6 +177,7 @@ mod platform {
                 &settings,
             )
             .map_err(|error| Error::new("native", error.localizedDescription().to_string()))?;
+            LEVEL.store(0f32.to_bits(), Ordering::Relaxed);
             let file_for_tap = file.clone();
             let frames = Arc::new(AtomicUsize::new(0));
             let frames_for_tap = Arc::clone(&frames);
@@ -175,6 +185,15 @@ mod platform {
             let tap: TapBlock = RcBlock::new(
                 move |buffer: NonNull<AVAudioPCMBuffer>, _time: NonNull<AVAudioTime>| {
                     let buffer = buffer.as_ref();
+                    let channels = buffer.floatChannelData();
+                    if !channels.is_null() {
+                        let samples = std::slice::from_raw_parts(
+                            (*channels).as_ptr(),
+                            buffer.frameLength() as usize * buffer.stride().max(1),
+                        );
+                        let level = super::loudness(samples, buffer.stride().max(1));
+                        LEVEL.store(level.to_bits(), Ordering::Relaxed);
+                    }
                     let written = frames_for_tap.load(Ordering::Relaxed);
                     if written >= max_frames {
                         return;
@@ -333,6 +352,10 @@ mod platform {
         "unsupported"
     }
 
+    pub fn level() -> f32 {
+        0.
+    }
+
     pub fn start(_locale: &str) -> Result<()> {
         Err(Error::new(
             "invalid",
@@ -354,6 +377,28 @@ mod platform {
     pub fn transcription_available() -> bool {
         false
     }
+}
+
+/// How loud one channel's samples are, from 0 at about -50 dB to 1 at -14 dB, which is roughly
+/// a room's quiet and a raised voice at a laptop's microphone.
+#[cfg(any(target_os = "macos", test))]
+fn loudness(samples: &[f32], stride: usize) -> f32 {
+    let (sum, count) = samples
+        .iter()
+        .step_by(stride.max(1))
+        .fold((0f32, 0usize), |(sum, count), sample| {
+            (sum + sample * sample, count + 1)
+        });
+    if count == 0 || sum <= 0. {
+        return 0.;
+    }
+    let decibels = 10. * (sum / count as f32).log10();
+    ((decibels + 50.) / 36.).clamp(0., 1.)
+}
+
+/// The microphone's loudness while recording, 0 to 1, for the window's listening animation.
+pub fn dictation_level() -> f32 {
+    platform::level()
 }
 
 pub fn dictation_status() -> String {
@@ -399,4 +444,21 @@ pub async fn transcribe_audio(locale: String, audio: String) -> Result<Option<St
         return Ok(None);
     }
     crate::commands::native_task(move || platform::transcribe_recording(&locale, &bytes)).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loudness_runs_from_silence_to_a_raised_voice() {
+        assert_eq!(loudness(&[], 1), 0.);
+        assert_eq!(loudness(&[0.; 64], 1), 0.);
+        assert_eq!(loudness(&[0.0001; 64], 1), 0.);
+        assert_eq!(loudness(&[0.5; 64], 1), 1.);
+        let speech = loudness(&[0.03; 64], 1);
+        assert!(speech > 0.3 && speech < 0.8, "{speech}");
+        // Interleaved: only the first channel counts.
+        assert_eq!(loudness(&[0.5, 0., 0.5, 0.], 2), 1.);
+    }
 }

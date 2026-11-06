@@ -177,6 +177,7 @@ const LOCAL_COMMANDS: &[&str] = &[
     "chat_background_image",
     "computer_action",
     "device_action",
+    "dictation_level",
     "dictation_status",
     "drop_prompt_attachments",
     "app_update_action",

@@ -68,6 +68,7 @@ const DENIED: &[&str] = &[
     "capture_prompt_window",
     "drop_prompt_attachments",
     "dictation_status",
+    "dictation_level",
     "start_dictation",
     "stop_dictation",
     "computer_action",

@@ -50,7 +50,7 @@ type StackSafe<T> = stacksafe::StackSafe<T>;
 type StackSafe<T> = T;
 
 const DRAG_THRESHOLD: f64 = 2.;
-const DEFAULT_TOOLTIP_SHOW_DELAY: Duration = Duration::from_millis(500);
+const DEFAULT_TOOLTIP_SHOW_DELAY: Duration = Duration::from_millis(150);
 const HOVERABLE_TOOLTIP_HIDE_DELAY: Duration = Duration::from_millis(500);
 
 /// The styling information for a given group.
@@ -3250,6 +3250,7 @@ impl Interactivity {
                     check_is_hovered_during_prepaint,
                     long_press_tooltip_active,
                     self.tooltip_show_delay,
+                    Some(hitbox.bounds),
                     window,
                 );
             }
@@ -3741,6 +3742,7 @@ pub(crate) fn register_tooltip_mouse_handlers(
     check_is_hovered_during_prepaint: Rc<dyn Fn(&Window) -> bool>,
     long_press_tooltip_active: Rc<Cell<bool>>,
     show_delay: Option<Duration>,
+    anchor: Option<Bounds<Pixels>>,
     window: &mut Window,
 ) {
     let current_view = window.current_view();
@@ -3761,6 +3763,7 @@ pub(crate) fn register_tooltip_mouse_handlers(
                 current_view,
                 phase,
                 show_delay,
+                anchor,
                 window,
                 cx,
             )
@@ -3792,6 +3795,7 @@ pub(crate) fn register_tooltip_mouse_handlers(
                         &build_tooltip,
                         &check_is_hovered_during_prepaint,
                         Some(long_press_tooltip_active.clone()),
+                        anchor,
                         window,
                         cx,
                     ) {
@@ -3844,6 +3848,7 @@ fn handle_tooltip_mouse_move(
     current_view: EntityId,
     phase: DispatchPhase,
     show_delay: Duration,
+    anchor: Option<Bounds<Pixels>>,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -3918,6 +3923,7 @@ fn handle_tooltip_mouse_move(
                             &build_tooltip,
                             &check_is_hovered_during_prepaint,
                             None,
+                            anchor,
                             window,
                             cx,
                         );
@@ -3940,6 +3946,7 @@ fn show_tooltip(
     build_tooltip: &Rc<dyn Fn(&mut Window, &mut App) -> Option<(AnyView, bool)>>,
     check_is_hovered_during_prepaint: &Rc<dyn Fn(&Window) -> bool>,
     long_press_tooltip_active: Option<Rc<Cell<bool>>>,
+    anchor: Option<Bounds<Pixels>>,
     window: &mut Window,
     cx: &mut App,
 ) -> bool {
@@ -3950,6 +3957,7 @@ fn show_tooltip(
             tooltip: AnyTooltip {
                 view,
                 mouse_position: window.mouse_position(),
+                anchor,
                 check_visible_and_update: Rc::new(move |tooltip_bounds, window, cx| {
                     if long_press_tooltip_active
                         .as_ref()

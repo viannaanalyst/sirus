@@ -1,7 +1,7 @@
 //! The row of actions under a finished reply, as Sirus Code shows it (MessageActions.tsx,
 //! UndoTurnButton.tsx, ADR-187): copy the answer, try the latest turn again, undo the turn's file
-//! changes after a read-only check and a confirmation, and a `⋯` button. The `⋯` opens a popup
-//! with the side chat, fork and handoff (handoff.rs opens the handoff's popup).
+//! changes after a read-only check and a confirmation, and the side chat, fork and handoff
+//! (handoff.rs opens the handoff's popup).
 //!
 //! This module is a child of `shell` (`#[path]`), so it reaches the window's private state. It
 //! draws nothing on its own: the row fades in on hover of the turn (`group_hover`), and the only
@@ -10,10 +10,6 @@
 use super::*;
 use gpui::{AnyView, App, ClickEvent, ClipboardItem, Pixels, Point, Render, SharedString};
 use std::time::Duration;
-
-/// The `⋯` popup's width and the height it needs per row, for choosing its side of the button.
-const MORE_WIDTH: f32 = 220.;
-const MORE_ROW: f32 = 30.;
 
 /// How long the copy button shows its check mark.
 const COPIED_FOR: Duration = Duration::from_millis(1400);
@@ -82,22 +78,13 @@ impl Review {
 }
 
 /// The window's state for the row: which copy is checked, the undo outcome shown under a turn,
-/// the turns whose changes went back in this window, the request in flight, and the `⋯` popup.
+/// the turns whose changes went back in this window, and the request in flight.
 #[derive(Default)]
 pub(crate) struct State {
     copied: Option<String>,
     notice: Option<(String, String)>,
     undone: Vec<String>,
     pub(crate) pending: Option<String>,
-    pub(crate) more: Option<More>,
-}
-
-/// The `⋯` popup open over one turn: its session and turn key, and where the button was pressed.
-pub(crate) struct More {
-    pub session: String,
-    pub key: String,
-    pub anchor: Point<Pixels>,
-    pub open: Tween,
 }
 
 /// What the row knows about one turn.
@@ -158,7 +145,7 @@ pub(crate) fn visible(facts: &Facts) -> Shown {
     }
 }
 
-/// The rows of the `⋯` popup, in their order.
+/// The reply actions of a turn's row, in their order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Row {
     SideChat,
@@ -168,7 +155,7 @@ pub(crate) enum Row {
 
 /// One row of the popup: hidden when its rule does not apply, dimmed while its action cannot run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct MoreRow {
+pub(crate) struct ReplyRow {
     pub row: Row,
     pub enabled: bool,
 }
@@ -181,24 +168,24 @@ pub(crate) struct Can {
     pub handoff: bool,
 }
 
-/// The `⋯` popup's rows for a turn: the side chat when the answer is there, then the reply
+/// The reply actions for a turn: the side chat when the answer is there, then the reply
 /// actions, each only when `handoff::shown` says the turn has a settled reply for it.
-pub(crate) fn more_rows(shown: &Shown, reply: &handoff::Shown, can: Can) -> Vec<MoreRow> {
+pub(crate) fn reply_rows(shown: &Shown, reply: &handoff::Shown, can: Can) -> Vec<ReplyRow> {
     let mut rows = Vec::new();
     if shown.side_chat {
-        rows.push(MoreRow {
+        rows.push(ReplyRow {
             row: Row::SideChat,
             enabled: true,
         });
     }
     if reply.fork {
-        rows.push(MoreRow {
+        rows.push(ReplyRow {
             row: Row::Fork,
             enabled: can.fork,
         });
     }
     if reply.handoff {
-        rows.push(MoreRow {
+        rows.push(ReplyRow {
             row: Row::Handoff,
             enabled: can.handoff,
         });
@@ -394,8 +381,9 @@ impl Shell {
             Undo::Done => status = Some(t("Alterações desfeitas").to_owned()),
             Undo::Hidden => {}
         }
-        if !self.more_rows_of(conversation, index, turn).is_empty() {
-            items.push(self.more_button(index, conv.session_id.clone(), key.clone(), cx));
+        let reply = turn.reply.clone().unwrap_or_default();
+        for item in self.reply_rows_of(conversation, index, turn) {
+            items.push(self.reply_button(index, item, &conv.session_id, &reply, cx));
         }
         let notice = state
             .notice
@@ -436,7 +424,7 @@ impl Shell {
         )
     }
 
-    /// What the row's rules say about a turn: the same facts for the buttons and the `⋯` popup.
+    /// What the row's rules say about a turn: the same facts for all its buttons.
     fn shown_of(&self, conversation: usize, index: usize, turn: &Turn) -> Shown {
         let conv = &self.conversations[conversation];
         visible(&Facts {
@@ -449,15 +437,15 @@ impl Shell {
         })
     }
 
-    /// The `⋯` popup's rows for a turn, with the fork and handoff rules of handoff.rs.
-    fn more_rows_of(&self, conversation: usize, index: usize, turn: &Turn) -> Vec<MoreRow> {
+    /// The reply actions for a turn, with the fork and handoff rules of handoff.rs.
+    fn reply_rows_of(&self, conversation: usize, index: usize, turn: &Turn) -> Vec<ReplyRow> {
         let shown = self.shown_of(conversation, index, turn);
         let settled = handoff::shown(
             !turn.live,
             !turn.answer.trim().is_empty(),
             turn.reply.is_some(),
         );
-        more_rows(&shown, &settled, self.handoff_can(conversation))
+        reply_rows(&shown, &settled, self.handoff_can(conversation))
     }
 
     fn action_button(
@@ -489,190 +477,46 @@ impl Shell {
             .into_any_element()
     }
 
-    /// The `⋯` button of a turn's row; a press opens or closes its popup where it was pressed.
-    fn more_button(
+    /// A reply action's icon in the turn's row; a dimmed one takes no press.
+    fn reply_button(
         &self,
         index: usize,
-        session: String,
-        key: String,
+        item: ReplyRow,
+        session: &str,
+        reply: &str,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let dot = || div().size(px(3.)).rounded_full().bg(content(0.5));
-        div()
-            .id(("turn-more", index))
+        let (id, glyph, name) = match item.row {
+            Row::SideChat => ("turn-side-chat", "message-square", t("Chat lateral")),
+            Row::Fork => ("turn-fork", "branch", t("Fork")),
+            Row::Handoff => ("turn-handoff", "handoff", t("Handoff")),
+        };
+        let button = div()
+            .id((id, index))
             .size(px(24.))
             .rounded(px(crate::theme::RADIUS_SM))
             .flex()
             .items_center()
             .justify_center()
-            .gap(px(2.))
+            .text_color(content(0.5))
+            .tooltip(name_tip(name))
+            .child(icon(glyph, 13.));
+        if !item.enabled {
+            return button.opacity(0.4).into_any_element();
+        }
+        let (session, reply) = (session.to_owned(), reply.to_owned());
+        button
             .cursor_pointer()
-            .hover(|s| s.bg(content(0.07)))
-            .tooltip(name_tip(t("Mais ações")))
-            .children([dot(), dot(), dot()])
+            .hover(|s| s.bg(content(0.07)).text_color(content(0.9)))
             .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
-                this.open_more(session.clone(), key.clone(), event.position(), cx)
+                this.run_row(item.row, &session, &reply, event.position(), cx)
             }))
             .into_any_element()
     }
 
-    /// The `⋯` popup over a turn's row, above or below its button, animated in and kept on screen.
-    /// A click outside it or Esc closes it. Its rows go through `more_row`, the one place to swap.
-    pub(super) fn more_menu_view(
-        &self,
-        now: Instant,
-        moving: &mut bool,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        let popup = self.message_actions.more.as_ref()?;
-        if !popup.open.done(now) {
-            *moving = true;
-        }
-        let shown = popup.open.at(now).clamp(0., 1.);
-        let conversation = self
-            .conversations
-            .iter()
-            .position(|c| c.session_id == popup.session)?;
-        let conv = &self.conversations[conversation];
-        let (index, turn) = conv
-            .turns
-            .iter()
-            .enumerate()
-            .find(|(i, turn)| key_of(turn, *i) == popup.key)?;
-        let rows = self.more_rows_of(conversation, index, turn);
-        if rows.is_empty() {
-            return None;
-        }
-        let reply = turn.reply.clone().unwrap_or_default();
-        let at = popup.anchor;
-        let (x, y) = (f32::from(at.x), f32::from(at.y));
-        let height = rows.len() as f32 * MORE_ROW + 10.;
-        let room_above = y - height - 14. >= 0.;
-        let room_below = self.viewport_height - y - height - 6. >= 0.;
-        let above = room_above || !room_below;
-        let left = (x - 12.).min(self.viewport_width - MORE_WIDTH - 8.).max(8.);
-        let slide = (1. - shown) * -4.;
-        let items: Vec<AnyElement> = rows
-            .into_iter()
-            .enumerate()
-            .map(|(i, item)| self.more_row(i, item, &popup.session, &reply, at, cx))
-            .collect();
-        Some(
-            div()
-                .absolute()
-                .top_0()
-                .left_0()
-                .size_full()
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _, _, cx| {
-                        this.message_actions.more = None;
-                        cx.notify();
-                    }),
-                )
-                .child(
-                    div()
-                        .id("turn-more-menu")
-                        .occlude()
-                        .absolute()
-                        .left(px(left))
-                        .when(above, |d| {
-                            d.bottom(px((self.viewport_height - y + 6. + slide).max(8.)))
-                        })
-                        .when(!above, |d| d.top(px((y + 6. + slide).max(8.))))
-                        .w(px(MORE_WIDTH))
-                        .p(px(4.))
-                        .flex()
-                        .flex_col()
-                        .opacity(shown)
-                        .rounded(px(crate::theme::RADIUS_LG))
-                        .border_1()
-                        .border_color(content(0.12))
-                        .child(crate::theme::floating_surface(crate::theme::RADIUS_LG))
-                        .shadow_lg()
-                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .child(crate::hover_track::list("turn-more-menu").pill())
-                        .children(items),
-                )
-                .into_any_element(),
-        )
-    }
-
-    /// One row of the `⋯` popup. The only place the rows are drawn: swap this for the shared
-    /// sliding hover when it lands. A row that cannot run now is dimmed and takes no press.
-    fn more_row(
-        &self,
-        i: usize,
-        item: MoreRow,
-        session: &str,
-        reply: &str,
-        at: Point<Pixels>,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let (glyph, label) = match item.row {
-            Row::SideChat => ("message-square", t("Chat lateral")),
-            Row::Fork => ("branch", t("Fork")),
-            Row::Handoff => ("handoff", t("Handoff")),
-        };
-        let row = div()
-            .id(("turn-more-row", i))
-            .h(px(MORE_ROW))
-            .px(px(8.))
-            .rounded(px(crate::theme::RADIUS_MD))
-            .flex()
-            .items_center()
-            .gap(px(9.))
-            .text_size(px(13.))
-            .text_color(content(0.92))
-            .child(icon(glyph, 14.).text_color(content(0.65)))
-            .child(div().flex_1().min_w_0().truncate().child(label));
-        if !item.enabled {
-            return row.opacity(0.4).into_any_element();
-        }
-        let (session, reply) = (session.to_owned(), reply.to_owned());
-        let row = row.cursor_pointer().on_click(
-            cx.listener(move |this, _, _, cx| this.run_more(item.row, &session, &reply, at, cx)),
-        );
-        crate::hover_track::list("turn-more-menu")
-            .row(row, i, false)
-            .into_any_element()
-    }
-
-    /// Opens the `⋯` popup of a turn, or closes it when it is already open for that turn.
-    fn open_more(
-        &mut self,
-        session: String,
-        key: String,
-        at: Point<Pixels>,
-        cx: &mut Context<Self>,
-    ) {
-        let same = self
-            .message_actions
-            .more
-            .as_ref()
-            .is_some_and(|open| open.session == session && open.key == key);
-        self.message_actions.more = if same {
-            None
-        } else {
-            Some(More {
-                session,
-                key,
-                anchor: at,
-                open: Tween::from_to(
-                    0.,
-                    1.,
-                    Instant::now(),
-                    if cx.reduce_motion() { 0. } else { MENU },
-                    Curve::Expo,
-                ),
-            })
-        };
-        cx.notify();
-    }
-
-    /// A row's action: the popup closes, then the side chat, a fork, or the handoff popup
-    /// (handoff.rs), which opens where the `⋯` button was pressed.
-    fn run_more(
+    /// A reply action: the side chat, a fork, or the handoff popup
+    /// (handoff.rs), which opens where its button was pressed.
+    fn run_row(
         &mut self,
         row: Row,
         session: &str,
@@ -680,7 +524,6 @@ impl Shell {
         at: Point<Pixels>,
         cx: &mut Context<Self>,
     ) {
-        self.message_actions.more = None;
         match row {
             Row::SideChat => self.open_pane(4, cx),
             Row::Fork => self.fork_turn(session, reply, cx),
@@ -962,14 +805,14 @@ mod tests {
         handoff: true,
     };
 
-    /// The `⋯` popup's rows for a settled-or-live turn, as `turn_actions` builds them.
-    fn more(finished: bool, answered: bool, has_reply: bool, can: Can) -> Vec<MoreRow> {
+    /// The reply actions for a settled-or-live turn, as `turn_actions` builds them.
+    fn more(finished: bool, answered: bool, has_reply: bool, can: Can) -> Vec<ReplyRow> {
         let shown = visible(&facts(finished, answered, true, false, None));
         let settled = handoff::shown(finished, answered, has_reply);
-        more_rows(&shown, &settled, can)
+        reply_rows(&shown, &settled, can)
     }
 
-    fn enabled_rows(rows: &[MoreRow]) -> Vec<(Row, bool)> {
+    fn enabled_rows(rows: &[ReplyRow]) -> Vec<(Row, bool)> {
         rows.iter().map(|row| (row.row, row.enabled)).collect()
     }
 

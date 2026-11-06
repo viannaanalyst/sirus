@@ -228,7 +228,7 @@ impl Shell {
             .overflow_hidden()
             .child(head);
         if visible > 0 {
-            card = card.child(self.turn_review_files(index, turn, open, cx));
+            card = card.child(self.turn_review_files(conversation, index, turn, open, cx));
         }
         if visible > TURN_REVIEW_SHOWN {
             let hidden = visible - TURN_REVIEW_SHOWN;
@@ -272,6 +272,7 @@ impl Shell {
     /// The files of a review: the first few, or all of them when open. Each row opens its diff.
     fn turn_review_files(
         &self,
+        conversation: usize,
         index: usize,
         turn: &Turn,
         open: bool,
@@ -281,6 +282,7 @@ impl Shell {
             return div().into_any_element();
         };
         let key = turn.message_id.clone().unwrap_or_default();
+        let session = self.conversations[conversation].session_id.clone();
         let picked = self.turn_review.picked.get(&key).cloned();
         let limit = if open { usize::MAX } else { TURN_REVIEW_SHOWN };
         let mut column = div()
@@ -305,6 +307,8 @@ impl Shell {
             let active = picked.as_deref() == Some(file.path.as_str());
             let path = file.path.clone();
             let row_key = key.clone();
+            let row_session = session.clone();
+            let omitted = file.omitted && !file.committed && file.diff.is_none();
             let (added, removed) = line_counts(file);
             let mut row = div()
                 .id(("turn-file", index * 4096 + position))
@@ -336,7 +340,13 @@ impl Shell {
                 row.child(tally(added, removed))
             };
             column = column.child(row.on_click(cx.listener(move |this, _, _, cx| {
-                this.pick_turn_review_file(row_key.clone(), path.clone(), cx);
+                this.pick_turn_review_file(
+                    row_key.clone(),
+                    path.clone(),
+                    row_session.clone(),
+                    omitted,
+                    cx,
+                );
             })));
             if active {
                 column = column.child(self.turn_review_diff(index, &key, file, review.expired));
@@ -371,7 +381,10 @@ impl Shell {
                 _ if file.binary => note(t("Arquivo binário: prévia textual indisponível."), false),
                 Some(Full::Loading) => note(t("Carregando…"), false),
                 Some(Full::Failed) => note(t("Não foi possível ler o diff."), true),
-                _ if file.omitted => note(
+                // The host held its text when the transcript left it out, and has no more.
+                _ if file.omitted => note(t("Não foi possível ler o diff."), true),
+                // Counted, but too long to keep.
+                _ if line_counts(file) != (0, 0) => note(
                     t("Este diff excedeu o limite de armazenamento da revisão."),
                     false,
                 ),
@@ -425,10 +438,21 @@ impl Shell {
         cx.notify();
     }
 
-    fn pick_turn_review_file(&mut self, key: String, path: String, cx: &mut Context<Self>) {
+    fn pick_turn_review_file(
+        &mut self,
+        key: String,
+        path: String,
+        session: String,
+        omitted: bool,
+        cx: &mut Context<Self>,
+    ) {
         if self.turn_review.picked.get(&key) == Some(&path) {
             self.turn_review.picked.remove(&key);
         } else {
+            // The closed card shows its first files too, so a row may need the texts first.
+            if omitted && should_fetch(self.turn_review.full.get(&key)) {
+                self.fetch_turn_review(key.clone(), session, key.clone(), cx);
+            }
             self.turn_review.picked.insert(key, path);
         }
         cx.notify();
@@ -468,6 +492,11 @@ impl Shell {
         })
         .detach();
     }
+}
+
+/// Whether a turn's diff texts should be asked for: not while on their way or once they came.
+fn should_fetch(full: Option<&Full>) -> bool {
+    matches!(full, None | Some(Full::Failed))
 }
 
 /// `+added −removed` in the diff colors, as the summary and the file rows show them.
@@ -531,6 +560,14 @@ mod tests {
             files,
             expired: false,
         }
+    }
+
+    #[test]
+    fn the_texts_are_asked_for_once_and_again_after_a_failure() {
+        assert!(should_fetch(None));
+        assert!(should_fetch(Some(&Full::Failed)));
+        assert!(!should_fetch(Some(&Full::Loading)));
+        assert!(!should_fetch(Some(&Full::Ready(HashMap::new()))));
     }
 
     #[test]

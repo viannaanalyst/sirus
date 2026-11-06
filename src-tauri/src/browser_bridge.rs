@@ -55,6 +55,7 @@ const VAULT_COMMANDS: &[&str] = &[
     "remote_action",
     "remote_pair",
     "dictation_status",
+    "dictation_level",
     "start_dictation",
     "stop_dictation",
 ];
@@ -368,6 +369,9 @@ async fn vault_command(app: &AppHandle, command: &str, args: &Value) -> Result<S
         "remote_pair" => reply(crate::remote::remote_pair().await),
         "dictation_status" => reply(Ok::<_, crate::error::Error>(
             crate::dictation::dictation_status(),
+        )),
+        "dictation_level" => reply(Ok::<_, crate::error::Error>(
+            crate::dictation::dictation_level(),
         )),
         "start_dictation" => {
             let locale = args["locale"].as_str().unwrap_or("pt-BR").to_owned();

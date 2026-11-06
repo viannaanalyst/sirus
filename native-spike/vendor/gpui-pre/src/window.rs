@@ -3914,6 +3914,19 @@ impl Window {
                 origin: Point::default(),
                 size: self.viewport_size(),
             };
+            if let Some(anchor) = tooltip_request.tooltip.anchor {
+                const GAP: Pixels = px(6.);
+                let widest = (window_bounds.right() - tooltip_size.width - GAP).max(GAP);
+                let above = anchor.top() - tooltip_size.height - GAP;
+                tooltip_bounds.origin = point(
+                    (anchor.center().x - tooltip_size.width / 2.).clamp(GAP, widest),
+                    if above >= GAP {
+                        above
+                    } else {
+                        anchor.bottom() + GAP
+                    },
+                );
+            }
 
             if tooltip_bounds.right() > window_bounds.right() {
                 let new_x = mouse_position.x - tooltip_bounds.size.width - px(1.);

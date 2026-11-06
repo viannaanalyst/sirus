@@ -4,8 +4,8 @@
 //! lists and rules. The host's refusal is shown as the host wrote it.
 //!
 //! This module is a child of `shell` (`#[path]`), so it reaches the window's private state. The
-//! actions sit in the turn's `⋯` popup (message_actions.rs); the handoff popup opens above that
-//! `⋯` button, animates in, and closes on a click outside it or a second click on the action.
+//! actions sit in the turn's row (message_actions.rs); the handoff popup opens above its button,
+//! animates in, and closes on a click outside it or a second click on the action.
 
 use super::message_actions::settle;
 use super::*;

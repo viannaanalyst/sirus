@@ -4,7 +4,7 @@
 
 ## Context
 
-Sirus Code is a desktop host for coding agents. It must read the local filesystem, spawn processes, drive a PTY, and talk to Git. A website runtime (Next.js) cannot own those privileges. Electron would work but ships a full Chromium and a Node-shaped attack surface that we do not want for a tool that executes agents against user repositories.
+Sirus is a desktop host for coding agents. It must read the local filesystem, spawn processes, drive a PTY, and talk to Git. A website runtime (Next.js) cannot own those privileges. Electron would work but ships a full Chromium and a Node-shaped attack surface that we do not want for a tool that executes agents against user repositories.
 
 ## Decision
 

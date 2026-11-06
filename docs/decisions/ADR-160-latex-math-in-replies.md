@@ -4,7 +4,7 @@
 
 ## Context
 
-Agents write formulas in LaTeX (`$E = mc^2$`, `$$\int_0^1 x\,dx$$`). Replies showed the raw TeX. T3 Code renders it on web and mobile.
+Agents write formulas in LaTeX (`$E = mc^2$`, `$$\int_0^1 x\,dx$$`). Replies showed the raw TeX. Another open-source client renders it on web and mobile.
 
 ## Decision
 

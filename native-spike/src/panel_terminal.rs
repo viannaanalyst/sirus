@@ -1,5 +1,5 @@
 //! Terminal side panel: a local PTY in the worktree, emulated by alacritty_terminal.
-//! Ported in part from Monocode's terminal.rs (MIT).
+//! Ported in part from an MIT-licensed terminal (MIT).
 use crate::i18n::{t, tf};
 use crate::panels::PanelContext;
 use crate::tab_tile::{Face, TAB_TILE, TAB_TILE_GAP, mark_tile, tab_tile_inset};

@@ -61,7 +61,7 @@ mod delegated_tasks;
 /// The transcript's follow of the end: glides instead of jumping (glide.rs).
 #[path = "glide.rs"]
 mod glide;
-/// The streamed reply revealed at a steady pace (Monocode's wordFade rhythm).
+/// The streamed reply revealed at a steady pace.
 #[path = "paced.rs"]
 mod paced;
 /// The sidebar's hover card: a conversation's model, work time, title and folder (sidebar_card.rs).
@@ -176,6 +176,15 @@ struct Draft {
 }
 
 impl Draft {
+    /// A text with the caret at its end.
+    fn with_text(text: String) -> Self {
+        let cursor = text.len();
+        Self {
+            text,
+            cursor,
+            anchor: cursor,
+        }
+    }
     fn selection(&self) -> Range<usize> {
         self.cursor.min(self.anchor)..self.cursor.max(self.anchor)
     }
@@ -218,7 +227,7 @@ impl Draft {
     }
 }
 
-/// The host's key for a conversation's composer draft, as Sirus Code's `session:<id>`.
+/// The host's key for a conversation's composer draft, as Sirus's `session:<id>`.
 fn draft_key(session_id: &str) -> String {
     format!("session:{session_id}")
 }
@@ -355,7 +364,7 @@ enum LookTab {
     Eyes,
 }
 
-/// The usage popup's accounts page, after Sirus Code's `ProviderAccountsPanel`.
+/// The usage popup's accounts page, after Sirus's `ProviderAccountsPanel`.
 #[derive(Default)]
 struct AccountsPage {
     /// The provider whose accounts these are.
@@ -368,22 +377,6 @@ struct AccountsPage {
     adding: Option<String>,
     signing_in: Option<String>,
     problem: Option<String>,
-}
-
-fn move_project_to_folder(settings: &mut Value, project: &str, folder: Option<&str>) {
-    for entry in settings["projectFolders"]
-        .as_array_mut()
-        .into_iter()
-        .flatten()
-    {
-        let on = folder == entry["id"].as_str();
-        if let Some(ids) = entry["projectIds"].as_array_mut() {
-            ids.retain(|id| id.as_str() != Some(project));
-            if on {
-                ids.push(json!(project));
-            }
-        }
-    }
 }
 
 /// The checkout a conversation runs in: its worktree, or the project's own folder.
@@ -614,6 +607,56 @@ fn typed_text(text: &str, placeholder: &str, caret: Div) -> Div {
     }
 }
 
+/// ⌘K's filters: (label, icon).
+const SCOPES: [(&str, &str); 4] = [
+    ("Tudo", "sparkles"),
+    ("Conversas", "message-square"),
+    ("Arquivos", "file-text"),
+    ("Projetos", "folder"),
+];
+/// How many rows a filter lists of one kind.
+const PALETTE_ROWS_FULL: usize = 40;
+
+fn palette_key(label: &'static str) -> Div {
+    div()
+        .flex_shrink_0()
+        .min_w(px(18.))
+        .h(px(18.))
+        .px(px(5.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(5.))
+        .border_1()
+        .border_color(content(0.08))
+        .bg(content(0.07))
+        .text_size(px(10.5))
+        .text_color(content(0.6))
+        .child(label)
+}
+
+fn palette_hint(key: &'static str, label: &'static str) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(5.))
+        .child(palette_key(key))
+        .child(label)
+}
+
+/// Where `needle` sits in `title`, when lowercasing keeps the byte offsets.
+fn palette_match(title: &str, needle: &str) -> Option<std::ops::Range<usize>> {
+    if needle.is_empty() {
+        return None;
+    }
+    let lower = title.to_lowercase();
+    if lower.len() != title.len() {
+        return None;
+    }
+    let start = lower.find(needle)?;
+    Some(start..start + needle.len())
+}
+
 fn provider_title(provider: &str) -> &'static str {
     match provider {
         "claude" => "Claude Code",
@@ -630,7 +673,7 @@ fn provider_title(provider: &str) -> &'static str {
     }
 }
 
-/// A usage window's name, as Sirus Code's `usageWindowLabel`.
+/// A usage window's name, as Sirus's `usageWindowLabel`.
 fn usage_window_label(id: &str, minutes: Option<u64>) -> String {
     let known = match id {
         "five_hour" | "opencode-go/rolling" => t("Limite de 5 horas"),
@@ -698,7 +741,7 @@ fn provider_path(provider: &str) -> &'static str {
     }
 }
 
-/// A provider's mark in its own colours, as Monocode's `provider_icon`: Codex's is a gradient, so
+/// A provider's mark in its own colours: Codex's is a gradient, so
 /// it is an image; the rest are one colour.
 fn provider_mark(provider: &str, side: f32) -> AnyElement {
     if provider == "codex" {
@@ -723,7 +766,7 @@ fn provider_brand(provider: &str) -> u32 {
     }
 }
 
-/// The color the effort bar heats from, as Sirus Code's `resolveModelBrand`.
+/// The color the effort bar heats from, as Sirus's `resolveModelBrand`.
 fn model_brand(model: &str, provider: &str) -> u32 {
     let id = model.to_lowercase();
     if provider == "claude"
@@ -827,6 +870,7 @@ fn styled_tokens(text: String) -> StyledText {
 
 /// What a reply from the back end is for.
 enum Waiting {
+    ProjectRemoved(usize),
     /// An account being removed: its id and provider.
     AccountRemoved(String, &'static str),
     /// A drawn-on picture coming back from the host, and the draft it replaces.
@@ -858,13 +902,11 @@ enum Waiting {
     Icons,
     Attached(usize),
     Dictated,
-    SideChat,
     SettingsData(&'static str),
     Usage,
     CliAgents,
     CliProbe(String),
     CliLogin(String),
-    ScriptsSaved(usize),
     ScriptAction,
     Transcript(usize),
     /// `transcript_action` search for the palette's text (global_search.rs).
@@ -905,9 +947,17 @@ struct PaletteState {
     query: String,
     selected: usize,
     open: Tween,
+    /// ⌘K's filter: all, conversations, files or projects.
+    scope: usize,
+    /// Where the pointer last was: a row takes the selection only when it moves, not when the
+    /// list scrolls under it.
+    pointer: Option<gpui::Point<Pixels>>,
+    scroll: gpui::ScrollHandle,
+    /// The selection moved by keys, so the list brings it into view.
+    follow: std::cell::Cell<bool>,
 }
 
-/// A collapsed sidebar sliding out over the workspace (Monocode's sidebar_peek.rs).
+/// A collapsed sidebar sliding out over the workspace.
 struct Peek {
     open: bool,
     t: Tween,
@@ -936,8 +986,6 @@ const PEEK_EDGE: f32 = 6.;
 const PEEK_INSET: f32 = 6.;
 const PEEK_DRIFT: f32 = 12.;
 const PEEK_CLOSE: Duration = Duration::from_millis(180);
-/// Where the sidebar menu's switches start numbering, clear of Settings' own.
-const SIDEBAR_SWITCH_ID: usize = 800_000;
 /// Settings, same pages in the same order as Sirus's SettingsSidebar.
 const SETTINGS_NAV: [(&str, &[(&str, &str)]); 3] = [
     (
@@ -1056,7 +1104,6 @@ pub struct Shell {
     pane_views: HashMap<(usize, String), gpui::AnyView>,
     settings_data: HashMap<&'static str, Value>,
     /// The project's scripts while its settings popup edits them (project_scripts.rs).
-    scripts_edit: Option<crate::project_scripts::Edit>,
     /// Whether the notice above the composer shows the latest run's output.
     scripts_output: bool,
     waiting: HashMap<u64, Waiting>,
@@ -1268,7 +1315,6 @@ pub struct Shell {
     resizing: bool,
     rows: HashMap<Row, RowMotion>,
     switch: Tween,
-    next_turn: usize,
     epoch: Instant,
     frames: VecDeque<Instant>,
     show_stats: bool,
@@ -1353,7 +1399,7 @@ impl Shell {
         window.focus(&focus, cx);
         cx.observe_window_activation(window, |_, _, cx| cx.notify())
             .detach();
-        // Loops (spinners, shimmers, streaming text) tick together at 30 Hz, as Monocode's pulse.
+        // Loops (spinners, shimmers, streaming text) tick together at 30 Hz
         cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor()
@@ -1401,7 +1447,7 @@ impl Shell {
             }
         })
         .detach();
-        // Sirus Code's incoming check: every 5 minutes while the window is visible. Answers only
+        // Sirus's incoming check: every 5 minutes while the window is visible. Answers only
         // redraw when they change (git_sync.rs), so an idle window stays still.
         cx.spawn(async move |this, cx| {
             loop {
@@ -1457,7 +1503,6 @@ impl Shell {
             setting_edit: None,
             pane_views: HashMap::new(),
             settings_data: HashMap::new(),
-            scripts_edit: None,
             scripts_output: false,
             waiting: HashMap::new(),
             drafts: HashMap::new(),
@@ -1610,7 +1655,6 @@ impl Shell {
             resizing: false,
             rows: HashMap::new(),
             switch: Tween::still(1., now),
-            next_turn: 0,
             epoch: now,
             frames: VecDeque::new(),
             show_stats: false,
@@ -1681,15 +1725,10 @@ impl Shell {
                     };
                     self.cli_reply("cliLogins", id, reply);
                 }
-                Some(Waiting::ScriptsSaved(ix)) if ok => {
-                    if let Some(project) = self.projects.get_mut(ix) {
-                        project.scripts = crate::project_scripts::Saved::of(&value["scripts"]);
-                    }
-                }
-                Some(Waiting::ScriptsSaved(_) | Waiting::ScriptAction) if !ok => {
+                Some(Waiting::ScriptAction) if !ok => {
                     self.problem = Some(error_text(&value));
                 }
-                Some(Waiting::ScriptsSaved(_) | Waiting::ScriptAction) => {}
+                Some(Waiting::ScriptAction) => {}
                 Some(Waiting::Older(ix)) if ok => {
                     let conversation = &mut self.conversations[ix];
                     let older = value["messages"].as_array().cloned().unwrap_or_default();
@@ -1736,6 +1775,7 @@ impl Shell {
                     self.worktrees
                         .insert(project, value.as_array().cloned().unwrap_or_default());
                 }
+                Some(Waiting::ProjectRemoved(ix)) if ok => self.forget_project(ix, cx),
                 Some(Waiting::ProjectAdded) if ok => {
                     self.projects.push(Project {
                         id: value["id"].as_str().unwrap_or("").to_owned(),
@@ -1744,7 +1784,6 @@ impl Shell {
                         appearance: value["appearance"].clone(),
                         scripts: crate::project_scripts::Saved::of(&value["scripts"]),
                         open: true,
-                        pinned: false,
                         conversations: Vec::new(),
                     });
                     let ix = self.projects.len() - 1;
@@ -1862,33 +1901,6 @@ impl Shell {
                 Some(Waiting::Dictated) if ok => {
                     if let Some(text) = value.as_str().filter(|t| !t.is_empty()) {
                         self.draft().insert(text);
-                    }
-                }
-                Some(Waiting::SideChat) if ok && false => {
-                    let ix = match self
-                        .conversations
-                        .iter()
-                        .position(|c| Some(c.session_id.as_str()) == value["id"].as_str())
-                    {
-                        Some(ix) => ix,
-                        None => self.add_session(&value),
-                    };
-                    self.ensure_loaded(ix);
-                    let (project, id) = (self.current_project, self.next_id);
-                    let _ = project;
-                    if !self.tabs.iter().any(|t| t.conversation == ix && !t.closing) {
-                        self.next_id += 1;
-                        let now = Instant::now();
-                        let x = self.new_tab_x.at(now).max(0.);
-                        self.tabs.push(Tab {
-                            id,
-                            conversation: ix,
-                            pinned: false,
-                            closing: false,
-                            x: Tween::still(x, now),
-                            w: Tween::still(0., now),
-                        });
-                        self.select(id, cx);
                     }
                 }
                 Some(Waiting::Agents) if ok => {
@@ -2076,7 +2088,7 @@ impl Shell {
                 "notification-activity" => self.activity_event(&payload, cx),
                 "agent-output" => self.agent_output(&payload),
                 "agent-exit" => self.refresh_diff(),
-                // Monocode's chime for activity on something linked to a session.
+                // The chime for activity on something linked to a session.
                 "pr-watch-activity" => {
                     if self.settings["notifications"]["sounds"].as_bool() != Some(false) {
                         crate::sound::play(crate::sound::Cue::LinkedActivity);
@@ -2106,9 +2118,7 @@ impl Shell {
         // These two fix up this Mac's own settings; another computer's are left as they are.
         let remote = self.on_remote();
         let repaired = !remote && crate::settings_pages::repair_provider_paths(&mut self.settings);
-        if !remote
-            && (crate::chat_background::seed_monocode_default(&mut self.settings) || repaired)
-        {
+        if !remote && repaired {
             self.backend
                 .invoke("save_settings", json!({ "settings": self.settings }));
         }
@@ -2158,7 +2168,6 @@ impl Shell {
                 appearance: p["appearance"].clone(),
                 scripts: crate::project_scripts::Saved::of(&p["scripts"]),
                 open: false,
-                pinned: false,
                 conversations: Vec::new(),
             })
             .collect();
@@ -2347,92 +2356,6 @@ impl Shell {
     ) {
         self.scripts_output = false;
         self.script_action(crate::project_scripts::run_args(session, kind), cx);
-    }
-
-    /// Saves the settings popup's draft when it changed and is valid; `leave` ends the edit.
-    /// An invalid draft is not saved, and leaving discards it.
-    fn save_project_scripts(&mut self, leave: bool) {
-        if let Some(edit) = self.scripts_edit.as_ref() {
-            if let Some(project) = self.projects.get(edit.project) {
-                if edit.draft.changed(&project.scripts) && edit.draft.valid() {
-                    let args = edit.draft.save_args(&project.id);
-                    let index = edit.project;
-                    let call = self.backend.invoke("project_scripts_action", args);
-                    self.waiting.insert(call, Waiting::ScriptsSaved(index));
-                }
-            }
-        }
-        if leave {
-            self.scripts_edit = None;
-        }
-    }
-
-    fn focus_script(&mut self, field: crate::project_scripts::Field, cx: &mut Context<Self>) {
-        if let Some(edit) = self.scripts_edit.as_mut() {
-            edit.focus = Some(field);
-        }
-        cx.notify();
-    }
-
-    fn toggle_script_preview(&mut self, cx: &mut Context<Self>) {
-        if let Some(edit) = self.scripts_edit.as_mut() {
-            if edit.draft.open_preview_allowed() {
-                edit.draft.open_preview = !edit.draft.open_preview;
-            }
-        }
-        cx.notify();
-    }
-
-    /// The Scripts row of the settings popup: unfolding starts an edit of the saved scripts.
-    fn toggle_scripts_row(&mut self, cx: &mut Context<Self>) {
-        let opening = self.project_menu.as_ref().and_then(|m| m.expanded) != Some("scripts");
-        self.toggle_project_row("scripts", cx);
-        if opening {
-            if let Some(ix) = self.current_project {
-                self.scripts_edit = Some(crate::project_scripts::Edit::new(
-                    ix,
-                    &self.projects[ix].scripts,
-                ));
-            }
-        }
-    }
-
-    /// The Scripts block of the settings popup, scrolling inside its own area.
-    fn scripts_fields_view(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
-        let project = &self.projects[index];
-        let edit = self
-            .scripts_edit
-            .as_ref()
-            .filter(|edit| edit.project == index);
-        let draft = edit.map_or_else(
-            || crate::project_scripts::Draft::of(&project.scripts),
-            |edit| edit.draft.clone(),
-        );
-        let focus = edit.and_then(|edit| edit.focus);
-        let can_save =
-            edit.is_some_and(|edit| edit.draft.changed(&project.scripts) && edit.draft.valid());
-        use crate::project_scripts::Field;
-        let handlers = [
-            crate::project_scripts_view::click(cx, |this, cx| this.focus_script(Field::Setup, cx)),
-            crate::project_scripts_view::click(cx, |this, cx| this.focus_script(Field::Finish, cx)),
-            crate::project_scripts_view::click(cx, |this, cx| {
-                this.focus_script(Field::Preview, cx)
-            }),
-        ];
-        let toggle =
-            crate::project_scripts_view::click(cx, |this, cx| this.toggle_script_preview(cx));
-        let save = crate::project_scripts_view::click(cx, |this, cx| {
-            this.save_project_scripts(false);
-            cx.notify();
-        });
-        let fields =
-            crate::project_scripts_view::fields(&draft, focus, handlers, toggle, save, can_save);
-        div()
-            .id("project-scripts-scroll")
-            .max_h(px(crate::project_scripts_view::SETTINGS_HEIGHT - 20.))
-            .overflow_y_scroll()
-            .child(fields)
-            .into_any_element()
     }
 
     /// The run notice above the composer: the conversation's latest script run.
@@ -2742,14 +2665,18 @@ impl Shell {
             "native_github_switch" => {
                 let login = text("login");
                 self.native_task("github", move || {
-                    crate::native_actions::github_switch(&login);
+                    if let Err(problem) = crate::native_actions::github_switch(&login) {
+                        eprintln!("cannot switch GitHub account: {problem}");
+                    }
                     crate::native_actions::github_list()
                 });
             }
             "native_github_logout" => {
                 let login = text("login");
                 self.native_task("github", move || {
-                    crate::native_actions::github_logout(&login);
+                    if let Err(problem) = crate::native_actions::github_logout(&login) {
+                        eprintln!("cannot sign out of GitHub: {problem}");
+                    }
                     crate::native_actions::github_list()
                 });
             }
@@ -2761,7 +2688,9 @@ impl Shell {
                     };
                     let _ = results
                         .send_blocking(("github_device", json!({ "code": code, "url": url })));
-                    crate::native_actions::github_login_wait();
+                    if let Err(problem) = crate::native_actions::github_login_wait() {
+                        eprintln!("GitHub sign-in did not finish: {problem}");
+                    }
                     let _ = results.send_blocking(("github", crate::native_actions::github_list()));
                     Value::Null
                 });
@@ -2902,7 +2831,7 @@ impl Shell {
         }
     }
 
-    /// Tabs belong to their project, as in Monocode: going to another project brings its own.
+    /// Tabs belong to their project: going to another project brings its own.
     fn enter_project(&mut self, project: Option<usize>, cx: &mut Context<Self>) {
         if project == self.current_project {
             return;
@@ -3451,7 +3380,7 @@ impl Shell {
         }
     }
 
-    /// What the footer's usage opens: Monocode's cards with Sirus Code's account and actions.
+    /// What the footer's usage opens: the cards with Sirus's account and actions.
     fn usage_popup_view(
         &self,
         now: Instant,
@@ -4073,19 +4002,6 @@ impl Shell {
         if self.find.shown() {
             return Some(&mut self.find.query);
         }
-        // The settings popup's focused script field takes the typing.
-        if self
-            .scripts_edit
-            .as_ref()
-            .is_some_and(|edit| edit.focus.is_some())
-        {
-            let edit = self.scripts_edit.as_mut()?;
-            let field = edit.focus?;
-            return Some(edit.draft.field_mut(field));
-        }
-        if self.edit_target().is_some() {
-            return self.edit_target();
-        }
         if let Some((_, value)) = self.secret_entry.as_mut() {
             return Some(value);
         }
@@ -4173,6 +4089,10 @@ impl Shell {
     }
 
     fn draft(&mut self) -> &mut Draft {
+        // A queued request being edited is typed in with the same keys as the composer.
+        if self.edit_target().is_some() {
+            return self.queues.edit_draft_mut();
+        }
         self.touch_drafts();
         let ix = self.active_conversation();
         self.drafts.entry(ix).or_default()
@@ -4558,7 +4478,7 @@ impl Shell {
         moving
     }
 
-    /// The pinned cards, as Monocode's pinned_tabs.rs: up to three in a row, more stacked
+    /// The pinned cards: up to three in a row, more stacked
     /// behind the last chosen, fanning out when pointed at. Hovered cards show their title.
     fn pinned_dock(
         &mut self,
@@ -5377,11 +5297,28 @@ impl Shell {
             let state = self.palette_ui.as_mut().unwrap();
             match key {
                 "escape" => self.palette_ui = None,
-                "down" => state.selected = (state.selected + 1).min(count.saturating_sub(1)),
-                "up" => state.selected = state.selected.saturating_sub(1),
+                "down" => {
+                    state.selected = (state.selected + 1).min(count.saturating_sub(1));
+                    state.follow.set(true);
+                }
+                "up" => {
+                    state.selected = state.selected.saturating_sub(1);
+                    state.follow.set(true);
+                }
+                "tab" if !state.files && !state.all => {
+                    let step = if keys.modifiers.shift {
+                        SCOPES.len() - 1
+                    } else {
+                        1
+                    };
+                    state.scope = (state.scope + step) % SCOPES.len();
+                    state.selected = 0;
+                    state.follow.set(true);
+                }
                 "backspace" => {
                     state.query.pop();
                     state.selected = 0;
+                    state.follow.set(true);
                     self.palette_query_changed(cx);
                 }
                 "enter" => {
@@ -5399,6 +5336,7 @@ impl Shell {
                 }
                 _ => {
                     state.selected = 0;
+                    state.follow.set(true);
                     cx.notify();
                     return;
                 }
@@ -5779,7 +5717,7 @@ impl Shell {
             .collect()
     }
 
-    /// Adds `/name` at the start of the draft, once, as Sirus Code's `insertSkillInvocation`.
+    /// Adds `/name` at the start of the draft, once, as Sirus's `insertSkillInvocation`.
     fn use_skill(&mut self, name: &str, cx: &mut Context<Self>) {
         let token = format!("/{name}");
         let draft = self.draft();
@@ -5853,7 +5791,7 @@ impl Shell {
         .detach();
     }
 
-    /// The composer's + menu, as Sirus Code's: attach, skills, goal, planning, debug and team.
+    /// The composer's + menu, as Sirus's: attach, skills, goal, planning, debug and team.
     fn add_menu_view(
         &self,
         now: Instant,
@@ -5872,7 +5810,7 @@ impl Shell {
             conversation.debugging,
             conversation.team,
         );
-        // As Sirus Code's `supportsPlanning` and its team check.
+        // As Sirus's `supportsPlanning` and its team check.
         let provider = conversation.provider;
         let planning_ok = !matches!(provider, "grok" | "antigravity")
             && (provider != "codex" || conversation.model.is_some());
@@ -6192,7 +6130,7 @@ impl Shell {
                         let on = !this.conversations[ix].planning;
                         this.conversations[ix].planning = on;
                         if on {
-                            // Planning never runs with full access, as in Sirus Code.
+                            // Planning never runs with full access, as in Sirus.
                             this.conversations[ix].debugging = false;
                             if this.conversations[ix].approval == "full" {
                                 this.conversations[ix].approval =
@@ -6471,8 +6409,8 @@ impl Shell {
         let strip_left = nav_end + 6.;
         let open_dock = self.dock.at(now);
         // With the side panel open the tabs stop at its edge, marked by a short rule; its own
-        // options sit in the bar above it, as in Monocode.
-        let room = width - self.sidebar_width * self.sidebar.at(now) - 12.;
+        // options sit in the bar above it.
+        let room = self.dock_room(width, now);
         let dock_width = self.dock_full(room, now) * open_dock;
         // Exactly over the card's hairline: gutter, card border, then the panel.
         let dock_edge = (width - 6. - 1. - dock_width - 1.).max(nav_end + 6.);
@@ -7740,14 +7678,20 @@ impl Shell {
                             ),
                         )
                         .child(
-                            item("menu-project-settings", "tuning", "Aparência", None).on_click(
-                                cx.listener(move |this, _, _, cx| {
+                            item(
+                                "menu-project-settings",
+                                "tuning",
+                                "Configurações do projeto",
+                                None,
+                            )
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
                                     close(this);
                                     this.switch_project(index, cx);
                                     this.toggle_project_menu(cx);
                                     this.open_project_sub(ProjectSub::Settings, cx);
-                                }),
-                            ),
+                                },
+                            )),
                         )
                         .child(divider())
                         .child(
@@ -7842,7 +7786,7 @@ impl Shell {
         state
     }
 
-    /// The rail beside the transcript: one tick per message, as Sirus Code's `MessageTrail`.
+    /// The rail beside the transcript: one tick per message, as Sirus's `MessageTrail`.
     fn message_trail(
         &self,
         conversation: usize,
@@ -8044,7 +7988,7 @@ impl Shell {
         )
     }
 
-    /// One project at a time, as Monocode's: its name opens the popup that changes it.
+    /// One project at a time: its name opens the popup that changes it.
     fn project_header(&self, cx: &mut Context<Self>) -> AnyElement {
         let current = self.current_project.or(self.project_order.first().copied());
         let name = current.map_or(String::new(), |ix| self.projects[ix].name.clone());
@@ -8126,7 +8070,6 @@ impl Shell {
 
     /// Closes the popup, saving a name being edited. Says whether it was open.
     fn close_project_menu(&mut self) -> bool {
-        self.save_project_scripts(true);
         let Some(menu) = self.project_menu.take() else {
             return false;
         };
@@ -8152,13 +8095,6 @@ impl Shell {
     }
 
     fn open_project_sub(&mut self, sub: ProjectSub, cx: &mut Context<Self>) {
-        if self
-            .project_menu
-            .as_ref()
-            .is_some_and(|m| m.sub != Some(sub))
-        {
-            self.save_project_scripts(true);
-        }
         let Some(ix) = self.current_project else {
             return;
         };
@@ -8220,7 +8156,7 @@ impl Shell {
                     .unwrap_or("")
             })
             .collect();
-        let mut order: Vec<usize> = (0..self.projects.len()).collect();
+        let mut order = self.project_order.clone();
         order.sort_by(|a, b| latest[*b].cmp(latest[*a]));
         order
     }
@@ -8349,26 +8285,33 @@ impl Shell {
 
     /// The next or previous project, wrapping around (⌘⇧→, ⌘⇧←).
     fn step_project(&mut self, forward: bool, cx: &mut Context<Self>) {
-        let count = self.projects.len();
-        if count < 2 {
+        let mut order = self.project_order.clone();
+        order.sort_unstable();
+        if order.len() < 2 {
             return;
         }
-        let at = self.current_project.unwrap_or(0).min(count - 1);
-        self.switch_project(rail_step(at, count, forward), cx);
+        let at = self
+            .current_project
+            .and_then(|current| order.iter().position(|p| *p == current))
+            .unwrap_or(0);
+        self.switch_project(order[rail_step(at, order.len(), forward)], cx);
     }
 
-    /// The projects in the footer, under the sidebar, as Monocode's: five robots at a time, the
+    /// The projects in the footer, under the sidebar: five robots at a time, the
     /// name and the keys under the pointer. The arrows, a swipe or a sideways wheel slide them.
     fn project_rail(&self, width: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if self.projects.len() < 2 || width < 120. || !self.sidebar_items.shown("projects") {
+        if self.project_order.len() < 2 || width < 120. || !self.sidebar_items.shown("projects") {
             return None;
         }
         const FITS: usize = 5;
         const GAP: f32 = 4.;
-        let count = self.projects.len();
-        let current = self.current_project.unwrap_or(0).min(count - 1);
         // The newest first, so the rail's first screen is what was used last.
         let order = self.projects_by_activity();
+        let count = order.len();
+        let current = self
+            .current_project
+            .filter(|project| order.contains(project))
+            .unwrap_or(order[0]);
         let current_at = order.iter().position(|p| *p == current).unwrap_or(0);
         let last = count.saturating_sub(FITS) as f32;
         let now = Instant::now();
@@ -8559,17 +8502,40 @@ impl Shell {
         .detach();
     }
 
-    /// Removes a project from the list and goes to the next one, if it was the current one.
+    /// Asks the host to remove a project; the window lets go of it once that's done.
     fn drop_project(&mut self, ix: usize, cx: &mut Context<Self>) {
         self.close_project_menu();
+        let working = self.projects[ix]
+            .conversations
+            .iter()
+            .any(|c| self.conversations[*c].working());
+        if working {
+            self.problem =
+                Some(t("Pare as conversas em andamento antes de remover este projeto.").to_owned());
+            cx.notify();
+            return;
+        }
         let id = self.projects[ix].id.clone();
-        self.backend
+        let call = self
+            .backend
             .invoke("remove_project", json!({ "projectId": id }));
+        self.waiting.insert(call, Waiting::ProjectRemoved(ix));
+        cx.notify();
+    }
+
+    /// Takes a removed project out of everything that lists one. Its slot in `projects` stays,
+    /// because the other projects are known by index: `project_order` says who is listed.
+    fn forget_project(&mut self, ix: usize, cx: &mut Context<Self>) {
         self.project_order.retain(|p| *p != ix);
+        self.project_recent.retain(|p| *p != ix);
         if self.current_project == Some(ix) {
-            if let Some(next) = self.project_order.first().copied() {
-                self.switch_project(next, cx);
+            match self.project_order.first().copied() {
+                Some(next) => self.switch_project(next, cx),
+                None => self.current_project = None,
             }
+        }
+        for conversation in std::mem::take(&mut self.projects[ix].conversations) {
+            self.leave_conversation(conversation, cx);
         }
         cx.notify();
     }
@@ -8591,20 +8557,6 @@ impl Shell {
         {
             cx.notify();
         }
-    }
-
-    fn toggle_project_row(&mut self, which: &'static str, cx: &mut Context<Self>) {
-        if self.project_menu.as_ref().and_then(|m| m.expanded) == Some("scripts") {
-            self.save_project_scripts(true);
-        }
-        if let Some(menu) = self.project_menu.as_mut() {
-            menu.expanded = if menu.expanded == Some(which) {
-                None
-            } else {
-                Some(which)
-            };
-        }
-        cx.notify();
     }
 
     fn set_project_look(&mut self, field: &str, value: Value, cx: &mut Context<Self>) {
@@ -8700,20 +8652,6 @@ impl Shell {
         let Some(project) = self.current_project else {
             return false;
         };
-        // A focused script field takes Enter, Backspace, Tab and Escape before the menu does.
-        if let Some(edit) = self.scripts_edit.as_mut() {
-            let taken = match key {
-                "enter" => edit.enter(),
-                "backspace" => edit.backspace(),
-                "tab" => edit.tab(),
-                "escape" => edit.escape(),
-                _ => false,
-            };
-            if taken {
-                cx.notify();
-                return true;
-            }
-        }
         match key {
             "tab" => {
                 let next = match sub {
@@ -8726,7 +8664,6 @@ impl Shell {
             }
             "escape" => {
                 if sub.is_some() {
-                    self.save_project_scripts(true);
                     if sub == Some(ProjectSub::Settings) {
                         self.commit_project_name(&query);
                     }
@@ -8907,7 +8844,7 @@ impl Shell {
             .child(row(
                 "project-settings",
                 "tuning",
-                crate::i18n::t("Aparência"),
+                crate::i18n::t("Configurações do projeto"),
                 None,
                 ProjectSub::Settings,
                 cx,
@@ -9330,7 +9267,7 @@ impl Shell {
                 let session = self.conversations[self.active_conversation()]
                     .session_id
                     .clone();
-                // The editors open beside their row, as Monocode's submenus do.
+                // The editors open beside their row
                 if expanded == Some("editor")
                     && !self.env_editors.is_empty()
                     && let Some(row) = self.project_editor_row.get()
@@ -9657,7 +9594,7 @@ impl Shell {
         )
     }
 
-    /// A row of the sidebar's navigation, sized as Monocode's.
+    /// A row of the sidebar's navigation, sized.
     fn sidebar_nav_row(id: &'static str, active: bool) -> Stateful<Div> {
         div()
             .id(id)
@@ -9829,7 +9766,7 @@ impl Shell {
                     .cursor_pointer()
                     .child(icon(item.icon, 14.).text_color(content(0.65)))
                     .child(div().flex_1().min_w_0().truncate().child(t(item.label)))
-                    // Monocode's menu switch: neutral, never the accent.
+                    // The menu switch: neutral, never the accent.
                     .child(
                         div()
                             .relative()
@@ -10437,7 +10374,7 @@ impl Shell {
         )
     }
 
-    /// What the model allows and what is chosen, as Sirus Code's `modelExecutionControls`.
+    /// What the model allows and what is chosen, as Sirus's `modelExecutionControls`.
     fn execution(&self, provider: &str, model: Option<&str>) -> Execution {
         let info = model.and_then(|id| {
             self.models
@@ -10617,7 +10554,7 @@ impl Shell {
         self.effort_label_from = None;
     }
 
-    /// The providers the picker offers: installed and not turned off, in Sirus Code's order.
+    /// The providers the picker offers: installed and not turned off, in Sirus's order.
     fn enabled_providers(&self) -> Vec<&'static str> {
         let off: Vec<&str> = self.settings["disabledProviders"]
             .as_array()
@@ -10642,7 +10579,7 @@ impl Shell {
             .collect()
     }
 
-    /// The rows for a scope, as Sirus Code's `pickerModelChoices`: the newest of each model line,
+    /// The rows for a scope, as Sirus's `pickerModelChoices`: the newest of each model line,
     /// keeping anything favorited, selected or found by a search.
     fn model_rows(&self) -> Vec<ModelRow> {
         let conversation = &self.conversations[self.active_conversation()];
@@ -10918,7 +10855,7 @@ impl Shell {
         rows
     }
 
-    /// Sirus Code's effort page: 280 wide, a 32 tall bar and a thumb that steps through levels.
+    /// Sirus's effort page: 280 wide, a 32 tall bar and a thumb that steps through levels.
     fn effort_page(
         &self,
         now: Instant,
@@ -11090,7 +11027,7 @@ impl Shell {
             .into_any_element()
     }
 
-    /// Sirus Code's catalog page: 288 wide, provider tabs with a gliding mark, search and rows.
+    /// Sirus's catalog page: 288 wide, provider tabs with a gliding mark, search and rows.
     fn catalog_page(&self, now: Instant, moving: &mut bool, cx: &mut Context<Self>) -> AnyElement {
         let tabs = self.enabled_providers();
         let tab_count = tabs.len() + 1;
@@ -11492,10 +11429,6 @@ impl Shell {
         self.composer_column().0
     }
 
-    fn composer_menu_right(&self) -> f32 {
-        self.composer_column().1
-    }
-
     /// While the agent works, the project's robot walks along the composer's top edge over a line
     /// of letters in its colour. Reduce Motion leaves it out.
     fn composer_runner(&self, ix: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -11705,34 +11638,8 @@ impl Shell {
                         window.on_next_frame(|window, _| window.refresh());
                     }
                 }
-                let fill = crate::theme::text_selection();
                 if !selection.is_empty() {
-                    let mut at = selection.start;
-                    while at < selection.end {
-                        let Some(start) = layout.position_for_index(at) else {
-                            break;
-                        };
-                        let mut stop = at;
-                        let mut end = start;
-                        for next in (at + 1)..=selection.end {
-                            if let Some(p) = layout.position_for_index(next) {
-                                if p.y != start.y {
-                                    break;
-                                }
-                                stop = next;
-                                end = p;
-                            }
-                        }
-                        if stop == at {
-                            at += 1;
-                            continue;
-                        }
-                        window.paint_quad(gpui::fill(
-                            Bounds::new(start, gpui::size(end.x - start.x, line)),
-                            fill,
-                        ));
-                        at = stop;
-                    }
+                    paint_selection(&layout, selection.clone(), window);
                 } else if typing {
                     // Out of focus it rests lit rather than freezing halfway through a blink.
                     let lit = !window.is_window_active()
@@ -12054,6 +11961,7 @@ impl Shell {
                         .text_color(if main { on_accent() } else { content(0.85) })
                         .bg(if main { accent() } else { content(0.08) })
                         .hover(|s| s.opacity(0.88))
+                        .child(label)
                 };
                 d.child(
                     div()
@@ -12273,7 +12181,7 @@ impl Shell {
                                                 cx.notify();
                                             })),
                                     )
-                                    // One line of controls, as Monocode's: what shapes the work on the left, the model and
+                                    // One line of controls: what shapes the work on the left, the model and
                                     // sending on the right.
                                     .child(
                                         div()
@@ -12527,7 +12435,7 @@ impl Shell {
                         |(text, _)| text.clone(),
                     )),
             )
-            // Refresh sits right beside the numbers, as in Monocode.
+            // Refresh sits right beside the numbers.
             .child(
                 div()
                     .id("refresh-usage")
@@ -12595,7 +12503,7 @@ impl Shell {
     }
 
     /// A group of steps: its tile and title, and the steps on a rail when open. The running group
-    /// is open by itself, inside a window that follows the newest step (Monocode's live phase);
+    /// is open by itself, inside a window that follows the newest step;
     /// a settled one opens with a click.
     #[allow(clippy::too_many_arguments)]
     fn phase_view(
@@ -12915,7 +12823,7 @@ impl Shell {
             div().child(worked).into_any_element()
         };
         // Pointing at the tile pushes the model's mark out to the right as the chevron slides
-        // in from the left; an open fold keeps the chevron (Monocode's phase_tile.rs).
+        // in from the left; an open fold keeps the chevron.
         let roll_key = 2_000_000 + index * 64 + section;
         let roll = self.roll(conversation, roll_key, now, moving);
         let shown = if foldable { roll.max(openness) } else { 0. }.clamp(0., 1.);
@@ -12995,7 +12903,7 @@ impl Shell {
             .iter()
             .rposition(|beat| matches!(beat, data::Beat::Steps(_)));
         let turn_width = self.turn_width.get();
-        // An instruction opens a new stretch of the turn, as a prompt does in Monocode: its bubble,
+        // An instruction opens a new stretch of the turn, as a prompt does: its bubble,
         // then a header of its own over what followed.
         let mut sections: Vec<(Option<usize>, std::ops::Range<usize>)> = Vec::new();
         let (mut start, mut before) = (0, None);
@@ -13027,7 +12935,7 @@ impl Shell {
                 blocks.push(self.steer_bubble(index, steer, turn, conversation, cx));
             }
             // What came before the newest words folds under the header, even while the turn works:
-            // the view keeps the latest reply and the running group, as in Monocode.
+            // the view keeps the latest reply and the running group.
             let foldable = data::folds_work(beats);
             let answer = data::final_answer(beats);
             let key = (conversation, index, FOLD_KEY + section);
@@ -13142,7 +13050,7 @@ impl Shell {
                         .pl(px(TILE_RAIL_INDENT))
                         .pb(px(6.))
                         .child(rail(at + 1 == total))
-                        // Work under the fold reads a step back from the answer, as in Monocode.
+                        // Work under the fold reads a step back from the answer.
                         .child(div().opacity(0.83).child(element))
                 });
                 let body = div().w_full().flex().flex_col().children(rows);
@@ -13490,18 +13398,13 @@ impl Shell {
         }
     }
 
-    fn close_pane(&mut self, kind: usize, cx: &mut Context<Self>) {
-        self.dock_panes.retain(|k| *k != kind);
-        if self.dock_active == Some(kind) {
-            self.dock_active = self.dock_panes.last().copied();
-            if self.dock_active.is_none() {
-                self.chooser_since = Instant::now();
-            }
-        }
-        cx.notify();
+    /// The side panel: its open panes as chips, or the six options in two columns.
+    /// The width inside the card, its gutters and borders taken out: all a maximized panel gets.
+    fn dock_room(&self, width: f32, now: Instant) -> f32 {
+        let open = self.sidebar.at(now);
+        width - self.sidebar_width * open - 6. - 6. * (1. - open) - 2.
     }
 
-    /// The side panel: its open panes as chips, or the six options in two columns.
     /// The side panel's full width: what it was given, narrower when that would squeeze the
     /// conversation, or all the room when it's maximized.
     fn dock_full(&self, room: f32, now: Instant) -> f32 {
@@ -13653,9 +13556,7 @@ impl Shell {
     fn toggle_palette(&mut self, files: bool, cx: &mut Context<Self>) {
         self.environment = None;
         self.appearance = None;
-        if files {
-            self.refresh_files();
-        }
+        self.refresh_files();
         let same = self.palette_ui.as_ref().is_some_and(|p| p.files == files);
         self.palette_ui = if same {
             None
@@ -13666,6 +13567,10 @@ impl Shell {
                 search: Default::default(),
                 query: String::new(),
                 selected: 0,
+                scope: 0,
+                pointer: None,
+                scroll: gpui::ScrollHandle::new(),
+                follow: std::cell::Cell::new(false),
                 open: Tween::from_to(
                     0.,
                     1.,
@@ -13720,33 +13625,70 @@ impl Shell {
         if self.palette_ui.as_ref().is_some_and(|p| p.all) {
             return self.palette_message_hits(query.trim(), &[]);
         }
-        for (ix, c) in self.conversations.iter().enumerate() {
-            if needle.is_empty() || c.title.to_lowercase().contains(&needle) {
-                hits.push(PaletteHit::Chat(ix));
+        let scope = self.palette_ui.as_ref().map_or(0, |p| p.scope);
+        let quiet = needle.is_empty();
+        if scope <= 1 {
+            // Only conversations still in a project: a deleted one stays in memory, unlisted.
+            let mut chats: Vec<usize> = (0..self.conversations.len())
+                .filter(|ix| self.project_of(*ix).is_some())
+                .filter(|ix| {
+                    quiet
+                        || self.conversations[*ix]
+                            .title
+                            .to_lowercase()
+                            .contains(&needle)
+                })
+                .collect();
+            if quiet {
+                chats.sort_by(|a, b| {
+                    self.conversations[*b]
+                        .last_activity
+                        .cmp(&self.conversations[*a].last_activity)
+                });
+                chats.truncate(if scope == 0 { 5 } else { PALETTE_ROWS_FULL });
             }
+            hits.extend(chats.iter().map(|ix| PaletteHit::Chat(*ix)));
+            // Words inside messages come from the host's search (global_search.rs), from 3 characters.
+            hits.extend(self.palette_message_hits(query.trim(), &chats));
         }
-        // Words inside messages come from the host's search (global_search.rs), from 3 characters.
-        let listed: Vec<usize> = hits
-            .iter()
-            .filter_map(|hit| match hit {
-                PaletteHit::Chat(ix) => Some(*ix),
-                _ => None,
-            })
-            .collect();
-        hits.extend(self.palette_message_hits(query.trim(), &listed));
-        if !needle.is_empty() {
-            for (ix, project) in self.projects.iter().enumerate() {
-                if project.name.contains(&needle) {
-                    hits.push(PaletteHit::Project(ix));
+        if scope == 0 || scope == 2 {
+            let room = if quiet && scope == 0 {
+                3
+            } else {
+                PALETTE_ROWS_FULL
+            };
+            hits.extend(
+                self.files
+                    .1
+                    .iter()
+                    .filter(|(name, folder)| {
+                        quiet || format!("{folder}/{name}").to_lowercase().contains(&needle)
+                    })
+                    .take(room)
+                    .map(|(name, folder)| PaletteHit::File(name.clone(), folder.clone())),
+            );
+        }
+        if scope == 0 || scope == 3 {
+            let room = if quiet && scope == 0 {
+                3
+            } else {
+                PALETTE_ROWS_FULL
+            };
+            hits.extend(
+                self.projects_by_activity()
+                    .into_iter()
+                    .filter(|ix| quiet || self.projects[*ix].name.to_lowercase().contains(&needle))
+                    .take(room)
+                    .map(PaletteHit::Project),
+            );
+        }
+        if scope == 0 && !quiet {
+            for (ix, label) in COMMANDS.iter().enumerate() {
+                if *label != "Abrir Simulador" && t(label).to_lowercase().contains(&needle) {
+                    hits.push(PaletteHit::Command(ix));
                 }
             }
         }
-        for (ix, label) in COMMANDS.iter().enumerate() {
-            if *label != "Abrir Simulador" && t(label).to_lowercase().contains(&needle) {
-                hits.push(PaletteHit::Command(ix));
-            }
-        }
-        hits.truncate(if needle.is_empty() { 8 } else { 12 });
         hits
     }
 
@@ -13754,11 +13696,20 @@ impl Shell {
         self.palette_ui = None;
         match hit {
             PaletteHit::Chat(c) | PaletteHit::Message(c, _) => self.open(c, cx),
-            PaletteHit::File(..) => self.open_pane(1, cx),
+            PaletteHit::File(name, folder) => {
+                let root = &self.conversations[self.active_conversation()].worktree;
+                let path = if folder.is_empty() {
+                    format!("{root}/{name}")
+                } else {
+                    format!("{root}/{folder}/{name}")
+                };
+                self.open_image_file(path, cx);
+            }
             PaletteHit::Project(ix) => {
                 self.projects[ix].open = true;
-                if let Some(first) = self.projects[ix].conversations.first().copied() {
-                    self.open(first, cx);
+                match self.projects[ix].conversations.first().copied() {
+                    Some(first) => self.open(first, cx),
+                    None => self.switch_project(ix, cx),
                 }
             }
             PaletteHit::Command(0) => self.new_conversation(None, cx),
@@ -13774,7 +13725,7 @@ impl Shell {
             }
             PaletteHit::Command(14) => self.toggle_usage_page(cx),
             PaletteHit::Command(15) => self.open_pull_requests(cx),
-            PaletteHit::Command(16) => self.copy_prompt_link(cx),
+            PaletteHit::Command(16) => self.copy_prompt_link(),
             PaletteHit::Command(pane) => self.open_pane(pane - 5, cx),
         }
         cx.notify();
@@ -13795,25 +13746,34 @@ impl Shell {
         let selected = state.selected.min(hits.len().saturating_sub(1));
         let mut rows: Vec<AnyElement> = Vec::new();
         let mut group = "";
+        let mut selected_row = 0;
+        let needle = state.query.trim().to_lowercase();
         for (ix, hit) in hits.iter().enumerate() {
+            let provider_tile = |provider| {
+                mark_tile(
+                    &crate::tab_tile::TileSize {
+                        w: 18.,
+                        h: 16.,
+                        radius: 4.,
+                    },
+                    Face::provider(provider),
+                    provider_glyph(provider, 11.),
+                )
+                .into_any_element()
+            };
             let (heading, title, detail, mark): (&str, String, Option<String>, AnyElement) =
                 match hit {
                     PaletteHit::Chat(c) => {
                         let conv = &self.conversations[*c];
                         (
-                            t("Conversas recentes"),
+                            if needle.is_empty() {
+                                t("Conversas recentes")
+                            } else {
+                                t("Conversas")
+                            },
                             conv.title.clone(),
                             Some(conv.age()),
-                            mark_tile(
-                                &crate::tab_tile::TileSize {
-                                    w: 18.,
-                                    h: 16.,
-                                    radius: 4.,
-                                },
-                                Face::provider(conv.provider),
-                                provider_glyph(conv.provider, 11.),
-                            )
-                            .into_any_element(),
+                            provider_tile(conv.provider),
                         )
                     }
                     PaletteHit::Message(c, snippet) => {
@@ -13822,50 +13782,37 @@ impl Shell {
                             t("Nas mensagens"),
                             snippet.clone(),
                             Some(conv.title.clone()),
-                            mark_tile(
-                                &crate::tab_tile::TileSize {
-                                    w: 18.,
-                                    h: 16.,
-                                    radius: 4.,
-                                },
-                                Face::provider(conv.provider),
-                                provider_glyph(conv.provider, 11.),
-                            )
-                            .into_any_element(),
+                            provider_tile(conv.provider),
                         )
                     }
                     PaletteHit::File(name, folder) => (
-                        "",
+                        if state.files {
+                            ""
+                        } else if needle.is_empty() {
+                            t("Arquivos recentes")
+                        } else {
+                            t("Arquivos")
+                        },
                         name.to_string(),
                         Some(if folder.is_empty() {
                             name.to_string()
                         } else {
                             format!("{folder}/{name}")
                         }),
-                        crate::file_icons::file_icon(name, false, 18.),
+                        crate::file_icons::file_icon(name, false, 16.),
                     ),
                     PaletteHit::Project(p) => (
                         t("Projetos"),
                         self.projects[*p].name.to_string(),
-                        None,
-                        div()
-                            .size(px(18.))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child(icon("folder", 14.).text_color(content(0.6)))
-                            .into_any_element(),
+                        Some(self.projects[*p].path.clone()),
+                        self.project_avatar_for(*p, 16.),
                     ),
                     PaletteHit::Command(i) => (
                         t("Comandos"),
                         t(COMMANDS[*i]).to_string(),
                         None,
-                        div()
-                            .size(px(18.))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child(icon("chevron-right", 12.).text_color(content(0.5)))
+                        icon("chevron-right", 13.)
+                            .text_color(content(0.6))
                             .into_any_element(),
                     ),
                 };
@@ -13873,85 +13820,182 @@ impl Shell {
                 group = heading;
                 rows.push(
                     div()
-                        .px(px(14.))
-                        .pt(px(8.))
-                        .pb(px(3.))
-                        .text_size(px(11.5))
-                        .text_color(content(0.4))
+                        .flex_shrink_0()
+                        .pl(px(18.))
+                        .pr(px(18.))
+                        .pt(px(if rows.is_empty() { 6. } else { 12. }))
+                        .pb(px(5.))
+                        .text_size(px(11.))
+                        .text_color(content(0.45))
                         .child(heading)
                         .into_any_element(),
                 );
             }
+            let chosen = ix == selected;
+            if chosen {
+                selected_row = if ix == 0 { 0 } else { rows.len() };
+            }
             let hit = hit.clone();
-            let two_lines = matches!(hit, PaletteHit::File(..));
+            let two_lines = state.files && matches!(hit, PaletteHit::File(..));
+            let height = if two_lines { 46. } else { 38. };
+            let lit = palette_match(&title, &needle);
+            let name = gpui::StyledText::new(title).with_highlights(lit.map(|range| {
+                (
+                    range,
+                    gpui::HighlightStyle {
+                        color: Some(accent()),
+                        font_weight: Some(FontWeight::SEMIBOLD),
+                        ..Default::default()
+                    },
+                )
+            }));
             rows.push(
-                crate::hover_track::list("palette")
-                    .row(
+                div()
+                    .id(("palette-row", ix))
+                    .relative()
+                    .flex_shrink_0()
+                    .w_full()
+                    .h(px(height))
+                    .pl(px(16.))
+                    .pr(px(18.))
+                    .flex()
+                    .items_center()
+                    .gap(px(10.))
+                    .text_size(px(13.5))
+                    .text_color(content(if chosen { 1. } else { 0.86 }))
+                    .cursor_pointer()
+                    .when(chosen, |d| {
+                        d.bg(content(0.09)).child(
+                            div()
+                                .absolute()
+                                .left_0()
+                                .top(px((height - 18.) / 2.))
+                                .w(px(2.5))
+                                .h(px(18.))
+                                .rounded_full()
+                                .bg(accent()),
+                        )
+                    })
+                    .on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
+                        let Some(state) = this.palette_ui.as_mut() else {
+                            return;
+                        };
+                        let moved = state.pointer.is_some_and(|old| old != event.position);
+                        state.pointer = Some(event.position);
+                        if moved && state.selected != ix {
+                            state.selected = ix;
+                            cx.notify();
+                        }
+                    }))
+                    .on_click(cx.listener({
+                        let hit = hit.clone();
+                        move |this, _, _, cx| this.run_hit(hit.clone(), cx)
+                    }))
+                    .child(
                         div()
-                            .id(("palette-row", ix))
-                            .mx(px(6.))
-                            .h(px(if two_lines { 46. } else { 34. }))
-                            .px(px(8.))
-                            .rounded(px(crate::theme::RADIUS_MD))
+                            .size(px(26.))
+                            .flex_shrink_0()
+                            .rounded(px(7.))
+                            .bg(content(if chosen { 0.08 } else { 0.045 }))
                             .flex()
                             .items_center()
-                            .gap(px(10.))
-                            .text_size(px(13.))
-                            .text_color(content(0.9))
-                            .when(ix == selected, |d| d.bg(content(0.1)))
-                            .cursor_pointer()
-                            .on_click(cx.listener({
-                                let hit = hit.clone();
-                                move |this, _, _, cx| this.run_hit(hit.clone(), cx)
-                            }))
-                            .child(mark)
-                            .map(|d| {
-                                if two_lines {
-                                    d.child(
-                                        div()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .flex()
-                                            .flex_col()
-                                            .child(div().truncate().child(title))
-                                            .children(detail.clone().map(|d| {
-                                                div()
-                                                    .truncate()
-                                                    .text_size(px(11.5))
-                                                    .text_color(content(0.45))
-                                                    .child(d)
-                                            })),
-                                    )
-                                } else {
-                                    d.child(div().flex_1().min_w_0().truncate().child(title))
-                                        .children(detail.clone().map(|d| {
-                                            div()
-                                                .flex_shrink_0()
-                                                .max_w(px(170.))
-                                                .truncate()
-                                                .text_size(px(11.5))
-                                                .text_color(content(0.4))
-                                                .child(d)
-                                        }))
-                                }
-                            }),
-                        ix,
-                        ix == selected,
+                            .justify_center()
+                            .child(mark),
                     )
+                    .map(|d| {
+                        if two_lines {
+                            d.child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .flex()
+                                    .flex_col()
+                                    .child(div().truncate().child(name))
+                                    .children(detail.clone().map(|d| {
+                                        div()
+                                            .truncate()
+                                            .text_size(px(11.5))
+                                            .text_color(content(0.45))
+                                            .child(d)
+                                    })),
+                            )
+                        } else {
+                            d.child(div().flex_1().min_w_0().truncate().child(name))
+                                .children(detail.clone().map(|d| {
+                                    div()
+                                        .min_w_0()
+                                        .max_w(gpui::relative(0.45))
+                                        .truncate()
+                                        .text_size(px(12.))
+                                        .text_color(content(if chosen { 0.5 } else { 0.38 }))
+                                        .child(d)
+                                }))
+                        }
+                    })
+                    .when(chosen, |d| d.child(palette_key("↵")))
                     .into_any_element(),
             );
         }
         if hits.is_empty() {
             rows.push(
                 div()
-                    .px(px(16.))
-                    .py(px(18.))
+                    .px(px(18.))
+                    .py(px(36.))
+                    .w_full()
+                    .text_center()
                     .text_size(px(13.))
                     .text_color(content(0.45))
                     .child(self.palette_note())
                     .into_any_element(),
             );
         }
+        if state.follow.replace(false) {
+            state.scroll.scroll_to_item(selected_row);
+        }
+        let width = (self.viewport_width - 32.).clamp(320., 620.);
+        let list_height = (self.viewport_height - 300.).clamp(160., 400.);
+        let chips = (!state.files && !state.all).then(|| {
+            div()
+                .flex_shrink_0()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap(px(4.))
+                .px(px(12.))
+                .pb(px(10.))
+                .children(SCOPES.iter().enumerate().map(|(ix, (label, glyph))| {
+                    let on = state.scope == ix;
+                    let ink = accent();
+                    div()
+                        .id(("palette-scope", ix))
+                        .h(px(26.))
+                        .px(px(10.))
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .rounded_full()
+                        .border_1()
+                        .border_color(if on { ink.opacity(0.45) } else { content(0.08) })
+                        .bg(if on { ink.opacity(0.14) } else { content(0.) })
+                        .text_size(px(12.))
+                        .text_color(content(if on { 1. } else { 0.55 }))
+                        .cursor_pointer()
+                        .when(!on, |d| {
+                            d.hover(|s| s.bg(content(0.05)).text_color(content(0.95)))
+                        })
+                        .sinks()
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if let Some(state) = this.palette_ui.as_mut() {
+                                state.scope = ix;
+                                state.selected = 0;
+                                state.follow.set(true);
+                            }
+                            cx.notify();
+                        }))
+                        .child(icon(glyph, 12.).text_color(if on { ink } else { content(0.45) }))
+                        .child(t(label))
+                }))
+        });
         Some(
             div()
                 .id("palette-backdrop")
@@ -13973,30 +14017,28 @@ impl Shell {
                         .occlude()
                         .absolute()
                         .left(gpui::relative(0.5))
-                        .ml(px(-290.))
+                        .ml(px(-width / 2.))
                         .top(px(92. + (1. - p) * -8.))
-                        .w(px(580.))
+                        .w(px(width))
                         .opacity(p)
                         .rounded(px(crate::theme::RADIUS_LG))
                         .border_1()
                         .border_color(content(0.12))
                         .child(crate::theme::floating_surface(crate::theme::RADIUS_LG))
                         .shadow_lg()
-                        .pb(px(6.))
                         .flex()
                         .flex_col()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(
                             div()
-                                .h(px(50.))
-                                .px(px(16.))
+                                .h(px(56.))
+                                .flex_shrink_0()
+                                .px(px(18.))
                                 .flex()
                                 .items_center()
-                                .gap(px(10.))
-                                .border_b_1()
-                                .border_color(content(0.08))
-                                .text_size(px(14.))
-                                .child(icon("search", 15.).text_color(content(0.5)))
+                                .gap(px(12.))
+                                .text_size(px(15.))
+                                .child(icon("search", 18.).text_color(content(0.45)))
                                 .child(typed_text(
                                     &state.query,
                                     if state.files {
@@ -14004,32 +14046,50 @@ impl Shell {
                                     } else if state.all {
                                         t("Buscar em todas as conversas")
                                     } else {
-                                        t("Buscar conversas, mensagens ou comandos")
+                                        t("Buscar conversas, arquivos e projetos")
                                     },
                                     div().flex_shrink_0().w(px(1.5)).h(px(18.)).bg(accent()),
-                                )),
+                                ))
+                                .child(palette_key("esc")),
                         )
-                        .child(crate::hover_track::list("palette").pill())
-                        .children(rows)
-                        .when(state.files, |d| {
-                            d.child(
-                                div()
-                                    .mt(px(4.))
-                                    .h(px(32.))
-                                    .px(px(16.))
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(14.))
-                                    .border_t_1()
-                                    .border_color(content(0.08))
-                                    .text_size(px(11.5))
-                                    .text_color(content(0.4))
-                                    .child(t("↑ ↓ navegar"))
-                                    .child(t("↵ abrir"))
-                                    .child(t("Esc fechar"))
-                                    .child(t("> comandos")),
-                            )
-                        }),
+                        .children(chips)
+                        .child(
+                            div()
+                                .id("palette-list")
+                                .h(px(list_height))
+                                .py(px(6.))
+                                .flex()
+                                .flex_col()
+                                .border_t_1()
+                                .border_color(content(0.07))
+                                .overflow_y_scroll()
+                                .track_scroll(&state.scroll)
+                                .children(rows),
+                        )
+                        .child(
+                            div()
+                                .h(px(36.))
+                                .flex_shrink_0()
+                                .px(px(14.))
+                                .flex()
+                                .items_center()
+                                .gap(px(14.))
+                                .border_t_1()
+                                .border_color(content(0.07))
+                                .text_size(px(11.))
+                                .text_color(content(0.45))
+                                .child(palette_hint("↑↓", t("Navegar")))
+                                .child(palette_hint("↵", t("Abrir")))
+                                .map(|d| {
+                                    if state.files {
+                                        d.child(palette_hint(">", t("Comandos")))
+                                    } else if state.all {
+                                        d
+                                    } else {
+                                        d.child(palette_hint("tab", t("Trocar filtro")))
+                                    }
+                                }),
+                        ),
                 )
                 .into_any_element(),
         )
@@ -14091,7 +14151,7 @@ impl Shell {
     }
 
     /// The Ambiente card, compact: one 26 px row per function, each opening in place. Same
-    /// functions as Sirus Code's EnvironmentPanel.
+    /// functions as Sirus's EnvironmentPanel.
     fn environment_view(
         &self,
         now: Instant,
@@ -14175,6 +14235,7 @@ impl Shell {
                 .text_color(if main { on_accent() } else { content(0.85) })
                 .bg(if main { accent() } else { content(0.08) })
                 .hover(|s| s.opacity(0.88))
+                .child(label)
         };
         let open_row = self.env_open;
         let mut rows: Vec<AnyElement> = vec![
@@ -14979,6 +15040,7 @@ impl Shell {
                 .children(crate::settings_pair::overlay(
                     self.settings_page,
                     self.setting_edit.as_ref().map(|(k, v)| (*k, v.as_str())),
+                    (self.viewport_width, self.viewport_height),
                     Shell::run_setting,
                     Shell::edit_setting,
                     cx,
@@ -15118,7 +15180,7 @@ impl Shell {
                 .justify_center()
                 .child(div().size(px(7.)).rounded_full().bg(colors.accent))
         };
-        // Workspace theme: a dropdown with a search field, as Monocode's picker.
+        // Workspace theme: a dropdown with a search field
         let menu = self.theme_menu.as_ref().map(|menu| {
             let t = menu.open.at(Instant::now()).clamp(0., 1.);
             let needle = menu.query.to_lowercase();
@@ -15226,6 +15288,10 @@ impl Shell {
                                 search: Default::default(),
                                 query: String::new(),
                                 selected: 0,
+                                scope: 0,
+                                pointer: None,
+                                scroll: gpui::ScrollHandle::new(),
+                                follow: std::cell::Cell::new(false),
                                 open: Tween::from_to(
                                     0.,
                                     1.,
@@ -15397,17 +15463,6 @@ impl Shell {
                 |l, ix| l.saturation = [None, Some(0.), Some(0.12), Some(0.35)][ix],
             ),
         ));
-        let later = |title: &'static str, about: &'static str| {
-            row(
-                title,
-                about,
-                div()
-                    .text_size(px(12.))
-                    .text_color(content(0.35))
-                    .child(t("Em breve"))
-                    .into_any_element(),
-            )
-        };
         div()
             .child(crate::settings_pages::about_line(t(
                 "Personalize materiais e movimento.",
@@ -15923,7 +15978,7 @@ fn model_name(provider: &str) -> &'static str {
     }
 }
 
-/// The live phase's header, as Monocode's: "Running 11 commands · Explored the project".
+/// The live phase's header: "Running 11 commands · Explored the project".
 fn live_summary(steps: &[data::Step]) -> String {
     let count = |kind: &str| steps.iter().filter(|s| s.kind == kind).count();
     let (commands, reads, edits) = (count("command"), count("read"), count("edit"));
@@ -15961,7 +16016,7 @@ mod live_header_tests {
     }
 
     #[test]
-    fn the_live_header_counts_commands_and_reads_as_monocode_does() {
+    fn the_live_header_counts_commands_and_what_it_read() {
         let steps: Vec<_> = (0..11)
             .map(|_| step("command"))
             .chain([step("read")])
@@ -16078,7 +16133,7 @@ struct ProjectSwitch {
 const SWITCH_SHOWS_AFTER: f32 = 0.16;
 
 /// One end of a group whose drawing fades out at its top and bottom edges, in px. Paint one before
-/// the group and one after it (Monocode's edge fade).
+/// the group and one after it.
 fn edge_mask(begin: bool, top: f32, bottom: f32) -> gpui::Canvas<()> {
     gpui::canvas(
         |_, _, _| {},
@@ -16146,6 +16201,38 @@ fn other_choice<'a>(options: &[&'a str], current: Option<&str>, seed: usize) -> 
         .filter(|option| Some(*option) != current)
         .collect();
     rest[seed % rest.len().max(1)]
+}
+
+/// The selection's fill over laid out text, one run per line.
+fn paint_selection(layout: &gpui::TextLayout, selection: Range<usize>, window: &mut Window) {
+    let line = layout.line_height();
+    let fill = crate::theme::text_selection();
+    let mut at = selection.start;
+    while at < selection.end {
+        let Some(start) = layout.position_for_index(at) else {
+            break;
+        };
+        let mut stop = at;
+        let mut end = start;
+        for next in (at + 1)..=selection.end {
+            if let Some(p) = layout.position_for_index(next) {
+                if p.y != start.y {
+                    break;
+                }
+                stop = next;
+                end = p;
+            }
+        }
+        if stop == at {
+            at += 1;
+            continue;
+        }
+        window.paint_quad(gpui::fill(
+            Bounds::new(start, gpui::size(end.x - start.x, line)),
+            fill,
+        ));
+        at = stop;
+    }
 }
 
 /// What a composer this wide leaves out: the effort, then the access level's name.
@@ -16301,17 +16388,6 @@ fn path_chip(name: String, folder: bool) -> Div {
         .child(name)
 }
 
-/// Rows of a command with a caption are taller: a title and its chips (tree "A").
-fn step_height(step: &data::Step) -> f32 {
-    if step.capture {
-        28.
-    } else if step.kind == "command" {
-        30.
-    } else {
-        22.
-    }
-}
-
 /// A finished row of the opened tree: a quiet icon, the verb and what it acted on. A command
 /// reads as what the model said it was for, with its program and the files it names as chips.
 fn step_row(step: &data::Step) -> Div {
@@ -16375,7 +16451,7 @@ fn toggled(button: Stateful<Div>, on: bool) -> Stateful<Div> {
 }
 
 /// Rounds what a card paints at its corners: GPUI clips to rectangles, so the renderer masks
-/// them (Monocode's layout.rs, MIT), and the chrome's wash fills outside the curve.
+/// them, and the chrome's wash fills outside the curve.
 fn card_corner_mask(begin: bool) -> impl IntoElement {
     const RADIUS: f32 = crate::theme::RADIUS_LG;
     gpui::canvas(
@@ -16853,8 +16929,10 @@ impl Render for Shell {
             moving = true;
         }
         let dock_share = self.dock.at(now);
-        let room = f32::from(size.width) - self.sidebar_width * self.sidebar.at(now) - 12.;
+        let room = self.dock_room(f32::from(size.width), now);
         let dock_full = self.dock_full(room, now);
+        let dock_filling = self.dock_max.at(now);
+        crate::panel_browser::set_grip_share(1. - f64::from(dock_filling));
         let dock_width = dock_full * dock_share;
         let dock = (dock_share > 0.001).then(|| self.dock_view(dock_full, now, &mut moving, cx));
         let stats = self.stats(now);
@@ -16958,14 +17036,14 @@ impl Render for Shell {
                                                     .bg(pane_fill())
                                                     .overflow_hidden()
                                                     .child(div().flex_1().min_h_0().w_full().flex()
-                                                    .child(title_tab.unwrap_or(transcript))
+                                                    .child(div().flex_1().min_w_0().h_full().flex().overflow_hidden().child(title_tab.unwrap_or(transcript)))
                                                     .when_some(dock, |d, dock| {
                                                         d.child(
-                                                            div().id("dock-resize").relative().flex_shrink_0().h_full().w(px(1.)).bg(content(0.08)).opacity(dock_share)
-                                                                .child(gpui::deferred(div().id("dock-resize-grip").occlude().absolute().top_0().bottom_0().left(px(-6.)).w(px(12.)).cursor_col_resize().on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                                            div().id("dock-resize").relative().flex_shrink_0().h_full().w(px(1. - dock_filling)).bg(content(0.08)).opacity(dock_share)
+                                                                .when(dock_filling < 0.999, |d| d.child(gpui::deferred(div().id("dock-resize-grip").occlude().absolute().top_0().bottom_0().left(px(-6.)).w(px(12.)).cursor_col_resize().on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
                                                                     cx.stop_propagation();
                                                                     this.resizing_dock = true;
-                                                                }))).with_priority(1)),
+                                                                }))).with_priority(1))),
                                                         )
                                                             .child(div().flex_shrink_0().h_full().w(px(dock_width)).overflow_hidden().child(dock))
                                                     }))
@@ -16980,10 +17058,10 @@ impl Render for Shell {
             .child(tracker)
             .child(crate::panel_browser::frame_end())
             .child(input_area)
-            // Behind a peeking sidebar the window goes out of focus, as in Monocode.
+            // Behind a peeking sidebar the window goes out of focus.
             .children(peek_blur.filter(|t| *t > 0.001).map(|t| {
                 gpui::canvas(|_, _, _| {}, move |bounds, _, window, _| {
-                    // The workspace only dims, as in Monocode: the blur is the panel's own.
+                    // The workspace only dims: the blur is the panel's own.
                     window.paint_quad(gpui::fill(bounds, gpui::Hsla { a: 0.4 * t, ..gpui::black() }));
                 })
                 .absolute()

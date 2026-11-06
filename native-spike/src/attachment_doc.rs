@@ -1,5 +1,5 @@
 //! What the attachment viewer reads: an attachment's facts, the kind of viewer it gets, and the
-//! parsers for what the host sends back (`attachment_preview`, ADR-184 in Sirus Code). No UI types
+//! parsers for what the host sends back (`attachment_preview`, ADR-184 in Sirus). No UI types
 //! except the thumbnail, so the parsers are tested without a window. Everything here may block:
 //! call it from a background thread.
 use base64::Engine as _;
@@ -106,7 +106,7 @@ pub enum Viewer {
     Csv,
     Tsv,
     Pptx,
-    /// DOC, XLS and PPT: Sirus Code asks to convert them; the host says so.
+    /// DOC, XLS and PPT: Sirus asks to convert them; the host says so.
     Legacy,
     Image,
     Html,
@@ -177,7 +177,7 @@ pub fn image_format(name: &str, mime: &str) -> Option<gpui::ImageFormat> {
     })
 }
 
-/// "812 B", "6 KB", "1.4 MB": Sirus Code's `formatFileSize`.
+/// "812 B", "6 KB", "1.4 MB": Sirus's `formatFileSize`.
 pub fn format_size(bytes: u64) -> String {
     if bytes < 1024 {
         format!("{bytes} B")
@@ -413,7 +413,7 @@ pub enum Preview {
     Pdf(Vec<u8>),
     Word(Vec<WordBlock>),
     Sheets(Vec<Sheet>),
-    Office { format: String, bytes: Vec<u8> },
+    Office { bytes: Vec<u8> },
 }
 
 pub fn parse_preview(value: &Value) -> Result<Preview, String> {
@@ -425,7 +425,6 @@ pub fn parse_preview(value: &Value) -> Result<Preview, String> {
     match value["type"].as_str() {
         Some("pdf") => Ok(Preview::Pdf(bytes("data")?)),
         Some("office") => Ok(Preview::Office {
-            format: value["format"].as_str().unwrap_or("").to_owned(),
             bytes: bytes("data")?,
         }),
         Some("word") => Ok(Preview::Word(
@@ -495,7 +494,7 @@ pub fn parse_preview(value: &Value) -> Result<Preview, String> {
     }
 }
 
-/// The message for a host error (`code`), as Sirus Code's `documentError`.
+/// The message for a host error (`code`), as Sirus's `documentError`.
 pub fn error_message(error: &Value) -> &'static str {
     use crate::i18n::t;
     match error["code"].as_str().unwrap_or("") {
@@ -793,8 +792,8 @@ mod tests {
                                     ))
                                     .collect::<Vec<_>>()
                             ),
-                            Ok(Preview::Office { format, bytes }) => println!(
-                                "  office {format} {} bytes, slides {:?}",
+                            Ok(Preview::Office { bytes }) => println!(
+                                "  office {} bytes, slides {:?}",
                                 bytes.len(),
                                 pptx_slides(&bytes)
                             ),

@@ -41,7 +41,7 @@ thread_local! {
     static DELEGATE: RefCell<Option<Retained<Delegate>>> = const { RefCell::new(None) };
 }
 
-/// Which of Monocode's three sounds a name stands for. An unknown name plays nothing.
+/// Which of The three sounds a name stands for. An unknown name plays nothing.
 fn cue_of(choice: &str) -> Option<crate::sound::Cue> {
     use crate::sound::Cue;
     Some(match choice {

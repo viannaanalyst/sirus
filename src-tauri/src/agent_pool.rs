@@ -131,7 +131,7 @@ fn retire(entries: Vec<Pooled>) {
 /// exit at once on end of input; the wait only covers one still persisting its login.
 const QUIT_GRACE: Duration = Duration::from_secs(2);
 
-/// Stops every kept process (Sirus Code closing). Quitting cannot wait on the runtime, so the
+/// Stops every kept process (Sirus closing). Quitting cannot wait on the runtime, so the
 /// input of every process is closed at once and their exits are polled, within QUIT_GRACE,
 /// before the groups are killed.
 pub(crate) fn clear() {

@@ -6,7 +6,7 @@
 
 Users want to dictate prompts into the composer with a microphone button
 next to Send. Its implementation records WAV audio and ships it to the provider
-session for server-side transcription, which Sirus Code does not have: we do
+session for server-side transcription, which Sirus does not have: we do
 not talk to vendor transcription APIs and do not store vendor credentials.
 
 ## Decision

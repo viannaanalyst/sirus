@@ -5,8 +5,8 @@
 ## Context
 
 The owner requested a Profile and activity-sharing experience within
-Sirus Code's settings. Historical token and deletion-preserving
-activity ledgers; Sirus Code retains transcripts and current session choices.
+Sirus's settings. Historical token and deletion-preserving
+activity ledgers; Sirus retains transcripts and current session choices.
 Quota snapshots cannot supply lifetime token totals. Browser clipboard/download
 and arbitrary social URL bridges would cross the existing native trust boundary.
 

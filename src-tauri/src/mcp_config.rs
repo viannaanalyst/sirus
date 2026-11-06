@@ -533,7 +533,7 @@ fn validate(server: &McpServerInput) -> Result<()> {
         return invalid("Use 1–64 letters, digits, hyphens or underscores for the name.");
     }
     if server.name.to_ascii_lowercase().starts_with("sirus_") {
-        return invalid("Names starting with sirus_ are reserved for Sirus Code.");
+        return invalid("Names starting with sirus_ are reserved for Sirus.");
     }
     match (&server.command, &server.url) {
         (Some(command), None) => {

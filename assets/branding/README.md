@@ -1,4 +1,4 @@
-# Sirus Code brand assets
+# Sirus brand assets
 
 - `public/sirus-glyph.png` is the transparent silver "S" orbit mark used by the
   New thread landing and the launch splash.

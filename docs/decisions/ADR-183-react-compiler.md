@@ -4,9 +4,9 @@
 
 ## Context
 
-The UI leans on hand-written `memo`, `useMemo` and `useCallback`. t3code (github.com/pingdotgg/t3code, MIT)
+The UI leans on hand-written `memo`, `useMemo` and `useCallback`. Another open-source client (github.com/pingdotgg/another open-source client, MIT)
 compiles every web file in a test and fails on any compiler bailout, because a file the compiler skips
-still builds but silently loses its automatic memoization. Synara (MIT) turns the compiler on for builds and
+still builds but silently loses its automatic memoization. Another open-source client (MIT) turns the compiler on for builds and
 tests and makes it opt-in in dev, since large chat modules make the transform slow.
 
 ## Decision
@@ -37,4 +37,4 @@ tests and makes it opt-in in dev, since large chat modules make the transform sl
 - A skipped function behaves exactly as before; only its automatic memoization is missing.
 - New code that bails out fails `npm test` until it is fixed or allowlisted with a reason.
 
-Credit: the coverage-test idea is t3code's; the build setup (compiled builds, opt-in dev) is Synara's.
+Credit: the coverage-test idea is another client's; the build setup (compiled builds, opt-in dev) is another client's.

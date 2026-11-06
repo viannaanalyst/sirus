@@ -1,8 +1,8 @@
 //! Every file of a worktree, for the Arquivos search, and the fuzzy matcher that ranks them. After
-//! Monocode: `list_project_files` in src-tauri/src/fs.rs (prefer `git ls-files -co
+//! `list_project_files` in src-tauri/src/fs.rs (prefer `git ls-files -co
 //! --exclude-standard`, which honors .gitignore; otherwise a bounded walk that skips vendor
 //! folders) and `shared/lib/fuzzy.ts` (sequential match with bonuses for runs, path breaks and
-//! camelCase; a file-name hit outranks a folder-only one). MIT, see LICENSE-MONOCODE-MIT.
+//! camelCase; a file-name hit outranks a folder-only one). MIT, see LICENSE-THIRD-PARTY-MIT.
 //!
 //! Everything here blocks: call it through `run_blocking`, never on the UI thread.
 use std::path::Path;
@@ -10,7 +10,7 @@ use std::process::{Command, Stdio};
 
 /// Files kept from one listing; a monorepo past this is searched in its first part.
 const MAX_FILES: usize = 100_000;
-/// `git ls-files` output beyond this is dropped for the walk, as Monocode does.
+/// `git ls-files` output beyond this is dropped for the walk.
 const MAX_LS_FILES_BYTES: usize = 8 * 1024 * 1024;
 /// Folders the walk (for folders without Git) never enters.
 const SKIPPED_DIRS: &[&str] = &[".git", "node_modules", "target"];

@@ -4,7 +4,7 @@
 
 ## Context
 
-The phone app (ADR-080, ADR-081) reaches Sirus Code on the Mac over Tailscale. The Mac has to be awake and running the window, and agents run on the laptop. The owner wants the same thing on an always-on Linux server (an Ubuntu 24.04 aarch64 container on a VPS, as uid 1000, reachable only over Tailscale): the phone opens the same app, and Claude Code, Codex and OpenCode run there.
+The phone app (ADR-080, ADR-081) reaches Sirus on the Mac over Tailscale. The Mac has to be awake and running the window, and agents run on the laptop. The owner wants the same thing on an always-on Linux server (an Ubuntu 24.04 aarch64 container on a VPS, as uid 1000, reachable only over Tailscale): the phone opens the same app, and Claude Code, Codex and OpenCode run there.
 
 The back end was Tauri-shaped throughout: every module took `tauri::AppHandle` to emit events and reach `State<Arc<AppState>>`, ~170 `#[tauri::command]`s were the only entry points, and remote access ran each phone request through the main window's IPC (`Webview::on_message`), forwarded events with `listen_any` and served the UI through Tauri's asset resolver. Nothing could run without a window, and the crate did not build on Linux at all (`objc2-avf-audio` in the general dependencies, a few macOS-only items referenced from shared code).
 

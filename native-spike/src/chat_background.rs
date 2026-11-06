@@ -1,13 +1,13 @@
 //! Settings → Aparência → Fundo do chat: the picture behind the conversation card.
 //!
-//! The effects and the fade are Monocode's (project_appearance.rs and project_background.rs,
-//! MIT, see LICENSE-MONOCODE-MIT). The texture is prepared once per (picture, effect, screen
+//! The effects and the fade are the (project_appearance.rs and project_background.rs,
+//! MIT, see LICENSE-THIRD-PARTY-MIT). The texture is prepared once per (picture, effect, screen
 //! size, fade curve) on a background thread through GPUI's asset cache; opacity is not part of
 //! the key, so changing the visibility only changes how the finished texture is painted.
 use crate::backend;
 use gpui::{App, Asset, ObjectFit, RenderImage, Window, prelude::*};
 use image::{ImageReader, Limits, RgbaImage, imageops};
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::{
     future::Future,
     io::Cursor,
@@ -15,16 +15,9 @@ use std::{
     sync::Arc,
 };
 
-/// The Monocode picture copied on first load, as the chat background's file name.
-const SEEDED_NAME: &str = "chat-monocode.png";
-/// Where Monocode kept its chat background.
-const MONOCODE_PICTURE: &str =
-    "Library/Application Support/com.monocode.desktop/backgrounds/chat-background.png";
-/// Written once the first load has been handled, so a picture removed in Settings stays removed.
-const MARKER: &str = ".monocode-default";
-/// Artwork larger than this is shrunk on decode, as Monocode's read_image does.
+/// Artwork larger than this is shrunk on decode
 const SOURCE_CAP: u32 = 2048;
-/// Pictures above this size are refused, as in Monocode.
+/// Pictures above this size are refused.
 const SOURCE_BYTES_CAP: u64 = 30 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -34,7 +27,7 @@ pub enum Effect {
     Ascii,
     Halftone,
     Scanlines,
-    /// Monocode's "Haze" (GradientBlur).
+    /// The "Haze" (GradientBlur).
     Haze,
 }
 
@@ -97,7 +90,7 @@ impl Look {
     }
 }
 
-/// Monocode's background_fade: the share of the picture kept at `y` (0 at the top, 1 at the
+/// The background_fade: the share of the picture kept at `y` (0 at the top, 1 at the
 /// bottom) of the texture.
 pub fn fade(y: f32, empty: bool, haze: bool) -> f32 {
     let stops: &[(f32, f32)] = match (empty, haze) {
@@ -263,7 +256,7 @@ fn covering(artwork: (u32, u32), screen: (u32, u32)) -> (u32, u32) {
     )
 }
 
-/// Monocode's order: the pattern effects run at the artwork's resolution and the result is
+/// The order: the pattern effects run at the artwork's resolution and the result is
 /// cover-fitted; Haze blurs the cover-fitted picture. The fade goes into the alpha last.
 pub fn texture(source: &RgbaImage, effect: Effect, screen: (u32, u32), empty: bool) -> RgbaImage {
     let target = covering(source.dimensions(), screen);
@@ -330,7 +323,7 @@ fn luma(p: &image::Rgba<u8>) -> f32 {
     (p[0] as f32 * 0.2126 + p[1] as f32 * 0.7152 + p[2] as f32 * 0.0722).round()
 }
 
-/// Dither, ASCII, Halftone and Scanlines, at the source's resolution (Monocode's effect_pixels).
+/// Dither, ASCII, Halftone and Scanlines, at the source's resolution.
 fn pattern_effect(source: &RgbaImage, effect: Effect) -> RgbaImage {
     let (width, height) = source.dimensions();
     let mut output = source.clone();
@@ -414,41 +407,10 @@ fn haze(source: &RgbaImage, empty: bool) -> RgbaImage {
     output
 }
 
-/// Monocode's default for a first load: Dither, empty conversations only, 24% and 65%.
-/// Copies the Monocode picture into the back end's backgrounds folder and sets it, only when no
-/// chat background is set and the picture can be read. Returns true when `settings` changed;
-/// the caller saves them through the normal settings save.
-pub fn seed_monocode_default(settings: &mut Value) -> bool {
-    let Some(home) = std::env::var_os("HOME") else {
-        return false;
-    };
-    let source = PathBuf::from(home).join(MONOCODE_PICTURE);
-    seed_from(settings, &source, &backend::data_dir().join("backgrounds"))
-}
-
-fn seed_from(settings: &mut Value, source: &Path, folder: &Path) -> bool {
-    if !settings.is_object() || folder.join(MARKER).exists() {
-        return false;
-    }
-    let _ = std::fs::create_dir_all(folder);
-    let _ = std::fs::write(folder.join(MARKER), b"");
-    let unset = settings["chatBackground"]
-        .as_str()
-        .is_none_or(str::is_empty);
-    if !unset || std::fs::copy(source, folder.join(SEEDED_NAME)).is_err() {
-        return false;
-    }
-    settings["chatBackground"] = json!(SEEDED_NAME);
-    settings["chatBackgroundEffect"] = json!("dither");
-    settings["chatBackgroundShowOn"] = json!("empty");
-    settings["chatBackgroundEmptyVisibility"] = json!(24);
-    settings["chatBackgroundSessionVisibility"] = json!(65);
-    true
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn fade_keeps_the_picture_then_fades_to_nothing() {
@@ -576,62 +538,5 @@ mod tests {
         let result = texture(&source, Effect::None, (4, 10), false);
         assert_eq!(result.get_pixel(0, 0)[3], 255);
         assert_eq!(result.get_pixel(0, 9)[3], 0);
-    }
-
-    #[test]
-    fn seeding_copies_once_and_respects_the_marker() {
-        let root = std::env::temp_dir().join(format!("sirus-chat-bg-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        let source = root.join("monocode.png");
-        let folder = root.join("backgrounds");
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(&source, b"png bytes").unwrap();
-
-        let mut settings = json!({ "locale": "en" });
-        assert!(seed_from(&mut settings, &source, &folder));
-        assert_eq!(settings["chatBackground"], SEEDED_NAME);
-        assert_eq!(settings["chatBackgroundEffect"], "dither");
-        assert_eq!(settings["chatBackgroundShowOn"], "empty");
-        assert_eq!(settings["chatBackgroundEmptyVisibility"], 24);
-        assert_eq!(settings["chatBackgroundSessionVisibility"], 65);
-        assert_eq!(settings["locale"], "en", "other settings are kept");
-        assert_eq!(
-            std::fs::read(folder.join(SEEDED_NAME)).unwrap(),
-            b"png bytes"
-        );
-
-        // The user removes the picture: the marker keeps it removed.
-        let mut removed = json!({ "chatBackground": null });
-        assert!(!seed_from(&mut removed, &source, &folder));
-        assert_eq!(removed["chatBackground"], Value::Null);
-
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn seeding_leaves_a_chosen_picture_and_an_unreadable_source_unset() {
-        let root = std::env::temp_dir().join(format!("sirus-chat-bg-b-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        let folder = root.join("backgrounds");
-
-        let mut chosen =
-            json!({ "chatBackground": "chat-mine.jpg", "chatBackgroundEffect": "ascii" });
-        assert!(!seed_from(&mut chosen, &root.join("missing.png"), &folder));
-        assert_eq!(chosen["chatBackground"], "chat-mine.jpg");
-        assert_eq!(chosen["chatBackgroundEffect"], "ascii");
-        assert!(
-            folder.join(MARKER).exists(),
-            "the first load is handled even when nothing is copied"
-        );
-
-        let mut unreadable = json!({ "chatBackground": null });
-        assert!(!seed_from(
-            &mut unreadable,
-            &root.join("missing.png"),
-            &root.join("other")
-        ));
-        assert_eq!(unreadable["chatBackground"], Value::Null);
-
-        let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -4,7 +4,7 @@
 
 ## Context
 
-Skills live in several CLI-specific and shared directories. Sirus Code needs a searchable view and explicit draft selection without changing external providers or exposing arbitrary filesystem reads. A grouped catalog with preview and composer selection is the interaction reference.
+Skills live in several CLI-specific and shared directories. Sirus needs a searchable view and explicit draft selection without changing external providers or exposing arbitrary filesystem reads. A grouped catalog with preview and composer selection is the interaction reference.
 
 ## Decision
 
@@ -16,7 +16,7 @@ Limits are 512 names, 2,048 documents, 8,192 entries, four nested levels and 64 
 
 `disabledSkills` persists bounded names. Switches hide picker entries and reject explicit disabled invocations; they do not uninstall skills or control vendor automatic discovery. Page-wide Restore defaults affects only this preference.
 
-The Add menu inserts leading `/skill-name` into the owner's unsent draft. Send resolves up to four distinct leading known names, preferring project sources, then the selected provider, shared `.agents`, portable Sirus Code and foreign copies. Selected documents and reference directories are inlined within an aggregate 64 KiB limit. Provider/cwd/account/preferences are rechecked before turn mutation. Visible persisted user text and existing execution validation, approvals and process policies remain unchanged. Unknown slash commands remain vendor commands. This delivers instructions rather than executing scripts in the host.
+The Add menu inserts leading `/skill-name` into the owner's unsent draft. Send resolves up to four distinct leading known names, preferring project sources, then the selected provider, shared `.agents`, portable Sirus and foreign copies. Selected documents and reference directories are inlined within an aggregate 64 KiB limit. Provider/cwd/account/preferences are rechecked before turn mutation. Visible persisted user text and existing execution validation, approvals and process policies remain unchanged. Unknown slash commands remain vendor commands. This delivers instructions rather than executing scripts in the host.
 
 Settings uses Arc primitives, compact switches, theme tokens and text-only previews. Owner/provider/account/workspace changes invalidate pending requests. Refresh is explicit; no polling is introduced.
 

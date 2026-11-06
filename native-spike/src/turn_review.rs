@@ -11,7 +11,6 @@
 use super::message_actions::{Review, ReviewFile};
 use super::*;
 use crate::panel_changes::{diff_line, note};
-use crate::theme::Sinks as _;
 use std::collections::{HashMap, HashSet};
 
 /// Files a card shows before "Show more".
@@ -91,7 +90,7 @@ enum Full {
 }
 
 impl Shell {
-    /// The card under a finished turn that changed files, as Monocode's session review: the count
+    /// The card under a finished turn that changed files: the count
     /// and totals, Undo, Keep and Review, the first three files and "Show more". Keep dismisses it.
     pub(super) fn turn_review_view(
         &self,
@@ -501,7 +500,7 @@ fn should_fetch(full: Option<&Full>) -> bool {
 }
 
 /// `+added −removed` in the diff colors, as the summary and the file rows show them.
-/// A card button: Undo, Keep and Review, as Monocode's session review.
+/// A card button: Undo, Keep and Review
 fn review_button(id: &'static str, label: &str, enabled: bool) -> Stateful<Div> {
     div()
         .id(id)

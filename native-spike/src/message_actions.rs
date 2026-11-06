@@ -1,4 +1,4 @@
-//! The row of actions under a finished reply, as Sirus Code shows it (MessageActions.tsx,
+//! The row of actions under a finished reply, as Sirus shows it (MessageActions.tsx,
 //! UndoTurnButton.tsx, ADR-187): copy the answer, try the latest turn again, undo the turn's file
 //! changes after a read-only check and a confirmation, and the side chat, fork and handoff
 //! (handoff.rs opens the handoff's popup).
@@ -8,7 +8,6 @@
 //! timer is the copy check's, started by a click.
 
 use super::*;
-use crate::theme::Sinks as _;
 use gpui::{AnyView, App, ClickEvent, ClipboardItem, Pixels, Point, Render, SharedString};
 use std::time::Duration;
 
@@ -94,8 +93,6 @@ pub(crate) struct Facts<'a> {
     pub finished: bool,
     /// It has answer text to copy or to ask about.
     pub answered: bool,
-    /// It is the conversation's newest turn.
-    pub latest: bool,
     /// The conversation is working; nothing may be retried or undone meanwhile.
     pub working: bool,
     pub review: Option<&'a Review>,
@@ -422,7 +419,6 @@ impl Shell {
         visible(&Facts {
             finished: !turn.live,
             answered: !turn.answer.trim().is_empty(),
-            latest: index + 1 == conv.turns.len(),
             working: conv.working(),
             review: turn.review.as_ref(),
             undone_here: self.message_actions.undone.contains(&key_of(turn, index)),
@@ -724,14 +720,12 @@ mod tests {
     fn facts<'a>(
         finished: bool,
         answered: bool,
-        latest: bool,
         working: bool,
         review: Option<&'a Review>,
     ) -> Facts<'a> {
         Facts {
             finished,
             answered,
-            latest,
             working,
             review,
             undone_here: false,
@@ -741,7 +735,7 @@ mod tests {
     #[test]
     fn a_live_turn_shows_nothing() {
         let changes = review(&[("a.rs", false, true, false)], false);
-        let shown = visible(&facts(false, true, true, false, Some(&changes)));
+        let shown = visible(&facts(false, true, false, Some(&changes)));
         assert_eq!(
             shown,
             Shown {
@@ -754,7 +748,7 @@ mod tests {
 
     #[test]
     fn an_older_answer_offers_copy_and_side_chat_only() {
-        let shown = visible(&facts(true, true, false, false, None));
+        let shown = visible(&facts(true, true, false, None));
         assert!(shown.copy && shown.side_chat);
         assert_eq!(shown.undo, Undo::Hidden);
     }
@@ -771,7 +765,7 @@ mod tests {
     #[test]
     fn a_turn_without_text_still_offers_retry_and_undo() {
         let changes = review(&[("a.rs", false, true, false)], false);
-        let shown = visible(&facts(true, false, true, false, Some(&changes)));
+        let shown = visible(&facts(true, false, false, Some(&changes)));
         assert!(!shown.copy && !shown.side_chat);
         assert_eq!(shown.undo, Undo::Offered { enabled: true });
     }
@@ -779,7 +773,7 @@ mod tests {
     #[test]
     fn undo_is_disabled_while_the_conversation_works() {
         let changes = review(&[("a.rs", false, true, false)], false);
-        let shown = visible(&facts(true, true, false, true, Some(&changes)));
+        let shown = visible(&facts(true, true, true, Some(&changes)));
         assert_eq!(shown.undo, Undo::Offered { enabled: false });
     }
 
@@ -787,17 +781,17 @@ mod tests {
     fn undo_needs_a_reversible_file_and_no_expiry() {
         let binary_only = review(&[("logo.png", true, true, false)], false);
         assert_eq!(
-            visible(&facts(true, true, false, false, Some(&binary_only))).undo,
+            visible(&facts(true, true, false, Some(&binary_only))).undo,
             Undo::Hidden
         );
         let expired = review(&[("a.rs", false, true, false)], true);
         assert_eq!(
-            visible(&facts(true, true, false, false, Some(&expired))).undo,
+            visible(&facts(true, true, false, Some(&expired))).undo,
             Undo::Hidden
         );
         let omitted = review(&[("a.rs", false, true, false)], false);
         assert!(matches!(
-            visible(&facts(true, true, false, false, Some(&omitted))).undo,
+            visible(&facts(true, true, false, Some(&omitted))).undo,
             Undo::Offered { .. }
         ));
     }
@@ -809,11 +803,11 @@ mod tests {
             false,
         );
         assert_eq!(
-            visible(&facts(true, true, false, false, Some(&all))).undo,
+            visible(&facts(true, true, false, Some(&all))).undo,
             Undo::Done
         );
         let changes = review(&[("a.rs", false, true, false)], false);
-        let mut done_here = facts(true, true, false, false, Some(&changes));
+        let mut done_here = facts(true, true, false, Some(&changes));
         done_here.undone_here = true;
         assert_eq!(visible(&done_here).undo, Undo::Done);
     }
@@ -822,7 +816,7 @@ mod tests {
     fn a_turn_without_changes_has_no_undo() {
         let none = review(&[], false);
         assert_eq!(
-            visible(&facts(true, true, false, false, Some(&none))).undo,
+            visible(&facts(true, true, false, Some(&none))).undo,
             Undo::Hidden
         );
     }
@@ -834,7 +828,7 @@ mod tests {
 
     /// The reply actions for a settled-or-live turn, as `turn_actions` builds them.
     fn more(finished: bool, answered: bool, has_reply: bool, can: Can) -> Vec<ReplyRow> {
-        let shown = visible(&facts(finished, answered, true, false, None));
+        let shown = visible(&facts(finished, answered, false, None));
         let settled = handoff::shown(finished, answered, has_reply);
         reply_rows(&shown, &settled, can)
     }

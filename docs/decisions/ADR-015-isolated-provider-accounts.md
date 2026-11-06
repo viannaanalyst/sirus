@@ -17,7 +17,7 @@ The owner clarified that the usage popup must add another account of the same pr
 
 ## Consequences
 
-Multiple Codex/Claude accounts can coexist without replacing the system login. A session binds a profile rather than a cryptographically immutable vendor identity: external vendor tools can still replace credentials in that directory, especially the shared default. This is an explicit limitation, not a guarantee against external reauthentication. No cloud account or Sirus Code login is introduced.
+Multiple Codex/Claude accounts can coexist without replacing the system login. A session binds a profile rather than a cryptographically immutable vendor identity: external vendor tools can still replace credentials in that directory, especially the shared default. This is an explicit limitation, not a guarantee against external reauthentication. No cloud account or Sirus login is introduced.
 
 Native regressions cover private paths, foreign IDs, environment isolation, fixed login/cancel, session binding and profile-scoped reset offers. Empty-profile probes against both installed CLIs verified absence of inherited default identity without logging in or running inference. Automated tests exercise login with a disposable process fixture; a real browser login requires the user's participation. Operational details and sources: [usage guide](../development/provider-usage.md).
 

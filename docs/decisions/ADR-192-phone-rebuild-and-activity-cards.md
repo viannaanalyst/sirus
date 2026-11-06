@@ -14,7 +14,7 @@ Working in several projects at once, nothing told you when another one finished 
 - **The phone's conversation matches the Mac's:** the step tree in the Mac's words, the subagent card and sheet, a working pill, and a composer with `+`, `/`, `@`, photos, modes and a model button showing only the provider's mark.
 - **New navigation.** Novo, Conversas and Painel in a top bar, a projects drawer, a Painel replacing Home and a Custo screen.
 - **The Mac's accent reaches the phone** through `phone_look_set` and `phone_look_get`, and cost through `usage_summary`, a few KB instead of megabytes of `usage_history`.
-- **Type and bubbles follow Monocode's measures** on both, and the phone uses the system font.
+- **Type and bubbles follow the reference app's measures** on both, and the phone uses the system font.
 
 ## Consequences
 

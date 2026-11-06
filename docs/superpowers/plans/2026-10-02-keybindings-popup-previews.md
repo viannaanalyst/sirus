@@ -1,6 +1,6 @@
 # Keybindings and popup-material previews
 
-**Goal:** Bring a searchable keybinding reference/editor into the existing closed Sirus Code command map, and preview Dark/Light with optional glass.
+**Goal:** Bring a searchable keybinding reference/editor into the existing closed Sirus command map, and preview Dark/Light with optional glass.
 
 **Architecture:** Keep centralized keyboard dispatch and existing customShortcuts persistence. Extend only real workspace panel actions and the aligned native allowlist. Reuse Arc's recorder, with page-wide restoration and no individual reset control. Preview-only appearance proposal separates palette (Dark/Light) from material (solid/glass); retained production settings remain unchanged pending visual selection.
 

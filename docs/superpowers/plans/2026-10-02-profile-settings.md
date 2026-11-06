@@ -5,7 +5,7 @@
 > needed. This workspace has no Git metadata; do not create commits/worktrees.
 
 **Goal:** Add a local Profile settings page and a working activity-card share
-dialog using Sirus Code's existing design and real retained activity.
+dialog using Sirus's existing design and real retained activity.
 
 **Architecture:** Derive retained prompt activity from owned native Sessions,
 excluding imports and fork-inherited prefixes. Local profile preferences follow
@@ -51,7 +51,7 @@ tokens, bounded native JSON preferences, AppKit and the existing dialog/opener.
 ### Task 3: Share card and verification
 
 - [x] Draw the same locally rendered PNG for the preview and every export;
-  include identity, Sirus Code brand, activity and real metrics on a white card.
+  include identity, Sirus brand, activity and real metrics on a white card.
 - [x] Add the reference share modal with labelled circular actions, pending/error
   status, native Copy/Save and fixed social composer actions; preserve focus.
 - [x] Verify real server renders, pure tests, TS/lint, native tests/check/Clippy,

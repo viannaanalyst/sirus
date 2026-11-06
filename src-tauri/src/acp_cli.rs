@@ -468,7 +468,7 @@ pub(crate) async fn execute(
             &provider,
             wire,
             "initialize",
-            json!({"protocolVersion":1,"clientCapabilities":{},"clientInfo":{"name":"Sirus Code","version":"0.1.0"}}),
+            json!({"protocolVersion":1,"clientCapabilities":{},"clientInfo":{"name":"Sirus","version":"0.1.0"}}),
             cancel,
             &mut updates,
         )

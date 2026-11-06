@@ -594,7 +594,7 @@ pub(crate) fn finalize_session(
         session
             .last_error
             .clone()
-            .or_else(|| Some("Execution was interrupted when Sirus Code closed.".into()))
+            .or_else(|| Some("Execution was interrupted when Sirus closed.".into()))
     } else {
         None
     };
@@ -936,12 +936,12 @@ mod tests {
     }
     #[test]
     fn a_late_process_exit_preserves_shutdown_interruption() {
-        let mut session: Session = serde_json::from_value(serde_json::json!({"id":"s","title":"Test","projectId":"p","agent":"codex","status":"stopped","createdAt":"time","lastActivityAt":"time","worktree":{"path":"/unused","branch":"main","isolated":false},"lastError":"Execution was interrupted when Sirus Code closed.","messages":[]})).unwrap();
+        let mut session: Session = serde_json::from_value(serde_json::json!({"id":"s","title":"Test","projectId":"p","agent":"codex","status":"stopped","createdAt":"time","lastActivityAt":"time","worktree":{"path":"/unused","branch":"main","isolated":false},"lastError":"Execution was interrupted when Sirus closed.","messages":[]})).unwrap();
         finalize_session(&mut session, Some(0), true, false, true, None);
         assert_eq!(session.status, SessionStatus::Stopped);
         assert_eq!(
             session.last_error.as_deref(),
-            Some("Execution was interrupted when Sirus Code closed.")
+            Some("Execution was interrupted when Sirus closed.")
         );
         session.status = SessionStatus::Failed;
         session.last_error = Some("Output limit".into());
@@ -1161,11 +1161,11 @@ mod tests {
             "sirus/{session-name}-{id}",
         )
         .unwrap();
-        let edit_prompt = "This is a disposable Sirus Code integration test. Create exactly one file named sirus-smoke.txt in the current workspace containing SIRUS_OK followed by a newline. Do not modify any other file, use network, install dependencies, or read authentication/configuration files. Then respond with SIRUS_OK.";
+        let edit_prompt = "This is a disposable Sirus integration test. Create exactly one file named sirus-smoke.txt in the current workspace containing SIRUS_OK followed by a newline. Do not modify any other file, use network, install dependencies, or read authentication/configuration files. Then respond with SIRUS_OK.";
         let (prompt, expected, seconds) = match mode {
             SmokeMode::Edit => (edit_prompt, "SIRUS_OK", 120),
             SmokeMode::Analysis => (
-                "This is a disposable Sirus Code read-only integration test. Reply only SIRUS_ANALYSIS_OK. Do not read or write files, execute tools, use network tools, or inspect authentication/configuration.",
+                "This is a disposable Sirus read-only integration test. Reply only SIRUS_ANALYSIS_OK. Do not read or write files, execute tools, use network tools, or inspect authentication/configuration.",
                 "SIRUS_ANALYSIS_OK",
                 45,
             ),

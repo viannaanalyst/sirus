@@ -38,9 +38,9 @@ static PENDING: parking_lot::Mutex<Option<Pending>> = parking_lot::const_mutex(N
 pub enum SnapEvent {
     /// A capture is waiting to be claimed for the open composer.
     Ready { nonce: String, app: String },
-    /// Screen Recording is not granted to Sirus Code.
+    /// Screen Recording is not granted to Sirus.
     NeedsPermission,
-    /// Sirus Code itself is in front; there is no other window to snap.
+    /// Sirus itself is in front; there is no other window to snap.
     OwnWindow,
     /// The window could not be captured.
     Failed,

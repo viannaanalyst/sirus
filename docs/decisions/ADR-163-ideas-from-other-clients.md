@@ -4,19 +4,19 @@
 
 ## Context
 
-A review of what T3 Code and Synara shipped in the week of 2026-10-21 turned up a handful of small
-ideas that fit Sirus Code:
+A review of what another open-source client and another open-source client shipped in the week of 2026-10-21 turned up a handful of small
+ideas that fit Sirus:
 
-- T3 Code's ⌘K finds a conversation by what was said in it, not only by its title, and ranks the
+- Another client's ⌘K finds a conversation by what was said in it, not only by its title, and ranks the
   best title match first.
-- Synara's ⌘W closes the chat tab (or a focused panel) instead of reaching the window's Close.
-- Synara can start a new conversation in the workspace of an open one (same branch and folder).
-- Synara's Hubs label where each piece of a worker's context came from, so another agent's report
+- Another client's ⌘W closes the chat tab (or a focused panel) instead of reaching the window's Close.
+- Another open-source client can start a new conversation in the workspace of an open one (same branch and folder).
+- Another client's Hubs label where each piece of a worker's context came from, so another agent's report
   is never read as the person's instruction.
-- T3 Code's webhook filters fan out over arrays with a `[]` path segment.
-- T3 Code applies streamed text with fewer copies and scans.
+- Another client's webhook filters fan out over arrays with a `[]` path segment.
+- Another open-source client applies streamed text with fewer copies and scans.
 
-Other items were compared and left out: Synara's running-subagents capsule (Sirus already has one,
+Other items were compared and left out: Another client's running-subagents capsule (Sirus already has one,
 ADR-097, with per-task stop and crash recovery through `activity::recover`), its embedded editor,
 and Hubs' task keys and queue/steer follow-ups (Sirus has no persistent coordinator that replans
 between retries, and the prompt queue lives in the renderer, ADR-042).
@@ -29,7 +29,7 @@ between retries, and the prompt queue lives in the renderer, ADR-042).
   `transcript_action { search }` the all-conversations search uses) and lists up to eight more chats
   under "In messages", one row each with the matching text; choosing one opens the chat at that
   message (`jumpToMessage`). Chats already listed by title are not repeated. No full-text index: the
-  existing bounded scan is fast at current volumes; an FTS5 trigram index (T3 Code's choice) can come
+  existing bounded scan is fast at current volumes; an FTS5 trigram index (another client's choice) can come
   later behind the same command if it is not.
 - **⌘W closes a tab**, like a browser: the active right-panel pane when focus is inside the panel,
   else the open conversation's header tab (through the tab strip, so it animates and offers Undo),

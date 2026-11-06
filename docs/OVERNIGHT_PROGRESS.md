@@ -1,6 +1,6 @@
 # Overnight progress
 
-Evidence ledger for the Sirus Code overnight mission, resumed through **2026-10-01**. This replaces the earlier partial checkpoint. Implementation, automated checks, actual provider calls and real-window interaction are separate claims. No phase is declared complete on the strength of a mock.
+Evidence ledger for the Sirus overnight mission, resumed through **2026-10-01**. This replaces the earlier partial checkpoint. Implementation, automated checks, actual provider calls and real-window interaction are separate claims. No phase is declared complete on the strength of a mock.
 
 ## Starting point
 
@@ -334,7 +334,7 @@ This checkpoint supersedes the execution-control limitations of the preceding co
 - Switching executables during a read could discard the new read along with the stale one; replacement probes now queue under the new executable identity.
 - The new reset Cancel action initially missed the existing translation key; the production interaction harness caught it and now passes the Portuguese action.
 - Repeated/stale/foreign reset attempts are rejected; failed attempts retire the renderer offer without automatically redeeming again or guessing new quota.
-- Closing Sirus Code cancels probe work and drops owned process groups. Confirmed reset outcomes are retained even if the subsequent quota refresh fails.
+- Closing Sirus cancels probe work and drops owned process groups. Confirmed reset outcomes are retained even if the subsequent quota refresh fails.
 
 ### Decisões arquiteturais
 
@@ -431,7 +431,7 @@ This checkpoint supersedes the execution-control limitations of the preceding co
 ### Completed
 
 - The usage popup now opens **Add account** for the same provider, with default/named account rows, verified CLI email/plan/quota, selected new-session default, browser sign-in, cancellation and name management. The separate footer visibility control continues to choose monitored providers.
-- Codex/Claude profiles use private native-generated directories and fixed vendor login. CLI credentials remain vendor-owned; no token input, copies, imports or raw auth output enter Sirus Code IPC/persistence/logs. Default login is preserved. Registered metadata and new-session selection persist atomically.
+- Codex/Claude profiles use private native-generated directories and fixed vendor login. CLI credentials remain vendor-owned; no token input, copies, imports or raw auth output enter Sirus IPC/persistence/logs. Default login is preserved. Registered metadata and new-session selection persist atomically.
 - Session admission and exact continuation bind the profile. Switching providers and returning retains that session's original per-provider account. Changing the selected account applies to future sessions, not existing ones. Agent processes, quota probes and Codex reset offers receive the same native profile.
 - Native paths reject foreign/unknown IDs, traversal, directory symlinks and unsafe ownership/permissions. Missing profiles fail explicitly. Used profiles cannot be overwritten by in-app re-login. Login has bounded discarded output, a ten-minute deadline, cancellation and synchronous owned-group shutdown; spawn/PID registration shares the shutdown admission lock.
 - README, AGENTS and the short usage guide now describe real accounts. [ADR-015](decisions/ADR-015-isolated-provider-accounts.md) records the owner-authorized new-profile login exception; existing scoped Cursor/Go reads and earned-reset policy remain.
@@ -481,7 +481,7 @@ This checkpoint supersedes the execution-control limitations of the preceding co
 ### Completed
 
 - One persistent PanelLeft control now sits at the window's top edge, fully visible and to the right of the native green traffic light. It stays in the same position while the sidebar opens/closes; the collapsed session chip reserves its own space instead of overlapping window controls.
-- Sirus Code branding and a working search icon form the next sidebar row. Navigation starts lower, with quieter New session styling. The existing project/session organization and real actions are preserved; no Recent menu or fabricated navigation feature was added.
+- Sirus branding and a working search icon form the next sidebar row. Navigation starts lower, with quieter New session styling. The existing project/session organization and real actions are preserved; no Recent menu or fabricated navigation feature was added.
 - The sidebar control reuses IconButton, translated labels and the central customizable Command+B shortcut. Existing saved preference and fade/resize behavior remain. Native geometry uses central inset/height tokens aligned to the actual macOS window.
 - Escape from the search palette returns focus to its initiating control. Radix still owns initial focus/trapping; opening another modal through a command does not steal its focus back to the sidebar.
 
@@ -543,4 +543,4 @@ This checkpoint supersedes the execution-control limitations of the preceding co
 - Memory-only selections are draft-owner/provider scoped. Planning replaces remembered Full selections; successful sends cannot silently restore them. Native settings reject approval grants in model defaults. Codex confirms thread policy before input and explicitly restores restrictive turn policy; Claude requires Auto/Full mode acknowledgement before input; OpenCode generates per-process policy layers; Cursor keeps prompt/model arguments separate.
 - Application/test typecheck, lint, **76 Node tests**, Rust fmt/check/Clippy with warnings denied, **127 Rust tests** and doctests passed; **17 live tests remain opt-in**. The installed Claude acknowledged manual, auto, bypassPermissions and plan in disposable directories with zero user prompts. Fixed protocol fixtures verify policy confirmation/rejection and restrictive restoration, not full-profile inference. Final read-only review found no remaining blockers.
 - Frontend and the local signed desktop build passed (**61.60 MiB**); strict deep signature verification passed. Graphify was incrementally updated (**3,618 nodes / 7,922 edges / 170 communities**); its existing TypeScript-store partial extraction warning remains while both TypeScript compilers pass.
-- The native computer-use connection began returning `cgWindowNotFound` for Sirus Code and other apps during reopening. The updated UI could not be visually checked in that build or confirmed open; the user must reopen the compiled app to load it. No new inference, login, credential change, reset redemption or user-project edit was submitted. Full mode was not selected through the actual desktop UI.
+- The native computer-use connection began returning `cgWindowNotFound` for Sirus and other apps during reopening. The updated UI could not be visually checked in that build or confirmed open; the user must reopen the compiled app to load it. No new inference, login, credential change, reset redemption or user-project edit was submitted. Full mode was not selected through the actual desktop UI.

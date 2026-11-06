@@ -1081,7 +1081,7 @@ pub(crate) mod tests {
             fs::create_dir_all(path.join("repo")).unwrap();
             let repo = Self(path);
             run_ok(&repo.cwd(), &["init", "-q"]).unwrap();
-            run_ok(&repo.cwd(), &["config", "user.name", "Sirus Code Test"]).unwrap();
+            run_ok(&repo.cwd(), &["config", "user.name", "Sirus Test"]).unwrap();
             run_ok(
                 &repo.cwd(),
                 &["config", "user.email", "test@example.invalid"],

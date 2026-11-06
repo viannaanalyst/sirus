@@ -4,7 +4,7 @@
 
 ## Context
 
-Sirus Code is built and released on an Apple silicon Mac only (`scripts/release.ts`), and the app had never been compiled for Windows. People asked for a Windows `.exe` in Releases. The macOS-only parts (WKWebView browser, computer use, native notifications, Keychain, cookie import) already sit behind `cfg(target_os = "macos")`, and the terminal uses `portable-pty`, which supports ConPTY, so the question was how much of the rest assumes Unix.
+Sirus is built and released on an Apple silicon Mac only (`scripts/release.ts`), and the app had never been compiled for Windows. People asked for a Windows `.exe` in Releases. The macOS-only parts (WKWebView browser, computer use, native notifications, Keychain, cookie import) already sit behind `cfg(target_os = "macos")`, and the terminal uses `portable-pty`, which supports ConPTY, so the question was how much of the rest assumes Unix.
 
 ## Decision
 

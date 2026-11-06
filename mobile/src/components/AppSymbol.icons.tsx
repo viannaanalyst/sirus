@@ -1,4 +1,4 @@
-// Generated from @hugeicons/core-free-icons (MIT), the set Monocode uses. Each icon is its shapes,
+// Generated from @hugeicons/core-free-icons (MIT). Each icon is its shapes,
 // so importing one does not register the whole library in Metro.
 import type { ComponentType } from "react";
 import Svg, { type SvgProps, Circle, Ellipse, Path } from "react-native-svg";

@@ -4,7 +4,7 @@
 
 ## Context
 
-"Compact and send" (ADR-057) compacts a heavy Claude conversation before a message that follows a long pause, so the request does not resend the whole uncached context. It guessed the pause from the last activity: 70 minutes. But the prompt cache lasts 1 hour on a subscription and only 5 minutes with an API key, and its lifetime starts when a request starts, not when the reply ends. T3 Code also offers compacting an idle conversation shortly before its cache expires, so coming back costs no wait.
+"Compact and send" (ADR-057) compacts a heavy Claude conversation before a message that follows a long pause, so the request does not resend the whole uncached context. It guessed the pause from the last activity: 70 minutes. But the prompt cache lasts 1 hour on a subscription and only 5 minutes with an API key, and its lifetime starts when a request starts, not when the reply ends. Another open-source client also offers compacting an idle conversation shortly before its cache expires, so coming back costs no wait.
 
 ## Decision
 

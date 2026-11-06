@@ -1,4 +1,4 @@
-// Ported from Monocode (MIT License; see LICENSE-MONOCODE-MIT at the root of native-spike).
+// Ported from an MIT-licensed project (MIT License; see LICENSE-THIRD-PARTY-MIT at the root of native-spike).
 
 //! Ordered dithering for charts: a tone in [0, 1]
 //! becomes a share of inked 3px cells through a 4×4 Bayer matrix, so fills

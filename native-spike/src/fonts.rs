@@ -1,4 +1,4 @@
-//! The app's fonts, as Monocode's (fonts.rs, MIT): one fixed choice, nothing to pick. The interface
+//! The app's fonts (fonts.rs, MIT): one fixed choice, nothing to pick. The interface
 //! is GPUI's default `.SystemUIFont`, code is Menlo, and the terminal leads with a Nerd Font patched
 //! JetBrains Mono when one is installed, so prompt icons draw, else Menlo.
 use gpui::{Font, FontFallbacks, TextSystem};

@@ -73,7 +73,7 @@ pub fn debug_prompt(debugging: bool, request: String) -> String {
     if !debugging {
         return request;
     }
-    format!("{request}\n\nSirus Code Debug mode: Observe the real state, reproduce the defect, investigate testable hypotheses, fix the smallest root cause and verify the original symptom. Collect relevant logs/errors when accessible. Add a regression test when practical and run appropriate checks before claiming success. Keep the current permission policy. When reproduction requires the user or evidence is inaccessible, give precise steps and ask for that evidence; never claim to observe external actions you cannot access.")
+    format!("{request}\n\nSirus Debug mode: Observe the real state, reproduce the defect, investigate testable hypotheses, fix the smallest root cause and verify the original symptom. Collect relevant logs/errors when accessible. Add a regression test when practical and run appropriate checks before claiming success. Keep the current permission policy. When reproduction requires the user or evidence is inaccessible, give precise steps and ask for that evidence; never claim to observe external actions you cannot access.")
 }
 
 /// The approval modes a provider accepts; empty when it takes none (its own policy applies).

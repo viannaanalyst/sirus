@@ -255,7 +255,7 @@ impl Steers {
             return json!({});
         };
         let message = messages.join("\n\n");
-        json!({"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":format!("Message from the user, for you (this subagent) only. Sirus Code, the app running this session, delivers it through its PreToolUse hook because the person typed it while you were working; it is not part of any tool output. Follow it, and where it conflicts with your earlier instructions it wins. Your final report goes to the agent that launched you, which did not see this message: say there what the person asked for.\n\n{message}")}})
+        json!({"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":format!("Message from the user, for you (this subagent) only. Sirus, the app running this session, delivers it through its PreToolUse hook because the person typed it while you were working; it is not part of any tool output. Follow it, and where it conflicts with your earlier instructions it wins. Your final report goes to the agent that launched you, which did not see this message: say there what the person asked for.\n\n{message}")}})
     }
 }
 fn unsupported(vendor_id: &str) -> Value {
@@ -1651,7 +1651,7 @@ mod tests {
 
     #[test]
     fn a_full_context_window_is_never_a_usage_limit() {
-        // The CLI's frame once the window is full (t3code #19832): `blocking_limit` with the
+        // The CLI's frame once the window is full : `blocking_limit` with the
         // context wording, after a rate-limit event that still allows requests.
         let frames = [
             json!({"type":"result","subtype":"success","is_error":true,"result":"Prompt is too long","terminal_reason":"blocking_limit","num_turns":189}),

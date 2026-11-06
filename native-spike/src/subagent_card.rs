@@ -1,7 +1,7 @@
-//! The subagents of a turn as one card in the transcript (Sirus Code's `SubagentTeam`, ADR-146):
+//! The subagents of a turn as one card in the transcript (Sirus's `SubagentTeam`, ADR-146):
 //! a header with the team's headline and counts, the subagents in phases, a row each. Pointing
 //! at a running Claude subagent shows Mensagem and Parar (ADR-111, ADR-113); a row opens what
-//! that subagent did (`subagent_feed`, Sirus Code's `SubagentPane`) in place, under the row.
+//! that subagent did (`subagent_feed`, Sirus's `SubagentPane`) in place, under the row.
 //!
 //! The data and its rules are in `subagent_team.rs`. This module is a child of `shell`
 //! (`#[path]`), so it reaches the window's private state. Nothing here draws while idle: the

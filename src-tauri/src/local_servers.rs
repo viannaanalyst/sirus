@@ -7,7 +7,7 @@
 //! development port and is not a macOS service. Sirus's own listeners and the agent
 //! CLIs are never listed.
 //!
-//! Stopping: only a process that Sirus Code itself started (a terminal shell's
+//! Stopping: only a process that Sirus itself started (a terminal shell's
 //! child or an agent's tool) can be stopped: the listener of a localhost port is
 //! found with the same probe, its parent chain must reach this app's process, and it
 //! gets SIGTERM. Servers started outside the app are never touched.
@@ -336,7 +336,7 @@ pub async fn local_server_action(
     if stopped == 0 {
         return Err(Error::new(
             "forbidden",
-            "This server was not started by Sirus Code, so it is left running.",
+            "This server was not started by Sirus, so it is left running.",
         ));
     }
     Ok(stopped)

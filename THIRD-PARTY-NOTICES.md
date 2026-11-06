@@ -54,7 +54,7 @@ The filled shapes left in `native-spike/assets` (`zap-fill`, `star-fill`, `squar
 Attribution 4.0 International license (CC BY 4.0, https://creativecommons.org/licenses/by/4.0/).
 The icons are taken from the `@iconify-json/solar` package and from Zeron's adjusted copies
 (https://github.com/zeronsh/comet, MIT, listed above); their stroke width is normalized to 1.7 and
-some coordinates are rounded. Those changes were made by Sirus Code. The attribution and license
+some coordinates are rounded. Those changes were made by Sirus. The attribution and license
 texts are kept in `native-spike/ICONS-NOTICE.md`.
 
 ## Mermaid and KaTeX (diagrams and formulas in replies)
@@ -66,7 +66,7 @@ npm packages they are built from (mostly MIT and ISC, with some Apache-2.0, BSD-
 EPL-2.0 for ELK, and Unlicense). The licence text of every package is kept in
 `native-spike/assets/reply-render/LICENSES.txt`, which `bundle.sh` ships inside the app.
 
-The notification sounds in `native-spike/src/sound.rs` come from Monocode (MIT, `native-spike/LICENSE-MONOCODE-MIT`) and use recipes from cuelume by Daniel Belyi (MIT).
+The notification sounds in `native-spike/src/sound.rs` come from Monocode (MIT, `native-spike/LICENSE-THIRD-PARTY-MIT`) and use recipes from cuelume by Daniel Belyi (MIT).
 
 ## Hugeicons (interface icons on the Mac and the phone)
 

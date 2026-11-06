@@ -32,7 +32,7 @@ const HISTORY_LIMIT: usize = 200;
 const FOREGROUND_IDLE: f64 = 1.5;
 
 /// Never controllable: secrets, system security, shells/automation (typing into
-/// them would bypass provider sandboxes and approvals) and Sirus Code itself.
+/// them would bypass provider sandboxes and approvals) and Sirus itself.
 const BLOCKED: &[(&str, &str)] = &[
     ("com.1password.1password", "1Password"),
     ("com.agilebits.onepassword7", "1Password 7"),
@@ -52,7 +52,7 @@ const BLOCKED: &[(&str, &str)] = &[
     ("com.apple.scripteditor2", "Script Editor"),
     ("com.apple.automator", "Automator"),
     ("com.apple.shortcuts", "Shortcuts"),
-    ("com.siruscode.app", "Sirus Code"),
+    ("com.siruscode.app", "Sirus"),
     ("com.siruscode.native", "Sirus Native"),
 ];
 
@@ -581,7 +581,10 @@ fn observation(
 #[cfg(target_os = "macos")]
 fn execute(app: &AppHandle, session_id: &str, tool: &str, args: &Value) -> Result<Value, String> {
     if !enabled() {
-        return Err("Computer use is turned off. The person can enable it in Sirus Code Settings → Computer.".into());
+        return Err(
+            "Computer use is turned off. The person can enable it in Sirus Settings → Computer."
+                .into(),
+        );
     }
     let (provider, planning, locale) = session_context(app, session_id)
         .ok_or_else(|| "this session no longer exists".to_string())?;

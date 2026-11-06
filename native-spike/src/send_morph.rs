@@ -5,7 +5,7 @@
 //! When the action changes, say a held modifier turns Queue into Steer, the
 //! glyph and label roll to the new one, as the title tabs roll their pane.
 //!
-//! From Monocode's send_morph.rs (see LICENSE-MONOCODE-MIT).
+//! From an MIT-licensed project (see LICENSE-THIRD-PARTY-MIT).
 use crate::motion::{Curve, eased};
 use crate::theme::*;
 use gpui::{AnyElement, Hsla, MouseButton, div, prelude::*, px};

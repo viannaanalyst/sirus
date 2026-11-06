@@ -302,7 +302,7 @@ fn record_launch(app: &AppHandle, state: &AppState, caller_id: &str, launched: &
 }
 
 /// A message one session sends another, headed with where it came from so the target does
-/// not take another agent's request for the person's (Synara's provenance labels).
+/// not take another agent's request for the person's (provenance labels).
 fn relayed(caller: &crate::models::Session, prompt: &str, portuguese: bool) -> String {
     let title = short(&caller.title);
     let agent = caller.agent.key();

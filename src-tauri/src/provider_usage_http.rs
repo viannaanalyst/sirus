@@ -262,7 +262,7 @@ fn client() -> Result<&'static reqwest::Client, Failure> {
             .retry(reqwest::retry::never())
             .connect_timeout(Duration::from_secs(4))
             .timeout(Duration::from_secs(8))
-            .user_agent("Sirus Code/0.1.0")
+            .user_agent("Sirus/0.1.0")
             .pool_max_idle_per_host(1)
             .build()
             .map_err(|_| ())

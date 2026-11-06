@@ -17,10 +17,10 @@ use tungstenite::Message;
 
 /// The window's own connection: loopback only, always on.
 const PORT: u16 = 7811;
-/// The listener for other devices, on only while Settings → Conexões allows it. Sirus Code uses
+/// The listener for other devices, on only while Settings → Conexões allows it. Sirus uses
 /// 7710, so the two never clash on one Mac.
 const REMOTE_PORT: u16 = 7711;
-/// `tailscale serve` takes one handler per HTTPS port and Sirus Code holds 443, so this app
+/// `tailscale serve` takes one handler per HTTPS port and Sirus holds 443, so this app
 /// serves its secure address on 8443 and turning either off leaves the other alone.
 const HTTPS_PORT: u16 = 8443;
 static HOST_PID: AtomicI32 = AtomicI32::new(0);
@@ -203,10 +203,6 @@ impl Backend {
     /// Makes `id` the active computer (`None`: this Mac). Does not connect.
     pub fn activate(&self, id: Option<&str>) {
         *self.active.lock().unwrap() = id.map(str::to_owned);
-    }
-
-    pub fn active(&self) -> Option<String> {
-        self.active.lock().unwrap().clone()
     }
 
     /// Asks the active computer for its state again; `Incoming::Ready` follows.
@@ -544,8 +540,8 @@ fn host_binary() -> Result<PathBuf, String> {
         .ok_or_else(|| t("O sirus-host não foi encontrado.").into())
 }
 
-/// First launch: a consistent copy of Sirus Code's state, when this computer has it, with
-/// everything automatic turned off. Without it (a new computer, or Sirus Code's folder deleted)
+/// First launch: a consistent copy of Sirus's state, when this computer has it, with
+/// everything automatic turned off. Without it (a new computer, or Sirus's folder deleted)
 /// the host starts with an empty state of its own.
 fn seed(dir: &Path) -> Result<(), String> {
     let source = PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
@@ -689,7 +685,7 @@ fn ensure_host(dir: &Path) -> Result<(), String> {
             command.env_remove(&key);
         }
     }
-    // Usage history also reads Sirus Code's named account profiles (read-only, logs only).
+    // Usage history also reads Sirus's named account profiles (read-only, logs only).
     if let Some(accounts) = code_account_profiles() {
         command.env("SIRUS_USAGE_EXTRA_ACCOUNTS", accounts);
     }
@@ -712,7 +708,7 @@ fn ensure_host(dir: &Path) -> Result<(), String> {
     Err(t("O motor do Sirus não respondeu.").into())
 }
 
-/// Sirus Code's `provider-accounts` folder, when it exists on this computer.
+/// Sirus's `provider-accounts` folder, when it exists on this computer.
 fn code_account_profiles() -> Option<PathBuf> {
     let dir = PathBuf::from(std::env::var_os("HOME")?)
         .join("Library/Application Support/com.siruscode.app/provider-accounts");

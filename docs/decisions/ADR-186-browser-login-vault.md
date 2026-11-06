@@ -10,7 +10,7 @@ Agents that drive the Sirus browser (ADR-030, ADR-087, ADR-150) hit sign-in page
 
 ### Storage
 
-- Saved logins (origin, username, password, optional TOTP seed, an "agents may use" flag) are one JSON document in one macOS Keychain generic-password item (service `Sirus Code browser logins`, account `vault`), through `security-framework` like connectors (ADR-137). Nothing is written to the app data folder or `state.db`.
+- Saved logins (origin, username, password, optional TOTP seed, an "agents may use" flag) are one JSON document in one macOS Keychain generic-password item (service `Sirus browser logins`, account `vault`), through `security-framework` like connectors (ADR-137). Nothing is written to the app data folder or `state.db`.
 - The store sits behind a `SecretStore` trait (`read`/`write` of that document). The Keychain implementation is the only one in the app; tests use an in-memory double. On non-macOS builds the store reports that the Keychain is needed.
 - Writes are applied to a copy, saved, then adopted, so a refused Keychain write changes nothing. The decrypted list is cached in memory after the first read; passwords are zeroed when a login is dropped.
 - The renderer receives `LoginSummary` only (origin, username, a fixed mask, `hasTotp`, `agentUse`). There is no command that returns a password or a seed. Passwords go in through `login_vault_save`; on an edit an empty password keeps the saved one.

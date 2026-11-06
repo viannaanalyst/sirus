@@ -1,4 +1,4 @@
-# ADR-002: UI talks only to the Sirus Code Client API
+# ADR-002: UI talks only to the Sirus Client API
 
 **Status:** Accepted
 

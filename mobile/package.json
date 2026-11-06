@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "license": "MIT",
-  "description": "Sirus Code's native iPhone app (ADR-135).",
+  "description": "Sirus's native iPhone app (ADR-135).",
   "main": "index.ts",
   "scripts": {
     "postinstall": "node scripts/vendor-ghostty.mjs && node scripts/apply-patches.mjs",

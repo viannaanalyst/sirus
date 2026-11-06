@@ -1,4 +1,4 @@
-//! Device mode's sizing, after Sirus Code's `browser-device.ts` and `BrowserDevice.tsx`: typed
+//! Device mode's sizing, after Sirus's `browser-device.ts` and `BrowserDevice.tsx`: typed
 //! sizes and the rails around the frame that resize it by dragging. Pure functions.
 
 pub const MIN_SIDE: u32 = 240;

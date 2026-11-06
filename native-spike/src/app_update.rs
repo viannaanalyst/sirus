@@ -1,6 +1,6 @@
 //! In-app updates of Sirus (ADR-140, ADR-190). A release publishes `Sirus-arm64.app.tar.gz`, its
 //! minisign signature and `sirus-latest.json` under a fixed release tag, so this app reads its
-//! own feed and never the one Sirus Code installs read. Nothing is installed that the key in
+//! own feed and never the one Sirus installs read. Nothing is installed that the key in
 //! `updater.pub` did not sign. Installing swaps the bundle on disk; the relaunch happens only
 //! when the person asks, and the shell puts it behind the running-agents confirmation first.
 //!
@@ -16,7 +16,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 /// Where this app reads its updates: a fixed release tag whose feed file every release replaces.
-/// Sirus Code installs read `releases/latest/download/latest.json` and never see this one.
+/// Sirus installs read `releases/latest/download/latest.json` and never see this one.
 pub const FEED_URL: &str =
     "https://github.com/viannaanalyst/sirus/releases/download/sirus-channel/sirus-latest.json";
 /// The updater key's public half: `native-spike/updater.pub`, which `scripts/release-sirus.ts`

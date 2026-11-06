@@ -246,7 +246,7 @@ const MessageRow = memo(function MessageRow(props: { readonly message: Message; 
   return <AgentReply message={props.message} computerId={props.computerId} agent={props.agent} cwd={props.cwd} files={props.files} prompt={props.prompt} />;
 });
 
-/** A sent message in the Mac's accent at 24%: a pill on one line, a card past it (as Monocode's). */
+/** A sent message in the Mac's accent at 24%: a pill on one line, a card past it. */
 function UserBubble(props: { readonly text: string; readonly attachments?: readonly MessageAttachment[]; readonly computerId: string }) {
   const accent = useMacAccent(props.computerId);
   const [lines, setLines] = useState(1);

@@ -25,7 +25,7 @@ pub enum MediaKind {
 // ---- Which links are media ---------------------------------------------------------------
 
 /// A scheme other than `file:///` (`http:`, `data:`, `mailto:`): the link is not on this Mac.
-/// The same test as Sirus Code's `isLocalImageLink`.
+/// The same test as Sirus's `isLocalImageLink`.
 fn foreign_scheme(value: &str) -> bool {
     let bytes = value.as_bytes();
     if !bytes.first().is_some_and(u8::is_ascii_alphabetic) {
@@ -388,14 +388,14 @@ pub enum Act {
 
 // ---- The page of a preview ---------------------------------------------------------------
 
-/// Sirus Code's policy for agent HTML (`html_preview.rs`): the page's own inline scripts and
+/// Sirus's policy for agent HTML (`html_preview.rs`): the page's own inline scripts and
 /// styles run, images, fonts and media may come from https, and nothing else may be fetched, so
 /// the page can neither send data out nor load code from anywhere.
 pub const PREVIEW_POLICY: &str = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob: https:; font-src data: https:; media-src data: blob: https:";
 const MAX_PAGE: usize = 2 * 1024 * 1024;
 
 /// The document the viewer shows for agent HTML. The policy comes first, so the page cannot
-/// loosen it. `None` when the page is larger than 2 MiB (Sirus Code's limit).
+/// loosen it. `None` when the page is larger than 2 MiB (Sirus's limit).
 pub fn preview_page(source: &str) -> Option<String> {
     (source.len() <= MAX_PAGE).then(|| {
         format!(

@@ -2,7 +2,6 @@
 //! reply after it make one turn.
 use crate::i18n::t;
 use serde_json::Value;
-use std::time::Instant;
 
 pub struct Step {
     pub kind: String,
@@ -75,7 +74,7 @@ pub struct Turn {
     pub model: Option<String>,
 }
 
-/// One moment of a turn, in the order it happened (Monocode's activity rows).
+/// One moment of a turn, in the order it happened.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Beat {
     /// What the agent wrote: a byte range of `Turn::answer`.
@@ -151,7 +150,6 @@ pub struct Project {
     pub path: String,
     pub appearance: Value,
     pub open: bool,
-    pub pinned: bool,
     pub conversations: Vec<usize>,
     /// Setup and On finish scripts and the preview address (project_scripts.rs).
     pub scripts: crate::project_scripts::Saved,

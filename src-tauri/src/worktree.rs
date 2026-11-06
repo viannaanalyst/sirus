@@ -318,7 +318,7 @@ pub(crate) mod tests {
             ],
         )
         .unwrap();
-        git::run_ok(&clone, &["config", "user.name", "Sirus Code Test"]).unwrap();
+        git::run_ok(&clone, &["config", "user.name", "Sirus Test"]).unwrap();
         git::run_ok(&clone, &["config", "user.email", "test@example.invalid"]).unwrap();
         clone
     }

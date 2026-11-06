@@ -200,11 +200,11 @@ impl UsageState {
     ) -> Result<T> {
         let mut cancel = self.cancel.subscribe();
         if *cancel.borrow() {
-            return Err(Error::agent("Sirus Code is closing"));
+            return Err(Error::agent("Sirus is closing"));
         }
         tokio::select! {
             biased;
-            _ = cancel.changed() => Err(Error::agent("Sirus Code is closing")),
+            _ = cancel.changed() => Err(Error::agent("Sirus is closing")),
             result = tokio::time::timeout(Duration::from_secs(seconds), work) => result.map_err(|_| Error::agent("Usage operation timed out. Refresh usage before trying again."))?,
         }
     }
@@ -489,7 +489,7 @@ impl Probe {
     }
     async fn initialize(&mut self, provider: &AgentProviderId) -> Result<()> {
         if *provider == AgentProviderId::Codex {
-            self.rpc("initialize", json!({"clientInfo":{"name":"sirus_usage","title":"Sirus Code","version":"0.1.0"},"capabilities":{"experimentalApi":true}})).await?;
+            self.rpc("initialize", json!({"clientInfo":{"name":"sirus_usage","title":"Sirus","version":"0.1.0"},"capabilities":{"experimentalApi":true}})).await?;
             self.wire.send(json!({"method":"initialized"})).await?;
             // Fixed, read-only identity request. Never refresh or manage authentication.
             if let Ok(value) = self

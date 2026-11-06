@@ -1,5 +1,5 @@
-//! Recording the browser to a video (ADR-111, ADR-112), after Sirus Code's `browser-recorder.ts`.
-//! Sirus Code takes snapshots of the page and encodes them in the web view with MediaRecorder;
+//! Recording the browser to a video (ADR-111, ADR-112), after Sirus's `browser-recorder.ts`.
+//! Sirus takes snapshots of the page and encodes them in the web view with MediaRecorder;
 //! here the same snapshots (`takeSnapshot`, which works for a hidden page when asked to paint)
 //! are drawn into BGRA pixel buffers with the clicks and the key caption on top, and
 //! AVAssetWriter encodes them to H.264 in an MP4 under Movies/Sirus. Everything runs on the

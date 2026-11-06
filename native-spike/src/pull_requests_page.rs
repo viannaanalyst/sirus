@@ -1,4 +1,4 @@
-//! The Pull requests page, after Sirus Code's `src/components/pull-requests/` (ADR-050): the review
+//! The Pull requests page, after Sirus's `src/components/pull-requests/` (ADR-050): the review
 //! inbox of the GitHub repository of the project selected in the sidebar, with a list column
 //! (search and four segments: Abertos, Mesclados, Fechados, Issues) beside the selected item's detail (Resumo, Atividade, Checks and Código).
 //! It opens as a tab in the title bar (shell_terminal.rs). Everything runs on the host through

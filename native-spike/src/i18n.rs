@@ -112,10 +112,6 @@ const ENTRIES: &[(&str, &str)] = &[
         "\"{}\" tem mudanças não mantidas em {} nesta pasta. Mantenha ou desfaça nessa sessão primeiro.",
         "\"{}\" has unkept changes to {} in this folder. Keep or undo them in that session first.",
     ),
-    (
-        "\"{}\" é encerrado. A conversa continua.",
-        "\"{}\" is ended. The conversation goes on.",
-    ),
     ("%d/%m/%Y", "%m/%d/%Y"),
     ("%d/%m/%Y %H:%M", "%m/%d/%Y %H:%M"),
     ("(vazio)", "(empty)"),
@@ -130,16 +126,11 @@ const ENTRIES: &[(&str, &str)] = &[
     ("1 pedido na fila", "1 queued request"),
     ("1 repositório indisponível.", "1 repository unavailable."),
     ("1 subagente", "1 subagent"),
-    (
-        "100% é um núcleo da CPU, como no Monitor de Atividade.",
-        "100% is one CPU core, as in Activity Monitor.",
-    ),
     ("5 horas · modelo reserva", "5-hour · reserve model"),
     (
         "60 fps fica mais suave e gera arquivos maiores. A página é capturada o mais rápido que ela permitir.",
         "60 fps is smoother and makes larger files. The page is captured as fast as it allows.",
     ),
-    ("> comandos", "> commands"),
     (
         "A Tailscale não está conectada",
         "Tailscale is not connected",
@@ -320,7 +311,6 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Age sem perguntar.", "Acts without asking."),
     ("Agente", "Agent"),
     ("Agentes", "Agents"),
-    ("Agentes neste Mac", "Agents on this Mac"),
     ("Agentes podem usar este login", "Agents may use this login"),
     ("Agora não", "Not now"),
     ("Aguardando o navegador…", "Waiting for the browser…"),
@@ -407,6 +397,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Arquivos ({})", "Files ({})"),
     ("Arquivos e pastas", "Files and folders"),
     ("Arquivos que impedem o pull:", "Files blocking the pull:"),
+    ("Arquivos recentes", "Recent files"),
     (
         "Arraste para escolher a sua cor.",
         "Drag to pick your color.",
@@ -505,8 +496,8 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Buscar conectores", "Search connectors"),
     ("Buscar configurações", "Search Settings"),
     (
-        "Buscar conversas, mensagens ou comandos",
-        "Search chats, messages or commands",
+        "Buscar conversas, arquivos e projetos",
+        "Search conversations, files and projects",
     ),
     ("Buscar em todas as conversas", "Search all conversations"),
     ("Buscar modelos...", "Search models..."),
@@ -638,7 +629,6 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Conectando à tela…", "Connecting to the screen…"),
     ("Conectando…", "Connecting…"),
     ("Conectar", "Connect"),
-    ("Conectar a este Mac?", "Connect to this Mac?"),
     ("Conectar outro", "Connect another"),
     ("Conectar um aparelho", "Connect a device"),
     ("Conectar {}", "Connect {}"),
@@ -649,6 +639,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Conectores", "Connectors"),
     ("Conexões", "Connections"),
     ("Configurações", "Settings"),
+    ("Configurações do projeto", "Project settings"),
     ("Confirmar", "Confirm"),
     ("Confirmar ao excluir", "Confirm deleting"),
     (
@@ -692,6 +683,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Control follow-ups, dictation, finished turns, review defaults and safety confirmations.",
     ),
     ("Conversa", "Conversation"),
+    ("Conversas", "Chats"),
     ("Conversas e contatos", "Conversations and contacts"),
     (
         "Conversas novas recebem os conectores daqui. Os conectores de um projeto só chegam às conversas dele. Grok, Antigravity, Droid e Pi ainda não aceitam conectores.",
@@ -809,7 +801,6 @@ const ENTRIES: &[(&str, &str)] = &[
         "Digite no navegador da Tailscale ou no app do Sirus. Ele vale por pouco tempo.",
         "Enter it in the Tailscale browser or in the Sirus app. It is valid for a short time.",
     ),
-    ("Digite o código", "Type the code"),
     (
         "Digite o valor e aperte Enter",
         "Type the value and press Enter",
@@ -837,7 +828,6 @@ const ENTRIES: &[(&str, &str)] = &[
         "Documentação atualizada de bibliotecas",
         "Up-to-date library documentation",
     ),
-    ("Dê um nome ao aparelho", "Give the device a name"),
     (
         "Dê um nome e um comando à ação.",
         "Give the action a name and a command.",
@@ -961,7 +951,6 @@ const ENTRIES: &[(&str, &str)] = &[
         "Send /compact on its own, without attachments, team or debug mode.",
     ),
     ("Equipe", "Team"),
-    ("Esc fechar", "Esc close"),
     (
         "Escolha como o Sirus avisa quando o trabalho termina ou precisa da sua atenção.",
         "Choose how Sirus alerts you when work finishes or needs your attention.",
@@ -1161,7 +1150,6 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Fechar todas as abas", "Close all tabs"),
     ("Fechar {}?", "Close {}?"),
     ("Fechou o navegador", "Closed the browser"),
-    ("Ferramenta", "Tool"),
     ("Ferramentas de desenvolvimento", "Developer tools"),
     ("Fila", "Queue"),
     ("Fixar", "Pin"),
@@ -1336,10 +1324,6 @@ const ENTRIES: &[(&str, &str)] = &[
         "Leia com a câmera do iPhone ou digite o código no app do Sirus.",
         "Scan with the iPhone camera, or type the code in the Sirus app.",
     ),
-    (
-        "Leia o QR ou digite o código",
-        "Scan the QR or type the code",
-    ),
     ("Leitura de cache", "Cache read"),
     ("Lendo o histórico…", "Reading the history…"),
     ("Lendo o que ele fez…", "Reading what it did…"),
@@ -1409,7 +1393,6 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Luminosidade da cor", "Color lightness"),
     ("Mais antigas", "Older"),
     ("Mais escura ou mais clara.", "Darker or lighter."),
-    ("Mais {} não exibidos", "{} more not shown"),
     (
         "Mantenha no máximo 10 perfis personalizados.",
         "Keep at most 10 custom profiles.",
@@ -1535,6 +1518,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Navegador", "Browser"),
     ("Navegador do Sirus", "Sirus browser"),
     ("Navegador do sistema", "System browser"),
+    ("Navegar", "Navigate"),
     (
         "Necessária para capturar a janela de outro app.",
         "Needed to capture another app's window.",
@@ -1761,10 +1745,6 @@ const ENTRIES: &[(&str, &str)] = &[
     (
         "O Sirus abre o login do serviço no seu navegador; você entra uma vez.",
         "Sirus opens the service's sign-in in your browser; you sign in once.",
-    ),
-    (
-        "O Sirus deste iPhone vai controlá-lo.",
-        "Sirus on this iPhone will control it.",
     ),
     (
         "O Sirus preenche seu login salvo na página. O agente nunca vê a senha, e você não é perguntado de novo sobre este site nesta conversa.",
@@ -2027,7 +2007,6 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Outros", "Others"),
     ("Outros modelos", "Other models"),
     ("Ouvir", "Listen"),
-    ("Pacotes", "Packages"),
     ("Padrão", "Default"),
     ("Padrão do nome da branch", "Branch naming pattern"),
     ("Padrões", "Defaults"),
@@ -2050,8 +2029,11 @@ const ENTRIES: &[(&str, &str)] = &[
         "Parar e transcrever no composer, ou parar e enviar a mensagem assim que for transcrita.",
         "Stop and transcribe into the composer, or stop and send the message once it is transcribed.",
     ),
-    ("Parar processo?", "Stop process?"),
     ("Parar script", "Stop script"),
+    (
+        "Pare as conversas em andamento antes de remover este projeto.",
+        "Stop the running conversations before removing this project.",
+    ),
     ("Pare quando quiser", "Stop anytime"),
     ("Pareando…", "Pairing…"),
     ("Parear", "Pair"),
@@ -2614,11 +2596,13 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Trazer de volta ao painel", "Bring back to the pane"),
     ("Trocar", "Change"),
     ("Trocar de projeto", "Switch project"),
+    ("Trocar filtro", "Switch filter"),
     ("Trocar modelo e esforço", "Change model and effort"),
     ("Trocar método", "Change method"),
     ("Trocar token", "Replace token"),
     ("Trocar…", "Switch…"),
     ("Trouxe para a frente", "Brought to front"),
+    ("Tudo", "All"),
     ("Tudo pronto", "All set"),
     ("Título do commit", "Commit title"),
     ("Título do pull request", "Pull request title"),
@@ -2898,8 +2882,6 @@ const ENTRIES: &[(&str, &str)] = &[
     ("últimas 24 horas", "last 24 hours"),
     ("últimos {} dias", "last {} days"),
     ("… {} linhas a mais", "… {} more lines"),
-    ("↑ ↓ navegar", "↑ ↓ navigate"),
-    ("↵ abrir", "↵ open"),
 ];
 
 #[cfg(test)]

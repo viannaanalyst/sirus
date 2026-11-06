@@ -29,5 +29,5 @@ ADR-111 gave the browser device mode and recording, but only through the pane's 
 ## Consequences
 
 - The appearance and zoom settings are kept only while the app runs.
-- Clearing cookies or the cache affects every session's browser. All of them share the app's default WebKit data store, so another Sirus Code instance with the same bundle id is affected too.
+- Clearing cookies or the cache affects every session's browser. All of them share the app's default WebKit data store, so another Sirus instance with the same bundle id is affected too.
 - Overlay positions follow the page's viewport. Clicks inside cross-origin frames are not seen.

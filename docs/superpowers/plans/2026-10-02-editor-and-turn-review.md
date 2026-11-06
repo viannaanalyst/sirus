@@ -9,7 +9,7 @@ Repair actual manual editing of existing workspace code/Markdown. Study turn sum
 - [x] Verify the CodeMirror style/CSP path and preserve newer edits across save acknowledgments.
 - [x] Supply the existing document style nonce to CodeMirror, use palette-aware syntax tokens, retain aligned gutters and correct code scrolling/indentation.
 - [x] Replace unsafe timed/unmount writes with explicit Save/Command-S; retain owner buffers and confirm closing dirty inline files.
-- [x] Trace completed-turn file summaries, turn/file diff navigation, file-only undo and thread/message rollback. Document exact behavior and missing Sirus Code native checkpoint capability.
+- [x] Trace completed-turn file summaries, turn/file diff navigation, file-only undo and thread/message rollback. Document exact behavior and missing Sirus native checkpoint capability.
 - [x] Create three preview summary options with dark/light/System/glass, actual in-memory CodeMirror code/Markdown editing, split/unified right-side diff and simulated undo/revert confirmations.
 - [x] Run meaningful regressions, typecheck/lint/full tests, cargo check, desktop build/signature and a focused code review. Update ADR-019 and incremental Graphify.
 

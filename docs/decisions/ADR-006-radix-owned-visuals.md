@@ -1,4 +1,4 @@
-# ADR-006: Radix for behaviour, Sirus Code-owned visuals
+# ADR-006: Radix for behaviour, Sirus-owned visuals
 
 **Status:** Accepted
 
@@ -10,7 +10,7 @@ The product must feel like a Mac developer tool, not a shadcn dashboard. Accessi
 
 - Tailwind v4 + CSS variables in `src/styles/index.css`.
 - Radix: dialog, dropdown, popover, tooltip, context-menu, scroll-area.
-- Visuals: existing first-party primitives adapt vendored UI Arc MIT components. Sirus Code owns theme, motion, focus and sizing tokens; upstream source and license are retained. The component explorer is lazy and its local examples are separate from product data.
+- Visuals: existing first-party primitives adapt vendored UI Arc MIT components. Sirus owns theme, motion, focus and sizing tokens; upstream source and license are retained. The component explorer is lazy and its local examples are separate from product data.
 - Motion for React only where it adds press/presence; CSS tokens for duration/easing.
 - Control icons: Lucide. Provider/model identity uses bundled vendor assets with provenance; unavailable official assets use a documented neutral placeholder.
 - UI state: Zustand (`src/store/app-store.ts`). Do not add Redux/Query/another store without an ADR.

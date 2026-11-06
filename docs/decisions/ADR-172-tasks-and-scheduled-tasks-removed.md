@@ -4,7 +4,7 @@
 
 ## Context
 
-Sirus Code grew a personal to-do list (Tasks, ADR-052, with agent tools in ADR-110) and, on top
+Sirus grew a personal to-do list (Tasks, ADR-052, with agent tools in ADR-110) and, on top
 of it, prompts that run by themselves: on a clock (scheduled tasks, ADR-142) or when another
 service posts to a private URL (webhook tasks, ADR-161). The owner decided the product is about
 sessions, agents, worktrees and reviewable changes, and that these features pull it away from

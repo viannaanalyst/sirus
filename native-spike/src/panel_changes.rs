@@ -3,7 +3,7 @@
 //! A click shows the file's diff, colored; Preparar and Despreparar move one file between the groups.
 //! Below the lists, the Histórico: the branch's commits, a graph line and "Carregar mais" for older
 //! pages. A click on a commit lists the files it changed with their added and removed lines, and a
-//! click on one of those shows its diff, as in Monocode's history; the arrow goes back a step. The
+//! click on one of those shows its diff; the arrow goes back a step. The
 //! host back end has no such request, so those two are read with `git` in the worktree, on a
 //! background thread (local_git.rs). The footer commits the staged files with the title typed in
 //! its field.

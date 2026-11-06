@@ -1,4 +1,4 @@
-//! Settings → Conectores, as Sirus Code draws it (`components/settings/ConnectorsSettings.tsx`
+//! Settings → Conectores, as Sirus draws it (`components/settings/ConnectorsSettings.tsx`
 //! and `styles/connectors.css`, ADR-137): a search bar with "Adicionar personalizado", an optional
 //! scope filter, the connected list and the catalog in two columns of brand marks, a "⋯" menu on
 //! each connected row and one dialog for connecting, editing and renaming.

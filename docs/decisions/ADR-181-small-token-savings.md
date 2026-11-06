@@ -4,7 +4,7 @@
 
 ## Context
 
-Monocode, t3code, Synara and Zeron each carry a few cheap token savers. Before adding any, we checked what Sirus already does: compaction before a send after the prompt cache expired (ADR-057, ADR-074, ADR-157), a bounded handoff recap (ADR-028), bounded session tools (ADR-076), tool output stored apart (ADR-147), and usage history that counts each response once (ADR-141). Only two ideas were missing; the others were already covered or already tighter.
+The reference app, another open-source client, another open-source client and Zeron each carry a few cheap token savers. Before adding any, we checked what Sirus already does: compaction before a send after the prompt cache expired (ADR-057, ADR-074, ADR-157), a bounded handoff recap (ADR-028), bounded session tools (ADR-076), tool output stored apart (ADR-147), and usage history that counts each response once (ADR-141). Only two ideas were missing; the others were already covered or already tighter.
 
 ## Decision
 

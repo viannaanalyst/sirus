@@ -534,7 +534,7 @@ async fn execute(
 ) -> Result<bool> {
     // A kept app-server is initialized once; each turn still resumes and checks its thread.
     if !wire.initialized {
-        wire.request("initialize", json!({"clientInfo":{"name":"sirus","title":"Sirus Code","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}}),cancel).await?;
+        wire.request("initialize", json!({"clientInfo":{"name":"sirus","title":"Sirus","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}}),cancel).await?;
         wire.send(json!({"method":"initialized"})).await?;
         wire.initialized = true;
     }
@@ -1764,7 +1764,7 @@ else:
         session.worktree = tree.clone();
         session.model = std::env::var("SIRUS_SMOKE_MODEL").ok();
         let prompts = [
-            "This is a disposable Sirus Code integration test. Remember the exact phrase SIRUS_NATIVE_REMEMBER_741. Create exactly one file sirus-native.txt in the current workspace containing SIRUS_NATIVE_OK followed by a newline. Do not change other files, use network tools, install dependencies, or read authentication/configuration files. Reply SIRUS_NATIVE_OK.",
+            "This is a disposable Sirus integration test. Remember the exact phrase SIRUS_NATIVE_REMEMBER_741. Create exactly one file sirus-native.txt in the current workspace containing SIRUS_NATIVE_OK followed by a newline. Do not change other files, use network tools, install dependencies, or read authentication/configuration files. Reply SIRUS_NATIVE_OK.",
             "Without any tools or filesystem access, repeat the exact phrase I asked you to remember in the previous turn. Reply with that phrase only.",
         ];
         let mut first_thread = None;

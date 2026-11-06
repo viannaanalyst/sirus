@@ -5,7 +5,7 @@
 
 ## Context
 
-Every GitHub feature in Sirus (Pull requests, PR watches, CI auto-fix) reads through `gh`, and `git push` over HTTPS uses `gh` as its credential helper. `gh` keeps several accounts per host with one active (`gh auth switch`), but switching or adding one meant a terminal. Monocode and Synara also rely on `gh` and point at `gh auth login`; t3code has its own GitHub App sign-in, which needs a registered app.
+Every GitHub feature in Sirus (Pull requests, PR watches, CI auto-fix) reads through `gh`, and `git push` over HTTPS uses `gh` as its credential helper. `gh` keeps several accounts per host with one active (`gh auth switch`), but switching or adding one meant a terminal. The reference app and another open-source client also rely on `gh` and point at `gh auth login`; another open-source client has its own GitHub App sign-in, which needs a registered app.
 
 ## Decision
 

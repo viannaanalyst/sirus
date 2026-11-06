@@ -1,4 +1,4 @@
-//! The address bar's logic, after Sirus Code's `browser-url.ts`, `BrowserPanel.tsx` and
+//! The address bar's logic, after Sirus's `browser-url.ts`, `BrowserPanel.tsx` and
 //! `local-servers.ts`: what typed text loads (an address or a Google search), the suggestions under
 //! the field (open tabs, then history, then a search for what was typed), and the local servers
 //! listed on the blank page. Pure functions, no GPUI.

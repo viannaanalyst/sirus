@@ -34,7 +34,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-/// Results the search lists (Monocode's Quick Open lists 80).
+/// Results the search lists.
 const RESULT_CAP: usize = 80;
 /// Quiet time after the last keystroke before the search runs.
 const SEARCH_DEBOUNCE_MS: u64 = 120;
@@ -1735,7 +1735,7 @@ pub(crate) fn source_line(index: usize, text: &str, spans: Option<&LineSpans>) -
         )
 }
 
-/// Monocode's `--syntax-*` colors (src/styles/index.css), dark and light.
+/// The `--syntax-*` colors (src/styles/index.css), dark and light.
 pub(crate) fn group_color(group: Group) -> Hsla {
     let (dark, light) = match group {
         Group::Keyword => (0x569cd6, 0x0000ff),

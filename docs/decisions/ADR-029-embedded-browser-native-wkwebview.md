@@ -4,11 +4,11 @@
 
 ## Context
 
-The product owner wants a full embedded browser in Sirus Code:
+The product owner wants a full embedded browser in Sirus:
 a per-session browser pane with tabs and an address bar, plus agent-facing
 browser tools over MCP (navigate, snapshot, click, type, screenshot, …).
 In an Electron app each tab would be a Chromium `WebContentsView` and agents
-drive it over CDP through a private pipe. Sirus Code is Tauri 2 on macOS
+drive it over CDP through a private pipe. Sirus is Tauri 2 on macOS
 (WKWebView/WebKit), which has no `WebContentsView` and no CDP.
 
 Alternatives evaluated (October 2026):

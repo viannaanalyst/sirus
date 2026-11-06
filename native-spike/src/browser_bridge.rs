@@ -4,7 +4,7 @@
 //! and sends it here as a `browser_tool_request` event (only to this app, which registered with
 //! `register_browser_client` on connect). The request runs on the conversation's `Browser`
 //! (panel_browser.rs) and the answer goes back with the `browser_tool_result` command. The host
-//! shapes results, so the refs and shapes are Sirus Code's.
+//! shapes results, so the refs and shapes are Sirus's.
 //!
 //! Also here: the host's login prompts (`login-vault-state`: "save this login?" offers for the
 //! panel, "let the agent sign in?" approvals) and computer-use requests (`computer-state`),

@@ -470,7 +470,7 @@ impl Shell {
         let handoff = conv.handoff.as_ref().filter(|handoff| handoff.pending)?;
         let session = conv.session_id.clone();
         let (from, to) = (handoff.from, conv.provider);
-        // A shelf on the composer's top edge, like the approvals' in Monocode (composer_shelf.rs).
+        // A shelf on the composer's top edge.
         Some(
             div()
                 .mx(px(14.))

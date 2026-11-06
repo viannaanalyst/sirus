@@ -6,7 +6,7 @@
 
 ADR-029 introduced the native user-facing browser and reserved Phase 3 for
 agent control. An Electron app can expose `browser_*` tools over MCP
-because Chromium/CDP already runs the pages. Sirus Code drives WKWebView on
+because Chromium/CDP already runs the pages. Sirus drives WKWebView on
 the main thread and has no CDP; it also has no MCP gateway.
 
 Alternatives evaluated:

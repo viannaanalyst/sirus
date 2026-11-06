@@ -1,12 +1,12 @@
-//! Monocode's dark tokens (theme.rs): translucent ink over a blurred window.
+//! The dark tokens (theme.rs): translucent ink over a blurred window.
 use gpui::{AnyElement, Hsla, Rgba, Svg, canvas, hsla, prelude::*, px, rgb, svg};
 use std::cell::Cell;
 pub const TITLE_BAR: f32 = 40.;
 pub const FOOTER: f32 = 30.;
 pub const PLATE: f32 = 27.;
 /// The app's corners: small controls, buttons and rows, cards and popups, dialogs.
-pub const RADIUS_SM: f32 = 6.;
-pub const RADIUS_MD: f32 = 10.;
+pub const RADIUS_SM: f32 = 4.;
+pub const RADIUS_MD: f32 = 6.;
 pub const RADIUS_LG: f32 = 14.;
 pub const RADIUS_XL: f32 = 18.;
 pub const TAB_PLATE_HEIGHT: f32 = PLATE;
@@ -35,7 +35,7 @@ pub struct Palette {
     pub ink: Hsla,
 }
 
-/// Everything Aparência sets, as Monocode's appearance page: theme, workspace theme, accent,
+/// Everything Aparência sets: theme, workspace theme, accent,
 /// diff colors, a custom tint, the pane's glass and the interface scale.
 #[derive(Clone, Copy, PartialEq)]
 pub struct Look {
@@ -53,7 +53,7 @@ pub struct Look {
 }
 
 impl Default for Look {
-    /// The owner's Monocode: Ink, the pink accent, following the system, with glass.
+    /// The owner's look: Ink, the pink accent, following the system, with glass.
     fn default() -> Self {
         Self {
             preset: PRESETS.len() - 1,
@@ -75,7 +75,7 @@ pub struct Preset {
     hue: f32,
     saturation: f32,
     pub accent: u32,
-    /// The dark chrome's lightness (Monocode's `theme_dark_lightness`) and its ink.
+    /// The dark chrome's lightness and its ink.
     dark_lightness: f32,
     dark_ink: u32,
 }
@@ -185,7 +185,7 @@ pub const ACCENTS: &[(&str, u32)] = &[
     ("Ciano", 0x4fc3cf),
 ];
 
-/// Monocode's `sidebar_opacity` as the owner has it: how much of the desktop the tint hides.
+/// The `sidebar_opacity` as the owner has it: how much of the desktop the tint hides.
 const SHELL_ALPHA: f32 = 0.81;
 
 pub fn palette(look: &Look, system_dark: bool) -> Palette {
@@ -198,7 +198,7 @@ pub fn palette(look: &Look, system_dark: bool) -> Palette {
         _ => system_dark,
     };
     let tint = |s: f32, lightness: f32, alpha: f32| hsla(hue, s, lightness, alpha);
-    // Dark glass as Monocode (#060606 at 40% over the window's tint): the conversation sits a step
+    // Dark glass (#060606 at 40% over the window's tint): the conversation sits a step
     // darker than the chrome around it.
     let pane_alpha = match (look.glass, dark) {
         (true, true) => 0.4,
@@ -299,7 +299,7 @@ pub fn accent_wash(alpha: f32) -> Hsla {
     color.a = alpha;
     color
 }
-/// Black or white on the accent, by its relative luminance (Monocode's `primary_action`).
+/// Black or white on the accent, by its relative luminance.
 pub fn on_accent() -> Hsla {
     let color = accent().to_rgb();
     let linear = |v: f32| {
@@ -382,15 +382,15 @@ pub fn floating_surface(radius: f32) -> impl IntoElement {
     // A light film, so a popup reads a step above whatever sits beneath, even over black.
     frosted(radius, content(0.08), floating_fill(), 30.)
 }
-/// The sidebar opened over the workspace: a faint wash over a 24 px frost, as Monocode's.
+/// The sidebar opened over the workspace: a faint wash over a 24 px frost.
 pub fn peek_surface(radius: f32) -> impl IntoElement {
     frosted(radius, content(0.05), floating_fill(), 24.)
 }
-/// The composer: ink at 3% over a 24 px frost (Monocode's `[data-composer-box]`).
+/// The composer: ink at 3% over a 24 px frost.
 pub fn composer_surface(radius: f32) -> impl IntoElement {
     frosted(radius, content(0.03), field_fill(), 24.)
 }
-/// 14% ink, as Monocode mixes it. Translucent, because the conversation can sit on glass, where
+/// 14% ink. Translucent, because the conversation can sit on glass, where
 /// a colour mixed from the opaque pane reads as a black line.
 pub fn rail_color() -> Hsla {
     content(0.14)

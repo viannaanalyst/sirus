@@ -1,12 +1,12 @@
 # ADR-021: Read-only import of Claude Code and Codex conversations
 
-**Status:** Superseded — removed on 2026-10-02. The landing banner, import dialog, `provider_import_catalog` / `import_conversations` commands and `provider_import.rs` were deleted. Existing sessions keep the persisted `importOrigin` field for compatibility; Sirus Code no longer reads Claude Code or Codex history directories.
+**Status:** Superseded — removed on 2026-10-02. The landing banner, import dialog, `provider_import_catalog` / `import_conversations` commands and `provider_import.rs` were deleted. Existing sessions keep the persisted `importOrigin` field for compatibility; Sirus no longer reads Claude Code or Codex history directories.
 
 ## Context
 
 Users with existing Claude Code or Codex history have no way to continue those
-chats in Sirus Code. The CLIs' own history can be read and imported as threads.
-That crosses the FS boundary: Sirus Code must read files outside its managed
+chats in Sirus. The CLIs' own history can be read and imported as threads.
+That crosses the FS boundary: Sirus must read files outside its managed
 projects while treating project contents as untrusted and never letting the
 renderer choose a path.
 
@@ -28,14 +28,14 @@ renderer choose a path.
   creates Completed sessions with `importOrigin = { provider, conversationId }`.
   Imported sessions never claim a native thread and are deduplicated by origin.
   One persist call commits the batch.
-- The landing shows the Sirus Code glyph and a dismissible import banner that
+- The landing shows the Sirus glyph and a dismissible import banner that
   opens the import dialog (provider tabs, searchable list, multi-select).
   All toasts moved to the top-center below the window header.
 
 ## Consequences
 
 - **Positive:** users can bring existing Claude/Codex conversations into
-  Sirus Code and continue them; the file surface is fixed read-only CLI history
+  Sirus and continue them; the file surface is fixed read-only CLI history
   directories with hard bounds; conversations can be re-imported safely because
   duplicates are skipped.
 - **Negative:** imported transcripts are a best-effort text extraction (tool

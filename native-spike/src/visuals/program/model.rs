@@ -1,4 +1,4 @@
-// Ported from Monocode (MIT License; see LICENSE-MONOCODE-MIT at the root of native-spike).
+// Ported from an MIT-licensed project (MIT License; see LICENSE-THIRD-PARTY-MIT at the root of native-spike).
 
 //! A bounded native component tree. This is data, never HTML, CSS, or a host API.
 use serde::{Deserialize, Serialize};

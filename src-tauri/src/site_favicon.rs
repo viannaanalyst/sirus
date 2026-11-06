@@ -308,7 +308,7 @@ fn builder() -> reqwest::ClientBuilder {
         .https_only(true)
         .retry(reqwest::retry::never())
         .connect_timeout(Duration::from_secs(4))
-        .user_agent("Sirus Code")
+        .user_agent("Sirus")
         .pool_max_idle_per_host(1)
 }
 

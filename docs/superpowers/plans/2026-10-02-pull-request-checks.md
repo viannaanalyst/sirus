@@ -12,7 +12,7 @@
 
 - Switch track 36×20 px, 14 px thumb and 18 px orbit; 42×32 px control hit area. Keep keyboard, finite motion, reduced motion and silver tokens.
 - GitHub origin only. Native branch and commit only; no renderer-selected repo, URL, endpoint, executable, credentials or flags.
-- Fixed `gh api --hostname github.com --method GET` for PR list, check runs and combined commit statuses. CLI executes outside the project, with debug/browser/pager/proxy overrides removed and bounded output/process-group cleanup. No login, mutation, fetch, merge, rerun, comment or credential reading in Sirus Code.
+- Fixed `gh api --hostname github.com --method GET` for PR list, check runs and combined commit statuses. CLI executes outside the project, with debug/browser/pager/proxy overrides removed and bounded output/process-group cleanup. No login, mutation, fetch, merge, rerun, comment or credential reading in Sirus.
 - Prefer the newest open PR, otherwise newest closed/merged PR for the branch. Checks belong to the PR head SHA. Display local/PR commit mismatch accurately.
 - At most four 8-second probes, 100 runs + 100 statuses. Partial failures/truncation must never report all checks passed. Validate/escape text and only admit credential-free GitHub HTTPS check links.
 - Real no-PR, missing CLI, disconnected CLI, detached, unsupported remote, not-Git, error and loading states. Manual refresh; no polling.

@@ -6,7 +6,7 @@
 //!
 //! Agent output is untrusted: Mermaid runs in `strict` mode, KaTeX with `trust: false`, and the
 //! page's policy lets it load only that folder's scripts, styles and fonts and fetch nothing.
-//! Monocode's Rust Mermaid was not ported: it needs `mermaid-rs-renderer`, which this build does not
+//! A Rust Mermaid renderer was not added: it needs `mermaid-rs-renderer`, which this build does not
 //! have, and it draws no formulas.
 use crate::reply_rich::Want;
 use block2::RcBlock;
@@ -22,7 +22,7 @@ use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-/// Diagram source above this size stays a code block (Sirus Code's limit).
+/// Diagram source above this size stays a code block (Sirus's limit).
 pub const MAX_SOURCE: usize = 20_000;
 const MAX_SIDE: f64 = 4000.;
 const POLL: Duration = Duration::from_millis(60);

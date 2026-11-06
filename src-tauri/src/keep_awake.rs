@@ -100,7 +100,7 @@ mod platform {
     impl super::Assertion for Power {
         fn take(&mut self) -> bool {
             let kind = CFString::from_str("PreventUserIdleSystemSleep");
-            let name = CFString::from_str("Sirus Code agent turn running");
+            let name = CFString::from_str("Sirus agent turn running");
             let mut id = 0u32;
             let result = unsafe { IOPMAssertionCreateWithName(&*kind, LEVEL_ON, &*name, &mut id) };
             if result == 0 {
@@ -111,7 +111,7 @@ mod platform {
             // Sleep stays the IOKit assertion's job; this only keeps App Nap off.
             let token = NSProcessInfo::processInfo().beginActivityWithOptions_reason(
                 NSActivityOptions::UserInitiatedAllowingIdleSystemSleep,
-                &NSString::from_str("Sirus Code agent turn running"),
+                &NSString::from_str("Sirus agent turn running"),
             );
             self.activity = Some(Activity(token));
             true

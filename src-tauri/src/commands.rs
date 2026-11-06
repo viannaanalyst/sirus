@@ -68,7 +68,7 @@ impl AppState {
 
     pub fn ensure_running(&self) -> Result<()> {
         if self.closing.load(Ordering::Acquire) {
-            return Err(Error::agent("Sirus Code is closing"));
+            return Err(Error::agent("Sirus is closing"));
         }
         Ok(())
     }
@@ -96,8 +96,7 @@ impl AppState {
             if session.status.is_active() {
                 session.status = SessionStatus::Stopped;
                 crate::activity::sync(session);
-                session.last_error =
-                    Some("Execution was interrupted when Sirus Code closed.".into());
+                session.last_error = Some("Execution was interrupted when Sirus closed.".into());
             }
             session.pending_requests.clear();
             // A stream can fail before its process monitor publishes finality.

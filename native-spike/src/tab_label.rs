@@ -1,4 +1,4 @@
-// Copied from Monocode (crates/monocode-gpui/src/tab_label.rs, MIT, LICENSE-MONOCODE-MIT).
+// Copied from an MIT-licensed project (MIT, LICENSE-THIRD-PARTY-MIT).
 //! TabLabel.tsx: leave short labels clear and fade the last 40px only on overflow.
 use gpui::{ContentMask, SharedString, TextAlign, TextRun, canvas, prelude::*, px};
 

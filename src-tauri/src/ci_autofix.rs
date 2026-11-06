@@ -2,7 +2,7 @@
 //! request green. While `AppSettings.ci_auto_fix` is on, one native timer checks
 //! the PR of recently active sessions every minute. When its checks settle with
 //! a failure, the session receives one automatic Auto-approval turn carrying the
-//! failing checks and bounded log excerpts. After that turn settles, Sirus Code
+//! failing checks and bounded log excerpts. After that turn settles, Sirus
 //! commits the files it changed and pushes the session branch (never forced,
 //! same guards as Push), then waits for CI again. At most three fix attempts run
 //! without a green result, one per PR head; anything unexpected pauses the loop.
@@ -543,9 +543,9 @@ pub fn prompt(
         text.push_str(&section);
     }
     text.push_str(if portuguese {
-        "\nCorrija a causa neste workspace e rode os testes relevantes. Não faça commit nem push: o Sirus Code envia a correção quando você terminar. Se a falha não foi causada por este PR, explique por quê e não altere arquivos."
+        "\nCorrija a causa neste workspace e rode os testes relevantes. Não faça commit nem push: o Sirus envia a correção quando você terminar. Se a falha não foi causada por este PR, explique por quê e não altere arquivos."
     } else {
-        "\nFix the cause in this workspace and run the relevant tests. Do not commit or push: Sirus Code sends the fix when you finish. If this PR did not cause the failure, explain why and do not change files."
+        "\nFix the cause in this workspace and run the relevant tests. Do not commit or push: Sirus sends the fix when you finish. If this PR did not cause the failure, explain why and do not change files."
     });
     text
 }
@@ -656,7 +656,7 @@ fn commit_message(checks: &[String]) -> String {
     if subject.trim().is_empty() {
         subject = "Fix failing CI checks".into();
     }
-    format!("{subject}\n\nAutomatic fix by Sirus Code CI auto-fix.")
+    format!("{subject}\n\nAutomatic fix by Sirus CI auto-fix.")
 }
 
 #[derive(Debug, Deserialize)]

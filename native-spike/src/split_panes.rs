@@ -1,4 +1,4 @@
-//! Conversations side by side (split-layout.ts, SplitWorkspace.tsx, split-drag.ts of Sirus Code).
+//! Conversations side by side (split-layout.ts, SplitWorkspace.tsx, split-drag.ts of Sirus).
 //!
 //! The layout is a binary tree of panes; every pane shows one session. The active pane always
 //! shows the selected tab, so the composer, the dock, the Environment card and the shortcuts keep
@@ -16,7 +16,7 @@ use std::cell::Cell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-/// Sirus Code's limit of panes.
+/// Sirus's limit of panes.
 pub const MAX_PANES: usize = 4;
 /// A divider never leaves less than this share to either side.
 pub const MIN_RATIO: f32 = 0.2;

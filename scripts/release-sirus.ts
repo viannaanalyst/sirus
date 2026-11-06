@@ -6,7 +6,7 @@
 // native-spike/target/release-upload/sirus-v<version>/ and only prints what it would publish.
 // --publish needs to be explicit.
 //
-// Sirus Code installs read releases/latest/download/latest.json and the website links
+// Sirus installs read releases/latest/download/latest.json and the website links
 // releases/latest/download/SirusCode-arm64.dmg, so a Sirus release must never become the
 // repository's "latest": version releases (tag sirus-v<version>) are created with --latest=false,
 // and the app reads its own feed from the fixed release `sirus-channel`, whose
@@ -229,7 +229,7 @@ const versionRelease = [
   "--title", `Sirus ${version}`,
   "--notes-file", path.join(uploadDir, "notes.md"),
   "--target", head,
-  // Never the repository's "latest": Sirus Code's installs and the website follow that.
+  // Never the repository's "latest": Sirus's installs and the website follow that.
   "--latest=false",
   ...(prerelease ? ["--prerelease"] : []),
 ];
@@ -267,9 +267,9 @@ try {
   }
   step(`Replacing ${FEED_ASSET} and the stable DMG on ${CHANNEL}`);
   run("gh", channelUpload);
-  // Sirus Code's feed and the website's DMG link follow the repository's latest release.
+  // Sirus's feed and the website's DMG link follow the repository's latest release.
   const latest = capture("gh", ["api", `repos/${REPOSITORY}/releases/latest`, "--jq", ".tag_name"]);
-  if (latest.startsWith("sirus-")) throw new Error(`GitHub now calls ${latest} the repository's latest release; Sirus Code installs would read the wrong feed. Mark the previous Sirus Code release as latest again.`);
+  if (latest.startsWith("sirus-")) throw new Error(`GitHub now calls ${latest} the repository's latest release; Sirus installs would read the wrong feed. Mark the previous Sirus release as latest again.`);
   console.log(`  The repository's latest release is still ${latest}.`);
 } catch (error) {
   fail(`${error instanceof Error ? error.message : String(error)}

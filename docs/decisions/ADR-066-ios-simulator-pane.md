@@ -51,7 +51,7 @@ Input:
 **Lifecycle.**
 
 - There is one attached device app-wide.
-- Sirus Code boots at most 3 simulators. One it booted shuts down 10 minutes after it is detached, when the person switches to another device, and on quit. Simulators the person booted are never shut down automatically.
+- Sirus boots at most 3 simulators. One it booted shuts down 10 minutes after it is detached, when the person switches to another device, and on quit. Simulators the person booted are never shut down automatically.
 - After a fresh boot, attach waits briefly: `bootstatus` returns before SpringBoard accepts touches. A device that has no framebuffer yet is retried for up to 45 s.
 - Attach, detach and stream changes run one at a time. A helper that exits is restarted, the device re-attached and the stream resumed (at most three automatic recoveries a minute). A failed helper build is remembered until restart.
 - A recording ends, unsaved, on detach, device switch and quit.
@@ -59,13 +59,13 @@ Input:
 
 ## Consequences
 
-- **Positive:** the person and the agent can see and drive an iOS app without leaving Sirus Code, and without granting extra macOS permissions.
+- **Positive:** the person and the agent can see and drive an iOS app without leaving Sirus, and without granting extra macOS permissions.
 - **Negative:**
   - The helper relies on private Xcode frameworks, so a new Xcode can break it. Rebuilding per Xcode build limits this, and failures are reported in the pane.
   - The first open spends a few seconds compiling.
   - The simulated device cannot really rotate; rotate only turns the view.
   - Text input covers printable ASCII.
-  - Apps inside a simulator crash as macOS processes, so their crash dialogs (for example "MobileCal quit unexpectedly" on a first boot) come from macOS, not Sirus Code.
+  - Apps inside a simulator crash as macOS processes, so their crash dialogs (for example "MobileCal quit unexpectedly" on a first boot) come from macOS, not Sirus.
 
 ## Alternatives considered
 

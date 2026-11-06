@@ -340,7 +340,7 @@ fn http() -> Result<&'static reqwest::Client> {
             .redirect(reqwest::redirect::Policy::limited(3))
             .connect_timeout(Duration::from_secs(6))
             .timeout(Duration::from_secs(15))
-            .user_agent("Sirus Code")
+            .user_agent("Sirus")
             .build()
             .map_err(|error| error.to_string())
     })
@@ -458,7 +458,7 @@ async fn discover(server: &str) -> Result<Discovery> {
         .post(url.clone())
         .header("Content-Type", "application/json")
         .header("Accept", "application/json, text/event-stream")
-        .body(json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"Sirus Code","version":"1"}}}).to_string())
+        .body(json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"Sirus","version":"1"}}}).to_string())
         .send()
         .await
         .map_err(network)?;
@@ -548,7 +548,7 @@ async fn register(endpoint: &str, redirect: &str) -> Result<(String, Option<Stri
         .header("Accept", "application/json")
         .body(
             json!({
-                "client_name": "Sirus Code",
+                "client_name": "Sirus",
                 "redirect_uris": [redirect],
                 "grant_types": ["authorization_code", "refresh_token"],
                 "response_types": ["code"],
@@ -568,7 +568,7 @@ async fn register(endpoint: &str, redirect: &str) -> Result<(String, Option<Stri
         .ok_or_else(|| {
             Error::new(
                 "connector",
-                "The service did not register Sirus Code for sign-in.",
+                "The service did not register Sirus for sign-in.",
             )
         })?;
     Ok((
@@ -680,9 +680,9 @@ async fn wait_for_code(listener: tokio::net::TcpListener, state: &str) -> Result
         };
         let ok = query("state").as_deref() == Some(state) && query("code").is_some();
         let page = if ok {
-            "<!doctype html><meta charset=utf-8><title>Sirus Code</title><body style=\"font:16px -apple-system,sans-serif;background:#111;color:#eee;display:grid;place-items:center;height:100vh;margin:0\"><p>Pronto. Pode voltar ao Sirus Code.<br><small style=\"color:#888\">Done. You can return to Sirus Code.</small></p>"
+            "<!doctype html><meta charset=utf-8><title>Sirus</title><body style=\"font:16px -apple-system,sans-serif;background:#111;color:#eee;display:grid;place-items:center;height:100vh;margin:0\"><p>Pronto. Pode voltar ao Sirus.<br><small style=\"color:#888\">Done. You can return to Sirus.</small></p>"
         } else {
-            "<!doctype html><meta charset=utf-8><title>Sirus Code</title><body style=\"font:16px -apple-system,sans-serif;background:#111;color:#eee;display:grid;place-items:center;height:100vh;margin:0\"><p>O login não foi concluído. Tente de novo no Sirus Code.<br><small style=\"color:#888\">The sign-in did not finish. Try again in Sirus Code.</small></p>"
+            "<!doctype html><meta charset=utf-8><title>Sirus</title><body style=\"font:16px -apple-system,sans-serif;background:#111;color:#eee;display:grid;place-items:center;height:100vh;margin:0\"><p>O login não foi concluído. Tente de novo no Sirus.<br><small style=\"color:#888\">The sign-in did not finish. Try again in Sirus.</small></p>"
         };
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{page}",

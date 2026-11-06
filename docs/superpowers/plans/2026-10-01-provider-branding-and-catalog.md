@@ -1,6 +1,6 @@
 # Provider branding and catalog expansion
 
-Goal: show original, transparent vendor marks throughout Sirus Code and support nine CLI providers.
+Goal: show original, transparent vendor marks throughout Sirus and support nine CLI providers.
 
 1. Bundle glyphs from first-party brand assets. Record provenance and transformations; remove favicon tiles without redrawing marks. Keep monochrome marks legible in both themes.
 2. Resolve model families independently of the host CLI, including OpenCode's DeepSeek, Kimi, GLM, Qwen and other recognized upstream families. Test qualified IDs and unknown families.

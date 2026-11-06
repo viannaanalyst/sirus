@@ -551,7 +551,7 @@ pub(crate) async fn execute(
     let init = if wire.initialized {
         wire.acp_init.clone()
     } else {
-        let init=request(wire,"initialize",json!({"protocolVersion":1,"clientCapabilities":{},"clientInfo":{"name":"Sirus Code","version":"0.1.0"}}),cancel).await?;
+        let init=request(wire,"initialize",json!({"protocolVersion":1,"clientCapabilities":{},"clientInfo":{"name":"Sirus","version":"0.1.0"}}),cancel).await?;
         wire.initialized = true;
         wire.acp_init = init.clone();
         init

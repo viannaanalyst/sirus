@@ -1,4 +1,4 @@
-//! The Simulador pane's engine, after Sirus Code's DevicesPane and `device-stream.ts` (ADR-128).
+//! The Simulador pane's engine, after Sirus's DevicesPane and `device-stream.ts` (ADR-128).
 //! `sirus-host` has no device commands (the `devices` module is desktop-only), so this app runs
 //! Expo's pinned `expo-device-hub` itself, on loopback, and talks to it directly: boot and attach
 //! over HTTP, the screen as the helper's MJPEG stream, input as `[tag][json]` WebSocket packets.
@@ -235,7 +235,7 @@ pub fn tools_dir() -> PathBuf {
     crate::backend::data_dir().join("tools")
 }
 
-/// The hub's entry file: this app's own install, else the one Sirus Code made (same pinned
+/// The hub's entry file: this app's own install, else the one Sirus made (same pinned
 /// version, only read here).
 pub fn find_entry() -> Option<PathBuf> {
     [

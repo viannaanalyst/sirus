@@ -492,7 +492,7 @@ mod platform {
 
     fn ax_error(error: AXError) -> String {
         match error {
-            AXError::APIDisabled => "Accessibility permission is not granted to Sirus Code".into(),
+            AXError::APIDisabled => "Accessibility permission is not granted to Sirus".into(),
             AXError::CannotComplete => "the application did not respond".into(),
             AXError::ActionUnsupported => "that element does not support this action".into(),
             AXError::AttributeUnsupported => "that element does not support this value".into(),
@@ -578,7 +578,7 @@ mod platform {
     fn main_window(pid: i32, title: Option<&str>) -> Result<CFRetained<AXUIElement>, String> {
         if !unsafe { AXIsProcessTrusted() } {
             return Err(
-                "Accessibility permission is not granted to Sirus Code. Open Settings → Computer."
+                "Accessibility permission is not granted to Sirus. Open Settings → Computer."
                     .into(),
             );
         }
@@ -968,7 +968,10 @@ mod platform {
     /// Captures the app window that best matches `frame`, longest side ≤ `max_side` pixels.
     pub fn screenshot(pid: i32, frame: Frame, max_side: f64) -> Result<Image, String> {
         if !CGPreflightScreenCaptureAccess() {
-            return Err("Screen Recording permission is not granted to Sirus Code. Open Settings → Computer.".into());
+            return Err(
+                "Screen Recording permission is not granted to Sirus. Open Settings → Computer."
+                    .into(),
+            );
         }
         let (tx, rx) = mpsc::channel::<Result<Image, String>>();
         let handler = RcBlock::new(

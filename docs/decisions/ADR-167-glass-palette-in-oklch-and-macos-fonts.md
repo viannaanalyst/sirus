@@ -4,7 +4,7 @@
 
 ## Context
 
-The owner wants Sirus Code to look premium. Three directions were mocked up outside the repo:
+The owner wants Sirus to look premium. Three directions were mocked up outside the repo:
 "Graphite" (neutral), "Glass" (translucent, macOS-like) and "Studio" (warm, editorial). The owner
 chose Glass, which builds on what Sirus already has: native macOS window and sidebar glass. Its
 main window is built from layers of tinted glass, so the colors under the glass have to look

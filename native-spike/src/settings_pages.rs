@@ -9,7 +9,7 @@
 //! through `native_confirm`, which opens the shell's confirmation popup.
 
 use crate::i18n::{t, tf};
-use crate::theme::{accent, content, on_accent};
+use crate::theme::{accent, content};
 use chrono::{DateTime, Local};
 use gpui::{AnyElement, Context, FontWeight, Hsla, div, prelude::*, px, rgb};
 use serde_json::{Value, json};
@@ -1397,7 +1397,7 @@ fn provider_name(id: &str) -> String {
         .map_or_else(|| id.to_string(), |(_, name)| name.to_string())
 }
 
-/// The name a skill's source origin shows as: the shared folder, Sirus Code or a provider.
+/// The name a skill's source origin shows as: the shared folder, Sirus or a provider.
 fn origin_label(origin: &str) -> String {
     match origin {
         "agents" => t("Compartilhadas (.agents)").to_string(),
@@ -1867,9 +1867,24 @@ fn notifications(s: &Value) -> Vec<Group> {
 const KEYBINDINGS: &[(&str, &str, &str, &str)] = &[
     ("new-session", "Nova sessão", "Sessão", "meta+n"),
     ("palette", "Paleta de comandos", "Aplicativo", "meta+k"),
-    ("projectBack", "Voltar ao último projeto", "Aplicativo", "alt+tab"),
-    ("projectNext", "Próximo projeto", "Aplicativo", "meta+shift+right"),
-    ("projectPrevious", "Projeto anterior", "Aplicativo", "meta+shift+left"),
+    (
+        "projectBack",
+        "Voltar ao último projeto",
+        "Aplicativo",
+        "alt+tab",
+    ),
+    (
+        "projectNext",
+        "Próximo projeto",
+        "Aplicativo",
+        "meta+shift+right",
+    ),
+    (
+        "projectPrevious",
+        "Projeto anterior",
+        "Aplicativo",
+        "meta+shift+left",
+    ),
     ("open-project", "Abrir projeto", "Projeto", "meta+o"),
     ("settings", "Configurações", "Aplicativo", "meta+,"),
     (

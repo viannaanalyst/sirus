@@ -4,7 +4,7 @@
 
 ## Context
 
-Sirus Code’s product model is parallel Sessions on Git worktrees. A host that silently `reset --hard` or `clean -fd` will destroy user work. Shell strings (`git $user`) invite injection.
+Sirus’s product model is parallel Sessions on Git worktrees. A host that silently `reset --hard` or `clean -fd` will destroy user work. Shell strings (`git $user`) invite injection.
 
 ## Decision
 

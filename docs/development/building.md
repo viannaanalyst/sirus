@@ -33,7 +33,7 @@ Use `CARGO_TARGET_DIR=../native-spike/target/host-check` for the `src-tauri` com
 
 ## Data on disk
 
-The window keeps its state in `~/Library/Application Support/com.siruscode.native/` (`state.db`, transcripts, worktrees, settings files). Its first launch copies Sirus Code's `com.siruscode.app` state when that folder exists (`sqlite3 .backup`, with automatic work off) and starts empty when it does not. Removing a project from the sidebar deletes metadata only, not the user's folder.
+The window keeps its state in `~/Library/Application Support/com.siruscode.native/` (`state.db`, transcripts, worktrees, settings files). Its first launch copies Sirus's `com.siruscode.app` state when that folder exists (`sqlite3 .backup`, with automatic work off) and starts empty when it does not. Removing a project from the sidebar deletes metadata only, not the user's folder.
 
 For isolated validation, set an absolute `SIRUS_DATA_DIR` for a launched host. Never launch a second host against the data folder of a running app.
 

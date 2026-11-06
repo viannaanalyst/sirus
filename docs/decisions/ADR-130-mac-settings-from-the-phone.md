@@ -4,7 +4,7 @@
 
 ## Context
 
-The phone settings sheet (ADR-124) only held choices that stay on the phone. The phone should also edit the computer's own settings (new threads, thread behavior, source control, agent behavior, maintenance) and have an About section with client storage, diagnostics, licenses, legal and the version. Several of those settings did not exist in Sirus Code yet.
+The phone settings sheet (ADR-124) only held choices that stay on the phone. The phone should also edit the computer's own settings (new threads, thread behavior, source control, agent behavior, maintenance) and have an About section with client storage, diagnostics, licenses, legal and the version. Several of those settings did not exist in Sirus yet.
 
 ## Decision
 

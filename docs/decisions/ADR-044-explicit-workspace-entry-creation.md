@@ -5,7 +5,7 @@
 ## Context
 
 The lazy Files tree can open existing files in the editor, but creating a file
-or folder requires leaving Sirus Code. Giving the webview filesystem access
+or folder requires leaving Sirus. Giving the webview filesystem access
 would bypass the session/worktree and Client/Transport boundaries. Reusing an
 editor overwrite operation would also introduce ambiguous replacement behavior.
 

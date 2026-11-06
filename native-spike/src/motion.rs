@@ -1,5 +1,5 @@
 //! The strip and sidebar animate with one small tween. Durations and curves follow
-//! Monocode's tab_motion.rs and shell.rs (200 ms ease-out, 160 ms reorder).
+//! The tab_motion.rs and shell.rs (200 ms ease-out, 160 ms reorder).
 use std::time::Instant;
 
 pub const TAB_OPEN: f32 = 0.20;

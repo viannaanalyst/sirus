@@ -584,10 +584,7 @@ fn instructions(
             continue;
         };
         if context.disabled.contains(&name) {
-            return Err(Error::new(
-                "invalid",
-                "This skill is disabled in Sirus Code.",
-            ));
+            return Err(Error::new("invalid", "This skill is disabled in Sirus."));
         }
         if !names.insert(name) {
             continue;

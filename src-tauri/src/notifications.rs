@@ -622,7 +622,7 @@ fn window_alert(app: &AppHandle, notice: &Notice, prefs: &Preferences, sound: So
             "title": notice.title,
             "body": notice.body,
             "sound": prefs.sounds.then_some(sound),
-            // Monocode's three sounds: one for finished work, one for a request of the person,
+            // The three sounds: one for finished work, one for a request of the person,
             // one for activity elsewhere. The window plays them.
             "cue": match notice.kind {
                 Kind::Permission | Kind::Question => "input",
@@ -711,7 +711,7 @@ pub async fn notification_action(
                 id: uuid::Uuid::new_v4().to_string(),
                 session_id: String::new(),
                 kind: Kind::Completion,
-                title: "Sirus Code".into(),
+                title: "Sirus".into(),
                 body: if portuguese {
                     "Teste de notificação. Seus avisos de atividade aparecerão aqui."
                 } else {

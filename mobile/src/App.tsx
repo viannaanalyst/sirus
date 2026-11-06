@@ -67,7 +67,7 @@ const GLASS_HEADER: AppNativeStackNavigationOptions = {
 /** Form sheets: full height, grabber visible. */
 const FORM_SHEET = { presentation: "formSheet", sheetAllowedDetents: [1], sheetGrabberVisible: true, headerShown: false, gestureEnabled: true } as const;
 
-/** Sirus Code's iPhone app (ADR-135). */
+/** Sirus's iPhone app (ADR-135). */
 export default function App() {
   useEffect(() => { void useSirus.getState().start().then(() => checkForAppUpdate()); }, []);
   // `sirus://pair?address=…&code=…` pairs at once (a computer's QR code can carry it).

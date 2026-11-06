@@ -4,7 +4,7 @@ Backlog written on **2026-09-30** for the overnight MVP mission; the implementat
 
 ## NOW — close the local desktop loop
 
-The priorities and acceptance criteria below are Sirus Code proposals for the overnight mission.
+The priorities and acceptance criteria below are Sirus proposals for the overnight mission.
 
 | Priority | Proposal | Acceptance criteria | Dependency / guardrail |
 | --- | --- | --- | --- |
@@ -16,7 +16,7 @@ The priorities and acceptance criteria below are Sirus Code proposals for the ov
 | P1 | Fast provider/model navigation | Cached detection does not block Settings opening. Explicit refresh shows pending/error states. Favorites and model search include provider identity and remain usable with arrows, Enter, and Escape. | Discovery results must come from actual CLI capabilities or a documented adapter strategy. |
 | P1 | Complete keyboard path | Add/open project, create session, choose model/workspace, send/stop, inspect diff, and open terminal work by keyboard. Cmd+B persists sidebar visibility; focus returns to the trigger after overlays close. | Central shortcut matcher; terminal input must retain its own editing shortcuts. |
 | P1 | Review at the session boundary | Changed-file list and diff identify the active session path/branch. Refresh on relevant lifecycle/user events; selecting another session cannot retain another worktree's stale result. | Git CLI argv, request identity checks, no aggressive polling. |
-| P1 | Clear provider limitation states | Installation, execution failure, unavailable catalog, and unsupported capability have distinct messages. A missing catalog never presents invented model availability. | Existing CLI authentication remains outside Sirus Code. |
+| P1 | Clear provider limitation states | Installation, execution failure, unavailable catalog, and unsupported capability have distinct messages. A missing catalog never presents invented model availability. | Existing CLI authentication remains outside Sirus. |
 
 ## Current implementation status
 
@@ -45,5 +45,5 @@ Do not implement these during the overnight mission: no RemoteTransport, mobile 
 
 - No competitor runtime, authentication, throughput, accessibility, or security behavior was tested.
 - No code or brand asset was copied from competing applications. Official provider assets need their own provenance check.
-- The backlog ranks engineering value for Sirus Code; it does not rank competitors or infer unsupported CLI behavior from their integrations.
+- The backlog ranks engineering value for Sirus; it does not rank competitors or infer unsupported CLI behavior from their integrations.
 - Recheck upstream documentation before implementing a runtime-specific protocol. The local adapter and installed CLI remain the source of truth for actual availability.

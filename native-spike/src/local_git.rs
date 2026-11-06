@@ -3,7 +3,7 @@
 //! `git` itself (as `backend::git` does). Everything blocks: call it through
 //! `project_files::run_blocking`, never on the UI thread.
 //!
-//! A merge commit is shown against its first parent, the way Monocode and GitHub list it (a bare
+//! A merge commit is shown against its first parent, the way GitHub lists it (a bare
 //! `git show` of a merge prints only a combined diff of conflicts). The root commit is shown against
 //! the empty tree.
 use crate::i18n::{t, tf};

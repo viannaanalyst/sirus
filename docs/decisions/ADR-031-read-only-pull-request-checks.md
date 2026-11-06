@@ -24,7 +24,7 @@ commit statuses. The newest open PR is preferred; the latest closed/merged PR is
 the fallback. Scope is the origin repository with a matching head/base repository
 and branch; upstream/fork PR discovery is not implemented. Repo segments and
 head SHA are validated, and query values are percent-encoded. GitHub CLI handles
-its own authentication; Sirus Code does not read credentials or start login.
+its own authentication; Sirus does not read credentials or start login.
 
 Each CLI probe executes outside the checkout, disables prompts/update notices,
 removes host/repository/debug/browser/pager/proxy overrides, uses null stdin and
@@ -78,7 +78,7 @@ results, auth sanitization and stale-context refusal without live private data.
 ## Alternatives considered
 
 Inferring CI from agent output would invent status. Reading GitHub credentials
-in Sirus Code or adding an app OAuth flow would expand auth authority. A generic
+in Sirus or adding an app OAuth flow would expand auth authority. A generic
 API bridge would expose arbitrary endpoints. Continuous polling conflicts with
 the host's long-running performance contract. These were rejected.
 

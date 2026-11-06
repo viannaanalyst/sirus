@@ -1,4 +1,4 @@
-// Ported from Monocode (MIT License; see LICENSE-MONOCODE-MIT at the root of native-spike).
+// Ported from an MIT-licensed project (MIT License; see LICENSE-THIRD-PARTY-MIT at the root of native-spike).
 #![allow(dead_code)]
 //! Sandboxed interactive visual programs and the native trees they produce.
 //!

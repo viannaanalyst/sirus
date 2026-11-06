@@ -353,7 +353,7 @@ async fn list_additional(provider: AgentProviderId, binary: &str) -> ProviderMod
         return empty(
             provider,
             "cli",
-            "CLI catalog is unavailable. Sign in through the provider CLI, then refresh. No login was started by Sirus Code.",
+            "CLI catalog is unavailable. Sign in through the provider CLI, then refresh. No login was started by Sirus.",
         );
     }
     let text = String::from_utf8_lossy(&output.stdout);
@@ -686,7 +686,7 @@ async fn list_hermes(binary: &str) -> ProviderModelList {
         .unwrap_or_else(|_| "\"/tmp\"".into());
     let input = format!(
         "{}\n{}\n",
-        r#"{"jsonrpc":"2.0","id":"sirus_init","method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{},"clientInfo":{"name":"Sirus Code","version":"0.1.0"}}}"#,
+        r#"{"jsonrpc":"2.0","id":"sirus_init","method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{},"clientInfo":{"name":"Sirus","version":"0.1.0"}}}"#,
         format_args!(
             r#"{{"jsonrpc":"2.0","id":"sirus_session","method":"session/new","params":{{"cwd":{cwd},"mcpServers":[]}}}}"#
         )
@@ -707,7 +707,7 @@ async fn list_hermes(binary: &str) -> ProviderModelList {
         return empty(
             AgentProviderId::Hermes,
             "cli",
-            "Hermes has no model provider yet. Run `hermes model` in a terminal, then refresh. No login was started by Sirus Code.",
+            "Hermes has no model provider yet. Run `hermes model` in a terminal, then refresh. No login was started by Sirus.",
         );
     }
     let models = parse_hermes_catalog(&reply["result"]);
@@ -744,7 +744,7 @@ fn parse_hermes_catalog(result: &serde_json::Value) -> Vec<DiscoveredModel> {
 
 async fn list_cursor(binary: &str) -> ProviderModelList {
     // Read-only ACP extension: no session, prompt, auth mutation or parameter writes.
-    let input = br#"{"jsonrpc":"2.0","id":"sirus_init","method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{},"clientInfo":{"name":"Sirus Code","version":"0.1.0"}}}
+    let input = br#"{"jsonrpc":"2.0","id":"sirus_init","method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{},"clientInfo":{"name":"Sirus","version":"0.1.0"}}}
 {"jsonrpc":"2.0","id":"sirus_models","method":"cursor/list_available_models","params":{}}
 "#;
     let metadata = crate::cli_output::request(binary, &["acp"], input, DISCOVER_TIMEOUT, |v| {

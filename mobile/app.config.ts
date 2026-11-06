@@ -1,7 +1,7 @@
 import type { ExpoConfig } from "expo/config";
 
 /**
- * Sirus Code's native iPhone app (ADR-135): React Native with
+ * Sirus's native iPhone app (ADR-135): React Native with
  * Expo, native navigation, Liquid Glass and SF Symbols. Signed with the owner's free Personal
  * Team, so no push, app groups or Sign in with Apple capabilities are requested.
  */

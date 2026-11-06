@@ -1,5 +1,5 @@
 #![allow(dead_code, unused_imports)]
-// Copied from Monocode (crates/monocode-gpui/src/tab_tile.rs, MIT, LICENSE-MONOCODE-MIT), trimmed.
+// Copied from an MIT-licensed project (MIT, LICENSE-THIRD-PARTY-MIT), trimmed.
 //! The icon tile that stands for a tab or a session: a small raised solid
 //! rectangle, a touch wider than tall, holding one mark. A split tab
 //! stacks one tile per pane, the focused one in front and the rest tucked

@@ -157,6 +157,53 @@ fn seconds_left(pairing: &Pairing) -> Option<i64> {
     (left > 0).then_some(left)
 }
 
+/// How long a code lasts, for the ring around its time.
+const CODE_SECONDS: f32 = 300.;
+const CARD_WIDTH: f32 = 380.;
+
+/// The QR's side in a window of `room`: as large as the dialog holds, and never so small it
+/// stops being readable.
+fn qr_side(room: (f32, f32)) -> f32 {
+    let wide = room.0.min(CARD_WIDTH) - 88.;
+    let tall = room.1 * 0.94 - 350.;
+    wide.min(tall).clamp(132., 224.)
+}
+
+/// A ring that empties as the code's time runs out.
+fn time_ring(share: f32) -> impl IntoElement {
+    gpui::canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            let center = bounds.center();
+            let radius = f32::from(bounds.size.width) / 2. - 1.;
+            let arc = |share: f32| {
+                let mut path = gpui::PathBuilder::stroke(px(1.5));
+                let steps = (share.clamp(0., 1.) * 48.).ceil().max(1.) as usize;
+                for step in 0..=steps {
+                    let turn = share.clamp(0., 1.) * step as f32 / steps as f32;
+                    let angle = turn * std::f32::consts::TAU - std::f32::consts::FRAC_PI_2;
+                    let at =
+                        center + gpui::point(px(angle.cos() * radius), px(angle.sin() * radius));
+                    if step == 0 {
+                        path.move_to(at);
+                    } else {
+                        path.line_to(at);
+                    }
+                }
+                path.build()
+            };
+            if let Ok(track) = arc(1.) {
+                window.paint_path(track, content(0.12));
+            }
+            if let Ok(left) = arc(share) {
+                window.paint_path(left, accent());
+            }
+        },
+    )
+    .size(px(14.))
+    .flex_shrink_0()
+}
+
 fn countdown(seconds: i64) -> String {
     format!("{}:{:02}", seconds / 60, seconds % 60)
 }
@@ -551,189 +598,6 @@ fn qr(pairing: &Pairing, side: f32) -> AnyElement {
         .into_any_element()
 }
 
-fn tile(path: &'static str) -> AnyElement {
-    div()
-        .size(px(52.))
-        .rounded(px(crate::theme::RADIUS_LG))
-        .bg(content(0.08))
-        .border_1()
-        .border_color(content(0.1))
-        .flex()
-        .items_center()
-        .justify_center()
-        .child(svg().path(path).size(px(26.)).text_color(content(0.8)))
-        .into_any_element()
-}
-
-/// The picture above the title: what happens on the other device, or a link and its state.
-fn hero(view: &str, way: Way, code: &str, address: &str) -> AnyElement {
-    let frame = div()
-        .h(px(132.))
-        .w_full()
-        .flex()
-        .items_center()
-        .justify_center()
-        .bg(content(0.035))
-        .border_b_1()
-        .border_color(content(0.08))
-        .overflow_hidden();
-    match (view, way) {
-        ("live", Way::App) => frame.child(
-            div()
-                .mt(px(34.))
-                .w(px(170.))
-                .h(px(120.))
-                .rounded_t(px(22.))
-                .border_1()
-                .border_color(content(0.16))
-                .bg(floating_fill())
-                .flex()
-                .flex_col()
-                .items_center()
-                .pt(px(10.))
-                .gap(px(6.))
-                .child(div().w(px(46.)).h(px(10.)).rounded_full().bg(content(0.16)))
-                .child(
-                    div()
-                        .mt(px(6.))
-                        .text_size(px(12.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(content(0.92))
-                        .child(t("Conectar a este Mac?")),
-                )
-                .child(
-                    div()
-                        .text_size(px(10.5))
-                        .text_color(content(0.55))
-                        .child(t("O Sirus deste iPhone vai controlá-lo.")),
-                )
-                .child(
-                    div()
-                        .mt(px(2.))
-                        .h(px(22.))
-                        .px(px(16.))
-                        .rounded_full()
-                        .bg(accent())
-                        .flex()
-                        .items_center()
-                        .text_size(px(11.))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(on_accent())
-                        .child(t("Conectar")),
-                ),
-        ),
-        ("live", Way::Browser) => frame.child(
-            div()
-                .w(px(300.))
-                .rounded(px(crate::theme::RADIUS_LG))
-                .border_1()
-                .border_color(content(0.16))
-                .child(crate::theme::floating_surface(crate::theme::RADIUS_LG))
-                .overflow_hidden()
-                .child(
-                    div()
-                        .h(px(24.))
-                        .px(px(10.))
-                        .flex()
-                        .items_center()
-                        .gap(px(5.))
-                        .border_b_1()
-                        .border_color(content(0.08))
-                        .children(
-                            (0..3).map(|_| div().size(px(7.)).rounded_full().bg(content(0.2))),
-                        )
-                        .child(
-                            div()
-                                .ml(px(8.))
-                                .text_size(px(10.5))
-                                .text_color(content(0.5))
-                                .child(
-                                    address
-                                        .trim_start_matches("https://")
-                                        .trim_start_matches("http://")
-                                        .trim_end_matches('/')
-                                        .to_string(),
-                                ),
-                        ),
-                )
-                .child(
-                    div()
-                        .py(px(12.))
-                        .flex()
-                        .flex_col()
-                        .items_center()
-                        .gap(px(8.))
-                        .child(
-                            div()
-                                .text_size(px(12.))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(content(0.9))
-                                .child(t("Digite o código")),
-                        )
-                        .child(div().flex().gap(px(5.)).children(code.chars().map(|digit| {
-                            div()
-                                .size_with(px(24.), px(30.))
-                                .rounded(px(crate::theme::RADIUS_SM))
-                                .bg(content(0.07))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .text_size(px(14.))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(content(0.9))
-                                .child(digit.to_string())
-                        }))),
-                ),
-        ),
-        _ => frame.child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(14.))
-                .child(tile("smartphone"))
-                .child(
-                    div()
-                        .size(px(28.))
-                        .rounded_full()
-                        .bg(if view == "expired" {
-                            content(0.16)
-                        } else {
-                            accent()
-                        })
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(
-                            svg()
-                                .path(if view == "expired" {
-                                    "refresh"
-                                } else {
-                                    "check"
-                                })
-                                .size(px(14.))
-                                .text_color(if view == "expired" {
-                                    content(0.8)
-                                } else {
-                                    on_accent()
-                                }),
-                        ),
-                )
-                .child(tile("laptop")),
-        ),
-    }
-    .into_any_element()
-}
-
-trait SizeWith {
-    fn size_with(self, w: gpui::Pixels, h: gpui::Pixels) -> Self;
-}
-
-impl SizeWith for gpui::Div {
-    fn size_with(self, w: gpui::Pixels, h: gpui::Pixels) -> Self {
-        self.w(w).h(h)
-    }
-}
-
 fn button<V: 'static>(
     id: &'static str,
     label: Option<&str>,
@@ -786,6 +650,7 @@ fn button<V: 'static>(
 pub fn overlay<V: 'static>(
     page: &str,
     editing: Option<(&str, &str)>,
+    room: (f32, f32),
     run: Run<V>,
     edit: Edit<V>,
     cx: &mut Context<V>,
@@ -850,158 +715,143 @@ pub fn overlay<V: 'static>(
     let mut body = div().flex().flex_col().gap(px(14.)).px(px(20.)).pb(px(20.));
     match view {
         "live" => {
-            let segment =
-                |id: &'static str, label: &'static str, icon: &'static str, value: Way| {
-                    let on = way == value;
-                    div()
-                        .id(id)
-                        .h(px(28.))
-                        .px(px(12.))
-                        .rounded(px(crate::theme::RADIUS_MD))
-                        .flex()
-                        .items_center()
-                        .gap(px(6.))
-                        .text_size(px(12.5))
-                        .text_color(content(if on { 0.95 } else { 0.55 }))
-                        .when(on, |d| d.bg(content(0.1)))
-                        .cursor_pointer()
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            run(
-                                this,
-                                "native_pair_way",
-                                json!({"way": if value == Way::App { "app" } else { "browser" }}),
-                                cx,
-                            );
-                        }))
-                        .child(svg().path(icon).size(px(13.)).text_color(content(if on {
-                            0.9
-                        } else {
-                            0.5
-                        })))
-                        .child(label)
-                };
+            let segment = |id: &'static str,
+                           ix: usize,
+                           label: &'static str,
+                           icon: &'static str,
+                           value: Way| {
+                let on = way == value;
+                div()
+                    .id(id)
+                    .relative()
+                    .h(px(28.))
+                    .px(px(12.))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .text_size(px(12.5))
+                    .text_color(content(if on { 0.95 } else { 0.55 }))
+                    .cursor_pointer()
+                    .sinks()
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        run(
+                            this,
+                            "native_pair_way",
+                            json!({"way": if value == Way::App { "app" } else { "browser" }}),
+                            cx,
+                        );
+                    }))
+                    .child(crate::segment_pill::probe("pair-way", ix))
+                    .child(svg().path(icon).size(px(13.)).text_color(content(if on {
+                        0.9
+                    } else {
+                        0.5
+                    })))
+                    .child(label)
+            };
             body = body.child(
                 div()
+                    .relative()
                     .self_center()
                     .p(px(2.))
                     .rounded(px(crate::theme::RADIUS_MD))
                     .bg(content(0.05))
                     .flex()
                     .gap(px(2.))
+                    .child(crate::segment_pill::pill(
+                        "pair-way",
+                        usize::from(way == Way::Browser),
+                        content(0.1),
+                        crate::theme::RADIUS_SM,
+                    ))
                     .child(segment(
                         "pair-way-app",
+                        0,
                         t("App do iPhone"),
                         "smartphone",
                         Way::App,
                     ))
                     .child(segment(
                         "pair-way-browser",
+                        1,
                         t("Navegador"),
                         "globe",
                         Way::Browser,
                     )),
             );
-            let card = div()
-                .rounded(px(crate::theme::RADIUS_LG))
-                .border_1()
-                .border_color(content(0.1))
-                .bg(content(0.03))
-                .p(px(16.));
+            let note = |text: &'static str| {
+                div()
+                    .w_full()
+                    .text_center()
+                    .text_size(px(11.5))
+                    .line_height(px(16.))
+                    .text_color(content(0.48))
+                    .child(text)
+            };
             body = body.child(match way {
-                Way::App => card
-                    .flex()
-                    .items_center()
-                    .gap(px(20.))
-                    .child(match pairing {
-                        Some(p) => qr(p, 176.),
-                        None => div()
-                            .size(px(176.))
-                            .flex_shrink_0()
-                            .rounded(px(22.))
-                            .bg(content(0.06))
-                            .into_any_element(),
-                    })
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .gap(px(14.))
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(4.))
-                                    .child(
-                                        div()
-                                            .text_size(px(11.5))
-                                            .text_color(content(0.5))
-                                            .child(t("Ou digite no app")),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_size(px(30.))
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .text_color(content(0.96))
-                                            .child(spaced.clone()),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(5.))
-                                    .text_size(px(12.))
-                                    .line_height(px(17.))
-                                    .text_color(content(0.62))
-                                    .children(
-                                        [
-                                            if pairing.is_some_and(|p| p.public_route) {
-                                                t("Funciona de qualquer lugar pelo endereço público deste Mac, sem Tailscale")
-                                            } else {
-                                                t("Tailscale no iPhone, com a mesma conta deste Mac")
-                                            },
-                                            t("Leia o QR ou digite o código"),
-                                            t("Dê um nome ao aparelho"),
-                                        ]
-                                        .into_iter()
-                                        .enumerate()
-                                        .map(|(i, step)| {
-                                            div()
-                                                .flex()
-                                                .gap(px(8.))
-                                                .child(
-                                                    div()
-                                                        .w(px(14.))
-                                                        .text_color(content(0.4))
-                                                        .child(format!("{}.", i + 1)),
-                                                )
-                                                .child(div().flex_1().child(step))
-                                        }),
-                                    ),
-                            ),
-                    )
-                    .into_any_element(),
-                Way::Browser => card
+                Way::App => {
+                    // The code fits the window, so the whole dialog stays on screen.
+                    let side = qr_side(room);
+                    div()
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .gap(px(14.))
+                        .child(match pairing {
+                            Some(p) => qr(p, side),
+                            None => div()
+                                .size(px(side))
+                                .flex_shrink_0()
+                                .rounded(px(22.))
+                                .bg(content(0.06))
+                                .into_any_element(),
+                        })
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .items_center()
+                                .gap(px(2.))
+                                .child(
+                                    div()
+                                        .text_size(px(11.5))
+                                        .text_color(content(0.5))
+                                        .child(t("Ou digite no app")),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(28.))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(content(0.96))
+                                        .child(spaced.clone()),
+                                ),
+                        )
+                        .child(note(if pairing.is_some_and(|p| p.public_route) {
+                            t("Funciona de qualquer lugar pelo endereço público deste Mac, sem Tailscale")
+                        } else {
+                            t("Tailscale no iPhone, com a mesma conta deste Mac")
+                        }))
+                        .into_any_element()
+                }
+                Way::Browser => div()
                     .flex()
                     .flex_col()
-                    .gap(px(12.))
+                    .gap(px(14.))
                     .child(
                         div()
                             .flex()
                             .items_center()
                             .gap(px(8.))
-                            .child(
-                                div()
-                                    .text_size(px(11.5))
-                                    .text_color(content(0.5))
-                                    .child(t("Endereço")),
-                            )
+                            .pl(px(10.))
+                            .pr(px(4.))
+                            .py(px(4.))
+                            .rounded(px(crate::theme::RADIUS_MD))
+                            .bg(content(0.05))
                             .child(
                                 div()
                                     .flex_1()
                                     .min_w_0()
+                                    .truncate()
                                     .text_size(px(12.5))
                                     .text_color(content(0.9))
                                     .child(address.clone()),
@@ -1019,36 +869,35 @@ pub fn overlay<V: 'static>(
                                 cx,
                             )),
                     )
-                    .child(
-                        div().flex().justify_center().gap(px(6.)).children(code.chars().enumerate().map(
-                            |(i, digit)| {
-                                div()
-                                    .ml(px(if i == 3 { 10. } else { 0. }))
-                                    .w(px(40.))
-                                    .h(px(52.))
-                                    .rounded(px(crate::theme::RADIUS_LG))
-                                    .bg(content(0.07))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .text_size(px(24.))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(content(0.95))
-                                    .child(digit.to_string())
-                            },
-                        )),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .text_color(content(0.5))
-                            .child(t("Só aparelhos da sua Tailscale chegam a este endereço.")),
-                    )
+                    .child(div().w_full().flex().justify_center().gap(px(6.)).children(
+                        code.chars().enumerate().map(|(i, digit)| {
+                            div()
+                                .ml(px(if i == 3 { 8. } else { 0. }))
+                                .flex_1()
+                                .min_w_0()
+                                .max_w(px(40.))
+                                .h(px(52.))
+                                .rounded(px(crate::theme::RADIUS_MD))
+                                .bg(content(0.07))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .text_size(px(24.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(content(0.95))
+                                .child(digit.to_string())
+                        }),
+                    ))
+                    .child(note(t(
+                        "Só aparelhos da sua Tailscale chegam a este endereço.",
+                    )))
                     .into_any_element(),
             });
             if let Some(error) = &dialog.error {
                 body = body.child(
                     div()
+                        .w_full()
+                        .text_center()
                         .text_size(px(12.))
                         .text_color(rgb(0xec8a85))
                         .child(error.clone()),
@@ -1063,48 +912,49 @@ pub fn overlay<V: 'static>(
                 div()
                     .flex()
                     .items_center()
-                    .justify_between()
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .text_color(content(0.55))
-                            .child(status),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .gap(px(8.))
-                            .when(way == Way::App && pairing.is_some(), |d| {
-                                d.child(button(
-                                    "pair-copy-link",
-                                    Some(if copied {
-                                        t("Copiado")
-                                    } else {
-                                        t("Copiar link")
-                                    }),
-                                    Some(if copied { "check" } else { "copy" }),
-                                    false,
-                                    true,
-                                    "native_pair_copy",
-                                    json!({"what": "link"}),
-                                    None,
-                                    run,
-                                    cx,
-                                ))
-                            })
-                            .child(button(
-                                "pair-new",
-                                Some(t("Novo código")),
-                                Some("refresh"),
-                                false,
-                                !dialog.busy,
-                                "native_pair_new",
-                                json!({}),
-                                None,
-                                run,
-                                cx,
-                            )),
-                    ),
+                    .justify_center()
+                    .gap(px(6.))
+                    .text_size(px(12.))
+                    .text_color(content(0.55))
+                    .children(left.map(|seconds| time_ring(seconds as f32 / CODE_SECONDS)))
+                    .child(status),
+            );
+            body = body.child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .justify_center()
+                    .gap(px(8.))
+                    .when(way == Way::App && pairing.is_some(), |d| {
+                        d.child(button(
+                            "pair-copy-link",
+                            Some(if copied {
+                                t("Copiado")
+                            } else {
+                                t("Copiar link")
+                            }),
+                            Some(if copied { "check" } else { "copy" }),
+                            false,
+                            true,
+                            "native_pair_copy",
+                            json!({"what": "link"}),
+                            None,
+                            run,
+                            cx,
+                        ))
+                    })
+                    .child(button(
+                        "pair-new",
+                        Some(t("Novo código")),
+                        Some("refresh"),
+                        false,
+                        !dialog.busy,
+                        "native_pair_new",
+                        json!({}),
+                        None,
+                        run,
+                        cx,
+                    )),
             );
         }
         "linked" => {
@@ -1240,8 +1090,10 @@ pub fn overlay<V: 'static>(
     }
 
     let header = div()
+        .w_full()
+        .text_center()
         .px(px(20.))
-        .pt(px(16.))
+        .pt(px(18.))
         .pb(px(14.))
         .child(
             div()
@@ -1261,7 +1113,7 @@ pub fn overlay<V: 'static>(
     let card = div()
         .id("pair-card")
         .relative()
-        .w(px(520.))
+        .w(px(CARD_WIDTH))
         .max_w_full()
         .max_h(gpui::relative(0.94))
         .overflow_y_scroll()
@@ -1271,7 +1123,6 @@ pub fn overlay<V: 'static>(
         .bg(floating_fill())
         .shadow_lg()
         .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        .child(hero(view, way, &code, &address))
         .child(header)
         .child(body)
         .with_animation(

@@ -1,4 +1,4 @@
-//! Project actions, as Monocode's: saved commands that run in a terminal with one click, from
+//! Project actions: saved commands that run in a terminal with one click, from
 //! the menu of the footer's button, which also opens the editor.
 //! This file holds what is kept and decided; the window draws it in `shell_actions.rs`.
 use serde::{Deserialize, Serialize};

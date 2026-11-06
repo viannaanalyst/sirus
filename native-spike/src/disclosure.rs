@@ -1,4 +1,4 @@
-//! A fold's reveal, from Monocode (crates/monocode-gpui/src/reveal.rs, MIT, LICENSE-MONOCODE-MIT):
+//! A fold's reveal, from an MIT-licensed project (LICENSE-THIRD-PARTY-MIT):
 //! the child is measured at its full height at the current width and the height follows
 //! `progress`, so nothing snaps when the motion ends. Put it inside a parent that clips.
 use gpui::{

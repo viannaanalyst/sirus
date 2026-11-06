@@ -1,7 +1,7 @@
 //! Prompt links (ADR-122) in Sirus Native: `sirus://new?prompt=…` opens a new conversation of the
 //! right project with the prompt in its composer, and "Copiar link do prompt" builds one from the
 //! open composer. The host reads and checks a link (`resolve_prompt_link`, the same parser and
-//! project matching as Sirus Code, hidden characters removed); this module only decides where the
+//! project matching as Sirus, hidden characters removed); this module only decides where the
 //! checked prompt lands. A link never sends anything: the person reads the draft and sends it.
 //!
 //! macOS hands the link to this app as an Apple Event (`application:openURLs:`); main.rs turns it
@@ -59,7 +59,7 @@ pub(crate) fn outcome_of(value: &Value) -> Option<Outcome> {
     }
 }
 
-/// Why a link was refused, in the person's words (Sirus Code's `promptLink.reason.*`).
+/// Why a link was refused, in the person's words (Sirus's `promptLink.reason.*`).
 pub(crate) fn reason_text(reason: &str) -> &'static str {
     match reason {
         "malformed" => t("Não é um link sirus://new."),
@@ -90,7 +90,7 @@ pub(crate) enum ProviderNote {
 }
 
 /// The provider and model a new conversation takes from a link. `models` is the provider's loaded
-/// list as (id, name); an empty list cannot refute a model, so it passes (Sirus Code's
+/// list as (id, name); an empty list cannot refute a model, so it passes (Sirus's
 /// `linkedModel`).
 pub(crate) fn pick_provider(
     wanted: Option<&str>,
@@ -331,7 +331,7 @@ impl Shell {
     }
 
     /// The palette's "Copiar link do prompt": a link to the open composer's draft.
-    pub(super) fn copy_prompt_link(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn copy_prompt_link(&mut self) {
         let ix = self.active_conversation();
         let conversation = &self.conversations[ix];
         let draft = self.drafts.get(&ix).map_or("", |d| d.text.as_str());

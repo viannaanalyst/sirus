@@ -1,16 +1,15 @@
-//! ⌘F: the find bar over the open conversation (ports Sirus Code's `TranscriptSearchBar`).
+//! ⌘F: the find bar over the open conversation (ports Sirus's `TranscriptSearchBar`).
 //!
 //! It searches each turn's user text and answer, case and accents folded, and walks the hits with
 //! Enter, ⇧Enter, the arrows and wrap-around. Going to a hit scrolls its turn into view. The words
 //! themselves are marked (`markdown::set_search`), in the accent on the current turn and in amber
-//! on the others, as in Monocode. Hits are computed when the query changes or the conversation gains
+//! on the others. Hits are computed when the query changes or the conversation gains
 //! turns, never per frame. While the bar is up it takes the typing (`query_target`); Esc closes
 //! it and gives the focus back to the composer, and never stops the agent.
 //!
 //! This module is a child of `shell` (`#[path]`), so it reaches the window's private state.
 
 use super::*;
-use crate::theme::Sinks as _;
 use gpui::{Keystroke, Stateful};
 use std::ops::Range;
 

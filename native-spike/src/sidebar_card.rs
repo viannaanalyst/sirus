@@ -1,4 +1,4 @@
-//! The sidebar's hover card (Monocode's sidebar card). A conversation row rests under the pointer
+//! The sidebar's hover card. A conversation row rests under the pointer
 //! for 500 ms and a small card opens to its right, beside the row and not over it: the provider
 //! and the model, the work time of the last turn, the full title, and the project's folder.
 //! Moving to another row switches the card at once; leaving the row and the card closes it; a

@@ -31,7 +31,7 @@ A session can watch its own pull request. This is the fourth exception to "turns
 - **Conflicts:** reported when `mergeable` becomes `CONFLICTING`. `UNKNOWN` (GitHub still computing after a push) keeps the last answer.
 - **Bound:** each wake counts. A new PR head resets the count. After 5 wakes in a row without a new head, the watch stops itself with a notice, and the person can watch again.
 
-**Waking.** The session gets one automatic Auto-approval turn (never Full, never planning) that starts with "PR watch:". It lists the failing checks, each review with its author and state, the quoted review text, every inline comment as `path:line` with its quoted text, and a conflict notice naming the base branch. GitHub content is quoted as untrusted data and the prompt is bounded to 24 KiB. Unlike CI auto-fix, Sirus Code does not commit or push afterwards; the agent follows the session's usual rules. If the turn cannot start, the watch stops with a notice.
+**Waking.** The session gets one automatic Auto-approval turn (never Full, never planning) that starts with "PR watch:". It lists the failing checks, each review with its author and state, the quoted review text, every inline comment as `path:line` with its quoted text, and a conflict notice naming the base branch. GitHub content is quoted as untrusted data and the prompt is bounded to 24 KiB. Unlike CI auto-fix, Sirus does not commit or push afterwards; the agent follows the session's usual rules. If the turn cannot start, the watch stops with a notice.
 
 **UI.**
 
@@ -46,7 +46,7 @@ A session can watch its own pull request. This is the fourth exception to "turns
   - The agent can arm the watch itself when asked.
   - Polling is bounded: 8 PRs, one query each per minute, and none at all for busy sessions.
 - **Negative:**
-  - While something is watched, Sirus Code queries GitHub once a minute per PR.
+  - While something is watched, Sirus queries GitHub once a minute per PR.
   - Automatic turns run under Auto approval without a per-turn confirmation.
   - Comments by the person's own `gh` account never wake the agent, including the person's own review notes.
   - Edited reviews are not reported again.

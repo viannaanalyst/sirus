@@ -1,14 +1,14 @@
 //! Which Keychain items this process owns.
 //!
-//! Sirus Native runs its own headless host next to Sirus Code. Sharing one Keychain item made
+//! Sirus Native runs its own headless host next to Sirus. Sharing one Keychain item made
 //! each app rewrite the other's secrets, and macOS then asked for the login password. With
 //! `SIRUS_KEYCHAIN_APP` set, the host keeps its secrets under that app's name. It copies an
-//! existing Sirus Code secret only when macOS allows it without asking, and never writes back.
+//! existing Sirus secret only when macOS allows it without asking, and never writes back.
 #![cfg(target_os = "macos")]
 
 use security_framework::passwords::{get_generic_password, set_generic_password};
 
-const SHARED_APP: &str = "Sirus Code";
+const SHARED_APP: &str = "Sirus";
 
 fn separate_app() -> Option<String> {
     std::env::var("SIRUS_KEYCHAIN_APP")
@@ -26,7 +26,7 @@ extern "C" {
     fn SecKeychainSetUserInteractionAllowed(allowed: u8) -> i32;
 }
 
-/// Copies a Sirus Code secret into this app's item if macOS gives it up without a prompt.
+/// Copies a Sirus secret into this app's item if macOS gives it up without a prompt.
 pub fn adopt_shared(kind: &str, account: &str) -> Option<Vec<u8>> {
     let own = separate_app().map(|app| format!("{app} {kind}"))?;
     let shared = format!("{SHARED_APP} {kind}");

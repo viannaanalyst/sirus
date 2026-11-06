@@ -2,7 +2,7 @@
 
 Status: **Stages 1–5 done**, 2026-10-03. Stage 5 repeated the measurements on the real app with real provider output. Stage 1 recorded the baseline without changing product code; Stage 2 removed idle work; Stage 3 made streaming and persistence cheaper.
 
-Sirus Code is a desktop app that may stay open for hours. Its goal is to stay clearly lighter than an Electron app and to do almost no work when nothing is happening. This document records what was measured, what was found and what is planned. Numbers are only stated where they were actually measured.
+Sirus is a desktop app that may stay open for hours. Its goal is to stay clearly lighter than an Electron app and to do almost no work when nothing is happening. This document records what was measured, what was found and what is planned. Numbers are only stated where they were actually measured.
 
 ## Current architecture (performance-relevant)
 
@@ -19,7 +19,7 @@ Sirus Code is a desktop app that may stay open for hours. Its goal is to stay cl
 
 ### How they were taken
 
-- **Native app.** `scripts/perf/measure-idle.sh` launches the debug bundle, waits 20 s, then samples `top` every 5 s for 60 s (Stage 1; later stages use cumulative CPU time). Memory is `footprint` (phys_footprint) per process. WebKit helpers are attributed by launch diff: helper processes that appear after the launch belong to Sirus Code. This is a heuristic.
+- **Native app.** `scripts/perf/measure-idle.sh` launches the debug bundle, waits 20 s, then samples `top` every 5 s for 60 s (Stage 1; later stages use cumulative CPU time). Memory is `footprint` (phys_footprint) per process. WebKit helpers are attributed by launch diff: helper processes that appear after the launch belong to Sirus. This is a heuristic.
 - **Frontend.** Vite dev server in headless Chromium, with the recording stage's demo IPC (fictional data). Scripts: `scripts/perf/idle-probe.mjs` and `scripts/perf/stream-probe.mjs` (Playwright is not a project dependency; set `PLAYWRIGHT_MODULE` to an installed copy). Tools are CDP `Performance.getMetrics` and an instrumented `requestAnimationFrame` / timer counter. Chromium is not WebKit, so these numbers show **relative** costs and where work comes from, not absolute app CPU.
 - **Persisted state.** The user's real `state.json` at the time of the audit: 32 KB, 2 projects, 3 sessions, 25 messages. Every result below reflects this **small** state unless stated otherwise.
 
@@ -352,7 +352,7 @@ Following the latest output changes only on the reader's own direction. A wheel 
 
 ## Memory under agent load (2026-10-08)
 
-**Report.** With 3 conversations running agents, Activity Monitor showed "Sirus Code" at 6.28 GB. That figure groups the app, its WebKit helpers and child processes (provider CLIs and their subagents). Later, mostly idle, the owner's debug app read as follows (`footprint`, `vmmap --summary`, read-only):
+**Report.** With 3 conversations running agents, Activity Monitor showed "Sirus" at 6.28 GB. That figure groups the app, its WebKit helpers and child processes (provider CLIs and their subagents). Later, mostly idle, the owner's debug app read as follows (`footprint`, `vmmap --summary`, read-only):
 
 | Process | Footprint | Peak | Main categories |
 |---|---|---|---|

@@ -1,4 +1,4 @@
-//! All-conversation search, as Sirus Code's command palette and its ⌘⇧F search bar do it: the
+//! All-conversation search, as Sirus's command palette and its ⌘⇧F search bar do it: the
 //! host's `transcript_action` search returns the messages that may contain the text (unloaded
 //! transcripts included), and the window matches them again to cut a snippet. Message results
 //! start at three characters and wait for the typing to pause. A reply for an older text is
@@ -9,7 +9,7 @@
 use super::*;
 
 /// Message search starts at this many characters, so one letter does not scan every transcript
-/// (`PALETTE_MESSAGE_QUERY` in Sirus Code).
+/// (`PALETTE_MESSAGE_QUERY` in Sirus).
 pub(crate) const MIN_CHARS: usize = 3;
 /// How long the typing must rest before the host is asked.
 const DEBOUNCE: Duration = Duration::from_millis(150);
@@ -79,7 +79,7 @@ fn find_ci(text: &[char], needle: &str) -> Option<(usize, usize)> {
 }
 
 /// The text around the first match: 45 characters before and 75 after, whitespace collapsed, with
-/// an ellipsis where it was cut (the snippet of Sirus Code's `searchConversations`).
+/// an ellipsis where it was cut (the snippet of Sirus's `searchConversations`).
 pub(crate) fn snippet(text: &str, needle: &str) -> Option<String> {
     let chars: Vec<char> = text.chars().collect();
     let (start, end) = find_ci(&chars, needle)?;
@@ -131,6 +131,10 @@ impl Shell {
                 search: Search::default(),
                 query: String::new(),
                 selected: 0,
+                scope: 0,
+                pointer: None,
+                scroll: gpui::ScrollHandle::new(),
+                follow: std::cell::Cell::new(false),
                 open: Tween::from_to(
                     0.,
                     1.,

@@ -6,13 +6,13 @@
 
 Settings → Appearance offered Light, Dark and System, with the Glass palette (ADR-033, ADR-167), a
 Pierre-based code palette for diffs and Markdown (ADR-169, ADR-179) and a fixed terminal ANSI palette.
-Owners asked for the colour themes they already use in VS Code. t3code (github.com/pingdotgg/t3code, MIT)
+Owners asked for the colour themes they already use in VS Code. Another open-source client (github.com/pingdotgg/another open-source client, MIT)
 imports them from Open VSX: it searches open-vsx.org, downloads the `.vsix`, extracts the theme JSON,
-follows `include` chains and hardens the download. This ADR ports that design to Sirus Code.
+follows `include` chains and hardens the download. This ADR ports that design to Sirus.
 
 ## Decision
 
-- **Rust does the network and the zip.** t3code runs in a browser, where the renderer is the only place to
+- **Rust does the network and the zip.** another open-source client runs in a browser, where the renderer is the only place to
   do it. Sirus has a trusted native side, and the renderer is the part that renders Markdown, previews
   and other untrusted content, so the safer split is:
   - `src-tauri/src/vscode_theme.rs` is the only code that talks to Open VSX or opens a package. The renderer's
@@ -24,21 +24,21 @@ follows `include` chains and hardens the download. This ADR ports that design to
     credentials, port 443).
   - A decompression bomb cannot run in the UI process, and entries are read with `Read::take`, so a lying
     header cannot expand past the cap either.
-- **Hardening (t3code's limits).** 20 MiB `.vsix`, 100 MiB uncompressed in total, 5,000 entries, 200x
+- **Hardening (another client's limits).** 20 MiB `.vsix`, 100 MiB uncompressed in total, 5,000 entries, 200x
   compression ratio, all read from the central directory before any entry is read; 256 KiB per theme file and
   manifest, 512 KiB search and 256 KiB detail responses, 40 themes per extension, `include` depth 8 with cycle
   detection and a bounded number of resolved files, entry names with `..`, absolute paths or NUL are refused,
   and an `include` cannot climb out of `extension/`. Two deliberate differences: the ratio is judged only for
   entries of 1 KiB or more (padding in a tiny file is not a bomb, and the totals still cap everything), and
-  the package's SHA-256 is checked against Open VSX's published checksum, as t3code does. The packaged
+  the package's SHA-256 is checked against Open VSX's published checksum, as another open-source client does. The packaged
   `package.json` must match the chosen listing (publisher, name, version, licence).
 - **Licence allowlist.** `0BSD`, `Apache-2.0`, `BSD-2-Clause`, `BSD-3-Clause`, `CC0-1.0`, `ISC`, `MIT`,
-  `MPL-2.0`, `Unlicense`, as in t3code, from the Open VSX detail document and again from the packaged manifest.
+  `MPL-2.0`, `Unlicense`, as in another open-source client, from the Open VSX detail document and again from the packaged manifest.
   A file the owner picks from disk is theirs to use and is not licence-checked; it keeps every size and
   path limit.
 - **No new dependencies.** The back end already had `zip`, `reqwest`, `sha2` and `serde_json`; a small
   JSONC reader (comments, trailing commas, BOM; strings untouched) replaces `jsonc-parser`, and the renderer
-  needs no `jszip`. No new licence files or notices were needed beyond the existing T3 Code entry.
+  needs no `jszip`. No new licence files or notices were needed beyond the existing another open-source client entry.
 - **What is kept.** Only 66 workbench colours Sirus maps (`COLOR_KEYS`) as `#rrggbb[aa]`, and TextMate rules
   reduced to scope, foreground and font style (at most 400 rules, 16 scopes of 128 characters each). Anything
   else, including `semanticTokenColors` and external `.tmTheme` references, is dropped.
@@ -95,4 +95,4 @@ follows `include` chains and hardens the download. This ADR ports that design to
 - Verified by Rust tests (zip limits, include resolution, sanitising, host allowlist, storage validation) and
   `tests/vscode-theme.test.ts` (mapping, contrast floors, terminal, storage and reset).
 
-Credit: the design, limits and licence allowlist come from t3code's Open VSX theme import (MIT, T3 Tools Inc.).
+Credit: the design, limits and licence allowlist come from another client's Open VSX theme import (MIT, T3 Tools Inc.).

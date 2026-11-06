@@ -1,4 +1,4 @@
-//! Cards for other conversations (Monocode's approvals and delivery, option "M1"): when a
+//! Cards for other conversations: when a
 //! conversation the window is not showing finishes, fails, asks to run something or asks a
 //! question, a card slides in at the top right, under the title bar. Newest on top, three at
 //! most and then a "+N avisos" line. A permission card approves or denies right there with the

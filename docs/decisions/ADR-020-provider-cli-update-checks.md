@@ -6,7 +6,7 @@
 
 Users cannot tell when an installed provider CLI is outdated. A
 persistent toast ("Codex update available") with Review updates and Update all
-actions. Adding that to Sirus Code crosses two reviewed boundaries: outbound
+actions. Adding that to Sirus crosses two reviewed boundaries: outbound
 network reads and process spawn. The project already ships fixed read-only HTTPS
 probes (ADR-014) but has no package-manager execution.
 

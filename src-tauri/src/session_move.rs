@@ -291,7 +291,7 @@ pub async fn prepare_session_move(
         };
         let scratch = std::env::temp_dir().join("sirus-move");
         let message = format!(
-            "Move \"{}\" to {target}\n\nUncommitted work from Sirus Code, continued on another computer.",
+            "Move \"{}\" to {target}\n\nUncommitted work from Sirus, continued on another computer.",
             session.title.chars().take(120).collect::<String>()
         );
         let commit = crate::team::snapshot_commit(&cwd, &scratch, &message)?;

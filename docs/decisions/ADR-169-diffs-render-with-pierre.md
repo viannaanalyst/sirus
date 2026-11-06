@@ -12,7 +12,7 @@ meant more custom layout code to maintain.
 
 `@pierre/diffs` (Apache-2.0, by The Pierre Computer Company) is a diff renderer built for this: a
 virtualized `CodeView` of many files, highlighting in a worker pool, sticky file headers, word-level
-changes, hunk separators and line selection. T3 Code (MIT) already uses it with version 1.6.1; its
+changes, hunk separators and line selection. Another open-source client (MIT) already uses it with version 1.6.1; its
 theming and worker setup were the reference.
 
 ## Decision

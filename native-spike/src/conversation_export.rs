@@ -1,6 +1,6 @@
 //! Saving a conversation as Markdown from the conversation's context menu. The text is what the
 //! composer's `/export` writes (`conversationMarkdown` in lib/composer-commands.ts), and the host
-//! shows the save dialog (`export_conversation`), so the file choice is Sirus Code's own.
+//! shows the save dialog (`export_conversation`), so the file choice is Sirus's own.
 //!
 //! This module is a child of `shell` (`#[path]`), so it reaches the window's private state.
 

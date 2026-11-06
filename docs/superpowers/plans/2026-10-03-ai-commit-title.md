@@ -72,7 +72,7 @@ The client sends only the closed actions above and maps a cancelled generation t
 ## Final verification
 
 - [x] Whole-feature security/spec review from source snapshots.
-- [x] Required frontend and native checks, Graphify incremental update and desktop bundle build. Run disposable live inference only with a synthetic diff and no user repository/credentials read by Sirus Code; report any unavailable runtime honestly.
+- [x] Required frontend and native checks, Graphify incremental update and desktop bundle build. Run disposable live inference only with a synthetic diff and no user repository/credentials read by Sirus; report any unavailable runtime honestly.
 - [x] Confirm bundle completion and share the updated application and browser preview links. Do not quit the person's app, replace /Applications or perform real commit/push.
 
 Verification completed: native294 passed19ignored; frontend217 plus verification scripts passed, final utility lifecycle15 tests passed; typecheck/lint/build/preview builds, format/check/clippy, synthetic native Codex/Claude inference and desktop signature passed. Scoped and final reviews approved. Rendered gate/attribution component coverage remains a minor follow-up; existing chunk-size warnings remain.

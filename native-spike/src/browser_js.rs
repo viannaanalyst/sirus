@@ -1,6 +1,6 @@
 //! The page scripts of the browser pane and the agent's browser tools. The `.js` files in
 //! `browser_js/` are copies of the constants in `src-tauri/src/browser.rs` and
-//! `browser_agent.rs` (Sirus Code runs the same text), so the refs and result shapes the tool
+//! `browser_agent.rs` (Sirus runs the same text), so the refs and result shapes the tool
 //! docs promise stay true. The login scripts are read straight from `src-tauri/src`.
 
 macro_rules! script {

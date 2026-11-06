@@ -5,7 +5,7 @@
 
 ## Context
 
-Several agents running side by side can saturate the Mac: a `cargo build`, a test watcher or a browser left behind by a tool keeps the fans on long after the person stopped watching. Activity Monitor shows `node` and `rustc` but not which conversation started them, and stopping a whole conversation is the only control Sirus Code offered. The person needs to see, per running conversation, what its processes cost and stop either the conversation or one runaway process, without the app sampling the system all day.
+Several agents running side by side can saturate the Mac: a `cargo build`, a test watcher or a browser left behind by a tool keeps the fans on long after the person stopped watching. Activity Monitor shows `node` and `rustc` but not which conversation started them, and stopping a whole conversation is the only control Sirus offered. The person needs to see, per running conversation, what its processes cost and stop either the conversation or one runaway process, without the app sampling the system all day.
 
 ## Decision
 

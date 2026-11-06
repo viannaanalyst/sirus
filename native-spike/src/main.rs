@@ -1,6 +1,6 @@
 //! Part 1 of the native spike: tabs, pinning, sidebar and motion on GPUI with sample data,
-//! to compare by feel against the Tauri app. GPUI is vendored from Monocode (Apache-2.0);
-//! a few presentation files are ported from Monocode (MIT, LICENSE-MONOCODE-MIT).
+//! to compare by feel against the Tauri app. GPUI is vendored (Apache-2.0);
+//! a few presentation files are ported from an MIT-licensed project (MIT, LICENSE-THIRD-PARTY-MIT).
 mod app_update;
 mod attachment_doc;
 mod attachment_html;
@@ -97,6 +97,7 @@ impl AssetSource for Assets {
         }
         let bytes: &'static [u8] = match path {
             "plus" => include_bytes!("../assets/plus.svg"),
+            "sparkles" => include_bytes!("../assets/sparkles.svg"),
             "minus" => include_bytes!("../assets/minus.svg"),
             "comment-add" => include_bytes!("../assets/comment-add.svg"),
             "cursor" => include_bytes!("../assets/cursor.svg"),
@@ -170,7 +171,6 @@ impl AssetSource for Assets {
             "test-tube" => include_bytes!("../assets/test-tube.svg"),
             "hammer" => include_bytes!("../assets/hammer.svg"),
             "rocket" => include_bytes!("../assets/rocket.svg"),
-            "bug" => include_bytes!("../assets/bug.svg"),
             "package" => include_bytes!("../assets/package.svg"),
             "square-fill" => include_bytes!("../assets/square-fill.svg"),
             "window" => include_bytes!("../assets/window.svg"),

@@ -4,7 +4,7 @@
 
 ## Context
 
-People want to share a prompt — in a pull request comment, a README or a chat — that someone else can open in Sirus Code with one click, in the right project and with the right model. A link comes from outside the app, possibly from a stranger, so it is a trust boundary: it must never run anything, and it must not be able to hide instructions in the prompt.
+People want to share a prompt — in a pull request comment, a README or a chat — that someone else can open in Sirus with one click, in the right project and with the right model. A link comes from outside the app, possibly from a stranger, so it is a trust boundary: it must never run anything, and it must not be able to hide instructions in the prompt.
 
 ## Decision
 

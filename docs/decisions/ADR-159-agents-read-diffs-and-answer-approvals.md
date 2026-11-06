@@ -4,7 +4,7 @@
 
 ## Context
 
-An agent coordinating others (`sirus_create_session`, `sirus_send_to_session`) could read their messages but not their code, and a session it started that stopped on an approval waited for the person even when the coordinator could judge it. T3 Code added both to its MCP tools.
+An agent coordinating others (`sirus_create_session`, `sirus_send_to_session`) could read their messages but not their code, and a session it started that stopped on an approval waited for the person even when the coordinator could judge it. Another open-source client added both to its MCP tools.
 
 ## Decision
 

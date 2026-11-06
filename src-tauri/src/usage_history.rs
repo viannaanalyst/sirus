@@ -145,7 +145,7 @@ impl Sources {
                 _ => {}
             }
         }
-        // Sirus Native's host has no account list of its own: its launcher names Sirus Code's
+        // Sirus Native's host has no account list of its own: its launcher names Sirus's
         // `provider-accounts` folder, which is only read here (logs, never logins or keys).
         if let Some(root) = env_dir("SIRUS_USAGE_EXTRA_ACCOUNTS") {
             add_account_profiles(&mut sources, &root);

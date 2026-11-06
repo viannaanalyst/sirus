@@ -1,4 +1,4 @@
-//! The composer's attachment chips and the attachment viewer, after Sirus Code's
+//! The composer's attachment chips and the attachment viewer, after Sirus's
 //! `ComposerContextChips` and `AttachmentModal`. This is a child module of `shell` (declared there
 //! with `#[path]`) so it can reach the window's state; the parsing lives in `attachment_doc`, the
 //! PDF reading in `attachment_pdf`, and everything slow runs on a thread.
@@ -231,7 +231,7 @@ fn prepare_files(paths: &[std::path::PathBuf], existing: usize) -> Result<Vec<Va
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        // A folder goes as the names inside it, one level, as Sirus Code's attachments.
+        // A folder goes as the names inside it, one level, as Sirus's attachments.
         if path.is_dir() {
             let mut names: Vec<String> = std::fs::read_dir(path)
                 .map_err(|_| tf("Não foi possível ler {}.", &[&name]))?
@@ -364,7 +364,7 @@ fn load(backend: &Backend, info: &Info, owner: &str) -> Content {
                 .ok()
                 .and_then(|v| doc::parse_preview(&v).ok())
                 .and_then(|preview| match preview {
-                    Preview::Office { bytes, .. } => html::docx_to_html(&bytes).ok(),
+                    Preview::Office { bytes } => html::docx_to_html(&bytes).ok(),
                     _ => None,
                 });
             match converted {
@@ -384,7 +384,7 @@ fn load(backend: &Backend, info: &Info, owner: &str) -> Content {
                 doc::parse_preview(&v)
                     .map_err(|_| t("Não foi possível abrir este documento.").to_owned())
             }) {
-                Ok(Preview::Office { bytes, .. }) => match html::pptx_to_html(&bytes) {
+                Ok(Preview::Office { bytes }) => match html::pptx_to_html(&bytes) {
                     Ok(deck) => Content::Web(Arc::new(WebDoc {
                         html: deck.html,
                         kind: WebKind::Slides,
@@ -1103,7 +1103,7 @@ impl Shell {
         }
     }
 
-    /// HTML a reply wrote, in the web view under Sirus Code's rules for it (`reply_rich::PREVIEW_POLICY`):
+    /// HTML a reply wrote, in the web view under Sirus's rules for it (`reply_rich::PREVIEW_POLICY`):
     /// its own scripts run, nothing is fetched. One toggle away is the source.
     fn open_preview(&mut self, source: String, cx: &mut Context<Self>) {
         let Some(page) = reply_rich::preview_page(&source) else {
@@ -1726,12 +1726,11 @@ impl Shell {
         let markup = &self.viewer.markup;
         let active = markup.active;
         let has_strokes = !markup.strokes.is_empty();
-        let store = markup.stage.clone();
         let strokes = markup.strokes.clone();
         let size = markup.size;
         let chosen = markup.ink;
         let drawing = gpui::canvas(
-            move |bounds, _, _| store.set(Some(bounds)),
+            |_, _, _| {},
             move |bounds, _, window, _| {
                 let Some(size) = size else {
                     return;
@@ -1782,17 +1781,7 @@ impl Shell {
             .top(px(16.))
             .bottom(px(60.))
             .when(active, |d| d.cursor_crosshair())
-            // By its four sides: a percent height falls back on the picture's own shape here, and
-            // anything less wide than the stage overflowed it, looking zoomed in.
-            .child(
-                img(image.clone())
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .right_0()
-                    .bottom_0()
-                    .object_fit(ObjectFit::Contain),
-            )
+            .child(fitted_picture(image.clone(), markup.stage.clone()))
             .child(drawing)
             .on_mouse_down(
                 MouseButton::Left,
@@ -2125,13 +2114,16 @@ impl Shell {
                 .flex_1()
                 .min_h_0()
                 .child(
-                    img(image.clone())
+                    div()
                         .absolute()
                         .top(px(16.))
                         .left(px(16.))
                         .right(px(16.))
                         .bottom(px(16.))
-                        .object_fit(ObjectFit::Contain),
+                        .child(fitted_picture(
+                            image.clone(),
+                            self.viewer.markup.stage.clone(),
+                        )),
                 )
                 .into_any_element(),
             Content::Word(blocks) => word_view(blocks, open),
@@ -2838,7 +2830,7 @@ fn text_view(text: TextBody) -> AnyElement {
         .into_any_element()
 }
 
-/// The Word text and tables on a white page, as Sirus Code's `WordReader`.
+/// The Word text and tables on a white page, as Sirus's `WordReader`.
 fn word_view(blocks: &Arc<Vec<WordBlock>>, open: &Open) -> AnyElement {
     let ink: gpui::Hsla = rgb(0x242424).into();
     let rule: gpui::Hsla = rgb(0xd4d4d4).into();
@@ -3012,6 +3004,49 @@ fn slides_view(slides: &Arc<Vec<Vec<String>>>, open: &Open) -> AnyElement {
                 .text_size(px(11.5))
                 .text_color(content(0.45))
                 .child(t("Texto dos slides. Imagens e layout não são exibidos.")),
+        )
+        .into_any_element()
+}
+
+/// A picture fitted to the stage around it, sized from the stage's measured bounds: an image
+/// with no size of its own takes its natural one, and a percent height follows the picture's
+/// shape, and either shows it zoomed in. The measure arrives a frame late, so it asks for one.
+fn fitted_picture(
+    image: Arc<gpui::Image>,
+    stage: Rc<std::cell::Cell<Option<Bounds<Pixels>>>>,
+) -> AnyElement {
+    let measured = stage.get();
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .right_0()
+        .bottom_0()
+        .children(measured.map(|bounds| {
+            img(image)
+                .absolute()
+                .top_0()
+                .left_0()
+                .w(bounds.size.width)
+                .h(bounds.size.height)
+                .object_fit(ObjectFit::Contain)
+        }))
+        .child(
+            gpui::canvas(
+                move |bounds, window, _| {
+                    let moved = stage.get().is_none_or(|known| known.size != bounds.size);
+                    stage.set(Some(bounds));
+                    if moved {
+                        window.request_animation_frame();
+                    }
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .top_0()
+            .left_0()
+            .right_0()
+            .bottom_0(),
         )
         .into_any_element()
 }

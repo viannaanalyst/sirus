@@ -215,7 +215,7 @@ fn draw(blocks: Vec<Block>, rich: Option<&Rich>) -> AnyElement {
     stack(blocks, 16., rich)
         .text_size(px(14.))
         .line_height(px(24.))
-        // Monocode's reading contrast: prose a step back, emphasis at full ink.
+        // The reading contrast: prose a step back, emphasis at full ink.
         .text_color(content(0.78))
         .into_any_element()
 }
@@ -528,7 +528,7 @@ impl Inline {
     }
 }
 
-/// A found word's fill, as Monocode's: the accent on the current turn, amber on the others.
+/// A found word's fill: the accent on the current turn, amber on the others.
 fn search_fill(flags: u8) -> Option<gpui::Hsla> {
     if flags & SEARCH_NOW != 0 {
         Some(gpui::Hsla {
@@ -612,7 +612,7 @@ fn text(mut inl: Inline) -> AnyElement {
     crate::shell::transcript_select::wrap_links(styled, s, links)
 }
 
-/// A file named in code gets its icon in the pill (Monocode's file chip).
+/// A file named in code gets its icon in the pill.
 fn is_file_chip(code: &str) -> bool {
     !code.chars().any(char::is_whitespace)
         && code
@@ -622,7 +622,7 @@ fn is_file_chip(code: &str) -> bool {
 }
 
 /// A paragraph with inline code: words flow and wrap one by one, and each piece of code is a pill
-/// (Monocode's `rich_inline`), which a single run of text cannot draw. The pieces still read and
+///, which a single run of text cannot draw. The pieces still read and
 /// select as one paragraph (`wrap_piece`).
 fn flowing(inl: Inline) -> AnyElement {
     let mut cuts = vec![0, inl.text.len()];

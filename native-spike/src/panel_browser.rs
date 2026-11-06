@@ -1,13 +1,13 @@
-//! The Navegador panel, after Sirus Code's `BrowserPanel.tsx`: tabs, a toolbar (back, forward,
+//! The Navegador panel, after Sirus's `BrowserPanel.tsx`: tabs, a toolbar (back, forward,
 //! reload, address, saved logins, copy link, screenshot, element picker, device mode, more menu),
 //! the login offer bar and the page's JavaScript dialogs, over native WKWebViews parented to the
-//! GPUI window's content view (technique from Monocode's html.rs, MIT). The web view paints above
+//! GPUI window's content view (technique from MIT-licensed code). The web view paints above
 //! GPUI, so it hides whenever the panel isn't painted in a frame, while an overlay is open
 //! (`set_covered`) and while one of the panel's own menus is.
 //!
 //! One `Browser` exists per conversation (`entity_for`): it keeps its tabs whether or not the panel
 //! is shown, so an agent's browser tools (browser_bridge.rs) work with the panel closed. Page
-//! scripts and result shapes are Sirus Code's (browser_js.rs).
+//! scripts and result shapes are Sirus's (browser_js.rs).
 use crate::backend::Backend;
 use crate::browser_address::{self, LocalServer, Suggestion};
 use crate::browser_crop;
@@ -98,6 +98,7 @@ pub const PRESETS: [(&str, &str, u32, u32); 17] = [
 
 thread_local! {
     static COVERED: Cell<bool> = const { Cell::new(false) };
+    static GRIP_SHARE: Cell<f64> = const { Cell::new(1.) };
     static LIVE: RefCell<Vec<Weak<Shared>>> = const { RefCell::new(Vec::new()) };
     static SESSIONS: RefCell<HashMap<String, Entity<Browser>>> = RefCell::new(HashMap::new());
     /// The custom profiles and the profile new tabs open in, from the settings.
@@ -117,6 +118,12 @@ fn profiles() -> Vec<Profile> {
 /// The profile a new tab opens in, unless another is picked from the + menu.
 fn default_profile() -> String {
     PROFILES.with(|p| p.borrow().1.clone())
+}
+
+/// How much of the resize grip's ground the page leaves free: a maximized panel has no edge
+/// to drag, so the page reaches the card's side.
+pub fn set_grip_share(share: f64) {
+    GRIP_SHARE.with(|grip| grip.set(share));
 }
 
 /// Hides every browser web view while a menu, dialog or other overlay is open (native views
@@ -3685,7 +3692,7 @@ impl Render for Browser {
             self.focus_pending = false;
             window.focus(&self.focus, cx);
         }
-        // The panel opening is what opens the browser, as in Sirus Code.
+        // The panel opening is what opens the browser, as in Sirus.
         if self.tabs.is_empty() && !self.open && self.shared.parent.borrow().is_some() {
             let _ = self.ensure_open();
         }
@@ -4378,6 +4385,7 @@ fn paint_web(shared: &Rc<Shared>, bounds: Bounds<Pixels>, window: &mut Window) {
     let (x, y) = (f64::from(bounds.origin.x), f64::from(bounds.origin.y));
     let (w, h) = (f64::from(bounds.size.width), f64::from(bounds.size.height));
     let layout = shared.layout.get();
+    let grip = GRIP_ROOM * GRIP_SHARE.with(Cell::get);
     // Device mode: a frame of the device's aspect, centred, scaled so its CSS size is kept.
     let (fx, fy, fw, fh, page_zoom) = match layout.device {
         Some((dw, dh)) => {
@@ -4393,13 +4401,7 @@ fn paint_web(shared: &Rc<Shared>, bounds: Bounds<Pixels>, window: &mut Window) {
                 scale * layout.user_zoom,
             )
         }
-        None => (
-            x + GRIP_ROOM,
-            y,
-            (w - GRIP_ROOM).max(1.),
-            h,
-            layout.user_zoom,
-        ),
+        None => (x + grip, y, (w - grip).max(1.), h, layout.user_zoom),
     };
     let fy = if parent.isFlipped() {
         fy

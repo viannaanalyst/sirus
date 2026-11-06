@@ -1,4 +1,4 @@
-//! The effort bar's moving fill, after Sirus Code's `.effort-slider`: a gradient, a nebula and a
+//! The effort bar's moving fill, after Sirus's `.effort-slider`: a gradient, a nebula and a
 //! flare near the thumb, drifting stars, rising embers and, with Fast, lightning.
 use gpui::{
     Bounds, ContentMask, Corners, Hsla, PathBuilder, Pixels, Rgba, Window, fill, linear_color_stop,

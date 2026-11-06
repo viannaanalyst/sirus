@@ -1,4 +1,4 @@
-//! Selecting the text of a reply or a user message in the transcript (after Monocode's
+//! Selecting the text of a reply or a user message in the transcript (after
 //! `transcript/selection.rs`, MIT).
 //!
 //! The markdown renderer hands each text fragment (paragraph, heading, list item, code block,
@@ -803,7 +803,7 @@ impl Shell {
     }
 
     /// Puts a selected passage at the end of the composer's draft, on its own paragraph, with the
-    /// caret on a new one below it (Monocode's add_to_chat).
+    /// caret on a new one below it.
     fn add_to_chat(&mut self, text: &str) {
         let draft = self.draft();
         let separator = if draft.text.is_empty() || draft.text.ends_with("\n\n") {

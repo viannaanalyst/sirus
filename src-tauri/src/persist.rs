@@ -333,7 +333,7 @@ fn load_from(path: &Path, value: serde_json::Value, source: Source) -> Result<Ap
     for session in &mut data.sessions {
         if session.status.is_active() {
             session.status = crate::models::SessionStatus::Stopped;
-            session.last_error = Some("Execution was interrupted when Sirus Code closed.".into());
+            session.last_error = Some("Execution was interrupted when Sirus closed.".into());
             recovered = true;
         }
         recovered |= crate::project_scripts::recover(session);

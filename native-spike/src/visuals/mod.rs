@@ -1,4 +1,4 @@
-// Ported from Monocode (MIT License; see LICENSE-MONOCODE-MIT at the root of native-spike).
+// Ported from an MIT-licensed project (MIT License; see LICENSE-THIRD-PARTY-MIT at the root of native-spike).
 
 //! Session visuals are a bounded native component tree, with no browser surface.
 use crate::theme::{accent as accent_color, content};
@@ -206,13 +206,6 @@ impl VisualView {
         };
         this.initialize();
         this
-    }
-    /// Draws the visual inside an answer, captioned, or back in its own row.
-    pub(crate) fn set_inline(&mut self, caption: Option<String>, cx: &mut Context<Self>) {
-        if self.inline != caption {
-            self.inline = caption;
-            self.changed(cx);
-        }
     }
     fn initialize(&mut self) {
         self.revision = self.revision.wrapping_add(1);

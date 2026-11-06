@@ -1,4 +1,4 @@
-//! Monocode's notification sounds (crates/monocode-gpui/src/sound.rs, MIT, LICENSE-MONOCODE-MIT):
+//! The notification sounds (MIT, LICENSE-THIRD-PARTY-MIT):
 //! Cuelume's recipes rendered as quiet PCM cues. Recipes: Daniel Belyi, cuelume (MIT).
 #[derive(Clone, Copy)]
 pub(crate) enum Cue {

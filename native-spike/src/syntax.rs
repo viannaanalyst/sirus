@@ -1,8 +1,8 @@
-//! Syntax highlighting for the file view, with tree-sitter. Monocode colors code through CodeMirror's
+//! Syntax highlighting for the file view, with tree-sitter. The palette comes from CodeMirror's
 //! Lezer parsers and nine color groups (keyword, callable, string, type, tag, number, comment,
 //! property, meta; `editorLanguage.ts`); tree-sitter is the Rust counterpart of that approach, a real
 //! parser rather than patterns, and its capture names fall into the same groups. The colors of the
-//! groups are Monocode's `--syntax-*` palette (src/styles/index.css, MIT, see LICENSE-MONOCODE-MIT);
+//! groups are the `--syntax-*` palette (src/styles/index.css, MIT, see LICENSE-THIRD-PARTY-MIT);
 //! they are chosen where the text is drawn, so a light/dark flip needs no new parse.
 //!
 //! This module has no UI types: `highlight` is blocking, meant for a background thread.
@@ -10,7 +10,7 @@ use std::ops::Range;
 use std::sync::OnceLock;
 use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
 
-/// Monocode's color groups.
+/// The color groups.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Group {
     Keyword,

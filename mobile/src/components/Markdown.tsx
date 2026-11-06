@@ -42,7 +42,7 @@ export function Markdown(props: {
     // A modest radius: iOS clips square table-cell borders without stroking the corner arcs.
     const block = { marginTop: 4, marginBottom: 12, borderRadius: 8, borderWidth: StyleSheet.hairlineWidth, borderColor: theme["--color-md-hr"] };
     const heading = (level: number) => {
-      // As Monocode's phone: the two top levels a little larger, the rest bold lines of body size.
+      // the two top levels a little larger, the rest bold lines of body size.
       const fontSize = level <= 2 ? typography.fontSize + 2 : typography.fontSize;
       return { ...body, color: theme["--color-md-strong"], fontFamily: "System", fontWeight: "600", fontSize, lineHeight: Math.round(fontSize * 1.45), marginTop: 4 };
     };

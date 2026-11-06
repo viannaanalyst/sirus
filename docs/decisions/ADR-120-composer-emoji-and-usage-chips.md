@@ -6,7 +6,7 @@
 
 ## Context
 
-The owner asked for an emoji picker in the composer and plan-usage chips beside it. Sirus Code already reads plan usage (`provider_usage`, the sidebar rings, `/usage`), but the composer never showed it, and there was no way to insert an emoji except the macOS character viewer.
+The owner asked for an emoji picker in the composer and plan-usage chips beside it. Sirus already reads plan usage (`provider_usage`, the sidebar rings, `/usage`), but the composer never showed it, and there was no way to insert an emoji except the macOS character viewer.
 
 ## Decision
 

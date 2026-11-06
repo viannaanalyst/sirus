@@ -1,10 +1,10 @@
-//! File and folder icons as Sirus Code shows them (FileGlyph.tsx, lib/material-file-icon.ts): the
+//! File and folder icons as Sirus shows them (FileGlyph.tsx, lib/material-file-icon.ts): the
 //! Material Icon Theme's SVGs, through react-material-icon-theme. Icon: Material Icon Theme by
 //! Philipp Kief and Material Extensions (MIT), packed by Qalxry (MIT, © 2025). The SVGs live in
 //! assets/file-icons/. gpui's svg() is a mask, so each icon is drawn in one color from `color`
 //! rather than in the pack's own palette.
 //!
-//! Folders keep the pack's own colors: Monocode names each folder's icon with `getFolderIcon`
+//! Folders keep the pack's own colors: each folder's icon is named with `getFolderIcon`
 //! (react-material-icon-theme), which is the theme's `folderNames` table, ported to
 //! folder_icon_data.rs (generated) along with the folder SVGs in assets/file-icons/folders/, in
 //! closed and open variants. They are two-tone, so they are drawn as images, not as a mask.

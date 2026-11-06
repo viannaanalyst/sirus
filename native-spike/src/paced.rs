@@ -1,5 +1,5 @@
 //! The streamed reply, revealed at a steady pace instead of in the chunks the model sends
-//! (the rhythm of Monocode's `wordFade.tsx`): at least 90 characters a second, a backlog caught
+//! (the rhythm of the `wordFade.tsx`): at least 90 characters a second, a backlog caught
 //! up within 220 ms, a half-written word held back for 150 ms, and the shown text moved only
 //! every 30 ms. The per-word fade of 320 ms is not drawn here. The rules are plain functions,
 //! tested without a window. This module is a child of `shell` (`#[path]`).
@@ -35,10 +35,6 @@ impl Pacer {
             last_commit: now,
             cut_since: None,
         }
-    }
-
-    pub fn done(&self, text: &str) -> bool {
-        self.shown >= text.chars().count()
     }
 
     /// The part of `text` to show at `now`, and whether more frames are needed. `live` is false

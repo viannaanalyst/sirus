@@ -18,7 +18,7 @@ use crate::runtime::{AppHandle, Manager};
 include!(concat!(env!("OUT_DIR"), "/host_commands.rs"));
 
 const USAGE: &str = "\
-sirus-host: Sirus Code without a window (ADR-131)
+sirus-host: Sirus without a window (ADR-131)
 
 Usage:
   sirus-host serve [--data-dir DIR] [--bind ADDR] [--port PORT] [--assets-dir DIR] [--url URL]
@@ -41,7 +41,7 @@ Options:
                   Connections allows it (`remote.json`), on every address but Tailscale
                   peers only
   --https-port P  the `tailscale serve` HTTPS port (default 443; Sirus Native uses 8443 so a
-                  Sirus Code on the same Mac keeps 443)
+                  Sirus on the same Mac keeps 443)
   --label NAME    appended to this computer's name on the phone's list
 ";
 

@@ -4,7 +4,7 @@
 
 ## Context
 
-The phone reached the Mac and the VPS host (ADR-131) only over Tailscale, so the Tailscale app had to be on. T3 Code solves "reach my machines from anywhere" with its own relay: an account (Clerk), a central broker that hands out tunnel addresses and one-time credentials. The owner wanted the same experience without running a central service or paying for one.
+The phone reached the Mac and the VPS host (ADR-131) only over Tailscale, so the Tailscale app had to be on. Another open-source client solves "reach my machines from anywhere" with its own relay: an account (Clerk), a central broker that hands out tunnel addresses and one-time credentials. The owner wanted the same experience without running a central service or paying for one.
 
 ## Decision
 

@@ -51,7 +51,7 @@ The UI already talks to the Mac only through `Transport` (`src/client/transport.
 - From a paired device, the person can do anything the Mac window can, except the refused commands. That includes running agents with full access, so a device token is as sensitive as the Mac session itself. Tokens stay on the device, the Mac stores only hashes, and access ends when the device is revoked or remote access is turned off.
 - `tauri::webview::InvokeRequest` and `Webview::on_message` are public but marked not stable. A Tauri upgrade must re-check them; the lockfile pins Tauri 2.12.
 - Plain HTTP is used inside Tailscale. Service workers and web push (later stages) need HTTPS, which `tailscale serve` can provide in front of the same port.
-- macOS asks once whether Sirus Code may accept incoming connections.
+- macOS asks once whether Sirus may accept incoming connections.
 - No relay or cloud service: the Mac must be on and reachable over Tailscale. A headless host (VPS or always-on Mac) is a later, optional stage.
 
 ## Addendum (2026-10-16): the pairing QR code

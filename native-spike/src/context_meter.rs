@@ -1,4 +1,4 @@
-//! The composer's context meter and Compact (ADR-057). Ports Sirus Code's `ContextMeter.tsx`,
+//! The composer's context meter and Compact (ADR-057). Ports Sirus's `ContextMeter.tsx`,
 //! `lib/context-meter.ts` and `lib/compact-before-send.ts`.
 //!
 //! A ring on the composer shelf shows how much of the model's window the conversation holds, as
@@ -178,7 +178,7 @@ fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 
-/// The level colors of Sirus Code's `--warning` and `--danger`, in both themes.
+/// The level colors of Sirus's `--warning` and `--danger`, in both themes.
 fn level_color(level: Level) -> Option<gpui::Hsla> {
     let light = crate::theme::is_light();
     match level {

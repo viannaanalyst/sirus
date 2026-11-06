@@ -43,7 +43,7 @@ All CI content is quoted as untrusted data. The agent is told not to commit or p
 
 **Sending.** When the turn settles, a settlement hook wakes the timer.
 
-- **Commit:** Sirus Code stages only the files that turn changed, through the same guarded index path as Live Changes. It commits them as "Fix CI: <checks>".
+- **Commit:** Sirus stages only the files that turn changed, through the same guarded index path as Live Changes. It commits them as "Fix CI: <checks>".
 - **Push:** it pushes the session branch with `git::push`: never forced, with the same network-helper and hook guards.
 - **Pauses** happen, with a notice, in these cases:
   - the turn failed or stopped;
@@ -62,7 +62,7 @@ All CI content is quoted as untrusted data. The agent is told not to commit or p
 
 - **Positive:** a session's PR goes back to green without the person watching CI. The agent gets the logs directly. Pushing is done natively rather than by the agent, which also works when the provider sandbox blocks network access.
 - **Negative:**
-  - While the setting is on, Sirus Code polls GitHub once a minute for up to 8 sessions.
+  - While the setting is on, Sirus polls GitHub once a minute for up to 8 sessions.
   - It starts turns, commits and pushes without a per-action confirmation.
   - Auto approval lets the agent edit files and run reviewed commands under each provider's own policy.
   - Concurrent manual edits in the same workspace between the turn and the commit can race the staging. Staging only the turn's files and refusing a pre-staged index limits this, but does not prevent it.

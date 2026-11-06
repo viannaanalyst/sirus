@@ -4,7 +4,7 @@ The [working contract](../../AGENTS.md) defines the trust boundary and command s
 
 ## Providers and models
 
-A provider is a host CLI adapter, not a session or a model. Frontend metadata and capabilities live in `src/lib/provider-registry.ts`; executable lookup, argv and output decoding live in `detect.rs`, `agent.rs` and `agent_output.rs`. `cli_output.rs` captures read-only version/catalog commands with time and output bounds, keeping the child unreaped until its pipes drain so timeout cleanup still owns the original Unix process group. No vendor credentials are stored by Sirus Code.
+A provider is a host CLI adapter, not a session or a model. Frontend metadata and capabilities live in `src/lib/provider-registry.ts`; executable lookup, argv and output decoding live in `detect.rs`, `agent.rs` and `agent_output.rs`. `cli_output.rs` captures read-only version/catalog commands with time and output bounds, keeping the child unreaped until its pipes drain so timeout cleanup still owns the original Unix process group. No vendor credentials are stored by Sirus.
 
 Catalogs are cached in the existing Zustand store and loaded on demand. Opening Settings does not trigger provider detection. Explicit refresh runs bounded probes concurrently: version probes have a three-second timeout, catalog commands twelve seconds. A configured executable that is invalid is reported unavailable instead of silently falling back to PATH.
 
@@ -68,4 +68,4 @@ Live native integration passed with existing CLI authentication. Actual isolated
 
 ## Additional local CLI providers
 
-Antigravity, Droid, Pi and Devin use constrained print adapters and bounded fallback history. Installation, fixed argv, catalog discovery and permission limits are specified in [ADR-026](../decisions/ADR-026-additional-local-cli-providers.md). Their version/help/catalog probes were checked locally; new-provider authenticated inference is not yet verified. Sign in through each vendor CLI outside Sirus Code; no app-generated login or copied credentials are used. Devin requires an already trusted workspace.
+Antigravity, Droid, Pi and Devin use constrained print adapters and bounded fallback history. Installation, fixed argv, catalog discovery and permission limits are specified in [ADR-026](../decisions/ADR-026-additional-local-cli-providers.md). Their version/help/catalog probes were checked locally; new-provider authenticated inference is not yet verified. Sign in through each vendor CLI outside Sirus; no app-generated login or copied credentials are used. Devin requires an already trusted workspace.

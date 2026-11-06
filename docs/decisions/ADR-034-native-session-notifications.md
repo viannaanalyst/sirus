@@ -6,7 +6,7 @@
 
 Background sessions can finish or wait for an approval/question while another
 session is visible. A Notifications page can offer Activity toasts, Desktop
-notifications and Test. Sirus Code additionally needs independently selectable
+notifications and Test. Sirus additionally needs independently selectable
 event sounds without letting its untrusted webview manufacture activity alerts.
 
 ## Decision
@@ -49,7 +49,7 @@ Unknown fields are rejected. It accepts no session ID, lifecycle, text, URL,
 file path, destination, tool response or notification payload. Test copy comes
 from native localized fixed text and retained settings, with a three-second
 gate; previews have a 300ms gate. Only one explicit permission request can be
-pending. Settings opens one fixed Sirus Code macOS notification-settings URL.
+pending. Settings opens one fixed Sirus macOS notification-settings URL.
 Status/request callbacks have bounded waits. UI uses Client/Transport, with
 no frontend notification/shell/fs plugin or capability addition.
 

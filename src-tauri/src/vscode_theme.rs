@@ -2,7 +2,7 @@
 //! the `.vsix` is downloaded over HTTPS from Open VSX hosts only, checked against its SHA-256,
 //! inspected (entry count, expanded size, compression ratio) before anything is read, and the
 //! theme JSON is reduced to the few colours and token rules Sirus uses. The renderer only ever
-//! receives that bounded, validated value. Ported from t3code's Open VSX import (MIT), with the
+//! receives that bounded, validated value. Ported from an MIT-licensed Open VSX import, with the
 //! same limits.
 
 use std::collections::BTreeMap;
@@ -1215,7 +1215,7 @@ pub async fn vscode_themes_search(
 pub async fn vscode_themes_fetch(namespace: String, name: String) -> Result<Vec<VsCodeTheme>> {
     let Some(resolved) = fetch_detail(&namespace, &name).await? else {
         return Err(invalid(
-            "That theme's license is not one Sirus Code can import, or it is too large.",
+            "That theme's license is not one Sirus can import, or it is too large.",
         ));
     };
     let package = get_capped(

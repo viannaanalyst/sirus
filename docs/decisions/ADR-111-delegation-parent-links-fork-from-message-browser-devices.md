@@ -25,7 +25,7 @@ The owner asked for a chat to hand a task to another provider or model without a
   - *Device mode*: 17 presets, width × height fields (240–3840), rotate and close. The page lays out at the device's CSS size: the native view gets a centred, scaled-down frame and `pageZoom` equal to the scale.
   - *Resize rails* outside the frame on the left, right, bottom and both bottom corners (the frame stays centred); arrow keys resize by 10 px, Shift by 50.
   - *Crash recovery*: when a tab's WebContent process ends, the tab reloads by itself up to three times in 30 s, waiting 250 ms, 500 ms, then 1 s.
-  - *Recording*: native JPEG snapshots (15 fps, up to 1280 px wide) are drawn on a canvas that MediaRecorder encodes (MP4, else WebM). Each second is streamed to `Movies/Sirus Code/Browser recording <time>.<ext>` (at most 1 GiB, 10 minutes), shown in Finder at the end.
+  - *Recording*: native JPEG snapshots (15 fps, up to 1280 px wide) are drawn on a canvas that MediaRecorder encodes (MP4, else WebM). Each second is streamed to `Movies/Sirus/Browser recording <time>.<ext>` (at most 1 GiB, 10 minutes), shown in Finder at the end.
   - *Picture in picture*: the active tab's view moves into an always-on-top, resizable panel on every Space; closing it or the pane's button puts it back.
   - Passkeys are still out: WKWebView needs Apple's managed browser entitlement.
 

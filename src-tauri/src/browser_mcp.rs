@@ -338,7 +338,7 @@ fn execute(
         return crate::pr_watch::agent_tool(app, session_id, tool);
     }
     if tool.starts_with("browser_") && !agent_access() {
-        return Err("Agent browser access is off in Sirus Code's settings.".into());
+        return Err("Agent browser access is off in Sirus's settings.".into());
     }
     browser_tool(app, session_id, tool, args)
 }
@@ -429,7 +429,7 @@ fn browser_tool_definitions() -> Vec<Value> {
         json!({ "name": "browser_close", "description": "Close all tabs of the session browser.", "inputSchema": { "type": "object", "properties": {} } }),
         json!({ "name": "browser_device", "description": "Responsive device mode: pages lay out at a phone or tablet CSS size, so you can check mobile layouts (screenshots show it). Use a preset (iphone-se, iphone-xr, iphone-12-pro, iphone-14-pro-max, pixel-7, galaxy-s8-plus, galaxy-s20-ultra, ipad-mini, ipad-air, ipad-pro, surface-pro-7, surface-duo, galaxy-z-fold-5, zenbook-fold, galaxy-a51-71, nest-hub, nest-hub-max) or width and height (240–3840), with orientation portrait or landscape; fill: true goes back to the normal size. It changes CSS breakpoints, not the user agent. The person sees the same device in their browser pane.", "inputSchema": { "type": "object", "properties": { "preset": { "type": "string" }, "width": { "type": "integer" }, "height": { "type": "integer" }, "orientation": { "type": "string", "enum": ["portrait", "landscape"] }, "fill": { "type": "boolean" } } } }),
         json!({ "name": "browser_record_start", "description": "Start recording the active tab to a video, for example to show the person a flow you tested. Clicks and key presses appear in it when the person's settings say so. Stop with browser_record_stop; recordings end by themselves after 10 minutes.", "inputSchema": { "type": "object", "properties": {} } }),
-        json!({ "name": "browser_record_stop", "description": "Stop the recording and save it; returns the video file's path (in Movies/Sirus Code) and shows it to the person.", "inputSchema": { "type": "object", "properties": {} } }),
+        json!({ "name": "browser_record_stop", "description": "Stop the recording and save it; returns the video file's path (in Movies/Sirus) and shows it to the person.", "inputSchema": { "type": "object", "properties": {} } }),
         json!({ "name": "browser_hover", "description": "Hover an element by ref or selector (pointer and mouse events), to reveal menus and tooltips.", "inputSchema": element.clone() }),
         json!({ "name": "browser_select", "description": "Choose options in a native select, or in a listbox or combobox with role=option items, by option text or value. Errors list the available options.", "inputSchema": { "type": "object", "properties": { "ref": { "type": "string" }, "selector": { "type": "string" }, "values": { "type": "array", "items": { "type": "string" }, "minItems": 1, "maxItems": 20 } }, "required": ["values"] } }),
         json!({ "name": "browser_drag", "description": "Drag from one element or point to another. Each end is a ref, a selector, or {x, y} in CSS pixels of the visible page. Works with pointer events and HTML5 drag and drop.", "inputSchema": { "type": "object", "properties": { "from": { "type": "object" }, "to": { "type": "object" } }, "required": ["from", "to"] } }),

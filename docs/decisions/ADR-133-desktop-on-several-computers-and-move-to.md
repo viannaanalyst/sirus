@@ -27,7 +27,7 @@ The owner starts work on the Mac and wants to keep going from the phone after cl
 ## Consequences
 
 - Closing the Mac no longer strands a conversation: move it to the server, then continue there from the phone or from the Mac app later.
-- Native notifications come only for this Mac's conversations; a server's alerts reach the phone through web push (ADR-082). The commit made by a move is authored "Sirus Code" (the team snapshot's identity), not the person.
+- Native notifications come only for this Mac's conversations; a server's alerts reach the phone through web push (ADR-082). The commit made by a move is authored "Sirus" (the team snapshot's identity), not the person.
 - The desktop's computer store (`computers-store.ts`) repeats the phone's watching logic (`environments-store.ts`) instead of sharing it, to keep the two surfaces independent while the phone's store was changing; they can be merged later.
 - The phone's long-press menu does not offer "Move to" yet.
 - Both computers need this version: the host for the CORS origin and the new commands, the Mac for the CSP.

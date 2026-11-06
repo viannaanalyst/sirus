@@ -83,7 +83,7 @@ pub fn line(label: &str, detail: &str, tool: Option<&str>, target: Option<&str>)
     }
 }
 
-/// `git status --short` reads as `git status`; flags and paths are detail (Monocode's tools.rs).
+/// `git status --short` reads as `git status`; flags and paths are detail.
 pub fn command_label(command: &str) -> String {
     let mut words = command.split_whitespace();
     let program = words.next().unwrap_or("");

@@ -4,7 +4,7 @@
 
 ## Context
 
-ADR-061 reversed a turn's retained diffs file by file with `git apply -R`. It already left lines edited again afterwards alone, but it applied the files that still matched and only counted the rest, it did not notice that Git history had moved, and it only looked at other sessions that were running. Monocode's checkpoint guards (`src-tauri/src/checkpoint.rs`, 0.12 changelog) refuse to restore over later edits, across a changed Git `HEAD`, or while another active session overlaps the same files. This ADR adopts those three guards.
+ADR-061 reversed a turn's retained diffs file by file with `git apply -R`. It already left lines edited again afterwards alone, but it applied the files that still matched and only counted the rest, it did not notice that Git history had moved, and it only looked at other sessions that were running. The reference app's checkpoint guards (`src-tauri/src/checkpoint.rs`, 0.12 changelog) refuse to restore over later edits, across a changed Git `HEAD`, or while another active session overlaps the same files. This ADR adopts those three guards.
 
 ## Decision
 
@@ -27,5 +27,5 @@ Before an undo (of a whole turn or one file) Sirus refuses, changing nothing, wh
 
 ## Alternatives considered
 
-- **Storing full checkpoints (Monocode).** Rejected again: see ADR-061; retained diffs are enough.
+- **Storing full checkpoints (the reference app).** Rejected again: see ADR-061; retained diffs are enough.
 - **Blocking on any later turn that touched the same file.** Rejected: it would give up ADR-061's "edits elsewhere in the file are kept".

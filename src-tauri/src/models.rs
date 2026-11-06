@@ -692,7 +692,7 @@ pub struct AppSettings {
     /// Messages sent while a Codex/Claude reply runs steer it instead of waiting in the queue.
     pub steer_while_running: bool,
     /// Owner-authorized CI auto-fix: failing PR checks start an automatic fix turn,
-    /// then Sirus Code commits and pushes the session branch (ADR-064).
+    /// then Sirus commits and pushes the session branch (ADR-064).
     pub ci_auto_fix: bool,
     /// Owner switch for PR watch (ADR-079): sessions may watch their own pull
     /// request and get an automatic turn on new checks, reviews or conflicts.

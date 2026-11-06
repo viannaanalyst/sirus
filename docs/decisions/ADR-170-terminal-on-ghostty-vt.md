@@ -9,14 +9,14 @@ its fit and web-links add-ons. It parsed and drew in JavaScript on the main thre
 widths and ligature handling from the DOM, and needed `allowTransparency` (a slower composite) for
 window glass. Prompt icons (Powerline, Nerd Font) depended on a locally installed patched font.
 
-t3code (MIT, already credited in `THIRD-PARTY-NOTICES.md`) replaced xterm with `libghostty-vt`,
+Another open-source client (MIT, already credited in `THIRD-PARTY-NOTICES.md`) replaced xterm with `libghostty-vt`,
 the VT core of Ghostty (MIT), compiled to WebAssembly, with a Canvas 2D renderer. Ghostty parses
 escape sequences, tracks grapheme clusters and Unicode widths, encodes keyboard and mouse input
 (including the Kitty keyboard protocol) and answers terminal queries itself.
 
 ## Decision
 
-- `src/terminal/ghostty/` is ported from t3code: `runtime.ts` (one WebAssembly instance), `core.ts`
+- `src/terminal/ghostty/` is ported from another open-source client: `runtime.ts` (one WebAssembly instance), `core.ts`
   (per-terminal handles and render snapshots), `renderer.ts` (Canvas 2D, batched backgrounds and
   style runs), `surface.ts` (input, IME, selection, scrolling, sizing, links, cursor blink),
   `keyCodes.ts`, `links.ts` and `platform.ts`. Its tests came along, using Vitest because they need

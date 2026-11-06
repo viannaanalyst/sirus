@@ -1,5 +1,5 @@
-//! Which optional entries the sidebar shows (the three-dots menu beside its title, as in
-//! Monocode). Kept in a small file of its own in the data folder, like `terminal_place`. One line
+//! Which optional entries the sidebar shows (the three-dots menu beside its title).
+//! Kept in a small file of its own in the data folder, like `terminal_place`. One line
 //! in `ITEMS` per entry; an entry the file does not mention is shown. Pure, so it is tested.
 
 use serde_json::{Map, Value};

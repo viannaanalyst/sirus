@@ -1,6 +1,6 @@
 # Session notifications implementation plan
 
-**Goal:** Bring Notifications settings to Sirus Code and add independently configurable approval, question and completion sounds.
+**Goal:** Bring Notifications settings to Sirus and add independently configurable approval, question and completion sounds.
 
 **Architecture:** Native lifecycle events alone produce alerts. One closed `notification_action` command reports authorization, explicitly requests it, previews an allowlisted sound or sends a fixed test. React uses the existing Client and Arc controls; settings persist through `save_settings`.
 

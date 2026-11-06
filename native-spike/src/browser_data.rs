@@ -1,5 +1,5 @@
 //! Data the browser keeps for the whole app, and the Web Inspector (`browser.rs` `clear_data` and
-//! `devtools` in Sirus Code).
+//! `devtools` in Sirus).
 use block2::RcBlock;
 use objc2::MainThreadMarker;
 use objc2::msg_send;

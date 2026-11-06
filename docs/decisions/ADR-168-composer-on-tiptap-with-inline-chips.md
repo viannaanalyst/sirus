@@ -10,7 +10,7 @@ text, never a real element. The mirror had to wrap exactly like the textarea, so
 have an icon, a short label or a unit of its own, and the caret walked through it character by
 character.
 
-T3 Code (MIT, already credited in `THIRD-PARTY-NOTICES.md`) builds its composer on TipTap with
+Another open-source client (MIT, already credited in `THIRD-PARTY-NOTICES.md`) builds its composer on TipTap with
 inline chips. Its structure was the reference; the code here is written for Sirus, so no
 third-party source was copied.
 

@@ -170,7 +170,7 @@ async fn download() -> Option<HashMap<String, ModelPrice>> {
         .https_only(true)
         .connect_timeout(Duration::from_secs(6))
         .timeout(Duration::from_secs(20))
-        .user_agent("Sirus Code")
+        .user_agent("Sirus")
         .build()
         .ok()?;
     let response = client

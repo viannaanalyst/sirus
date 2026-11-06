@@ -25,7 +25,7 @@ There is no free-form cron.
 
 **Running.**
 
-- **Timer:** one native timer, `automations::start`, sleeps until the earliest next run (re-reading the clock at most hourly) or until a definition changes. It runs only while Sirus Code is open. This is a timer to a known instant, not a polling loop.
+- **Timer:** one native timer, `automations::start`, sleeps until the earliest next run (re-reading the clock at most hourly) or until a definition changes. It runs only while Sirus is open. This is a timer to a known instant, not a polling loop.
 - **Each run:** a due run creates a normal session with `create_session_locked` and admits its first turn through the same `send_prompt` path as the Send button, so every native validation and approval rule applies. The run uses the automation's typed approval profile.
   - **Ask (the default):** tool approvals wait for the person, and the run stays paused until they answer.
   - **Full:** requires `acknowledgeFullAccess` on every save and cannot combine with planning.

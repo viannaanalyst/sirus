@@ -4,7 +4,7 @@
 
 ## Context
 
-People want to split one request across several coding agents, possibly different providers and models, and still review the result like any other change. A model-driven loop that spawns agents, answers their approvals or merges on its own would widen authority beyond the person's choices. Provider-native subagents (ADR-035) stay inside one provider and cannot do this. Claude Code agent teams only form in interactive sessions, while Sirus Code runs Claude headless.
+People want to split one request across several coding agents, possibly different providers and models, and still review the result like any other change. A model-driven loop that spawns agents, answers their approvals or merges on its own would widen authority beyond the person's choices. Provider-native subagents (ADR-035) stay inside one provider and cannot do this. Claude Code agent teams only form in interactive sessions, while Sirus runs Claude headless.
 
 ## Decision
 
@@ -54,7 +54,7 @@ A **Team** is an opt-in, one-shot composer mode (`+` → Equipe). It is memory-o
    `stash` joined the native filter guards. Merge refuses any patch that still adds conflict markers.
 
    Merged work is reviewed and committed with the existing Changes/Commit flow.
-5. **Cleanup.** `cleanup { confirm: true }` removes the helpers' sessions and worktrees through the existing confirmed removal, once the team is done or stopped. Merges apply patches without commits, so each helper worktree still holds its edits; cleanup first commits them to the helper's own `sirus/...` branch (fixed Sirus Code identity, hooks and signing disabled) so the worktree is clean and is removed without force. Nothing is discarded, and the branches stay for inspection or manual deletion.
+5. **Cleanup.** `cleanup { confirm: true }` removes the helpers' sessions and worktrees through the existing confirmed removal, once the team is done or stopped. Merges apply patches without commits, so each helper worktree still holds its edits; cleanup first commits them to the helper's own `sirus/...` branch (fixed Sirus identity, hooks and signing disabled) so the worktree is clean and is removed without force. Nothing is discarded, and the branches stay for inspection or manual deletion.
 
 ### Recovery and limits
 

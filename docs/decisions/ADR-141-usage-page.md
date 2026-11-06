@@ -5,7 +5,7 @@
 
 ## Context
 
-The owner wants to see what the coding agents have used over the past 24 hours, 7, 30 or 90 days: tokens and cost per provider and model. Sirus Code does not record usage itself, and the quota probes of `provider_usage.rs` only report current limits. The provider CLIs already keep detailed local logs of every response, so the history can be read from them without a new recorder or any network call.
+The owner wants to see what the coding agents have used over the past 24 hours, 7, 30 or 90 days: tokens and cost per provider and model. Sirus does not record usage itself, and the quota probes of `provider_usage.rs` only report current limits. The provider CLIs already keep detailed local logs of every response, so the history can be read from them without a new recorder or any network call.
 
 ## Decision
 

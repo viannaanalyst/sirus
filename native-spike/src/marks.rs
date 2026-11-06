@@ -1,5 +1,5 @@
-//! The working spinner, the shimmering label and the tree rail, ported from Monocode's
-//! session_mark.rs and activity.rs (MIT, LICENSE-MONOCODE-MIT).
+//! The working spinner, the shimmering label and the tree rail, ported from an MIT-licensed project's
+//! session_mark.rs and activity.rs (MIT, LICENSE-THIRD-PARTY-MIT).
 use crate::theme::{content, rail_color};
 use gpui::{
     AnyElement, App, Bounds, ContentMask, Element, ElementId, GlobalElementId, Hsla,

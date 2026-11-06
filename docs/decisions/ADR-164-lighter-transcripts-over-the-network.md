@@ -4,8 +4,8 @@
 
 ## Context
 
-T3 Code cut its load times on slow links (cold connect 16.0 s → 3.6 s on 3G). Measured against
-the real `state.db`, most of T3 Code's changes would not move Sirus Code: `load_state` is about
+Another open-source client cut its load times on slow links (cold connect 16.0 s → 3.6 s on 3G). Measured against
+the real `state.db`, most of another client's changes would not move Sirus: `load_state` is about
 27 KB for 14 sessions, and the phone app already pages transcripts (`limit`, `lite`). The weight is
 elsewhere:
 

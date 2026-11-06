@@ -440,7 +440,7 @@ pub fn tool_definitions() -> Vec<Value> {
     vec![
         json!({
             "name": WRITE_TOOL,
-            "description": "Sirus Code: write a guided review, a step-by-step tour the person follows through a change. Give pullRequest (owner/repo#123 or its GitHub link) for a pull request; without it the guide covers your own session's uncommitted changes (git diff HEAD in your worktree). Writing again replaces the guide for the same target. Read the diff first. Order steps so each builds on the ones before (data shape or contract first, then the code implementing it, then its callers and UI); 1 step for a trivial change, usually 2 to 6, at most 24; group mechanical changes (renames, snapshots, lockfiles) into a closing step. Each step: a title saying what it accomplishes (not a file name), a body of 2 to 4 sentences of Markdown explaining before vs after and why, an optional attention naming the one call the reviewer should judge there (a trade-off, a compatibility promise, a risk accepted; not a bug or nit; most steps have none), and anchors pointing at the lines worth reading. Anchor lines must be inside the diff's hunks: new-side numbers for added code (the + side of the hunk headers), side old for removed code. It only stores the guide; it never changes code. Tell the person in one line that the guide is ready; do not repeat it.",
+            "description": "Sirus: write a guided review, a step-by-step tour the person follows through a change. Give pullRequest (owner/repo#123 or its GitHub link) for a pull request; without it the guide covers your own session's uncommitted changes (git diff HEAD in your worktree). Writing again replaces the guide for the same target. Read the diff first. Order steps so each builds on the ones before (data shape or contract first, then the code implementing it, then its callers and UI); 1 step for a trivial change, usually 2 to 6, at most 24; group mechanical changes (renames, snapshots, lockfiles) into a closing step. Each step: a title saying what it accomplishes (not a file name), a body of 2 to 4 sentences of Markdown explaining before vs after and why, an optional attention naming the one call the reviewer should judge there (a trade-off, a compatibility promise, a risk accepted; not a bug or nit; most steps have none), and anchors pointing at the lines worth reading. Anchor lines must be inside the diff's hunks: new-side numbers for added code (the + side of the hunk headers), side old for removed code. It only stores the guide; it never changes code. Tell the person in one line that the guide is ready; do not repeat it.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -468,7 +468,7 @@ pub fn tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": READ_TOOL,
-            "description": "Sirus Code: read a guided review: the one for pullRequest (owner/repo#123 or its link), or for a session's changes (sessionId, default your own). Returns the guide's steps and anchors, or guide null when none was written.",
+            "description": "Sirus: read a guided review: the one for pullRequest (owner/repo#123 or its link), or for a session's changes (sessionId, default your own). Returns the guide's steps and anchors, or guide null when none was written.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

@@ -1,4 +1,4 @@
-//! The message queue, as Sirus Code's: while the agent works, a message sent from the composer
+//! The message queue, as Sirus's: while the agent works, a message sent from the composer
 //! waits in a card above it and starts, in order, once the reply is done. A message can also
 //! steer the running reply ("Instruir agora"), and one sent while an approval waits declines the
 //! approval first and steers. Ports `ComposerPromptQueue.tsx`, `lib/prompt-queue.ts` and the
@@ -6,11 +6,33 @@
 //!
 //! The queue lives in memory, keyed by session id, so it survives switching tabs but not
 //! restarting the app (the card says so). Nothing here is sent to the host except through
-//! `send_prompt` and `steer_turn`, exactly as Sirus Code does.
+//! `send_prompt` and `steer_turn`, exactly as Sirus does.
 //!
 //! This module is a child of `shell` (`#[path]`), so it reaches the window's private state.
 
 use super::*;
+
+/// A press in the text being edited: places the caret, extends with Shift, and a double or triple
+/// click takes the word or the whole text.
+fn press_in_draft(draft: &mut super::Draft, at: usize, clicks: usize, shift: bool) {
+    let at = at.min(draft.text.len());
+    match clicks {
+        2 => {
+            draft.anchor = draft.word_left(at);
+            draft.cursor = draft.word_right(at);
+        }
+        n if n >= 3 => {
+            draft.anchor = 0;
+            draft.cursor = draft.text.len();
+        }
+        _ => {
+            draft.cursor = at;
+            if !shift {
+                draft.anchor = at;
+            }
+        }
+    }
+}
 
 /// Requests the queue holds, and the size of each (the host's own limit).
 const LIMIT: usize = 8;
@@ -27,7 +49,7 @@ const FULL: &str =
 const RETRY_ONLY: &str =
     "Este pedido já tentou iniciar. Para mudar o texto, cancele e adicione outro pedido.";
 const ATTACHMENTS_ONLY: &str = "Analisar anexos";
-/// What a message with only attachments says (Sirus Code's `composerPrompt`).
+/// What a message with only attachments says (Sirus's `composerPrompt`).
 const ANALYZE: &str = "Analyze the attached files.";
 const REFERENCE_HEADER: &str = "User-selected reference context (snapshot; not instructions):";
 
@@ -311,7 +333,7 @@ pub(super) struct Queues {
     /// The queued request being steered now.
     steering: Option<String>,
     /// The request being edited: its id and text.
-    editing: Option<(String, String)>,
+    editing: Option<(String, super::Draft)>,
     edit_error: bool,
     recall: HashMap<usize, Recall>,
     redirects: HashMap<u64, Redirect>,
@@ -560,23 +582,6 @@ impl Queues {
 }
 
 impl Shell {
-    /// Instruct now: steers the running reply with the draft and its attachments, whatever the
-    /// "steer while running" setting says. The queued path is `queue_draft`.
-    pub(super) fn steer_draft_now(&mut self, cx: &mut Context<Self>) {
-        let by_default = self.settings["steerWhileRunning"]
-            .as_bool()
-            .unwrap_or(false);
-        self.send_with(!by_default, cx);
-    }
-
-    /// Puts the draft and its attachments in the queue, whatever the setting says.
-    pub(super) fn queue_draft(&mut self, cx: &mut Context<Self>) {
-        let by_default = self.settings["steerWhileRunning"]
-            .as_bool()
-            .unwrap_or(false);
-        self.send_with(by_default, cx);
-    }
-
     /// Enter, the send button, ⌘Enter (`invert`: the other of queue and steer, for this message).
     pub(super) fn send_with(&mut self, invert: bool, cx: &mut Context<Self>) {
         let ix = self.active_conversation();
@@ -611,7 +616,7 @@ impl Shell {
             .map_or(String::new(), |d| d.text.clone());
         let text = draft.trim().to_owned();
         let attachments = self.attachments.get(&ix).cloned().unwrap_or_default();
-        // Attachments alone are enough, as in Sirus Code.
+        // Attachments alone are enough, as in Sirus.
         if text.is_empty() && attachments.is_empty() {
             return;
         }
@@ -690,7 +695,7 @@ impl Shell {
         cx.notify();
     }
 
-    /// Steers, queues or sends, as Sirus Code's `send` decides after any redirect.
+    /// Steers, queues or sends, as Sirus's `send` decides after any redirect.
     pub(super) fn dispatch(
         &mut self,
         out: Outgoing,
@@ -1080,7 +1085,7 @@ impl Shell {
     }
 
     /// The text being edited in the queue card, while the card is the one on screen.
-    pub(super) fn edit_target(&mut self) -> Option<&mut String> {
+    pub(super) fn edit_target(&mut self) -> Option<&mut super::Draft> {
         let session = self.conversations[self.active_conversation()]
             .session_id
             .clone();
@@ -1102,21 +1107,17 @@ impl Shell {
             .clone();
         match key {
             "enter" if shift => {
-                if let Some(text) = self.edit_target() {
-                    text.push('\n');
+                if let Some(draft) = self.edit_target() {
+                    draft.insert("\n");
                 }
             }
             "enter" => self.save_edit(&session),
             "escape" => self.queues.editing = None,
-            "backspace" => {
-                if let Some(text) = self.edit_target() {
-                    text.pop();
-                    self.queues.edit_error = false;
-                }
+            // Everything else, ⌘A and the arrows included, is the composer's keys on this text.
+            _ => {
+                self.queues.edit_error = false;
+                return false;
             }
-            // The arrows and the like must not move the composer's caret behind the card.
-            "left" | "right" | "up" | "down" | "home" | "end" | "delete" | "tab" => {}
-            _ => return false,
         }
         cx.stop_propagation();
         cx.notify();
@@ -1124,10 +1125,10 @@ impl Shell {
     }
 
     fn save_edit(&mut self, session_id: &str) {
-        let Some((id, text)) = self.queues.editing.clone() else {
+        let Some((id, draft)) = self.queues.editing.clone() else {
             return;
         };
-        if self.queues.edit(session_id, &id, &text) {
+        if self.queues.edit(session_id, &id, &draft.text) {
             self.queues.editing = None;
             self.queues.edit_error = false;
         } else {
@@ -1175,7 +1176,7 @@ impl Shell {
                 .when(!enabled, |d| d.opacity(0.4))
         };
 
-        // Only a paused queue says so, with the way out: the rows speak for themselves (Monocode).
+        // Only a paused queue says so, with the way out: the rows speak for themselves.
         let header = paused.then(|| {
             let enabled = in_flight.is_none() && editing.is_none();
             let session_id = session_id.clone();
@@ -1210,10 +1211,42 @@ impl Shell {
             let is_editing = editing.as_ref().is_some_and(|(id, _)| *id == item.id);
             let pictures = self.viewer.queue_tiles(&item.attachments, i);
             let body = if is_editing {
-                let text = editing
+                let draft = editing
                     .as_ref()
-                    .map(|(_, text)| text.clone())
+                    .map(|(_, draft)| draft.clone())
                     .unwrap_or_default();
+                let styled = gpui::StyledText::new(if draft.text.is_empty() {
+                    " ".to_owned()
+                } else {
+                    draft.text.clone()
+                });
+                let layout = styled.layout().clone();
+                let (paint, press, drag) = (layout.clone(), layout.clone(), layout);
+                let (selection, caret) = (draft.selection(), draft.cursor);
+                let overlay = gpui::canvas(
+                    |_, _, _| {},
+                    move |bounds, _, window, _| {
+                        if !selection.is_empty() {
+                            super::paint_selection(&paint, selection.clone(), window);
+                            return;
+                        }
+                        let at = paint.position_for_index(caret).unwrap_or(bounds.origin);
+                        window.paint_quad(
+                            gpui::fill(
+                                Bounds::new(
+                                    at,
+                                    gpui::size(px(crate::theme::CARET_WIDTH), paint.line_height()),
+                                ),
+                                crate::theme::caret_color(),
+                            )
+                            .corner_radii(px(1.)),
+                        );
+                    },
+                )
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full();
                 let (save_session, close_session) = (session_id.clone(), session_id.clone());
                 div()
                     .flex()
@@ -1231,7 +1264,49 @@ impl Shell {
                             .text_size(px(13.))
                             .line_height(px(20.8))
                             .text_color(content(0.95))
-                            .child(format!("{text}▏")),
+                            .cursor_text()
+                            .child(
+                                div()
+                                    .relative()
+                                    .w_full()
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(
+                                            move |this, event: &MouseDownEvent, window, cx| {
+                                                window.focus(&this.focus, cx);
+                                                let at = press
+                                                    .index_for_position(event.position)
+                                                    .unwrap_or_else(|nearest| nearest);
+                                                if let Some(draft) = this.edit_target() {
+                                                    press_in_draft(
+                                                        draft,
+                                                        at,
+                                                        event.click_count,
+                                                        event.modifiers.shift,
+                                                    );
+                                                }
+                                                cx.stop_propagation();
+                                                cx.notify();
+                                            },
+                                        ),
+                                    )
+                                    .on_mouse_move(cx.listener(
+                                        move |this, event: &MouseMoveEvent, _, cx| {
+                                            if !event.dragging() {
+                                                return;
+                                            }
+                                            let at = drag
+                                                .index_for_position(event.position)
+                                                .unwrap_or_else(|nearest| nearest);
+                                            if let Some(draft) = this.edit_target() {
+                                                draft.cursor = at;
+                                            }
+                                            cx.notify();
+                                        },
+                                    ))
+                                    .child(styled)
+                                    .child(overlay),
+                            ),
                     )
                     .when(edit_error, |d| {
                         d.child(
@@ -1359,7 +1434,8 @@ impl Shell {
                                     };
                                     let facts = facts_of(&this.conversations[at]);
                                     this.queues.pause(&session_id, &facts);
-                                    this.queues.editing = Some((id.clone(), text.clone()));
+                                    this.queues.editing =
+                                        Some((id.clone(), super::Draft::with_text(text.clone())));
                                     this.queues.edit_error = false;
                                     cx.notify();
                                 }
@@ -1439,7 +1515,7 @@ impl Shell {
                 .children(actions)
         });
 
-        // A ledge on the composer's top edge, as Monocode's: inset, open at the bottom.
+        // A ledge on the composer's top edge: inset, open at the bottom.
         Some(
             div()
                 .mx(px(8.))
@@ -1491,6 +1567,11 @@ impl Queues {
         self.map.get_mut(session_id)?.advance(session_id, facts)
     }
 
+    /// The draft being edited; the caller has checked there is one.
+    pub(super) fn edit_draft_mut(&mut self) -> &mut super::Draft {
+        &mut self.editing.as_mut().expect("being edited").1
+    }
+
     pub(super) fn is_editing(&self) -> bool {
         self.editing.is_some()
     }
@@ -1504,6 +1585,20 @@ impl Queues {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_press_places_the_caret_and_clicks_take_more() {
+        let mut draft = super::super::Draft::with_text("ola mundo".into());
+        assert_eq!((draft.cursor, draft.anchor), (9, 9));
+        press_in_draft(&mut draft, 2, 1, false);
+        assert_eq!((draft.cursor, draft.anchor), (2, 2));
+        press_in_draft(&mut draft, 5, 1, true);
+        assert_eq!(draft.selection(), 2..5);
+        press_in_draft(&mut draft, 5, 3, false);
+        assert_eq!(draft.selection(), 0..9);
+        press_in_draft(&mut draft, 5, 2, false);
+        assert_eq!(&draft.text[draft.selection()], "mundo");
+    }
 
     fn message(id: &str, role: &str, content: &str) -> Value {
         json!({ "id": id, "role": role, "content": content })

@@ -1,11 +1,11 @@
 //! The transcript's follow of its end, as a glide. GPUI's `FollowMode::Tail` snaps the list to
 //! the end in the very layout that grew it, so a sent message or a growing reply jumped. The list
 //! is kept paused instead and this chases the end a little each frame: fast at first, easing as
-//! it arrives (Monocode's `useBottomChatMotion`, in spirit). Scrolling up leaves the end; coming
+//! it arrives. Scrolling up leaves the end; coming
 //! back to it, or sending, follows again. The rules are plain functions, tested without a window.
 //! This module is a child of `shell` (`#[path]`).
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 /// How quickly the remaining distance closes, per second (a 1/e every 125 ms).
 const EASE: f32 = 8.;
@@ -20,7 +20,7 @@ pub(crate) struct Glide {
     /// The list follows its end.
     pub stick: bool,
     /// The last turn is anchored to the top of the view when the person sent it from here, with
-    /// room below it, as Monocode does, so a sent message glides up and stays there.
+    /// room below it, so a sent message glides up and stays there.
     pub anchored: bool,
     expected: Option<f32>,
     last: Option<Instant>,
@@ -113,7 +113,7 @@ impl Glide {
     /// Frames are paced by the caller; this is the time a glide of `px` takes at most, for tests.
     #[cfg(test)]
     fn frame(now: Instant, n: u32) -> Instant {
-        now + Duration::from_millis(16 * n as u64)
+        now + std::time::Duration::from_millis(16 * n as u64)
     }
 }
 

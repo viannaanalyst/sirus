@@ -1,4 +1,4 @@
-// Ported from Monocode (MIT License; see LICENSE-MONOCODE-MIT at the root of native-spike).
+// Ported from an MIT-licensed project (MIT License; see LICENSE-THIRD-PARTY-MIT at the root of native-spike).
 
 //! Small perspective scene renderer. Geometry stays in Rust and paints through GPUI paths.
 use super::program::{Camera, Geometry, SceneObject, ThemeColor};

@@ -36,20 +36,9 @@ export const MOBILE_THEME_OPTIONS: ReadonlyArray<{
 export type MobileThemeVariable = keyof ReturnType<typeof createMobileThemeVariables>;
 export type MobileThemeVariables = Readonly<Record<MobileThemeVariable, string>>;
 
-/** Theme ids saved by earlier versions of the app, and what they are called now. */
-const RENAMED_THEME_IDS: Readonly<Record<string, MobileThemeId>> = {
-  "t3-code": "standard",
-  "t3-chat": "orchid",
-  "t3-chat-dark": "orchid",
-  "t3-grove": "grove",
-  "t3-ocean": "ocean",
-  "t3-ember": "ember",
-  "t3-iris": "iris",
-};
-
 export function normalizeMobileThemeId(value: unknown): MobileThemeId {
   if (typeof value !== "string") return DEFAULT_MOBILE_THEME_ID;
-  const id = RENAMED_THEME_IDS[value] ?? value;
+  const id = value;
   return (MOBILE_THEME_IDS as readonly string[]).includes(id) ? (id as MobileThemeId) : DEFAULT_MOBILE_THEME_ID;
 }
 

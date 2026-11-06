@@ -20,7 +20,7 @@ layout simply does not have them.
 ### Layout (list mode)
 
 - Header: the traffic-light inset, then Back, Forward, Hide sidebar (⌘S) and New conversation (⌘N).
-  The "Sirus Code" brand line is gone.
+  The "Sirus" brand line is gone.
 - Search on its own line (opens the existing palette, ⌘K), then a **Pull requests** row with the
   unread dot the rail already shows (there is no count of pull requests in the app, so none is
   shown), a hairline, and a small muted **Projects** title with **+** (New project dialog) and the

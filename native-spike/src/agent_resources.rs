@@ -82,23 +82,10 @@ pub(crate) fn row_level(cpu_percent: f64, memory: f64, machine: &Machine) -> Lev
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct Process {
-    pub pid: i64,
-    /// The kernel's start time, sent back on Stop so a reused pid is never signalled.
-    pub started: i64,
-    pub name: String,
-    pub kind: String,
-    pub cpu: f64,
-    pub memory: f64,
-}
-
-#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct SessionUse {
     pub session_id: String,
     pub cpu: f64,
     pub memory: f64,
-    pub process_count: usize,
-    pub processes: Vec<Process>,
 }
 
 /// One reading of the agents' process trees and the Mac (`agent_resources`).
@@ -119,20 +106,6 @@ impl Snapshot {
                 session_id: entry["sessionId"].as_str().unwrap_or("").to_owned(),
                 cpu: entry["cpuPercent"].as_f64().unwrap_or(0.),
                 memory: entry["memoryBytes"].as_f64().unwrap_or(0.),
-                process_count: entry["processCount"].as_u64().unwrap_or(0) as usize,
-                processes: entry["processes"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .map(|process| Process {
-                        pid: process["pid"].as_i64().unwrap_or(0),
-                        started: process["started"].as_i64().unwrap_or(0),
-                        name: process["name"].as_str().unwrap_or("").to_owned(),
-                        kind: process["kind"].as_str().unwrap_or("tool").to_owned(),
-                        cpu: process["cpuPercent"].as_f64().unwrap_or(0.),
-                        memory: process["memoryBytes"].as_f64().unwrap_or(0.),
-                    })
-                    .collect(),
             })
             .collect();
         Some(Self {
@@ -168,8 +141,6 @@ pub(crate) struct Row {
     pub provider: Option<&'static str>,
     pub cpu: f64,
     pub memory: f64,
-    pub process_count: usize,
-    pub processes: Vec<Process>,
 }
 
 pub(crate) fn rows(snapshot: &Snapshot, sessions: &[Meta]) -> Vec<Row> {
@@ -184,8 +155,6 @@ pub(crate) fn rows(snapshot: &Snapshot, sessions: &[Meta]) -> Vec<Row> {
                 provider: meta.map(|s| s.provider),
                 cpu: entry.cpu,
                 memory: entry.memory,
-                process_count: entry.process_count,
-                processes: entry.processes.clone(),
             }
         })
         .collect();
@@ -196,33 +165,6 @@ pub(crate) fn rows(snapshot: &Snapshot, sessions: &[Meta]) -> Vec<Row> {
             .then(a.session_id.cmp(&b.session_id))
     });
     rows
-}
-
-/// Processes being stopped leave the rows at once, instead of after the next reading.
-pub(crate) fn without_stopping(rows: Vec<Row>, stopping: &HashSet<i64>) -> Vec<Row> {
-    if stopping.is_empty() {
-        return rows;
-    }
-    rows.into_iter()
-        .map(|mut row| {
-            if !row.processes.iter().any(|p| stopping.contains(&p.pid)) {
-                return row;
-            }
-            let before = row.processes.len();
-            row.processes.retain(|p| !stopping.contains(&p.pid));
-            let gone = before - row.processes.len();
-            row.process_count = row
-                .process_count
-                .saturating_sub(gone)
-                .max(row.processes.len());
-            row
-        })
-        .collect()
-}
-
-/// Only tools can be stopped one by one; the agent stops with its conversation.
-pub(crate) fn can_stop_process(kind: &str, pid: i64) -> bool {
-    kind != "agent" && pid > 1
 }
 
 /// CPU is a share of one core, as in Activity Monitor: 100% is one core.
@@ -255,18 +197,8 @@ pub(crate) fn format_memory(bytes: f64) -> String {
     }
 }
 
-fn kind_label(kind: &str) -> &'static str {
-    match kind {
-        "agent" => t("Agente"),
-        "shell" => t("Shell"),
-        "runtime" => t("Runtime"),
-        "build" => t("Build"),
-        "package" => t("Pacotes"),
-        "git" => t("Git"),
-        "browser" => t("Navegador"),
-        _ => t("Ferramenta"),
-    }
-}
+const POPUP_WIDTH: f32 = 300.;
+const ROW_GROUP: &str = "agent-resource-row";
 
 /// Memory pressure's word, when the Mac reports one.
 fn pressure_label(pressure: &str) -> Option<&'static str> {
@@ -299,18 +231,6 @@ pub(crate) fn running_key(conversations: &[Conversation]) -> String {
     ids.join(",")
 }
 
-/// The `agent_resource_action` call's argument for one process (the closed ResourceAction).
-pub(crate) fn stop_process_args(session_id: &str, process: &Process) -> Value {
-    json!({
-        "action": {
-            "type": "stopProcess",
-            "sessionId": session_id,
-            "pid": process.pid,
-            "started": process.started,
-        }
-    })
-}
-
 /// What the panel and the footer know. The panel reads while it is open, and once a little after
 /// the running set changes.
 #[derive(Default)]
@@ -322,8 +242,6 @@ pub(crate) struct State {
     pub snapshot: Option<Snapshot>,
     pub error: Option<String>,
     reading: bool,
-    pub expanded: HashSet<String>,
-    pub stopping_pids: HashSet<i64>,
     pub stopping_sessions: HashSet<String>,
     pub row_errors: HashMap<String, String>,
     /// The running set at the last look.
@@ -467,52 +385,6 @@ impl Shell {
         cx.notify();
     }
 
-    /// Stop one tool process: confirmed in the popup; the row drops it at once.
-    fn ask_stop_resource_process(
-        &mut self,
-        session_id: String,
-        process: Process,
-        cx: &mut Context<Self>,
-    ) {
-        self.ask(
-            t("Parar processo?").to_owned(),
-            tf("\"{}\" é encerrado. A conversa continua.", &[&process.name]),
-            t("Parar"),
-            move |this, cx| this.run_stop_process(session_id, process, cx),
-            cx,
-        );
-    }
-
-    fn run_stop_process(&mut self, session_id: String, process: Process, cx: &mut Context<Self>) {
-        self.resources.stopping_pids.insert(process.pid);
-        self.resources.row_errors.remove(&session_id);
-        let pid = process.pid;
-        let rx = self.backend.request(
-            "agent_resource_action",
-            stop_process_args(&session_id, &process),
-        );
-        cx.spawn(async move |this, cx| {
-            let stopped = super::message_actions::settle(rx).await;
-            let _ = this.update(cx, |this, cx| {
-                if let Err(problem) = stopped {
-                    this.resources.stopping_pids.remove(&pid);
-                    this.resources.row_errors.insert(session_id, problem);
-                }
-                this.read_resources(cx);
-                cx.notify();
-            });
-        })
-        .detach();
-        cx.notify();
-    }
-
-    pub(super) fn toggle_resource_row(&mut self, session_id: String, cx: &mut Context<Self>) {
-        if !self.resources.expanded.remove(&session_id) {
-            self.resources.expanded.insert(session_id);
-        }
-        cx.notify();
-    }
-
     /// The footer's gauge: shown only while a conversation runs, coloured by the level.
     pub(super) fn resources_gauge(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if running_key(&self.conversations).is_empty() {
@@ -523,7 +395,7 @@ impl Shell {
             .snapshot
             .as_ref()
             .map_or(Level::Normal, Snapshot::level);
-        // Only when there's something to act on, as Monocode's chip; its panel stays reachable.
+        // Only when there's something to act on; its panel stays reachable.
         if level == Level::Normal && self.resources.open.is_none() {
             return None;
         }
@@ -579,163 +451,135 @@ impl Shell {
             })
             .collect();
         let track = crate::hover_track::list("agent-resources");
-        let mut body = div().flex().flex_col().gap(px(2.));
-        let header = match &state.snapshot {
-            Some(snapshot) => {
-                let level = snapshot.level();
-                let tint = level.color();
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(3.))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(8.))
-                            .text_size(px(11.5))
-                            .text_color(tint.unwrap_or_else(|| content(0.6)))
-                            .child(format!("CPU {}", format_cpu(snapshot.cpu)))
-                            .child(div().text_color(content(0.35)).child("·"))
-                            .child(format!(
-                                "{} {}",
-                                t("Memória"),
-                                format_memory(snapshot.memory)
-                            )),
-                    )
-                    .children(
-                        snapshot
-                            .machine
-                            .pressure
-                            .as_deref()
-                            .and_then(pressure_label)
-                            .map(|label| {
-                                div()
-                                    .text_size(px(11.))
-                                    .text_color(content(0.5))
-                                    .child(label)
-                            }),
-                    )
-                    .into_any_element()
-            }
-            None => div()
-                .text_size(px(11.5))
-                .text_color(content(0.5))
-                .child(t("Medindo…"))
-                .into_any_element(),
-        };
-        body = body.child(
+        let tint = state.snapshot.as_ref().and_then(|s| s.level().color());
+        let totals = state.snapshot.as_ref().map_or_else(
+            || t("Medindo…").to_string(),
+            |s| format!("{} · {}", format_cpu(s.cpu), format_memory(s.memory)),
+        );
+        let mut body = div().flex().flex_col().child(
             div()
                 .flex()
-                .flex_col()
-                .gap(px(6.))
-                .pb(px(8.))
+                .items_center()
+                .gap(px(7.))
+                .px(px(8.))
+                .pt(px(4.))
+                .pb(px(7.))
+                .child(icon("zap", 13.).text_color(tint.unwrap_or_else(|| content(0.6))))
                 .child(
                     div()
-                        .text_size(px(13.))
+                        .flex_1()
+                        .min_w_0()
+                        .text_size(px(12.5))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(content(0.9))
-                        .child(t("Agentes neste Mac")),
+                        .child(t("Agentes")),
                 )
-                .child(header),
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .text_size(px(11.))
+                        .text_color(tint.unwrap_or_else(|| content(0.55)))
+                        .child(totals),
+                ),
         );
-        if let Some(error) = &state.error {
+        let pressure = state
+            .snapshot
+            .as_ref()
+            .and_then(|s| s.machine.pressure.as_deref())
+            .filter(|pressure| *pressure != "normal")
+            .and_then(pressure_label);
+        for warning in pressure
+            .map(str::to_owned)
+            .into_iter()
+            .chain(state.error.clone())
+        {
             body = body.child(
                 div()
-                    .text_size(px(11.5))
-                    .text_color(gpui::rgb(RED))
-                    .child(error.clone()),
+                    .px(px(8.))
+                    .pb(px(6.))
+                    .text_size(px(11.))
+                    .text_color(tint.unwrap_or_else(|| gpui::rgb(RED).into()))
+                    .child(warning),
             );
         }
         if let Some(snapshot) = &state.snapshot {
             let machine = snapshot.machine.clone();
-            let shown_rows = without_stopping(rows(snapshot, &meta), &state.stopping_pids);
+            let shown_rows = rows(snapshot, &meta);
             if shown_rows.is_empty() {
                 body = body.child(
                     div()
-                        .py(px(8.))
+                        .px(px(8.))
+                        .py(px(6.))
                         .text_size(px(11.5))
                         .text_color(content(0.5))
                         .child(t("Nenhum agente em execução.")),
                 );
             }
             for row in shown_rows {
-                let expanded = state.expanded.contains(&row.session_id);
                 let busy = state.stopping_sessions.contains(&row.session_id);
                 let title = title_or_untitled(&row.title);
                 let level = row_level(row.cpu, row.memory, &machine);
                 let sid = row.session_id.clone();
                 let stop_title = title.clone();
-                let toggle_id = sid.clone();
-                let toggle = div()
-                    .id(format!("resource-toggle-{sid}"))
-                    .flex_1()
-                    .min_w_0()
-                    .flex()
-                    .items_center()
-                    .gap(px(7.))
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.toggle_resource_row(toggle_id.clone(), cx)
-                    }))
-                    .child(
-                        icon(
-                            if expanded {
-                                "chevron-down"
-                            } else {
-                                "chevron-right"
-                            },
-                            11.,
-                        )
-                        .text_color(content(0.45)),
-                    )
-                    .children(
-                        row.provider
-                            .map(|provider| crate::tab_tile::provider_mark(provider, 14.)),
-                    )
-                    .child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .text_size(px(12.5))
-                            .text_color(content(0.9))
-                            .child(title.clone()),
-                    );
+                // Parar takes the figures' place while the pointer is on the row.
                 let figures = div()
+                    .flex_shrink_0()
                     .flex()
                     .items_center()
                     .gap(px(8.))
                     .text_size(px(11.))
                     .text_color(level.color().unwrap_or_else(|| content(0.55)))
+                    .when(busy, |d| d.opacity(0.))
+                    .when(!busy, |d| d.group_hover(ROW_GROUP, |s| s.opacity(0.)))
                     .child(format_cpu(row.cpu))
                     .child(format_memory(row.memory));
                 let stop = div()
                     .id(format!("resource-stop-{sid}"))
+                    .absolute()
+                    .right(px(4.))
+                    .top(px(3.))
+                    .h(px(22.))
                     .px(px(6.))
-                    .py(px(2.))
+                    .flex()
+                    .items_center()
                     .rounded(px(crate::theme::RADIUS_SM))
                     .text_size(px(11.))
-                    .text_color(content(0.6))
-                    .flex_shrink_0()
-                    .when(busy, |d| d.opacity(0.5))
+                    .text_color(content(0.7))
+                    .when(busy, |d| d.opacity(0.6))
                     .when(!busy, |d| {
-                        d.cursor_pointer()
+                        d.opacity(0.)
+                            .group_hover(ROW_GROUP, |s| s.opacity(1.))
+                            .cursor_pointer()
                             .hover(|s| s.bg(content(0.1)).text_color(content(0.95)))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.ask_stop_resource_session(sid.clone(), stop_title.clone(), cx)
                             }))
                     })
                     .child(if busy { t("Parando…") } else { t("Parar") });
-                let mut item = div().flex().flex_col().gap(px(4.)).py(px(4.)).child(
+                body = body.child(
                     track.row_named(
                         div()
+                            .relative()
+                            .group(ROW_GROUP)
+                            .h(px(28.))
                             .flex()
                             .items_center()
                             .gap(px(8.))
-                            .px(px(6.))
-                            .py(px(4.))
+                            .px(px(8.))
                             .rounded(px(crate::theme::RADIUS_MD))
-                            .child(toggle)
+                            .children(
+                                row.provider
+                                    .map(|provider| crate::tab_tile::provider_mark(provider, 14.)),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_size(px(12.5))
+                                    .text_color(content(0.9))
+                                    .child(title),
+                            )
                             .child(figures)
                             .child(stop),
                         &row.session_id,
@@ -743,111 +587,28 @@ impl Shell {
                     ),
                 );
                 if let Some(problem) = state.row_errors.get(&row.session_id) {
-                    item = item.child(
+                    body = body.child(
                         div()
-                            .px(px(6.))
+                            .px(px(8.))
+                            .pb(px(4.))
                             .text_size(px(11.))
                             .text_color(gpui::rgb(RED))
                             .child(problem.clone()),
                     );
                 }
-                if expanded {
-                    for process in &row.processes {
-                        let level = row_level(process.cpu, process.memory, &machine);
-                        let stoppable = can_stop_process(&process.kind, process.pid);
-                        let session = row.session_id.clone();
-                        let owned = process.clone();
-                        let stop = div()
-                            .id(format!("resource-process-stop-{}", process.pid))
-                            .px(px(6.))
-                            .text_size(px(11.))
-                            .text_color(content(0.6))
-                            .flex_shrink_0()
-                            .when(stoppable, |d| {
-                                d.cursor_pointer()
-                                    .hover(|s| s.text_color(content(0.95)))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.ask_stop_resource_process(
-                                            session.clone(),
-                                            owned.clone(),
-                                            cx,
-                                        )
-                                    }))
-                            })
-                            .when(!stoppable, |d| d.opacity(0.))
-                            .child(t("Parar"));
-                        item = item.child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(px(8.))
-                                .pl(px(26.))
-                                .pr(px(6.))
-                                .py(px(3.))
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .flex()
-                                        .items_center()
-                                        .gap(px(6.))
-                                        .child(
-                                            div()
-                                                .min_w_0()
-                                                .truncate()
-                                                .text_size(px(11.5))
-                                                .text_color(content(0.85))
-                                                .child(process.name.clone()),
-                                        )
-                                        .child(
-                                            div()
-                                                .flex_shrink_0()
-                                                .text_size(px(10.5))
-                                                .text_color(content(0.45))
-                                                .child(kind_label(&process.kind)),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .gap(px(8.))
-                                        .text_size(px(11.))
-                                        .text_color(level.color().unwrap_or_else(|| content(0.55)))
-                                        .child(format_cpu(process.cpu))
-                                        .child(format_memory(process.memory)),
-                                )
-                                .child(stop),
-                        );
-                    }
-                    if row.process_count > row.processes.len() {
-                        let more = row.process_count - row.processes.len();
-                        item = item.child(
-                            div()
-                                .pl(px(26.))
-                                .text_size(px(11.))
-                                .text_color(content(0.45))
-                                .child(tf("Mais {} não exibidos", &[&more])),
-                        );
-                    }
-                }
-                body = body.child(item);
             }
         }
-        let footnote = t("100% é um núcleo da CPU, como no Monitor de Atividade.");
         Some(
             div()
                 .id("agent-resources-popup")
                 .occlude()
                 .absolute()
                 .bottom(px(FOOTER + 2. + (1. - shown) * -6.))
-                .left(px(left.min(self.viewport_width - 340.).max(8.)))
-                .w(px(340.))
-                .max_h(px(520.))
+                .left(px(left.min(self.viewport_width - POPUP_WIDTH - 8.).max(8.)))
+                .w(px(POPUP_WIDTH))
+                .max_h(px(360.))
                 .overflow_y_scroll()
-                .p(px(14.))
-                .flex()
-                .flex_col()
-                .gap(px(6.))
+                .p(px(6.))
                 .opacity(shown)
                 .rounded(px(crate::theme::RADIUS_LG))
                 .border_1()
@@ -856,13 +617,6 @@ impl Shell {
                 .shadow_lg()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(body)
-                .child(
-                    div()
-                        .pt(px(6.))
-                        .text_size(px(10.5))
-                        .text_color(content(0.4))
-                        .child(footnote),
-                )
                 .into_any_element(),
         )
     }
@@ -877,17 +631,6 @@ mod tests {
             cores,
             memory_total,
             pressure: pressure.map(str::to_owned),
-        }
-    }
-
-    fn process(pid: i64, kind: &str) -> Process {
-        Process {
-            pid,
-            started: 100 + pid,
-            name: format!("p{pid}"),
-            kind: kind.into(),
-            cpu: 1.,
-            memory: 1.,
         }
     }
 
@@ -946,8 +689,6 @@ mod tests {
     fn a_reading_parses_and_reports_its_level() {
         let snapshot = Snapshot::of(&snapshot_json()).expect("parses");
         assert_eq!(snapshot.sessions.len(), 2);
-        assert_eq!(snapshot.sessions[0].processes[0].pid, 41);
-        assert_eq!(snapshot.sessions[0].processes[0].started, 7);
         assert_eq!(snapshot.machine.memory_total, Some(17179869184.0));
         // 150 of 800 points is calm, but the warning pressure makes the total amber.
         assert_eq!(snapshot.level(), Level::Elevated);
@@ -973,34 +714,6 @@ mod tests {
         );
         assert_eq!(ordered[1].title, "Alpha");
         assert_eq!(ordered[1].provider, Some("codex"));
-    }
-
-    #[test]
-    fn stopping_processes_leave_their_row_at_once() {
-        let snapshot = Snapshot::of(&json!({
-            "cores": 8, "cpuPercent": 5, "memoryBytes": 1, "sessions": [
-                { "sessionId": "a", "cpuPercent": 5, "memoryBytes": 1, "processCount": 4,
-                  "processes": [{ "pid": 2, "started": 1, "name": "x", "kind": "tool", "cpuPercent": 1, "memoryBytes": 1 },
-                                { "pid": 3, "started": 1, "name": "y", "kind": "tool", "cpuPercent": 1, "memoryBytes": 1 }] } ] })).unwrap();
-        let shown = without_stopping(rows(&snapshot, &[]), &HashSet::from([2]));
-        assert_eq!(shown[0].processes.len(), 1);
-        assert_eq!(
-            shown[0].process_count, 3,
-            "the count drops by the one that left"
-        );
-        assert_eq!(
-            without_stopping(rows(&snapshot, &[]), &HashSet::new())[0]
-                .processes
-                .len(),
-            2
-        );
-    }
-
-    #[test]
-    fn only_tools_can_be_stopped_one_by_one() {
-        assert!(can_stop_process("tool", 42));
-        assert!(!can_stop_process("agent", 42));
-        assert!(!can_stop_process("tool", 1), "launchd is never signalled");
     }
 
     #[test]
@@ -1035,10 +748,6 @@ mod tests {
             super::super::delegated_tasks::stop_args("s"),
             json!({ "sessionId": "s" })
         );
-        assert_eq!(
-            stop_process_args("s", &process(41, "tool")),
-            json!({ "action": { "type": "stopProcess", "sessionId": "s", "pid": 41, "started": 141 } })
-        );
     }
 
     #[test]
@@ -1053,10 +762,7 @@ mod tests {
     }
 
     #[test]
-    fn the_labels_follow_the_kinds_and_the_pressure() {
-        assert_eq!(kind_label("agent"), t("Agente"));
-        assert_eq!(kind_label("package"), t("Pacotes"));
-        assert_eq!(kind_label("whatever"), t("Ferramenta"));
+    fn the_labels_follow_the_pressure() {
         assert_eq!(
             pressure_label("critical"),
             Some(t("Pressão de memória crítica"))

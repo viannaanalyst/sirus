@@ -95,9 +95,9 @@ pub fn automatic(session_id: &str) -> bool {
 
 pub fn prompt(portuguese: bool) -> &'static str {
     if portuguese {
-        "O Sirus Code fechou inesperadamente enquanto você trabalhava neste turno, então seus últimos passos podem não ter terminado. Antes de repetir qualquer coisa, confira o que já aconteceu (arquivos, estado do git, processos) e então continue de onde parou."
+        "O Sirus fechou inesperadamente enquanto você trabalhava neste turno, então seus últimos passos podem não ter terminado. Antes de repetir qualquer coisa, confira o que já aconteceu (arquivos, estado do git, processos) e então continue de onde parou."
     } else {
-        "Sirus Code closed unexpectedly while you were working on this turn, so your last steps may not have finished. Before repeating anything, check what already happened (files, git state, processes), then continue where you left off."
+        "Sirus closed unexpectedly while you were working on this turn, so your last steps may not have finished. Before repeating anything, check what already happened (files, git state, processes), then continue where you left off."
     }
 }
 

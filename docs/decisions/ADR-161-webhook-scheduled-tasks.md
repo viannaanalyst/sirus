@@ -4,7 +4,7 @@
 
 ## Context
 
-The owner wants another service to start agent work: a new Sentry issue, a GitHub event or a failed CI job should open a conversation that investigates and fixes it. Scheduled tasks (ADR-142) already run a prompt by themselves in a new or bound conversation; they only ran on the clock. T3 Code added an "On webhook" schedule with filters and dedupe.
+The owner wants another service to start agent work: a new Sentry issue, a GitHub event or a failed CI job should open a conversation that investigates and fixes it. Scheduled tasks (ADR-142) already run a prompt by themselves in a new or bound conversation; they only ran on the clock. Another open-source client added an "On webhook" schedule with filters and dedupe.
 
 ## Decision
 

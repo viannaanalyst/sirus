@@ -1,4 +1,4 @@
-//! The subagents a turn launched, as Sirus Code's team card reads them (`lib/subagent-team.ts`,
+//! The subagents a turn launched, as Sirus's team card reads them (`lib/subagent-team.ts`,
 //! ADR-146): who they are, their state, the phases they were launched in, the card's counts, the
 //! headline and the elapsed-time text. Pure data, so it is tested without a window.
 use serde_json::Value;
@@ -130,7 +130,7 @@ pub fn elapsed(started: Option<i64>, ended: Option<i64>, now_ms: i64) -> Option<
     Some((ended.unwrap_or(now_ms) - started).max(0) as u64 / 1000)
 }
 
-/// `12s`, `3m 05s`... as Sirus Code's `formatActivityDuration`: seconds, minutes and seconds, then hours and minutes.
+/// `12s`, `3m 05s`... as Sirus's `formatActivityDuration`: seconds, minutes and seconds, then hours and minutes.
 pub fn duration(seconds: u64) -> String {
     match seconds {
         0..=59 => format!("{seconds}s"),

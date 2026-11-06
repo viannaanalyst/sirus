@@ -12,7 +12,7 @@ use objc2::runtime::{AnyClass, AnyObject};
 use objc2_foundation::{NSData, NSString};
 use std::ffi::c_void;
 
-/// More pages than this are refused (Sirus Code's reader does the same, `reader.pdfLimit`).
+/// More pages than this are refused (Sirus's reader does the same, `reader.pdfLimit`).
 pub const MAX_PAGES: usize = 1000;
 /// The most pixels one page raster has.
 const MAX_PIXELS: f64 = 16_000_000.;

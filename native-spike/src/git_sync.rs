@@ -1,4 +1,4 @@
-//! Two Git functions of the environment card and the header, after Sirus Code: "Criar branch"
+//! Two Git functions of the environment card and the header, after Sirus: "Criar branch"
 //! (EnvironmentPanel's BranchRow, with the name checked here before the host is asked) and the
 //! incoming commits behind the header's Puxar button (GitIncomingButton, lib/git-incoming.ts,
 //! ADR-148). The host does the Git work; this module reads its answers and keeps the state.
@@ -12,7 +12,7 @@ use gpui::{AnyElement, App, ClickEvent, Div, Hsla, Window, div, prelude::*, px, 
 use serde_json::Value;
 use std::time::{Duration, Instant};
 
-/// Sirus Code asks again every 5 minutes while the window is visible (lib/git-incoming.ts).
+/// Sirus asks again every 5 minutes while the window is visible (lib/git-incoming.ts).
 pub const INCOMING_REFRESH: Duration = Duration::from_secs(5 * 60);
 /// The green check after a pull stays this long, then the popover closes.
 pub const PULLED_FOR: Duration = Duration::from_secs(3);

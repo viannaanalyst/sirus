@@ -1,11 +1,11 @@
-# ADR-180: Small performance wins from Zeron, Monocode and Synara
+# ADR-180: Small performance wins from Zeron, the reference app and another open-source client
 
 **Status:** Accepted (2026-10-28).
 
 ## Context
 
-Three similar apps publish performance findings: Monocode batches agent output per frame in
-Rust, Synara measured style recalculation cost of `has-*` selectors, Zeron found a settled
+Three similar apps publish performance findings: The reference app batches agent output per frame in
+Rust, another open-source client measured style recalculation cost of `has-*` selectors, Zeron found a settled
 animation still spinning (92.8% CPU, 8.3% once stopped). Sirus already had much of this
 (ADR-047, 048, 099, 143, 147; one rAF flush of `agent-output`; bounded transcript cache; ambient
 gate for animations). Each item was checked against the tree first; this ADR records what was

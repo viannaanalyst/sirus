@@ -32,6 +32,113 @@ const ROOTS: &[(&str, &str)] = &[
     ("devin", ".codeium/windsurf/skills"),
 ];
 
+/// Where each provider's CLI reads the person's skills, by the folder that says it's installed.
+const PROVIDER_SKILLS: &[(&str, &str)] = &[
+    (".claude", ".claude/skills"),
+    (".codex", ".codex/skills"),
+    (".agents", ".agents/skills"),
+    (".cursor", ".cursor/skills"),
+    (".config/opencode", ".config/opencode/skills"),
+    (".grok", ".grok/skills"),
+    (".factory", ".factory/skills"),
+    (".pi/agent", ".pi/agent/skills"),
+];
+static PORTABLE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Makes the app's skills reachable from every installed provider's own folder.
+pub fn publish(data_dir: &Path) {
+    let portable = data_dir.join("skills");
+    let _ = PORTABLE.set(portable.clone());
+    let Some(home) = crate::new_project::home_dir() else {
+        return;
+    };
+    std::thread::spawn(move || {
+        for (installed, skills) in PROVIDER_SKILLS {
+            if home.join(installed).is_dir() {
+                link_skills(&portable, &home.join(skills));
+            }
+        }
+    });
+}
+
+/// A named account's CLI reads skills from its own folder only, so the person's and the app's
+/// are linked in each time it starts.
+pub(crate) fn share_with_account(user_skills: &str, account_skills: &Path) {
+    if let Some(home) = crate::new_project::home_dir() {
+        link_skills(&home.join(user_skills), account_skills);
+    }
+    if let Some(portable) = PORTABLE.get() {
+        link_skills(portable, account_skills);
+    }
+}
+
+/// Links each skill of `from` into `to`, never over what's there, and clears links left by a
+/// skill that was removed.
+fn link_skills(from: &Path, to: &Path) {
+    let Ok(entries) = std::fs::read_dir(from) else {
+        return;
+    };
+    if std::fs::create_dir_all(to).is_err() {
+        return;
+    }
+    if let Ok(existing) = std::fs::read_dir(to) {
+        for link in existing.flatten() {
+            let path = link.path();
+            let dangling = std::fs::read_link(&path)
+                .is_ok_and(|target| target.starts_with(from) && !target.exists());
+            if dangling {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+    }
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let target = to.join(&name);
+        if name.to_string_lossy().starts_with('.')
+            || !entry.path().join("SKILL.md").exists()
+            || std::fs::symlink_metadata(&target).is_ok()
+        {
+            continue;
+        }
+        #[cfg(unix)]
+        if let Err(error) = std::os::unix::fs::symlink(entry.path(), &target) {
+            tracing::warn!(%error, "cannot link a skill");
+        }
+    }
+}
+
+/// What an agent is told about pages and skills, in its system instructions.
+pub(crate) fn agent_hint() -> String {
+    let browser = "To open, preview or test any web page, always use Sirus's built-in browser (the browser_* tools of the sirus_browser MCP server; load them with tool search if deferred), never the `open` command, a system browser or a browser you start yourself. It takes http(s) URLs, so serve local files from 127.0.0.1 first. Computer use on a web page goes through this browser too. If those tools are not available to you, say so instead of opening another browser.";
+    let project = "Project skills may also sit in the workspace's .agents/skills, .sirus/skills and .claude/skills.";
+    match PORTABLE.get() {
+        Some(portable) => format!(
+            "{browser} Every skill the person has lives at {}/<name>/SKILL.md. {project} When a skill is named or clearly fits and your skill tool does not offer it, find it in these folders and read its SKILL.md instead of saying it did not load.",
+            portable.display()
+        ),
+        None => format!("{browser} {project}"),
+    }
+}
+
+/// Claude and Codex take the hint as system instructions. Every other provider, and any added
+/// later, has no such channel in common, so it reads it at the top of a thread's first prompt.
+pub(crate) fn with_agent_hint(session: &crate::models::Session, prompt: String) -> String {
+    if hint_is_in_prompt(&session.agent, session.native_thread.is_some()) {
+        format!("{}\n\nUser request:\n{prompt}", agent_hint())
+    } else {
+        prompt
+    }
+}
+
+fn hint_is_in_prompt(provider: &AgentProviderId, resumes: bool) -> bool {
+    !resumes && !matches!(provider, AgentProviderId::Claude | AgentProviderId::Codex)
+}
+
+/// The app's skills folder, for the agents' read access.
+pub(crate) fn portable_skills() -> Option<&'static Path> {
+    PORTABLE.get().map(PathBuf::as_path)
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SkillSource {
@@ -573,6 +680,41 @@ mod tests {
         std::fs::create_dir_all(&path).unwrap();
         std::fs::write(path.join("SKILL.md"), text).unwrap();
     }
+    #[test]
+    fn only_providers_without_system_instructions_read_the_hint_in_the_prompt() {
+        assert!(!hint_is_in_prompt(&AgentProviderId::Claude, false));
+        assert!(!hint_is_in_prompt(&AgentProviderId::Codex, false));
+        assert!(hint_is_in_prompt(&AgentProviderId::Cursor, false));
+        assert!(hint_is_in_prompt(&AgentProviderId::OpenCode, false));
+        assert!(!hint_is_in_prompt(&AgentProviderId::OpenCode, true));
+    }
+
+    #[test]
+    fn skills_link_in_without_touching_what_is_there_and_gone_ones_leave() {
+        let root = tempfile::tempdir().unwrap();
+        let (from, to) = (root.path().join("app"), root.path().join("cli/skills"));
+        for name in ["shared", "own", ".trash", "gone"] {
+            std::fs::create_dir_all(from.join(name)).unwrap();
+            std::fs::write(from.join(name).join("SKILL.md"), "x").unwrap();
+        }
+        std::fs::create_dir_all(from.join("not-a-skill")).unwrap();
+        std::fs::create_dir_all(to.join("own")).unwrap();
+        link_skills(&from, &to);
+        let is_link = |name: &str| {
+            std::fs::symlink_metadata(to.join(name))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        };
+        assert!(is_link("shared") && is_link("gone"));
+        assert!(!is_link("own"));
+        assert!(!to.join(".trash").exists() && !to.join("not-a-skill").exists());
+        std::fs::remove_dir_all(from.join("gone")).unwrap();
+        link_skills(&from, &to);
+        assert!(std::fs::symlink_metadata(to.join("gone")).is_err());
+        assert!(is_link("shared"));
+    }
+
     #[test]
     fn frontmatter_handles_quotes_multiline_crlf_and_invalid_names() {
         assert_eq!(frontmatter("---\r\nname: 'Example'\r\ndescription: >\r\n  First line\r\n  second line\r\n---\r\n", "fallback"), Some(("example".into(), "First line second line".into())));

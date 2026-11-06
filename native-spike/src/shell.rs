@@ -1,4 +1,6 @@
 //! The window: title strip, sidebar and a transcript with the live activity tree.
+#[path = "shell_actions.rs"]
+mod shell_actions;
 #[path = "shell_terminal.rs"]
 mod shell_terminal;
 use crate::backend::{self, Backend, Incoming};
@@ -29,7 +31,7 @@ use gpui::{
     Bounds, ElementInputHandler, EntityInputHandler, StyledText, TextLayout, UTF16Selection,
 };
 use serde_json::{Value, json};
-use shell_terminal::{TERM_CARD, terminal_tile};
+use shell_terminal::{PULLS_CARD, TERM_CARD, pulls_tile, terminal_tile};
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ops::Range;
@@ -335,8 +337,19 @@ struct ProjectMenu {
     /// The Checkouts or Projects search, or the project's name while editing it.
     query: String,
     selected: usize,
-    /// Which settings row is unfolded: "move" or "editor".
+    /// Which settings row has its list open beside it: "editor".
     expanded: Option<&'static str>,
+    /// What the appearance's tabs are showing.
+    look_tab: LookTab,
+}
+
+/// The project's appearance, one choice at a time.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum LookTab {
+    Color,
+    #[default]
+    Mascot,
+    Eyes,
 }
 
 /// The usage popup's accounts page, after Sirus Code's `ProviderAccountsPanel`.
@@ -1212,6 +1225,16 @@ pub struct Shell {
     send_moving: std::cell::Cell<bool>,
     /// Per conversation, the composer text's measured height and the tween its box follows.
     composer_rise: std::cell::RefCell<HashMap<usize, (Rc<std::cell::Cell<f32>>, Tween)>>,
+    /// The composer's text width last drawn: a narrow one drops the labels that don't fit.
+    composer_width: Rc<Cell<f32>>,
+    /// The key that must be pressed once more to act, and when it was first pressed.
+    press_again: Option<(Press, Instant)>,
+    /// The footer's project actions.
+    actions: shell_actions::ActionsUi,
+    /// The Actions dialog closed: the keys go back to the composer on the next frame.
+    refocus: bool,
+    /// Where "Abrir no editor" was last drawn: its list opens beside it.
+    project_editor_row: Rc<Cell<Option<Bounds<Pixels>>>>,
     system_dark: bool,
     theme_menu: Option<PaletteState>,
     settings_page: &'static str,
@@ -1542,6 +1565,11 @@ impl Shell {
             send_morph: Default::default(),
             send_moving: Default::default(),
             composer_rise: Default::default(),
+            composer_width: Default::default(),
+            press_again: None,
+            actions: shell_actions::ActionsUi::new(),
+            refocus: false,
+            project_editor_row: Default::default(),
             system_dark: true,
             theme_menu: None,
             settings_page: APPEARANCE,
@@ -2890,6 +2918,15 @@ impl Shell {
             }
             self.tabs = tabs;
             self.active = active;
+            // The tab in front may never have been shown since the app opened.
+            if let Some(ix) = self
+                .tabs
+                .iter()
+                .find(|tab| tab.id == active)
+                .map(|tab| tab.conversation)
+            {
+                self.ensure_loaded(ix);
+            }
         }
     }
 
@@ -3040,6 +3077,78 @@ impl Shell {
             },
             cx,
         );
+    }
+
+    /// True on the second press of `press` in time; the first shows a notice and waits.
+    fn pressed_twice(&mut self, press: Press, cx: &mut Context<Self>) -> bool {
+        let first = self
+            .press_again
+            .map(|(key, at)| (key, at.elapsed().as_secs_f32()));
+        if is_second_press(first, press) {
+            self.press_again = None;
+            cx.notify();
+            return true;
+        }
+        let at = Instant::now();
+        self.press_again = Some((press, at));
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_secs_f32(PRESS_WINDOW))
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.press_again.is_some_and(|(_, first)| first == at) {
+                    this.press_again = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+        cx.notify();
+        false
+    }
+
+    /// The small notice asking for `press` again, while that's what is awaited.
+    fn press_notice(&self, press: Press, cx: &gpui::App) -> Option<AnyElement> {
+        let (key, at) = self.press_again.filter(|(key, _)| *key == press)?;
+        let since = at.elapsed().as_secs_f32();
+        let shown = if cx.reduce_motion() {
+            1.
+        } else {
+            self.send_moving.set(true);
+            press_notice_shown(since)
+        };
+        Some(
+            div()
+                .flex()
+                .justify_center()
+                .child(
+                    div()
+                        .px(px(13.))
+                        .py(px(6.))
+                        .opacity(shown)
+                        .rounded_full()
+                        .border_1()
+                        .border_color(content(0.12))
+                        .child(crate::theme::floating_surface(99.))
+                        .shadow_lg()
+                        .relative()
+                        .text_size(px(12.5))
+                        .text_color(content(0.95))
+                        .whitespace_nowrap()
+                        .child(div().relative().child(t(match key {
+                            Press::StopAgent => "Aperte esc de novo para parar o agente",
+                            Press::Quit => "Aperte ⌘Q de novo para fechar o Sirus",
+                        }))),
+                )
+                .into_any_element(),
+        )
+    }
+
+    /// An agent opened a page: the conversation it works for shows it in the Navegador pane.
+    pub(crate) fn reveal_browser(&mut self, session: &str, cx: &mut Context<Self>) {
+        if self.conversations[self.active_conversation()].session_id == session {
+            self.open_pane(3, cx);
+        }
     }
 
     fn select_account(&mut self, provider: &'static str, id: String) {
@@ -4024,7 +4133,8 @@ impl Shell {
 
     /// Whether a popup's search or name field takes the keys instead of the composer.
     fn grabs_typing(&self) -> bool {
-        self.find.shown()
+        self.actions.dialog.is_some()
+            || self.find.shown()
             || self.queues.is_editing()
             || self.subagents.composing(&self.active_session_id())
             || matches!(self.add_menu, Some((AddPage::Skills | AddPage::Goal, _)))
@@ -4323,11 +4433,16 @@ impl Shell {
             (TAB_OPEN, REORDER, FAN)
         };
         let pinned = self.tabs.iter().filter(|t| t.pinned && !t.closing).count()
-            + self.term.pinned_ids().len();
-        let pulls_live = self.term.pulls_tab.as_ref().is_some_and(|t| !t.closing);
+            + self.term.pinned_ids().len()
+            + usize::from(self.term.pulls_in_deck());
+        let pulls_live = self.term.pulls_in_strip();
         let pulls_shown = pulls_live && self.term.pulls_active;
+        // A page on screen is the selected tab, wherever it sits; the session tabs give that up.
+        let page_on_screen = self.term.pulls_active || self.term.terminal_showing();
+        let page_in_strip = pulls_shown || self.term.terminal_showing_in_strip();
         let free = (self.tabs.iter().filter(|t| !t.pinned && !t.closing).count()
-            + usize::from(pulls_live)) as f32;
+            + usize::from(pulls_live)
+            + self.term.strip_count()) as f32;
         let menu_on_pin = self
             .menu
             .as_ref()
@@ -4355,7 +4470,12 @@ impl Shell {
         } else {
             0.
         };
-        let active_free = pulls_shown || self.tabs.iter().any(|t| t.id == self.active && !t.pinned);
+        let active_free = page_in_strip
+            || (!page_on_screen
+                && self
+                    .tabs
+                    .iter()
+                    .any(|t| t.id == self.active && !t.pinned && !t.closing));
         let (selected, others) = if active_free && even < SELECTED_MIN && free > 1. {
             (
                 SELECTED_MIN,
@@ -4373,7 +4493,7 @@ impl Shell {
             }
             let width = if tab.closing {
                 0.
-            } else if tab.id == self.active && !pulls_shown {
+            } else if tab.id == self.active && !page_on_screen {
                 selected
             } else {
                 others
@@ -4393,7 +4513,8 @@ impl Shell {
             }
         }
         // The page tab follows the session tabs, in the same strip.
-        if let Some(page) = self.term.pulls_tab.as_mut() {
+        let pulls_pinned = self.term.pulls_in_deck_now();
+        if let Some(page) = self.term.pulls_tab.as_mut().filter(|_| !pulls_pinned) {
             let width = match (page.closing, pulls_shown) {
                 (true, _) => 0.,
                 (false, true) => selected,
@@ -4413,6 +4534,9 @@ impl Shell {
                 self.term.pulls_tab = None;
             }
         }
+        moving |= self
+            .term
+            .lay_out(&mut x, (selected, others), (open, reorder), now);
         self.new_tab_x.set(x, now, reorder, Curve::Expo);
         moving |= !self.new_tab_x.done(now);
         self.tabs
@@ -4429,12 +4553,13 @@ impl Shell {
         reduced: bool,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        // Conversations, then terminals; a terminal's card has its key above TERM_CARD.
+        // Conversations, then pages: a page's card has its key at PULLS_CARD or above TERM_CARD.
         let pinned: Vec<(u64, Option<usize>)> = self
             .tabs
             .iter()
             .filter(|t| t.pinned && !t.closing)
             .map(|t| (t.id, Some(t.conversation)))
+            .chain(self.term.pulls_in_deck().then_some((PULLS_CARD, None)))
             .chain(
                 self.term
                     .pinned_ids()
@@ -4490,6 +4615,7 @@ impl Shell {
             let ix = pinned.iter().position(|(id, _)| *id == c)?;
             let title = match pinned[ix].1 {
                 Some(conversation) => self.conversations[conversation].title.clone(),
+                None if pinned[ix].0 == PULLS_CARD => t("Pull requests").to_owned(),
                 None => self.term_title(pinned[ix].0 - TERM_CARD, cx),
             };
             Some((title, places[ix].x))
@@ -4502,9 +4628,11 @@ impl Shell {
             let place = &places[ix];
             let selected = id == active_card;
             let hovered = hovered_card == Some(id);
-            let terminal = conversation.is_none().then(|| id - TERM_CARD);
+            let is_pulls = id == PULLS_CARD;
+            let terminal = (conversation.is_none() && !is_pulls).then(|| id - TERM_CARD);
             let (face, mark) = match conversation {
                 Some(conversation) => self.tile_parts(&self.conversations[conversation], now),
+                None if is_pulls => pulls_tile(),
                 None => terminal_tile(),
             };
             cards.push(
@@ -4555,6 +4683,10 @@ impl Shell {
                         MouseButton::Right,
                         cx.listener(move |this, event: &MouseDownEvent, _, cx| {
                             cx.stop_propagation();
+                            if is_pulls {
+                                this.ask_chip_menu(0, event.position, cx);
+                                return;
+                            }
                             if let Some(terminal) = terminal {
                                 this.ask_chip_menu(terminal, event.position, cx);
                                 return;
@@ -4573,9 +4705,15 @@ impl Shell {
                             cx.new(|_| split_panes::DragChip::new(drag.title.clone()))
                         })
                     })
-                    .on_click(cx.listener(move |this, _, window, cx| match terminal {
-                        Some(terminal) => this.open_title_tab(terminal, window, cx),
-                        None => this.select(id, cx),
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if is_pulls {
+                            this.open_pull_requests(cx);
+                            return;
+                        }
+                        match terminal {
+                            Some(terminal) => this.open_title_tab(terminal, window, cx),
+                            None => this.select(id, cx),
+                        }
                     }))
                     .into_any_element(),
             );
@@ -5326,7 +5464,11 @@ impl Shell {
             .map(|t| t.id)
             .collect();
         match (cmd, shift, ctrl, key) {
-            (true, false, false, "q") => cx.quit(),
+            (true, false, false, "q") => {
+                if self.pressed_twice(Press::Quit, cx) {
+                    cx.quit();
+                }
+            }
             (true, false, false, "t") | (true, false, false, "n") => {
                 self.new_conversation(None, cx)
             }
@@ -6180,7 +6322,10 @@ impl Shell {
     fn tab(&self, tab: &Tab, now: Instant, cx: &mut Context<Self>) -> AnyElement {
         let id = tab.id;
         let conversation = &self.conversations[tab.conversation];
-        let active = id == self.active && !tab.closing && !self.term.pulls_active;
+        let active = id == self.active
+            && !tab.closing
+            && !self.term.pulls_active
+            && !self.term.terminal_showing();
         let group: gpui::SharedString = format!("tab{id}").into();
         let width = tab.w.at(now);
         let dragged = self.drag.as_ref().is_some_and(|d| d.active && d.id == id);
@@ -6314,15 +6459,13 @@ impl Shell {
         // With the side panel open the tabs stop at its edge, marked by a short rule; its own
         // options sit in the bar above it, as in Monocode.
         let room = width - self.sidebar_width * self.sidebar.at(now) - 12.;
-        let dock_width =
-            (self.dock_width + (room - self.dock_width) * self.dock_max.at(now)) * open_dock;
+        let dock_width = self.dock_full(room, now) * open_dock;
         // Exactly over the card's hairline: gutter, card border, then the panel.
         let dock_edge = (width - 6. - 1. - dock_width - 1.).max(nav_end + 6.);
         let controls = (80. + 28. * open_dock + 72.).max(width - dock_edge - 16. + 6.);
         let (added, removed) = self.diff_stat();
         let (add_color, remove_color) = diff_colors(self.look.diff);
-        let strip =
-            width - strip_left - 12. - PLATE - 6. - controls - 10. - self.term.chips_width();
+        let strip = width - strip_left - 12. - PLATE - 6. - controls - 10.;
         *moving |= self.layout_tabs(strip, now, reduced);
         let tabs: Vec<AnyElement> = {
             // Pinned tabs live in the dock, not the strip.
@@ -6338,12 +6481,12 @@ impl Shell {
                 out.push(self.tab(tab, now, cx));
             }
             out.extend(self.pulls_tab_view(now, cx));
+            out.extend(self.term_tabs_view(now, cx));
             out
         };
         let dock = self.pinned_dock(now, moving, reduced, cx);
         let tray = self.tray.at(now);
         let add_x = self.new_tab_x.at(now) + tray;
-        let term_chips = self.term_chips(strip_left + strip + PLATE + 8., cx);
         div()
             .h(px(TITLE_BAR))
             .flex_shrink_0()
@@ -6529,7 +6672,6 @@ impl Shell {
                 cx,
                 true,
             ))
-            .children(term_chips)
             // A terminal tab pulled from the panel becomes a tab here, shell and all.
             .on_drop(cx.listener(
                 |this, drag: &crate::panel_terminal::TermTabDrag, window, cx| {
@@ -7941,6 +8083,7 @@ impl Shell {
                 query: String::new(),
                 selected: 0,
                 expanded: None,
+                look_tab: LookTab::default(),
             });
         }
         cx.notify();
@@ -8021,15 +8164,38 @@ impl Shell {
                 Some(first) => self.open(first, cx),
                 None => self.new_conversation(Some(index), cx),
             }
+        } else {
+            // Its tabs came back as they were left, and the one in front may never have loaded.
+            self.show(self.active, cx);
         }
         cx.notify();
     }
 
-    /// Every project, the current first and then by last use.
+    /// Every project, the one with the newest conversation first.
+    fn projects_by_activity(&self) -> Vec<usize> {
+        let latest: Vec<&str> = self
+            .projects
+            .iter()
+            .map(|project| {
+                project
+                    .conversations
+                    .iter()
+                    .map(|ix| self.conversations[*ix].last_activity.as_str())
+                    .max()
+                    .unwrap_or("")
+            })
+            .collect();
+        let mut order: Vec<usize> = (0..self.projects.len()).collect();
+        order.sort_by(|a, b| latest[*b].cmp(latest[*a]));
+        order
+    }
+
+    /// Every project, the current first, then those visited here, then by newest activity.
     fn projects_by_use(&self) -> Vec<usize> {
         let count = self.projects.len();
         let mut order: Vec<usize> = self.current_project.into_iter().collect();
-        for project in self.project_recent.iter().copied().chain(0..count) {
+        let recent = self.projects_by_activity();
+        for project in self.project_recent.iter().copied().chain(recent) {
             if project < count && !order.contains(&project) {
                 order.push(project);
             }
@@ -8166,13 +8332,16 @@ impl Shell {
         const GAP: f32 = 4.;
         let count = self.projects.len();
         let current = self.current_project.unwrap_or(0).min(count - 1);
+        // The newest first, so the rail's first screen is what was used last.
+        let order = self.projects_by_activity();
+        let current_at = order.iter().position(|p| *p == current).unwrap_or(0);
         let last = count.saturating_sub(FITS) as f32;
         let now = Instant::now();
         let length = if cx.reduce_motion() { 0. } else { RAIL_SLIDE };
         let mut pos = self.rail_pos.get();
         let seen = self.rail_seen.replace(Some(current));
         if seen != Some(current) {
-            let to = rail_window(pos.to.round() as usize, current, FITS, count) as f32;
+            let to = rail_window(pos.to.round() as usize, current_at, FITS, count) as f32;
             if seen.is_none() {
                 pos.snap(to, now);
             } else {
@@ -8207,10 +8376,11 @@ impl Shell {
                 .child(icon(glyph, 12.).text_color(content(0.55)))
         };
         let begin = at.floor().max(0.) as usize;
-        let tiles = (begin..(begin + FITS + 1).min(count)).map(|index| {
+        let tiles = (begin..(begin + FITS + 1).min(count)).map(|place| {
+            let index = order[place];
             let name = self.projects[index].name.clone();
             let chosen = index == current;
-            let x = (index as f32 - at) * step;
+            let x = (place as f32 - at) * step;
             // A tile on its way out fades as the edge cuts it.
             let cut = (-x).max(x + tile - room).max(0.) / tile;
             div()
@@ -8369,6 +8539,25 @@ impl Shell {
         cx.notify();
     }
 
+    fn open_editor_row(&mut self, cx: &mut Context<Self>) {
+        if let Some(menu) = self.project_menu.as_mut()
+            && menu.expanded != Some("editor")
+        {
+            menu.expanded = Some("editor");
+            cx.notify();
+        }
+    }
+
+    /// Hovering another row of the project's menu closes the editors beside theirs.
+    fn leave_editor_row(&mut self, hovered: &bool, _: &mut Window, cx: &mut Context<Self>) {
+        if *hovered
+            && let Some(menu) = self.project_menu.as_mut()
+            && menu.expanded.take().is_some()
+        {
+            cx.notify();
+        }
+    }
+
     fn toggle_project_row(&mut self, which: &'static str, cx: &mut Context<Self>) {
         if self.project_menu.as_ref().and_then(|m| m.expanded) == Some("scripts") {
             self.save_project_scripts(true);
@@ -8398,6 +8587,25 @@ impl Shell {
             json!({ "projectId": self.projects[ix].id, "appearance": look }),
         );
         cx.notify();
+    }
+
+    /// The stage's click: another mascot with other eyes, never the same ones.
+    fn shuffle_project_look(&mut self, cx: &mut Context<Self>) {
+        let Some(ix) = self.current_project else {
+            return;
+        };
+        let look = crate::project_avatar::saved_look(
+            &self.projects[ix].name,
+            &self.projects[ix].appearance,
+        );
+        let (_, shapes, eyes) = crate::project_avatar::appearance_choices();
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.subsec_nanos() as usize);
+        let shape = other_choice(shapes, look["accessory"].as_str(), seed);
+        let eye = other_choice(eyes, look["eyes"].as_str(), seed / 7);
+        self.set_project_look("accessory", json!(shape), cx);
+        self.set_project_look("eyes", json!(eye), cx);
     }
 
     /// The Projects rows in order, for keys and the list alike.
@@ -8723,6 +8931,7 @@ impl Shell {
                 .child(typed_text(&query, placeholder, caret()))
         };
         let project_path = self.projects[index].path.clone();
+        let mut flyout: Option<AnyElement> = None;
         let (width, top_offset, height, body): (f32, f32, f32, AnyElement) = match sub {
             ProjectSub::Checkouts => {
                 let rows = self.checkout_rows(index, &query);
@@ -8998,6 +9207,11 @@ impl Shell {
                 let look = crate::project_avatar::saved_look(&project.name, &project.appearance);
                 let (swatches, accessories, eyes) = crate::project_avatar::appearance_choices();
                 let name_for_preview = project.name.clone();
+                let tint = look["color"]
+                    .as_str()
+                    .and_then(|hex| u32::from_str_radix(hex.trim_start_matches('#'), 16).ok())
+                    .map_or_else(|| content(1.), |color| gpui::Hsla::from(rgb(color)));
+                let look_tint = move |alpha: f32| gpui::Hsla { a: alpha, ..tint };
                 let color_row: Vec<AnyElement> = swatches
                     .iter()
                     .copied()
@@ -9078,129 +9292,71 @@ impl Shell {
                             })
                     };
                 let expanded = menu.expanded;
-                let project_id = project.id.clone();
-                let folders: Vec<(String, String)> = self.settings["projectFolders"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .map(|f| {
-                        (
-                            f["id"].as_str().unwrap_or("").to_owned(),
-                            f["name"].as_str().unwrap_or("").to_owned(),
-                        )
-                    })
-                    .collect();
-                let in_folder = self.settings["projectFolders"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .find(|f| {
-                        f["projectIds"].as_array().is_some_and(|ids| {
-                            ids.iter().any(|i| i.as_str() == Some(project_id.as_str()))
-                        })
-                    })
-                    .and_then(|f| f["id"].as_str())
-                    .map(str::to_owned);
-                let sub_row = |id: (&'static str, usize), label: String, chosen: bool| {
-                    div()
-                        .id(id)
-                        .h(px(28.))
-                        .ml(px(25.))
-                        .px(px(8.))
-                        .rounded(px(crate::theme::RADIUS_MD))
-                        .flex()
-                        .items_center()
-                        .gap(px(8.))
-                        .text_size(px(12.5))
-                        .text_color(content(0.8))
-                        .cursor_pointer()
-                        .hover(|s| s.bg(content(0.07)))
-                        .child(div().flex_1().min_w_0().truncate().child(label))
-                        .when(chosen, |d| {
-                            d.child(icon("check", 12.).text_color(content(0.8)))
-                        })
-                };
-                let mut move_rows: Vec<AnyElement> = Vec::new();
-                if expanded == Some("move") {
-                    if folders.is_empty() {
-                        move_rows.push(
-                            div()
-                                .h(px(28.))
-                                .ml(px(25.))
-                                .px(px(8.))
-                                .flex()
-                                .items_center()
-                                .text_size(px(12.))
-                                .text_color(content(0.45))
-                                .child(crate::i18n::t("Nenhuma pasta criada"))
-                                .into_any_element(),
-                        );
-                    }
-                    for (at, (folder, label)) in folders.iter().cloned().enumerate() {
-                        let id = project_id.clone();
-                        move_rows.push(
-                            sub_row(
-                                ("project-folder", at),
-                                label,
-                                in_folder.as_deref() == Some(folder.as_str()),
-                            )
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                move_project_to_folder(&mut this.settings, &id, Some(&folder));
-                                this.backend
-                                    .invoke("save_settings", json!({ "settings": this.settings }));
-                                cx.notify();
-                            }))
-                            .into_any_element(),
-                        );
-                    }
-                    if in_folder.is_some() {
-                        let id = project_id.clone();
-                        move_rows.push(
-                            sub_row(
-                                ("project-folder-out", 0),
-                                crate::i18n::t("Tirar da pasta").to_owned(),
-                                false,
-                            )
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                move_project_to_folder(&mut this.settings, &id, None);
-                                this.backend
-                                    .invoke("save_settings", json!({ "settings": this.settings }));
-                                cx.notify();
-                            }))
-                            .into_any_element(),
-                        );
-                    }
-                }
                 let session = self.conversations[self.active_conversation()]
                     .session_id
                     .clone();
-                let editor_rows: Vec<AnyElement> = if expanded == Some("editor") {
-                    self.env_editors.iter().cloned().enumerate().map(|(at, (editor, label))| {
+                // The editors open beside their row, as Monocode's submenus do.
+                if expanded == Some("editor")
+                    && !self.env_editors.is_empty()
+                    && let Some(row) = self.project_editor_row.get()
+                {
+                    let track = crate::hover_track::list("project-editors");
+                    let rows = self.env_editors.iter().cloned().enumerate().map(|(at, (editor, label))| {
                         let session = session.clone();
-                        sub_row(("project-editor", at), label, false)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if !this.this_mac_only(cx) {
-                                    this.backend.invoke("open_in_editor", json!({ "sessionId": session, "editor": editor, "path": Value::Null }));
-                                }
-                                this.close_project_menu();
-                                cx.notify();
-                            })).into_any_element()
-                    }).collect()
-                } else {
-                    Vec::new()
-                };
-                let scripts_open = expanded == Some("scripts");
-                let scripts_rows: Vec<AnyElement> = if scripts_open {
-                    vec![self.scripts_fields_view(index, cx)]
-                } else {
-                    Vec::new()
-                };
-                let extra = (move_rows.len() + editor_rows.len()) as f32 * 28.
-                    + if scripts_open {
-                        crate::project_scripts_view::SETTINGS_HEIGHT
-                    } else {
-                        0.
-                    };
+                        track.row(
+                            div()
+                                .id(("project-editor", at))
+                                .relative()
+                                .h(px(30.))
+                                .px(px(8.))
+                                .rounded(px(crate::theme::RADIUS_MD))
+                                .flex()
+                                .items_center()
+                                .text_size(px(13.))
+                                .text_color(content(0.92))
+                                .cursor_pointer()
+                                .child(div().min_w_0().truncate().child(label))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    if !this.this_mac_only(cx) {
+                                        this.backend.invoke(
+                                            "open_in_editor",
+                                            json!({ "sessionId": session.clone(), "editor": editor.clone() }),
+                                        );
+                                    }
+                                    this.close_project_menu();
+                                    cx.notify();
+                                })),
+                            at,
+                            false,
+                        )
+                    });
+                    let wide = 190.;
+                    let beside = (left + 260. + 6.).min(self.viewport_width - wide - 8.);
+                    let tall = self.env_editors.len() as f32 * 30. + 10.;
+                    let flyout_top = (f32::from(row.top()) - 5.)
+                        .min(self.viewport_height - tall - 8.)
+                        .max(8.);
+                    flyout = Some(
+                        div()
+                            .id("project-editors")
+                            .occlude()
+                            .absolute()
+                            .left(px(beside))
+                            .top(px(flyout_top))
+                            .w(px(wide))
+                            .p(px(4.))
+                            .opacity(t)
+                            .rounded(px(crate::theme::RADIUS_LG))
+                            .border_1()
+                            .border_color(content(0.12))
+                            .child(crate::theme::floating_surface(crate::theme::RADIUS_LG))
+                            .shadow_lg()
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .child(track.pill())
+                            .children(rows)
+                            .into_any_element(),
+                    );
+                }
                 let reveal_path = project_path.clone();
                 let divider = || div().mx(px(4.)).my(px(5.)).h(px(1.)).bg(content(0.08));
                 let body = div()
@@ -9224,80 +9380,82 @@ impl Shell {
                             .child(caret()),
                     )
                     .child(
+                        // The robot on its colour: a click draws another look.
                         div()
+                            .id("project-stage")
                             .mt(px(8.))
+                            .h(px(92.))
+                            .rounded(px(crate::theme::RADIUS_MD))
+                            .bg(look_tint(0.15))
+                            .hover(|s| s.bg(look_tint(0.22)))
                             .flex()
                             .items_center()
-                            .gap(px(10.))
-                            .child(
-                                div()
-                                    .size(px(42.))
-                                    .flex_shrink_0()
-                                    .rounded(px(crate::theme::RADIUS_MD))
-                                    .border_1()
-                                    .border_color(content(0.1))
-                                    .bg(content(0.04))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .child(crate::project_avatar::project_avatar(
-                                        &project.name,
-                                        &project.appearance,
-                                        32.,
-                                    )),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .flex()
-                                    .flex_col()
-                                    .child(
-                                        div()
-                                            .text_size(px(12.))
-                                            .text_color(content(0.45))
-                                            .child(crate::i18n::t("Logo do projeto")),
-                                    )
-                                    .child(
-                                        div()
-                                            .truncate()
-                                            .text_size(px(12.5))
-                                            .text_color(content(0.8))
-                                            .child(crate::i18n::t(
-                                                "Aparece nas abas e no composer",
-                                            )),
-                                    ),
+                            .justify_center()
+                            .cursor_pointer()
+                            .tooltip(message_actions::name_tip(crate::i18n::t("Sortear visual")))
+                            .on_click(cx.listener(|this, _, _, cx| this.shuffle_project_look(cx)))
+                            .child(crate::project_avatar::project_avatar(
+                                &project.name,
+                                &project.appearance,
+                                62.,
+                            )),
+                    )
+                    .child(
+                        div()
+                            .mt(px(8.))
+                            .p(px(2.))
+                            .rounded(px(crate::theme::RADIUS_MD))
+                            .bg(field_fill())
+                            .flex()
+                            .gap(px(2.))
+                            .children(
+                                [
+                                    (LookTab::Color, crate::i18n::t("Cor")),
+                                    (LookTab::Mascot, crate::i18n::t("Mascote")),
+                                    (LookTab::Eyes, crate::i18n::t("Olhos")),
+                                ]
+                                .into_iter()
+                                .enumerate()
+                                .map(|(at, (tab, label))| {
+                                    let on = menu.look_tab == tab;
+                                    div()
+                                        .id(("project-look-tab", at))
+                                        .flex_1()
+                                        .h(px(24.))
+                                        .rounded(px(crate::theme::RADIUS_SM))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .text_size(px(12.))
+                                        .text_color(content(if on { 0.95 } else { 0.55 }))
+                                        .when(on, |d| d.bg(content(0.12)))
+                                        .cursor_pointer()
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            if let Some(menu) = this.project_menu.as_mut() {
+                                                menu.look_tab = tab;
+                                            }
+                                            cx.notify();
+                                        }))
+                                        .child(label)
+                                }),
                             ),
                     )
                     .child(
                         div()
-                            .mt(px(10.))
+                            .mt(px(8.))
+                            .h(px(28.))
                             .flex()
+                            .items_center()
                             .justify_between()
-                            .children(color_row),
+                            .when(menu.look_tab == LookTab::Eyes, |d| {
+                                d.justify_start().gap(px(6.))
+                            })
+                            .children(match menu.look_tab {
+                                LookTab::Color => color_row,
+                                LookTab::Mascot => accessory_row,
+                                LookTab::Eyes => eyes_row,
+                            }),
                     )
-                    .child(
-                        div()
-                            .mt(px(10.))
-                            .text_size(px(11.5))
-                            .text_color(content(0.45))
-                            .child(crate::i18n::t("Mascote")),
-                    )
-                    .child(
-                        div()
-                            .mt(px(4.))
-                            .flex()
-                            .justify_between()
-                            .children(accessory_row),
-                    )
-                    .child(
-                        div()
-                            .mt(px(6.))
-                            .text_size(px(11.5))
-                            .text_color(content(0.45))
-                            .child(crate::i18n::t("Olhos")),
-                    )
-                    .child(div().mt(px(4.)).flex().gap(px(6.)).children(eyes_row))
                     .child(divider())
                     .child(
                         item(
@@ -9306,6 +9464,7 @@ impl Shell {
                             crate::i18n::t("Cores do tema"),
                             false,
                         )
+                        .on_hover(cx.listener(Self::leave_editor_row))
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.close_project_menu();
                             this.open_settings_page(APPEARANCE, cx);
@@ -9318,31 +9477,12 @@ impl Shell {
                             crate::i18n::t("Imagem de fundo"),
                             false,
                         )
+                        .on_hover(cx.listener(Self::leave_editor_row))
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.close_project_menu();
                             this.open_settings_page(APPEARANCE, cx);
                         })),
                     )
-                    .child(crate::project_scripts_view::settings_row(
-                        "project-scripts",
-                        scripts_open,
-                        crate::project_scripts_view::click(cx, |this, cx| {
-                            this.toggle_scripts_row(cx)
-                        }),
-                    ))
-                    .children(scripts_rows)
-                    .child(
-                        item(
-                            "project-move",
-                            "chevrons-up-down",
-                            crate::i18n::t("Mover"),
-                            true,
-                        )
-                        .on_click(
-                            cx.listener(|this, _, _, cx| this.toggle_project_row("move", cx)),
-                        ),
-                    )
-                    .children(move_rows)
                     .child(
                         item(
                             "project-reveal",
@@ -9350,6 +9490,7 @@ impl Shell {
                             crate::i18n::t("Mostrar no Finder"),
                             false,
                         )
+                        .on_hover(cx.listener(Self::leave_editor_row))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             let _ = crate::native_actions::open_path(&reveal_path);
                             this.close_project_menu();
@@ -9363,15 +9504,31 @@ impl Shell {
                             crate::i18n::t("Abrir no editor"),
                             true,
                         )
-                        .on_click(
-                            cx.listener(|this, _, _, cx| this.toggle_project_row("editor", cx)),
-                        ),
+                        .relative()
+                        .when(expanded == Some("editor"), |d| d.bg(content(0.07)))
+                        .child({
+                            let store = self.project_editor_row.clone();
+                            gpui::canvas(
+                                move |bounds, _, _| store.set(Some(bounds)),
+                                |_, _, _, _| {},
+                            )
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .size_full()
+                        })
+                        .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                            if *hovered {
+                                this.open_editor_row(cx);
+                            }
+                        }))
+                        .on_click(cx.listener(|this, _, _, cx| this.open_editor_row(cx))),
                     )
-                    .children(editor_rows)
                     .child(divider())
                     .child(
                         div()
                             .id("project-remove")
+                            .on_hover(cx.listener(Self::leave_editor_row))
                             .h(px(32.))
                             .px(px(8.))
                             .rounded(px(crate::theme::RADIUS_MD))
@@ -9394,13 +9551,13 @@ impl Shell {
                             .child(icon("trash", 15.).text_color(rgb(0xe08a8a)))
                             .child(crate::i18n::t("Remover da lista")),
                     );
-                (260., 72., 500. + extra, body.into_any_element())
+                (260., 72., 436., body.into_any_element())
             }
         };
         let top = (menu_top + top_offset)
             .min(self.viewport_height - height - 10.)
             .max(8.);
-        div()
+        let card = div()
             .id("project-sub")
             .occlude()
             .absolute()
@@ -9415,7 +9572,15 @@ impl Shell {
             .shadow_lg()
             .overflow_hidden()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(body)
+            .child(body);
+        // The same origin as the card, so the list beside it can be placed in window terms.
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .child(card)
+            .children(flyout)
             .into_any_element()
     }
 
@@ -11432,6 +11597,8 @@ impl Shell {
         let caret_seen = self.composer_caret_seen.clone();
         let (caret_moved, caret_drawn) = (self.caret_moved.clone(), self.caret_drawn.clone());
         self.caret_blinks.set(typing && selection.is_empty());
+        let text_width = self.composer_width.clone();
+        let (no_effort, no_access_label) = composer_fits(self.composer_width.get());
         // The box slides to the height of the text, which the overlay below measures.
         let (text_height, box_height) = {
             let now = Instant::now();
@@ -11462,6 +11629,7 @@ impl Shell {
             |_, _, _| {},
             move |bounds, _, window, _| {
                 let line = layout.line_height();
+                text_width.set(f32::from(bounds.size.width));
                 if text_height.replace(f32::from(bounds.size.height))
                     != f32::from(bounds.size.height)
                 {
@@ -11902,6 +12070,18 @@ impl Shell {
                     .border_1()
                     .border_color(content(0.1))
                     .children(self.composer_runner(ix, cx))
+                    .children(
+                        self.press_notice(Press::StopAgent, cx)
+                            .filter(|_| conversation.working())
+                            .map(|notice| {
+                                div()
+                                    .absolute()
+                                    .top(px(-44.))
+                                    .left_0()
+                                    .right_0()
+                                    .child(notice)
+                            }),
+                    )
                     .child(crate::theme::composer_surface(crate::theme::RADIUS_LG - 1.))
                     .flex()
                     .flex_col()
@@ -12008,6 +12188,7 @@ impl Shell {
                                     )
                                     .child(
                                         round("composer-add", "plus")
+                                            .flex_shrink_0()
                                             .on_mouse_down(
                                                 MouseButton::Left,
                                                 cx.listener(|this, _, window, cx| {
@@ -12041,6 +12222,7 @@ impl Shell {
                                     .child(
                                         div()
                                             .id("composer-access")
+                                            .flex_shrink_0()
                                             .h(px(26.))
                                             .px(px(8.))
                                             .border_1()
@@ -12054,7 +12236,7 @@ impl Shell {
                                             .cursor_pointer()
                                             .hover(|s| s.bg(content(0.07)))
                                             .child(icon(access_glyph, 14.).text_color(access_color))
-                                            .child(access)
+                                            .when(!no_access_label, |d| d.child(access))
                                             .on_mouse_down(
                                                 MouseButton::Left,
                                                 cx.listener(|this, _, window, cx| {
@@ -12067,10 +12249,13 @@ impl Shell {
                                             })),
                                     )
                                     .children(ring)
-                                    .child(div().flex_1())
+                                    .child(div().flex_1().min_w_0())
                                     .child(
                                         shelf_button("composer-model")
                                             .relative()
+                                            .min_w_0()
+                                            .flex_shrink(1.)
+                                            .overflow_hidden()
                                             .h(px(26.))
                                             .border_1()
                                             .border_color(content(0.1))
@@ -12087,7 +12272,7 @@ impl Shell {
                                             )
                                             .child(provider_mark(provider, 16.))
                                             .child(div().min_w_0().truncate().child(model))
-                                            .children(effort.map(|e| {
+                                            .children(effort.filter(|_| !no_effort).map(|e| {
                                                 div()
                                                     .flex_shrink_0()
                                                     .text_color(content(0.4))
@@ -12113,6 +12298,7 @@ impl Shell {
                                     )
                                     .child(
                                         round("composer-mic", "mic")
+                                            .flex_shrink_0()
                                             .when(dictating, |d| d.bg(rgb(0xe0654d)))
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.toggle_dictation(cx)
@@ -12222,6 +12408,9 @@ impl Shell {
                 div()
                     .id("usage")
                     .relative()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_usage_popup(cx)))
                     .child(
@@ -12316,6 +12505,7 @@ impl Shell {
             })
             .child(div().flex_1())
             .when_some(self.update_notice(cx), |d, notice| d.child(notice))
+            .children(self.actions_button(cx))
             .when_some(self.resources_gauge(cx), |d, gauge| d.child(gauge))
             .child(self.usage_button(cx))
             .child(self.settings_button(cx))
@@ -12724,6 +12914,16 @@ impl Shell {
             .provider
             .unwrap_or(self.conversations[conversation].provider);
         let live = turn.live;
+        let failed_here = {
+            let conv = &self.conversations[conversation];
+            message_actions::can_retry(
+                &conv.status,
+                &conv.last_error,
+                index + 1 == conv.turns.len(),
+                conv.working(),
+            )
+        };
+        let conversation_session = self.conversations[conversation].session_id.clone();
         let shown_answer = self.paced_answer(conversation, index, turn, moving);
         let rich = crate::reply_view::Rich {
             session: self.conversations[conversation].session_id.clone(),
@@ -12982,90 +13182,105 @@ impl Shell {
             })
             .when(!turn.user.is_empty(), |d| {
                 d.child(
-                    div().flex().flex_col().items_end().gap(px(2.)).child(
-                        div().flex().justify_end().child(
-                            div()
-                                .relative()
-                                .max_w(px(576.))
-                                .min_w_0()
-                                .px(px(12.))
-                                .py(px(8.))
-                                .text_size(px(14.))
-                                .line_height(px(20.))
-                                .text_color(content(1.))
-                                .child(
-                                    gpui::canvas(
-                                        |_, _, _| {},
-                                        move |bounds, _, window, _| {
-                                            width_cell.set(bounds.size.width);
-                                            let radius = if bounds.size.height <= px(37.) {
-                                                f32::from(bounds.size.height) * 0.5
-                                            } else {
-                                                12.
-                                            };
-                                            window.paint_quad(
-                                                gpui::fill(bounds, accent_wash(0.24))
-                                                    .corner_radii(px(radius)),
-                                            );
-                                        },
-                                    )
-                                    .absolute()
-                                    .top_0()
-                                    .left_0()
-                                    .size_full(),
-                                )
-                                // Four lines while folded; Show more stays inside the bubble.
-                                .child(prompt_frame(
-                                    prompt_motion,
-                                    bubble_width,
-                                    prompt_collapsed,
-                                    transcript_select::user_text(
-                                        &self.select,
-                                        transcript_select::Reply {
-                                            conversation,
-                                            turn: index,
-                                            user: true,
-                                        },
-                                        turn.user.clone(),
-                                        styled_tokens(turn.user.clone()),
-                                    ),
-                                ))
-                                .when(prompt_overflows, |d| {
-                                    d.child(
-                                        div().flex().child(
-                                            div()
-                                                .id(("prompt-more", index))
-                                                .mt_1()
-                                                .px_1()
-                                                // Its label lines up with the text; the padding is for the hover.
-                                                .ml(px(-4.))
-                                                .py(px(2.))
-                                                .rounded(px(4.))
-                                                .text_size(px(12.))
-                                                .line_height(px(16.))
-                                                .text_color(content(0.6))
-                                                .cursor_pointer()
-                                                .hover(|s| {
-                                                    s.bg(content(0.08)).text_color(content(1.))
-                                                })
-                                                .child(if prompt_collapsed {
-                                                    "Show more"
+                    // Reversed: the retry, built first, sits under the bubble.
+                    div()
+                        .flex()
+                        .flex_col_reverse()
+                        .items_end()
+                        .gap(px(2.))
+                        .when(failed_here, |d| {
+                            d.child(self.retry_button(index, conversation_session.clone(), cx))
+                        })
+                        .child(
+                            div().flex().justify_end().child(
+                                div()
+                                    .relative()
+                                    .max_w(px(576.))
+                                    .min_w_0()
+                                    .px(px(12.))
+                                    .py(px(8.))
+                                    .text_size(px(14.))
+                                    .line_height(px(20.))
+                                    .text_color(content(1.))
+                                    .child(
+                                        gpui::canvas(
+                                            |_, _, _| {},
+                                            move |bounds, _, window, _| {
+                                                width_cell.set(bounds.size.width);
+                                                let radius = if bounds.size.height <= px(37.) {
+                                                    f32::from(bounds.size.height) * 0.5
                                                 } else {
-                                                    "Show less"
-                                                })
-                                                .on_click(cx.listener(move |this, _, _, cx| {
-                                                    if !this.expanded_prompts.remove(&prompt_key) {
-                                                        this.expanded_prompts.insert(prompt_key);
-                                                    }
-                                                    this.prompt_moved
-                                                        .insert(prompt_key, Instant::now());
-                                                    cx.notify();
-                                                })),
-                                        ),
+                                                    12.
+                                                };
+                                                window.paint_quad(
+                                                    gpui::fill(bounds, accent_wash(0.24))
+                                                        .corner_radii(px(radius)),
+                                                );
+                                            },
+                                        )
+                                        .absolute()
+                                        .top_0()
+                                        .left_0()
+                                        .size_full(),
                                     )
-                                }),
+                                    // Four lines while folded; Show more stays inside the bubble.
+                                    .child(prompt_frame(
+                                        prompt_motion,
+                                        bubble_width,
+                                        prompt_collapsed,
+                                        transcript_select::user_text(
+                                            &self.select,
+                                            transcript_select::Reply {
+                                                conversation,
+                                                turn: index,
+                                                user: true,
+                                            },
+                                            turn.user.clone(),
+                                            styled_tokens(turn.user.clone()),
+                                        ),
+                                    ))
+                                    .when(prompt_overflows, |d| {
+                                        d.child(
+                                            div().flex().child(
+                                                div()
+                                                    .id(("prompt-more", index))
+                                                    .mt_1()
+                                                    .px_1()
+                                                    // Its label lines up with the text; the padding is for the hover.
+                                                    .ml(px(-4.))
+                                                    .py(px(2.))
+                                                    .rounded(px(4.))
+                                                    .text_size(px(12.))
+                                                    .line_height(px(16.))
+                                                    .text_color(content(0.6))
+                                                    .cursor_pointer()
+                                                    .hover(|s| {
+                                                        s.bg(content(0.08)).text_color(content(1.))
+                                                    })
+                                                    .child(if prompt_collapsed {
+                                                        "Show more"
+                                                    } else {
+                                                        "Show less"
+                                                    })
+                                                    .on_click(cx.listener(
+                                                        move |this, _, _, cx| {
+                                                            if !this
+                                                                .expanded_prompts
+                                                                .remove(&prompt_key)
+                                                            {
+                                                                this.expanded_prompts
+                                                                    .insert(prompt_key);
+                                                            }
+                                                            this.prompt_moved
+                                                                .insert(prompt_key, Instant::now());
+                                                            cx.notify();
+                                                        },
+                                                    )),
+                                            ),
+                                        )
+                                    }),
+                            ),
                         ),
-                    ),
                 )
             })
             .children(blocks)
@@ -13226,6 +13441,13 @@ impl Shell {
     }
 
     /// The side panel: its open panes as chips, or the six options in two columns.
+    /// The side panel's full width: what it was given, narrower when that would squeeze the
+    /// conversation, or all the room when it's maximized.
+    fn dock_full(&self, room: f32, now: Instant) -> f32 {
+        let width = dock_fit(self.dock_width, room);
+        width + (room - width) * self.dock_max.at(now)
+    }
+
     fn dock_view(
         &self,
         width: f32,
@@ -15818,6 +16040,53 @@ fn rail_step(at: usize, count: usize, forward: bool) -> usize {
     }
 }
 
+/// The side panel's width in `room`, leaving the conversation enough to read and type in.
+fn dock_fit(width: f32, room: f32) -> f32 {
+    width.min((room - CONVERSATION_MIN).max(DOCK_FLOOR))
+}
+
+/// A key that acts only when pressed twice, so a stray press does nothing.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Press {
+    StopAgent,
+    Quit,
+}
+
+/// How long the second press has, in seconds, and how long the notice takes to fade in and out.
+const PRESS_WINDOW: f32 = 2.;
+const PRESS_FADE: f32 = 0.14;
+
+/// Whether a press seconds after the first of the same key counts as the second.
+fn is_second_press(first: Option<(Press, f32)>, press: Press) -> bool {
+    first.is_some_and(|(key, since)| key == press && since < PRESS_WINDOW)
+}
+
+/// The notice's opacity this long after the first press.
+fn press_notice_shown(since: f32) -> f32 {
+    (since / PRESS_FADE)
+        .min((PRESS_WINDOW - since) / PRESS_FADE)
+        .clamp(0., 1.)
+}
+
+/// One of `options` that isn't `current`, chosen by `seed`.
+fn other_choice<'a>(options: &[&'a str], current: Option<&str>, seed: usize) -> &'a str {
+    let rest: Vec<&'a str> = options
+        .iter()
+        .copied()
+        .filter(|option| Some(*option) != current)
+        .collect();
+    rest[seed % rest.len().max(1)]
+}
+
+/// What a composer this wide leaves out: the effort, then the access level's name.
+fn composer_fits(width: f32) -> (bool, bool) {
+    (width > 0. && width < 440., width > 0. && width < 390.)
+}
+
+/// What the conversation keeps beside the side panel, and the least the panel takes.
+const CONVERSATION_MIN: f32 = 420.;
+const DOCK_FLOOR: f32 = 280.;
+
 /// The bars on each side of the listening robot.
 const LISTEN_BARS: usize = 14;
 
@@ -16379,10 +16648,16 @@ impl Render for Shell {
                 || self.peek.is_some()
                 || self.project_menu.is_some()
                 || self.confirm.is_some()
+                || self.actions.covers_pages()
                 || self.first_run.active()
                 || self.viewer.visible()
                 || self.cards_visible(),
         );
+        if std::mem::take(&mut self.refocus) {
+            window.focus(&self.focus, cx);
+        }
+        let actions_menu = self.actions_menu_view(now, &mut moving, cx);
+        let action_dialog = self.action_dialog_view(now, &mut moving, cx);
         let composer_menu = self.composer_menu_view(now, &mut moving, cx);
         let usage_popup = self.usage_popup_view(now, &mut moving, cx);
         let resources_popup = self.resources_popup_view(now, &mut moving, cx);
@@ -16402,6 +16677,14 @@ impl Render for Shell {
         let attachment_modal = self.attachment_view(now, &mut moving, cx);
         let trail_card = self.trail_card();
         let project_switch = self.project_switch_view(cx);
+        let quit_notice = self.press_notice(Press::Quit, cx).map(|notice| {
+            div()
+                .absolute()
+                .top(px(TITLE_BAR + 10.))
+                .left_0()
+                .right_0()
+                .child(notice)
+        });
         let add_menu = self.add_menu_view(now, &mut moving, cx);
         let environment = self.environment_view(now, &mut moving, cx);
         let incoming_card = {
@@ -16479,7 +16762,7 @@ impl Render for Shell {
         }
         let dock_share = self.dock.at(now);
         let room = f32::from(size.width) - self.sidebar_width * self.sidebar.at(now) - 12.;
-        let dock_full = self.dock_width + (room - self.dock_width) * self.dock_max.at(now);
+        let dock_full = self.dock_full(room, now);
         let dock_width = dock_full * dock_share;
         let dock = (dock_share > 0.001).then(|| self.dock_view(dock_full, now, &mut moving, cx));
         let stats = self.stats(now);
@@ -16489,6 +16772,24 @@ impl Render for Shell {
         }
         div()
             .id("root")
+            .child(
+                // A web view that took the keys keeps them until AppKit is told otherwise, and a
+                // click on our own view does not tell it.
+                gpui::canvas(
+                    |_, _, _| {},
+                    |_, _, window, _| {
+                        window.on_mouse_event(
+                            |_: &MouseDownEvent, phase: gpui::DispatchPhase, window, _| {
+                                if phase == gpui::DispatchPhase::Capture {
+                                    crate::panel_browser::reclaim_keyboard(window);
+                                }
+                            },
+                        );
+                    },
+                )
+                .absolute()
+                .size_0(),
+            )
             .track_focus(&self.focus)
             .relative()
             .size_full()
@@ -16569,10 +16870,10 @@ impl Render for Shell {
                                                     .when_some(dock, |d, dock| {
                                                         d.child(
                                                             div().id("dock-resize").relative().flex_shrink_0().h_full().w(px(1.)).bg(content(0.08)).opacity(dock_share)
-                                                                .child(div().absolute().top_0().bottom_0().left(px(-3.)).w(px(7.)).cursor_col_resize().on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                                                .child(gpui::deferred(div().id("dock-resize-grip").occlude().absolute().top_0().bottom_0().left(px(-6.)).w(px(12.)).cursor_col_resize().on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
                                                                     cx.stop_propagation();
                                                                     this.resizing_dock = true;
-                                                                }))),
+                                                                }))).with_priority(1)),
                                                         )
                                                             .child(div().flex_shrink_0().h_full().w(px(dock_width)).overflow_hidden().child(dock))
                                                     }))
@@ -16605,6 +16906,9 @@ impl Render for Shell {
             .children(handoff_popup)
             .children(trail_card)
             .children(project_switch)
+            .children(quit_notice)
+            .children(actions_menu)
+            .children(action_dialog)
             .children(attachment_modal)
             .children(confirm_dialog)
             .children(term_plus_menu)
@@ -16936,6 +17240,23 @@ mod rail_tests {
 
     #[test]
     fn the_current_project_stays_in_the_window() {
+        assert!(!is_second_press(None, Press::Quit));
+        assert!(is_second_press(Some((Press::Quit, 1.)), Press::Quit));
+        assert!(!is_second_press(Some((Press::Quit, 2.5)), Press::Quit));
+        assert!(!is_second_press(Some((Press::StopAgent, 1.)), Press::Quit));
+        assert_eq!(press_notice_shown(0.), 0.);
+        assert_eq!(press_notice_shown(1.), 1.);
+        assert_eq!(press_notice_shown(PRESS_WINDOW), 0.);
+        for seed in 0..9 {
+            assert_ne!(other_choice(&["a", "b", "c"], Some("b"), seed), "b");
+        }
+        assert_eq!(dock_fit(500., 1400.), 500.);
+        assert_eq!(dock_fit(500., 800.), 380.);
+        assert_eq!(dock_fit(500., 500.), 280.);
+        assert_eq!(composer_fits(0.), (false, false));
+        assert_eq!(composer_fits(600.), (false, false));
+        assert_eq!(composer_fits(420.), (true, false));
+        assert_eq!(composer_fits(340.), (true, true));
         assert_eq!(listen_bar(3, 1., 2., 0.), 2.);
         assert!(listen_bar(0, 1., 0.2, 1.) > listen_bar(0, 1., 0.2, 0.2));
         assert!(listen_smoothed(0., 1.) > 1. - listen_smoothed(1., 0.));

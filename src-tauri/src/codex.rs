@@ -543,6 +543,7 @@ async fn execute(
     if let Some(model) = &run.session.model {
         params["model"] = json!(model);
     }
+    params["developerInstructions"] = json!(crate::skills::agent_hint());
     let method = if let Some(identity) = &run.session.native_thread {
         params["threadId"] = json!(identity.thread_id);
         params["excludeTurns"] = json!(true);

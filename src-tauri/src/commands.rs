@@ -2037,6 +2037,7 @@ pub async fn send_prompt(
                 }
                 _ => process_prompt,
             };
+            let process_prompt = crate::skills::with_agent_hint(session, process_prompt);
             let process_prompt = crate::execution::debug_prompt(request.debugging, process_prompt);
             let process_prompt = crate::goals::prompt(
                 admitted_goal

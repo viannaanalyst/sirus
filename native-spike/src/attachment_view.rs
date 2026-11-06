@@ -266,6 +266,25 @@ fn prepare_files(paths: &[std::path::PathBuf], existing: usize) -> Result<Vec<Va
 
 // ---- Loading -----------------------------------------------------------------------------
 
+/// A picture cropped to a sharp square. Its tile shows it filled, and a filled long picture would
+/// paint past a tile, which only clips to a rectangle.
+fn square_copy(picture: Arc<gpui::Image>) -> Arc<gpui::Image> {
+    let square = || {
+        let image = image::load_from_memory(picture.bytes()).ok()?;
+        let side = 240.min(image.width().min(image.height()).max(1));
+        let cropped = image.resize_to_fill(side, side, image::imageops::FilterType::Triangle);
+        let mut png = Vec::new();
+        cropped
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .ok()?;
+        Some(Arc::new(gpui::Image::from_bytes(
+            gpui::ImageFormat::Png,
+            png,
+        )))
+    };
+    square().unwrap_or(picture)
+}
+
 /// The copy of a sent picture the host keeps with its message. Blocks.
 fn sent_thumbnail(backend: &Backend, id: &str) -> Option<Arc<gpui::Image>> {
     let reply = backend
@@ -1167,12 +1186,14 @@ impl Shell {
             let asked = id.clone();
             std::thread::spawn(move || {
                 // A sent picture keeps its small copy on the host, across restarts.
-                let image = sent_thumbnail(&backend, &asked).or_else(|| {
-                    match fetch(&backend, "attachment_image", &owner, &asked, false) {
-                        Ok(Value::String(url)) => decode_image(&url),
-                        _ => None,
-                    }
-                });
+                let image = sent_thumbnail(&backend, &asked)
+                    .or_else(
+                        || match fetch(&backend, "attachment_image", &owner, &asked, false) {
+                            Ok(Value::String(url)) => decode_image(&url),
+                            _ => None,
+                        },
+                    )
+                    .map(square_copy);
                 let _ = tx.send_blocking(image);
             });
             cx.spawn(async move |this, cx| {
@@ -2662,6 +2683,7 @@ fn picture_tile(
         .bg(content(0.05))
         .cursor_pointer()
         .hover(|s| s.border_color(content(0.28)))
+        .overflow_hidden()
         .on_click(click)
         .when_some(thumb, |d, thumb| {
             // The image takes the corners itself: a parent clips only to a rectangle.
@@ -2689,6 +2711,8 @@ fn draft_picture(
             div()
                 .id(("attached", index))
                 .size_full()
+                // A copy made before the square ones may be taller than the tile.
+                .overflow_hidden()
                 .rounded(px(crate::theme::RADIUS_MD))
                 .border_1()
                 .border_color(content(0.1))
@@ -2985,6 +3009,20 @@ fn slides_view(slides: &Arc<Vec<Vec<String>>>, open: &Open) -> AnyElement {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_long_sent_picture_becomes_a_square() {
+        let mut png = Vec::new();
+        image::DynamicImage::new_rgb8(900, 120)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let copy = square_copy(Arc::new(gpui::Image::from_bytes(
+            gpui::ImageFormat::Png,
+            png,
+        )));
+        let read = image::load_from_memory(copy.bytes()).unwrap();
+        assert_eq!((read.width(), read.height()), (120, 120));
+    }
 
     #[test]
     fn limits_are_checked_before_anything_is_read() {

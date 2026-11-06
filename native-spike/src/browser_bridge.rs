@@ -94,9 +94,22 @@ async fn answer(request: Value, backend: Backend, cx: &mut AsyncApp) {
     }
     let session = request["sessionId"].as_str().unwrap_or_default().to_owned();
     let tool = request["tool"].as_str().unwrap_or_default().to_owned();
+    // A page an agent drives must not walk off with the keys of someone typing in the app.
+    let keys_home = on_window(cx, panel_browser::keyboard_home).unwrap_or(false);
     let result = run(&session, &tool, &request["args"], &backend, cx).await;
+    if keys_home {
+        on_window(cx, panel_browser::reclaim_keyboard);
+    }
     let _ = cx.update(|cx| cx.refresh_windows());
     backend.invoke("browser_tool_result", result_args(&id, result));
+}
+
+/// Reads or acts on the app's window, when it has one.
+fn on_window<T>(cx: &mut AsyncApp, work: impl FnOnce(&gpui::Window) -> T) -> Option<T> {
+    cx.update(|app| {
+        let window = app.windows().first().copied()?;
+        window.update(app, |_, window, _| work(window)).ok()
+    })
 }
 
 /// The arguments of `browser_tool_result`.
@@ -127,6 +140,11 @@ async fn run(
                     .read(app)
                     .set_parent(panel_browser::parent_of(window));
             });
+            if matches!(tool, "browser_open" | "browser_navigate")
+                && let Some(shell) = window.downcast::<crate::shell::Shell>()
+            {
+                let _ = shell.update(app, |shell, _, cx| shell.reveal_browser(session, cx));
+            }
         }
         entity
     });

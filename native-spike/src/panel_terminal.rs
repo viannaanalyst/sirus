@@ -78,6 +78,8 @@ pub struct TerminalPanel {
     cwd: String,
     terminals: Vec<Entity<Terminal>>,
     active: usize,
+    /// The terminal each project action last ran in, reused while it sits idle.
+    action_terminals: HashMap<String, gpui::WeakEntity<Terminal>>,
 }
 
 fn folder_name(cwd: &str) -> String {
@@ -94,6 +96,7 @@ impl TerminalPanel {
             cwd,
             terminals: vec![first],
             active: 0,
+            action_terminals: HashMap::new(),
         }
     }
     /// Gives up a terminal, shell and all, to live elsewhere. The panel is never left empty.
@@ -577,6 +580,10 @@ impl Terminal {
             let _ = sender.send(Msg::Input(bytes.into()));
         }
     }
+    /// Types a command at the prompt and presses return.
+    fn run(&mut self, command: &str, cx: &mut Context<Self>) {
+        self.input(format!("{command}\n").into_bytes(), cx);
+    }
     /// Typing returns a scrolled-back view to the prompt.
     fn input(&mut self, bytes: Vec<u8>, cx: &mut Context<Self>) {
         if self.exited {
@@ -806,6 +813,48 @@ pub fn focus_in(view: &AnyView, window: &mut Window, cx: &mut App) {
     }
 }
 
+/// Runs a project action in its own terminal of the pane, opening one if it has none idle.
+pub fn run_in(
+    view: &AnyView,
+    key: &str,
+    command: &str,
+    reveal: bool,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let Ok(panel) = view.clone().downcast::<TerminalPanel>() else {
+        return;
+    };
+    panel.update(cx, |panel, cx| {
+        let idle = panel
+            .action_terminals
+            .get(key)
+            .and_then(|weak| weak.upgrade())
+            .filter(|terminal| {
+                panel.terminals.contains(terminal) && {
+                    let terminal = terminal.read(cx);
+                    !terminal.busy() && !terminal.exited
+                }
+            });
+        let terminal = idle.unwrap_or_else(|| {
+            let fresh = panel.spawn(cx);
+            panel.terminals.push(fresh.clone());
+            panel
+                .action_terminals
+                .insert(key.to_owned(), fresh.downgrade());
+            fresh
+        });
+        terminal.update(cx, |terminal, cx| terminal.run(command, cx));
+        if reveal {
+            if let Some(at) = panel.terminals.iter().position(|t| *t == terminal) {
+                panel.active = at;
+            }
+            panel.focus_active(window, cx);
+        }
+        cx.notify();
+    });
+}
+
 /// A title-bar tab: one shell, or several side by side after Split Terminal Right.
 pub struct TerminalGroup {
     cwd: String,
@@ -862,6 +911,18 @@ impl TerminalGroup {
         if let Some(pane) = self.panes.last() {
             let focus = pane.read(cx).focus.clone();
             window.focus(&focus, cx);
+        }
+    }
+    /// Whether its last shell is free to take a command.
+    pub fn idle(&self, cx: &App) -> bool {
+        self.panes.last().is_some_and(|pane| {
+            let pane = pane.read(cx);
+            !pane.busy() && !pane.exited
+        })
+    }
+    pub fn run(&self, command: &str, cx: &mut App) {
+        if let Some(pane) = self.panes.last() {
+            pane.update(cx, |pane, cx| pane.run(command, cx));
         }
     }
     /// The folder's name, the label of the tab.

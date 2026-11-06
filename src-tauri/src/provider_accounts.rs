@@ -187,12 +187,14 @@ pub(crate) fn apply(command: &mut Command, provider: &AgentProviderId, home: Opt
     if let Some(home) = home {
         match provider {
             AgentProviderId::Codex => {
+                crate::skills::share_with_account(".codex/skills", &home.join("skills"));
                 command.env("CODEX_HOME", home);
                 for key in ["OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN"] {
                     command.env_remove(key);
                 }
             }
             AgentProviderId::Claude => {
+                crate::skills::share_with_account(".claude/skills", &home.join("skills"));
                 command
                     .env("CLAUDE_CONFIG_DIR", home)
                     .env("CLAUDE_SECURESTORAGE_CONFIG_DIR", home);

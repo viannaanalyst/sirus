@@ -49,6 +49,7 @@ mod panel_sidechat;
 mod panel_simulator;
 mod panel_terminal;
 mod panels;
+mod project_actions;
 mod project_avatar;
 mod project_files;
 mod project_scripts;
@@ -164,6 +165,11 @@ impl AssetSource for Assets {
             "list-ordered" => include_bytes!("../assets/list-ordered.svg"),
             "pause" => include_bytes!("../assets/pause.svg"),
             "play" => include_bytes!("../assets/play.svg"),
+            "test-tube" => include_bytes!("../assets/test-tube.svg"),
+            "hammer" => include_bytes!("../assets/hammer.svg"),
+            "rocket" => include_bytes!("../assets/rocket.svg"),
+            "bug" => include_bytes!("../assets/bug.svg"),
+            "package" => include_bytes!("../assets/package.svg"),
             "square-fill" => include_bytes!("../assets/square-fill.svg"),
             "window" => include_bytes!("../assets/window.svg"),
             "square-terminal" => include_bytes!("../assets/square-terminal.svg"),

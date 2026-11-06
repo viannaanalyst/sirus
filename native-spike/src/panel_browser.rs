@@ -23,6 +23,7 @@ use crate::i18n::{t, tf};
 use crate::panel_files::{TextField, TextFieldEvent};
 use crate::panels::PanelContext;
 use crate::theme;
+use gpui::StyledImage as _;
 use gpui::{
     Animation, AnimationExt, AnyElement, AnyView, App, Bounds, ClipboardItem, Context,
     ElementInputHandler, Entity, EntityInputHandler, FocusHandle, FutureExt as _, KeyDownEvent,
@@ -44,9 +45,16 @@ use std::{
 };
 
 const TOOLBAR: f32 = 36.;
+/// The tabs' row over the address.
+const TAB_STRIP: f32 = 34.;
 const MAX_TABS: usize = 8;
 const GUTTER: f64 = 12.;
+/// What the page leaves at its left edge: a native view takes every click over it, so the side
+/// panel's resize grip needs ground of its own.
+const GRIP_ROOM: f64 = 6.;
 const NOTICE: Duration = Duration::from_millis(1800);
+/// How long a menu waits for the page's picture before covering the page anyway.
+const FREEZE_LIMIT: Duration = Duration::from_millis(400);
 
 /// Chrome DevTools' device list, as `DEVICE_PRESETS` in src-tauri/src/browser.rs.
 pub const PRESETS: [(&str, &str, u32, u32); 17] = [
@@ -186,12 +194,21 @@ struct Geometry {
 impl Shared {
     fn apply(&self) {
         if let Some(web) = self.web.borrow().as_ref() {
-            web.setHidden(
-                COVERED.with(Cell::get)
-                    || self.menu.get()
-                    || self.blank.get()
-                    || !self.visible.get(),
-            );
+            let hidden = COVERED.with(Cell::get)
+                || self.menu.get()
+                || self.blank.get()
+                || !self.visible.get();
+            // A hidden page must not keep the keys, or nothing in the window can be typed in.
+            if hidden
+                && let (Some(window), Some(parent)) = (web.window(), self.parent.borrow().as_ref())
+                && window
+                    .firstResponder()
+                    .and_then(|responder| responder.downcast::<NSView>().ok())
+                    .is_some_and(|view| view.isDescendantOf(web))
+            {
+                window.makeFirstResponder(Some(parent));
+            }
+            web.setHidden(hidden);
         }
     }
 }
@@ -392,6 +409,8 @@ pub struct Browser {
     last_active: Option<String>,
     menu: Option<Menu>,
     menu_since: Instant,
+    /// The page as it looked when a menu opened: the web view hides under menus, this stays.
+    frozen: Option<std::sync::Arc<gpui::Image>>,
     notice: Option<(String, Instant)>,
     annotating: bool,
     matches: Vec<Value>,
@@ -516,6 +535,7 @@ impl Browser {
             last_active: None,
             menu: None,
             menu_since: Instant::now(),
+            frozen: None,
             notice: None,
             annotating: false,
             matches: Vec::new(),
@@ -1227,8 +1247,17 @@ impl Browser {
     fn open_menu(&mut self, menu: Option<Menu>, cx: &mut Context<Self>) {
         self.menu = if self.menu == menu { None } else { menu };
         self.menu_since = Instant::now();
-        self.shared.menu.set(self.menu.is_some());
-        self.shared.apply();
+        let web = self.shared.web.borrow().clone();
+        match web
+            .filter(|_| self.menu.is_some() && !self.shared.menu.get() && self.shared.visible.get())
+        {
+            // The page hides once its picture is ready, so it never leaves a hole.
+            Some(web) => self.freeze_page(&web, cx),
+            None => {
+                self.shared.menu.set(self.menu.is_some());
+                self.shared.apply();
+            }
+        }
         if self.menu == Some(Menu::Logins) {
             let reply = self.backend.request("login_vault_list", json!({}));
             cx.spawn(async move |this, cx| {
@@ -1242,6 +1271,33 @@ impl Browser {
             .detach();
         }
         cx.notify();
+    }
+
+    fn freeze_page(&mut self, web: &WKWebView, cx: &mut Context<Self>) {
+        let shot = browser_tab::snapshot(web);
+        cx.spawn(async move |this, cx| {
+            let picture = shot.recv().await.ok().and_then(Result::ok);
+            let _ = this.update(cx, |this, cx| {
+                this.frozen = picture.map(|png| {
+                    std::sync::Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Png, png))
+                });
+                this.cover_page(cx);
+            });
+        })
+        .detach();
+        // A page that never answers must not keep the menu under it.
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(FREEZE_LIMIT).await;
+            let _ = this.update(cx, |this, cx| this.cover_page(cx));
+        })
+        .detach();
+    }
+
+    fn cover_page(&mut self, cx: &mut Context<Self>) {
+        if self.menu.is_some() && !self.shared.menu.replace(true) {
+            self.shared.apply();
+            cx.notify();
+        }
     }
 
     fn close_menu(&mut self, cx: &mut Context<Self>) {
@@ -1467,7 +1523,8 @@ impl Browser {
     fn tab_strip(&self, cx: &mut Context<Self>) -> AnyElement {
         div()
             .id("browser-tabs")
-            .h(px(30.))
+            .h(px(TAB_STRIP))
+            .pt(px(4.))
             .w_full()
             .flex_shrink_0()
             .px(px(8.))
@@ -1620,6 +1677,47 @@ impl Browser {
                         if let Some(tab) = this.active_tab() {
                             unsafe { tab.web.reloadFromOrigin() };
                         }
+                        this.close_menu(cx);
+                    },
+                ));
+                rows.push(self.item(
+                    "m-link",
+                    t("Copiar link").into(),
+                    false,
+                    page,
+                    cx,
+                    |this, _, cx| {
+                        this.copy_link(cx);
+                        this.close_menu(cx);
+                    },
+                ));
+                let recording = self.recording.is_some();
+                rows.push(
+                    self.item(
+                        "m-record",
+                        t(if recording {
+                            "Parar a gravação"
+                        } else {
+                            "Gravar a página"
+                        })
+                        .into(),
+                        false,
+                        recording || page,
+                        cx,
+                        |this, _, cx| {
+                            this.toggle_recording(cx);
+                            this.close_menu(cx);
+                        },
+                    ),
+                );
+                rows.push(self.item(
+                    "m-pip",
+                    t("Janela flutuante").into(),
+                    self.pip.is_some(),
+                    self.pip.is_some() || page,
+                    cx,
+                    |this, _, cx| {
+                        this.toggle_pip(cx);
                         this.close_menu(cx);
                     },
                 ));
@@ -3523,10 +3621,8 @@ impl Render for Browser {
             .relative()
             .flex_1()
             .min_w_0()
-            .h(px(26.))
+            .h_full()
             .px(px(9.))
-            .rounded(px(crate::theme::RADIUS_MD))
-            .bg(theme::field_fill())
             .overflow_hidden()
             .flex()
             .items_center()
@@ -3575,11 +3671,27 @@ impl Render for Browser {
             });
 
         let shared = self.shared.clone();
-        let page = canvas(
-            |_, _, _| {},
-            move |bounds, _, window, _| paint_web(&shared, bounds, window),
-        )
-        .size_full();
+        let frozen = self.frozen.clone().filter(|_| self.shared.menu.get());
+        let page = div()
+            .relative()
+            .size_full()
+            .child(
+                canvas(
+                    |_, _, _| {},
+                    move |bounds, _, window, _| paint_web(&shared, bounds, window),
+                )
+                .size_full(),
+            )
+            .when_some(frozen, |d, frozen| {
+                d.child(
+                    gpui::img(frozen)
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full()
+                        .object_fit(gpui::ObjectFit::Contain),
+                )
+            });
 
         let active = self.active_tab();
         let (can_back, can_forward, has_page) = (
@@ -3589,6 +3701,81 @@ impl Render for Browser {
         );
         let has_tab = active.is_some();
         let blank = has_tab && !has_page;
+        // One piece: the address and, at its end, the tools for the page it shows.
+        let address = div()
+            .flex_1()
+            .min_w_0()
+            .h(px(30.))
+            .pr(px(2.))
+            .rounded(px(crate::theme::RADIUS_MD))
+            .bg(theme::field_fill())
+            .flex()
+            .items_center()
+            .child(field)
+            .when(!self.matches.is_empty(), |d| {
+                d.child(self.button(
+                    "browser-fill",
+                    "key",
+                    false,
+                    true,
+                    self.menu == Some(Menu::Fill),
+                    cx,
+                    |this, _, cx| this.open_menu(Some(Menu::Fill), cx),
+                ))
+            })
+            .child(self.button(
+                "browser-shot",
+                "browser-camera",
+                false,
+                has_page,
+                false,
+                cx,
+                |this, window, cx| this.capture_to_composer(window, cx),
+            ))
+            .child(self.button(
+                "browser-pick",
+                "pointer",
+                false,
+                has_page,
+                self.annotating,
+                cx,
+                |this, window, cx| this.toggle_annotate(window, cx),
+            ))
+            .child(self.button(
+                "browser-device",
+                "smartphone",
+                false,
+                has_page && !floating,
+                self.device.is_some(),
+                cx,
+                |this, _, cx| {
+                    if this.device.is_some() {
+                        this.set_device(None);
+                    } else {
+                        this.set_device(Some(Device {
+                            width: 390,
+                            height: 844,
+                            preset: Some("iphone-12-pro".into()),
+                        }));
+                        this.device_inputs_stale = true;
+                    }
+                    cx.notify();
+                },
+            ))
+            .when(self.recording.is_some(), |d| {
+                d.child(self.record_button(has_page, cx))
+            })
+            .when(self.pip.is_some(), |d| {
+                d.child(self.button(
+                    "browser-pip",
+                    "browser-pip",
+                    false,
+                    true,
+                    true,
+                    cx,
+                    |this, _, cx| this.toggle_pip(cx),
+                ))
+            });
         let toolbar = div()
             .h(px(TOOLBAR))
             .w_full()
@@ -3637,77 +3824,8 @@ impl Render for Browser {
                 },
             ))
             .child(div().w(px(4.)).flex_shrink_0())
-            .child(field)
+            .child(address)
             .child(div().w(px(4.)).flex_shrink_0())
-            .when(!self.matches.is_empty(), |d| {
-                d.child(self.button(
-                    "browser-fill",
-                    "key",
-                    false,
-                    true,
-                    self.menu == Some(Menu::Fill),
-                    cx,
-                    |this, _, cx| this.open_menu(Some(Menu::Fill), cx),
-                ))
-            })
-            .child(self.button(
-                "browser-link",
-                "browser-link",
-                false,
-                has_page,
-                false,
-                cx,
-                |this, _, cx| this.copy_link(cx),
-            ))
-            .child(self.button(
-                "browser-shot",
-                "browser-camera",
-                false,
-                has_page,
-                false,
-                cx,
-                |this, window, cx| this.capture_to_composer(window, cx),
-            ))
-            .child(self.button(
-                "browser-pick",
-                "pointer",
-                false,
-                has_page,
-                self.annotating,
-                cx,
-                |this, window, cx| this.toggle_annotate(window, cx),
-            ))
-            .child(self.button(
-                "browser-device",
-                "smartphone",
-                false,
-                has_page && !floating,
-                self.device.is_some(),
-                cx,
-                |this, _, cx| {
-                    if this.device.is_some() {
-                        this.set_device(None);
-                    } else {
-                        this.set_device(Some(Device {
-                            width: 390,
-                            height: 844,
-                            preset: Some("iphone-12-pro".into()),
-                        }));
-                        this.device_inputs_stale = true;
-                    }
-                    cx.notify();
-                },
-            ))
-            .child(self.record_button(has_page, cx))
-            .child(self.button(
-                "browser-pip",
-                "browser-pip",
-                false,
-                self.pip.is_some() || has_page,
-                self.pip.is_some(),
-                cx,
-                |this, _, cx| this.toggle_pip(cx),
-            ))
             .child(self.button(
                 "browser-more",
                 "browser-more",
@@ -3856,10 +3974,11 @@ impl Render for Browser {
                 .collect(),
             _ => Vec::new(),
         };
+        let chrome = TOOLBAR + if self.tabs.is_empty() { 0. } else { TAB_STRIP };
         let suggest_el = (!suggestions.is_empty()).then(|| {
             div()
                 .absolute()
-                .top(px(TOOLBAR))
+                .top(px(chrome))
                 .left(px(8.))
                 .right(px(8.))
                 .p(px(4.))
@@ -3978,10 +4097,10 @@ impl Render for Browser {
             .flex()
             .flex_col()
             .relative()
+            .when(!self.tabs.is_empty(), |d| d.child(self.tab_strip(cx)))
             .child(toolbar)
             .when_some(self.offer_bar(), |d, bar| d.child(bar))
             .when_some(self.device_bar(cx), |d, bar| d.child(bar))
-            .when(!self.tabs.is_empty(), |d| d.child(self.tab_strip(cx)))
             .when_some(self.dialog_bar(cx), |d, bar| d.child(bar))
             .child({
                 let device = self.device.is_some();
@@ -4011,7 +4130,7 @@ impl Render for Browser {
                         .child(
                             div()
                                 .absolute()
-                                .top(px(TOOLBAR))
+                                .top(px(chrome))
                                 .right_0()
                                 .left_0()
                                 .child(menu),
@@ -4022,7 +4141,7 @@ impl Render for Browser {
                 d.child(
                     div()
                         .absolute()
-                        .top(px(TOOLBAR + 4.))
+                        .top(px(chrome + 4.))
                         .w_full()
                         .flex()
                         .justify_center()
@@ -4076,11 +4195,29 @@ impl Render for Browser {
 }
 
 /// Hands keyboard focus back from the web view to GPUI's content view.
-fn reclaim_keyboard(window: &Window) {
+/// Whether the keys are with GPUI's content view rather than with a web view.
+pub fn keyboard_home(window: &Window) -> bool {
+    parent_of(window).is_some_and(|view| {
+        view.window().is_some_and(|ns_window| {
+            let responder: &objc2_app_kit::NSResponder = &view;
+            ns_window
+                .firstResponder()
+                .is_some_and(|current| std::ptr::eq(&*current, responder))
+        })
+    })
+}
+
+pub fn reclaim_keyboard(window: &Window) {
     if let Some(view) = parent_of(window)
         && let Some(ns_window) = view.window()
     {
-        ns_window.makeFirstResponder(Some(&view));
+        let responder: &objc2_app_kit::NSResponder = &view;
+        let holds = ns_window
+            .firstResponder()
+            .is_some_and(|current| std::ptr::eq(&*current, responder));
+        if !holds {
+            ns_window.makeFirstResponder(Some(&view));
+        }
     }
 }
 
@@ -4116,7 +4253,13 @@ fn paint_web(shared: &Rc<Shared>, bounds: Bounds<Pixels>, window: &mut Window) {
                 scale * layout.user_zoom,
             )
         }
-        None => (x, y, w, h, layout.user_zoom),
+        None => (
+            x + GRIP_ROOM,
+            y,
+            (w - GRIP_ROOM).max(1.),
+            h,
+            layout.user_zoom,
+        ),
     };
     let fy = if parent.isFlipped() {
         fy

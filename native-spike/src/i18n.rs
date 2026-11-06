@@ -298,6 +298,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Adicionar", "Add"),
     ("Adicionar ao chat", "Add to chat"),
+    ("Adicionar ação", "Add action"),
     ("Adicionar conector personalizado", "Add a custom connector"),
     ("Adicionar conta", "Add account"),
     ("Adicionar login", "Add login"),
@@ -369,6 +370,14 @@ const ENTRIES: &[(&str, &str)] = &[
     (
         "Aperte Esc ou Parar no indicador flutuante para revogar todos os apps de uma vez.",
         "Press Escape or Stop on the floating indicator to revoke every app at once.",
+    ),
+    (
+        "Aperte esc de novo para parar o agente",
+        "Press esc again to stop the agent",
+    ),
+    (
+        "Aperte ⌘Q de novo para fechar o Sirus",
+        "Press ⌘Q again to close Sirus",
     ),
     (
         "Aplicada ao enviar e mantida nos seus próximos envios manuais.",
@@ -455,6 +464,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Avisar com o app em foco", "Notify while app is in focus"),
     ("Avisos de atividade", "Activity alerts"),
     ("Avisos no app", "Activity toasts"),
+    ("Ações", "Actions"),
     ("Ações recentes", "Recent actions"),
     ("Baixando a versão {}…", "Downloading version {}…"),
     ("Baixando o Sirus {}…", "Downloading Sirus {}…"),
@@ -575,6 +585,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Cole um token do serviço; ele fica no Keychain, nunca nos ajustes.",
         "Paste a token from the service; it is kept in the Keychain, never in settings.",
     ),
+    ("Comando", "Command"),
     ("Comandos", "Commands"),
     ("Comece uma nova página", "Start a new page"),
     ("Comentar", "Comment"),
@@ -701,6 +712,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Copiar endereço", "Copy address"),
     ("Copiar link", "Copy link"),
     ("Copiar link do prompt", "Copy prompt link"),
+    ("Cor", "Color"),
     ("Cor de destaque", "Accent color"),
     ("Cores", "Colors"),
     ("Cores do diff", "Diff colors"),
@@ -827,11 +839,16 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Dê um nome ao aparelho", "Give the device a name"),
     (
+        "Dê um nome e um comando à ação.",
+        "Give the action a name and a command.",
+    ),
+    (
         "Dê um nome para reconhecer este aparelho na lista.",
         "Give it a name to tell it apart in the list.",
     ),
     ("Economia do cache", "Cache savings"),
     ("Editar", "Edit"),
+    ("Editar ação", "Edit action"),
     ("Editou", "Edited"),
     ("Efeito de luz nos botões", "Cursor-reactive button effects"),
     ("Efeito do fundo", "Background effect"),
@@ -1189,6 +1206,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Gerenciar perfis…", "Manage profiles…"),
     ("Girar", "Rotate"),
     ("Git detectado", "Git detected"),
+    ("Gravar a página", "Record the page"),
     ("Gravação de Tela", "Screen Recording"),
     (
         "Gravação salva em Filmes › Sirus",
@@ -1304,6 +1322,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Issues, pull requests e repositórios (token)",
         "Issues, pull requests and repositories (token)",
     ),
+    ("Janela flutuante", "Floating window"),
     (
         "Já existe um branch com esse nome.",
         "A branch with this name already exists.",
@@ -1475,6 +1494,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Mostrar sessões trabalhando", "Show working sessions"),
     ("Mostrar teclas", "Show key presses"),
+    ("Mostrar terminal ao rodar", "Show terminal when running"),
     ("Mostrar {} anteriores", "Show {} earlier"),
     ("Mostrar/ocultar Ambiente", "Toggle Environment"),
     (
@@ -1603,6 +1623,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Up to two providers. Turn one off to choose another.",
     ),
     ("Nome", "Name"),
+    ("Nome da ação", "Action name"),
     (
         "Nome da conta, Enter para entrar",
         "Account name, Enter to sign in",
@@ -2020,7 +2041,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Paleta de comandos", "Command Palette"),
     ("Parada", "Stopped"),
     ("Parando…", "Stopping…"),
-    ("Parar", "Stop"),
+    ("Parar a gravação", "Stop recording"),
     ("Parar agente", "Stop Agent"),
     ("Parar conversa?", "Stop conversation?"),
     ("Parar e enviar", "Stop and send"),
@@ -2378,6 +2399,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Salvar scripts", "Save scripts"),
     ("Salvar, agentes podem usar", "Save, agents may use"),
     (
+        "Salve um comando do projeto para rodar com um clique.",
+        "Save a project command to run with one click.",
+    ),
+    (
         "Salvo. Digite outro para trocar, ou um traço para remover",
         "Saved. Type a new one to replace it, or a dash to remove it",
     ),
@@ -2479,6 +2504,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Somente leitura", "Read-only"),
     ("Sons", "Sounds"),
     ("Sons de notificação", "Notification sounds"),
+    ("Sortear visual", "Draw another look"),
     ("Squash e mesclar", "Squash and merge"),
     ("Suave", "Smooth"),
     ("Suavização de fontes", "Font smoothing"),
@@ -2863,6 +2889,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "É rascunho: marque como pronto antes de mesclar.",
         "It is a draft: mark it ready before merging.",
     ),
+    ("Ícone", "Icon"),
     ("Ícone do Dock", "Dock icon"),
     ("Últimos 30 dias", "Last 30 days"),
     ("Últimos 7 dias", "Last 7 days"),

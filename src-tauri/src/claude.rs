@@ -122,7 +122,19 @@ pub async fn start(
         command.args(["--allowedTools", "mcp__sirus_browser"]);
         // Its tools are deferred behind tool search: name the visual tool so answers that
         // compare, measure or plan reach for it (ADR-123). Fixed text, never the renderer's.
-        command.args(["--append-system-prompt", crate::visuals::CLAUDE_HINT]);
+        // And pages go to the app's own browser, so the person sees what the agent sees.
+        command.args([
+            "--append-system-prompt",
+            &format!(
+                "{} {}",
+                crate::visuals::CLAUDE_HINT,
+                crate::skills::agent_hint()
+            ),
+        ]);
+        // The app's skills sit outside the workspace; reading one should never ask.
+        if let Some(skills) = crate::skills::portable_skills() {
+            command.arg(format!("--add-dir={}", skills.display()));
+        }
         // Computer tools are gated by the app's per-app approval, not per call.
         if crate::computer_mcp::endpoint(&session.id).is_some() {
             command.args(["--allowedTools", "mcp__sirus_computer"]);

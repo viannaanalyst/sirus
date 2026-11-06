@@ -1017,7 +1017,7 @@ impl Shell {
             || self.theme_menu.is_some()
             || self.menu.is_some()
             || self.session_filter.open.is_some();
-        // Escape stops the agent unless a menu, dialog or pane holds the keys. Clicking the
+        // Escape twice stops the agent, unless a menu, dialog or pane holds the keys. Clicking the
         // transcript can leave nothing focused, which still counts as the conversation.
         if key == "escape"
             && plain
@@ -1026,7 +1026,9 @@ impl Shell {
             && self.conversations[ix].working()
             && (self.focus.is_focused(window) || window.focused(cx).is_none())
         {
-            self.stop_agent(cx);
+            if self.pressed_twice(Press::StopAgent, cx) {
+                self.stop_agent(cx);
+            }
             cx.stop_propagation();
             return true;
         }

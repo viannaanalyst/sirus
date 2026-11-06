@@ -116,7 +116,6 @@ pub(crate) enum Undo {
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Shown {
     pub copy: bool,
-    pub retry: bool,
     pub undo: Undo,
     pub side_chat: bool,
 }
@@ -139,7 +138,6 @@ pub(crate) fn visible(facts: &Facts) -> Shown {
     };
     Shown {
         copy: facts.finished && facts.answered,
-        retry: facts.finished && facts.latest && !facts.working,
         undo,
         side_chat: facts.finished && facts.answered,
     }
@@ -172,6 +170,12 @@ pub(crate) struct Can {
 /// actions, each only when `handoff::shown` says the turn has a settled reply for it.
 pub(crate) fn reply_rows(shown: &Shown, reply: &handoff::Shown, can: Can) -> Vec<ReplyRow> {
     let mut rows = Vec::new();
+    if reply.handoff {
+        rows.push(ReplyRow {
+            row: Row::Handoff,
+            enabled: can.handoff,
+        });
+    }
     if shown.side_chat {
         rows.push(ReplyRow {
             row: Row::SideChat,
@@ -184,13 +188,12 @@ pub(crate) fn reply_rows(shown: &Shown, reply: &handoff::Shown, can: Can) -> Vec
             enabled: can.fork,
         });
     }
-    if reply.handoff {
-        rows.push(ReplyRow {
-            row: Row::Handoff,
-            enabled: can.handoff,
-        });
-    }
     rows
+}
+
+/// Whether a sent message offers to run again: only its conversation's last, after a failure.
+pub(crate) fn can_retry(status: &str, error: &str, latest: bool, working: bool) -> bool {
+    latest && !working && super::account_card::headline(status, error).is_some()
 }
 
 /// A small label shown on hover of a row button, through gpui's tooltip.
@@ -338,17 +341,9 @@ impl Shell {
                 cx,
             ));
         }
-        if shown.retry {
-            items.push(self.action_button(
-                ("turn-retry", index),
-                "refresh",
-                t("Tentar de novo"),
-                true,
-                Act::Retry {
-                    session: conv.session_id.clone(),
-                },
-                cx,
-            ));
+        let reply = turn.reply.clone().unwrap_or_default();
+        for item in self.reply_rows_of(conversation, index, turn) {
+            items.push(self.reply_button(index, item, &conv.session_id, &reply, cx));
         }
         let mut status: Option<String> = None;
         match shown.undo {
@@ -380,10 +375,6 @@ impl Shell {
             }
             Undo::Done => status = Some(t("Alterações desfeitas").to_owned()),
             Undo::Hidden => {}
-        }
-        let reply = turn.reply.clone().unwrap_or_default();
-        for item in self.reply_rows_of(conversation, index, turn) {
-            items.push(self.reply_button(index, item, &conv.session_id, &reply, cx));
         }
         let notice = state
             .notice
@@ -474,6 +465,38 @@ impl Shell {
             .cursor_pointer()
             .hover(|s| s.bg(content(0.07)).text_color(content(0.9)))
             .on_click(cx.listener(move |this, _, _, cx| this.run_action(act.clone(), cx)))
+            .into_any_element()
+    }
+
+    /// Under a sent message whose turn failed: runs it again.
+    pub(super) fn retry_button(
+        &self,
+        index: usize,
+        session: String,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        div()
+            .id(("turn-retry", index))
+            .h(px(24.))
+            .px(px(8.))
+            .rounded(px(crate::theme::RADIUS_SM))
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .text_size(px(12.))
+            .text_color(content(0.6))
+            .cursor_pointer()
+            .hover(|s| s.bg(content(0.07)).text_color(content(0.9)))
+            .child(icon("refresh", 12.))
+            .child(t("Tentar de novo"))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.run_action(
+                    Act::Retry {
+                        session: session.clone(),
+                    },
+                    cx,
+                )
+            }))
             .into_any_element()
     }
 
@@ -719,7 +742,6 @@ mod tests {
             shown,
             Shown {
                 copy: false,
-                retry: false,
                 undo: Undo::Hidden,
                 side_chat: false,
             }
@@ -730,22 +752,23 @@ mod tests {
     fn an_older_answer_offers_copy_and_side_chat_only() {
         let shown = visible(&facts(true, true, false, false, None));
         assert!(shown.copy && shown.side_chat);
-        assert!(!shown.retry);
         assert_eq!(shown.undo, Undo::Hidden);
     }
 
     #[test]
-    fn retry_only_on_the_latest_finished_turn_when_idle() {
-        assert!(visible(&facts(true, true, true, false, None)).retry);
-        assert!(!visible(&facts(true, true, true, true, None)).retry);
-        assert!(!visible(&facts(true, true, false, false, None)).retry);
+    fn retry_shows_only_after_a_failure_on_the_latest_turn() {
+        assert!(can_retry("failed", "boom", true, false));
+        assert!(!can_retry("idle", "", true, false));
+        assert!(!can_retry("failed", "", true, false));
+        assert!(!can_retry("failed", "boom", false, false));
+        assert!(!can_retry("failed", "boom", true, true));
     }
 
     #[test]
     fn a_turn_without_text_still_offers_retry_and_undo() {
         let changes = review(&[("a.rs", false, true, false)], false);
         let shown = visible(&facts(true, false, true, false, Some(&changes)));
-        assert!(!shown.copy && !shown.side_chat && shown.retry);
+        assert!(!shown.copy && !shown.side_chat);
         assert_eq!(shown.undo, Undo::Offered { enabled: true });
     }
 
@@ -826,9 +849,9 @@ mod tests {
         assert_eq!(
             enabled_rows(&more(true, true, true, ALL_CAN)),
             [
+                (Row::Handoff, true),
                 (Row::SideChat, true),
                 (Row::Fork, true),
-                (Row::Handoff, true),
             ]
         );
     }
@@ -855,9 +878,9 @@ mod tests {
         assert_eq!(
             enabled_rows(&more(true, true, true, busy)),
             [
+                (Row::Handoff, false),
                 (Row::SideChat, true),
                 (Row::Fork, false),
-                (Row::Handoff, false),
             ]
         );
     }
@@ -871,9 +894,9 @@ mod tests {
         assert_eq!(
             enabled_rows(&more(true, true, true, alone)),
             [
+                (Row::Handoff, false),
                 (Row::SideChat, true),
                 (Row::Fork, true),
-                (Row::Handoff, false),
             ]
         );
     }

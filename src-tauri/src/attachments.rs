@@ -1239,11 +1239,8 @@ fn image_copies(bytes: &[u8]) -> (Option<Vec<u8>>, Option<String>) {
     } else {
         image
     };
-    let chip = if large.width() > 240 || large.height() > 240 {
-        large.resize(240, 240, image::imageops::FilterType::Triangle)
-    } else {
-        large.clone()
-    };
+    // The composer shows it square: cropped to fill, so a long screenshot stays sharp and inside.
+    let chip = large.resize_to_fill(144, 144, image::imageops::FilterType::Triangle);
     let thumbnail = encode(&large, 80).filter(|out| out.len() <= 640 * 1024);
     let chip =
         encode(&chip, 78).map(|out| format!("data:image/jpeg;base64,{}", STANDARD.encode(out)));
@@ -1309,6 +1306,22 @@ mod thumbnail_tests {
         let jpeg = super::thumbnail(&png).unwrap();
         assert!(jpeg.starts_with(&[0xFF, 0xD8]));
         assert!(super::thumbnail(b"not an image").is_none());
+    }
+
+    #[test]
+    fn the_composer_copy_is_square_whatever_the_shape() {
+        use base64::Engine as _;
+        let mut png = Vec::new();
+        image::DynamicImage::new_rgb8(1600, 200)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let chip = super::image_copies(&png).1.unwrap();
+        let encoded = chip.strip_prefix("data:image/jpeg;base64,").unwrap();
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .unwrap();
+        let copy = image::load_from_memory(&bytes).unwrap();
+        assert_eq!((copy.width(), copy.height()), (144, 144));
     }
 }
 

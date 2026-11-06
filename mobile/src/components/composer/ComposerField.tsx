@@ -3,14 +3,14 @@ import type { TextInputSelectionChangeEvent } from "react-native";
 
 import { composerSegments } from "@sirus/lib/composer-tokens";
 
-import { useUniwindTheme } from "../../lib/useUniwindTheme";
+import { useMacAccent } from "../../data/mac-accent";
 import { AppText, AppTextInput } from "../AppText";
 import type { Selection } from "./useComposerSuggestions";
 
 /** The colours of a `/skill` or `@file` token, in the field and in the sent bubble (the desktop's `composer-token`). */
 export function useTokenColors() {
-  const link = useUniwindTheme()["--color-md-link"];
-  return { color: link, backgroundColor: /^#[0-9a-f]{6}$/i.test(link) ? `${link}24` : "transparent" };
+  const link = useMacAccent();
+  return { color: link, backgroundColor: /^#[0-9a-f]{6}$/i.test(link) ? `${link}2e` : "transparent" };
 }
 
 export interface ComposerFieldHandle { focus: () => void }

@@ -28,7 +28,8 @@ export function AddSheet(props: {
   const { modes } = composer;
   const planningOk = supportsPlanning(provider, model);
   const teamOk = supportsTeam(provider);
-  const run = (action: () => void) => () => { composer.closeSheet(); action(); };
+  // iOS drops a picker presented while this sheet's modal is still on screen: wait for it to go.
+  const run = (action: () => void) => () => { composer.closeSheet(); setTimeout(action, 450); };
   const mode = (update: (current: ComposerModes) => ComposerModes) => () => { composer.closeSheet(); composer.changeModes(update); };
   const check = (on: boolean) => on ? <SymbolView name="checkmark" size={15} weight="semibold" tintColorClassName="accent-foreground" /> : undefined;
   const editGoal = () => {

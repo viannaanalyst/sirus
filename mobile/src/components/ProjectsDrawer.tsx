@@ -157,7 +157,6 @@ function DrawerBody(props: { readonly onClose: () => void; readonly selected: st
       })}
       {!shown.length ? <AppText className="mt-6 text-center text-sm text-foreground-muted">{summaries.length ? "Nenhum projeto aqui." : "Nenhum projeto ainda. Adicione um com o botão +."}</AppText> : null}
     </ScrollView>
-    {shown.length ? <AppText className="mb-2.5 mt-1 px-2 text-xs text-foreground-tertiary">Toque e segure um projeto para abrir a página dele.</AppText> : null}
     <View className="flex-row items-center gap-2">
       <RoundButton icon="gearshape" label="Ajustes" onPress={() => { props.onClose(); navigation.navigate("Settings"); }} />
       <View className="h-11 flex-1 flex-row items-center gap-2 rounded-[22px] border border-border-subtle bg-glass-fallback px-3.5">

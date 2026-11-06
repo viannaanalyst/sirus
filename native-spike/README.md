@@ -36,6 +36,7 @@ Quitting with `pkill` leaves the host running. Kill it too after rebuilding it, 
 - `src/file_editor.rs`: the editor in the Files panel. `src/git_sync.rs`, `src/project_scripts.rs`, `src/cli_diagnostics.rs`, `src/delegated_tasks.rs`, `src/agent_resources.rs`, `src/conversation_export.rs`, `src/chat_background.rs`, `src/simulator.rs` (hidden for now).
 - `src/first_run.rs`: the welcome of the very first launch (agents, project, look) over the letters robot of `new_tab_field.rs`; once seen it is remembered in `native-first-run.json`, and Settings → Geral plays it again. `src/global_search.rs`: ⌘⇧F and the palette's message results, from the host's `transcript_action` search (3 characters, debounced). ⌃⇧F toggles the frame-time overlay.
 - `src/workspace_follow.rs`: follows a session's folder on disk for the Files and Changes panels. `src/prompt_link.rs`: `sirus://new` prompt links and "Copiar link do prompt".
+- `src/activity_cards.rs`: cards and project badges for what other conversations need (ADR-192).
 - `src/app_update.rs`: in-app updates. It reads `sirus-latest.json` from the fixed `sirus-channel` release, verifies the archive's minisign signature against the key in `updater.pub` (never changed: installed apps trust it), swaps the bundle and relaunches only when asked, after the running-agents confirmation. Releases: `node scripts/release-sirus.ts` (dry run) or `--publish`.
 - `src/i18n.rs`: English and Portuguese, with the Portuguese text as the key.
 - `src/visuals/`: native visuals, run from a JavaScript program.

@@ -9517,7 +9517,8 @@ impl Shell {
                 }
                 let view = if last && anchored {
                     div()
-                        .min_h(px((view_height - 28.).max(0.)))
+                        // Leaves room above the sent message, clear of the fade at the top.
+                        .min_h(px((view_height - 28. - ANCHOR_TOP).max(0.)))
                         .child(view)
                         .into_any_element()
                 } else {
@@ -15144,6 +15145,9 @@ fn prompt_frame(motion: Option<f32>, width: Pixels, collapsed: bool, text: AnyEl
             .into_any_element(),
     }
 }
+
+/// How far below the top of the view a sent message comes to rest.
+const ANCHOR_TOP: f32 = 32.;
 
 /// The first fold key among `phase_open`'s (conversation, turn, key); below it are step indexes.
 const FOLD_KEY: usize = 1 << 40;

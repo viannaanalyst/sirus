@@ -198,6 +198,11 @@ const ENTRIES: &[(&str, &str)] = &[
         "A versão nova é baixada e instalada e espera você reiniciar. Se você não reiniciar, ela entra na próxima vez que abrir o app.",
         "A new version is downloaded and installed, then waits for you to restart. If you don't, it starts the next time you open the app.",
     ),
+    ("A versão {} está disponível.", "Version {} is available."),
+    (
+        "A versão {} está instalada. Ela começa quando você reiniciar ou abrir o app de novo.",
+        "Version {} is installed. It starts when you restart or open the app again.",
+    ),
     ("Abaixo", "Below"),
     ("Abas de conversa", "Conversation tabs"),
     ("Aberto", "Open"),
@@ -234,8 +239,8 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Abrir ao lado", "Open to the side"),
     ("Abrir como rascunho", "Open as draft"),
     (
-        "Abrir diretório de dados do Sirus Code",
-        "Open Sirus Code data directory",
+        "Abrir diretório de dados do Sirus",
+        "Open Sirus data directory",
     ),
     ("Abrir links no", "Open links in"),
     ("Abrir no GitHub", "Open on GitHub"),
@@ -332,8 +337,8 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Animações da interface", "Interface animations"),
     ("Anotação anexada", "Annotation attached"),
     (
-        "Ao abrir o Sirus Code e a cada poucas horas.",
-        "When Sirus Code opens and every few hours.",
+        "Ao abrir o Sirus e a cada poucas horas.",
+        "When Sirus opens and every few hours.",
     ),
     ("Ao terminar", "On finish"),
     (
@@ -406,6 +411,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Atualizar skills", "Refresh skills"),
     ("Atualização", "Updated"),
+    ("Atualização pronta · Reiniciar", "Update ready · Restart"),
     ("Atualizações", "Updates"),
     (
         "Aumenta ou diminui tudo.",
@@ -421,10 +427,13 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Avisos de atividade", "Activity alerts"),
     ("Avisos no app", "Activity toasts"),
     ("Ações recentes", "Recent actions"),
+    ("Baixando a versão {}…", "Downloading version {}…"),
+    ("Baixando o Sirus {}…", "Downloading Sirus {}…"),
     (
         "Baixar atualizações em segundo plano",
         "Download updates in the background",
     ),
+    ("Baixar e instalar", "Download and install"),
     ("Baixo", "Low"),
     ("Bancos Prisma Postgres", "Prisma Postgres databases"),
     ("Barra", "Bar"),
@@ -446,6 +455,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Busca o branch padrão do origin e baseia novos worktrees nele, e não no branch local. Sem origin ou sem rede, eles começam do branch local.",
         "Fetches origin's default branch and bases new worktrees on it instead of the local branch. Without origin or a network, they start from the local branch.",
     ),
+    ("Buscando atualização…", "Looking for an update…"),
     ("Buscando…", "Searching…"),
     ("Buscar", "Search"),
     ("Buscar arquivos", "Search files"),
@@ -453,6 +463,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Buscar arquivos pelo nome…  (> para comandos)",
         "Search files by name…  (> for commands)",
     ),
+    ("Buscar atualização", "Check for updates"),
     ("Buscar conectores", "Search connectors"),
     ("Buscar configurações", "Search Settings"),
     (
@@ -703,8 +714,8 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Densidade da interface", "UI density"),
     ("Depois", "Later"),
     (
-        "Depois de permitir nos Ajustes do Sistema, feche e reabra o Sirus Code se o status não atualizar.",
-        "After allowing in System Settings, quit and reopen Sirus Code if the status does not update.",
+        "Depois de permitir nos Ajustes do Sistema, feche e reabra o Sirus se o status não atualizar.",
+        "After allowing in System Settings, quit and reopen Sirus if the status does not update.",
     ),
     ("Depois do turno", "After the turn"),
     ("Desafixar", "Unpin"),
@@ -796,8 +807,8 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Em breve", "Coming soon"),
     ("Em espera", "Waiting"),
     (
-        "Em qualquer app, o atalho captura a janela da frente e anexa à conversa aberta no Sirus Code. Nada é enviado.",
-        "From any app, the shortcut captures the window in front and attaches it to the conversation open in Sirus Code. Nothing is sent.",
+        "Em qualquer app, o atalho captura a janela da frente e anexa à conversa aberta no Sirus. Nada é enviado.",
+        "From any app, the shortcut captures the window in front and attaches it to the conversation open in Sirus. Nothing is sent.",
     ),
     ("Embaixo", "Bottom"),
     ("Embaixo, no painel lateral ou como abas na barra de título. ⌘J abre um terminal e ⇧⌘J divide à direita.", "At the bottom, in the side panel or as tabs in the title bar. ⌘J opens a terminal and ⇧⌘J splits to the right."),
@@ -854,8 +865,8 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Equipe", "Team"),
     ("Esc fechar", "Esc close"),
     (
-        "Escolha como o Sirus Code avisa quando o trabalho termina ou precisa da sua atenção.",
-        "Choose how Sirus Code alerts you when work finishes or needs your attention.",
+        "Escolha como o Sirus avisa quando o trabalho termina ou precisa da sua atenção.",
+        "Choose how Sirus alerts you when work finishes or needs your attention.",
     ),
     (
         "Escolha o provedor das novas sessões. As sessões atuais mantêm seu provedor.",
@@ -1050,12 +1061,16 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Girar", "Rotate"),
     ("Git detectado", "Git detected"),
     ("Gravação de Tela", "Screen Recording"),
-    ("Gravação salva em Filmes › Sirus Code", "Recording saved in Movies › Sirus Code"),
+    ("Gravação salva em Filmes › Sirus", "Recording saved in Movies › Sirus"),
     ("Gravações do navegador", "Browser recordings"),
     ("Histórico · {}", "History · {}"),
     ("Hoje", "Today"),
     ("Hoje: {}% de {}% disponíveis", "Today: {}% of {}% available"),
     ("Hora de renovar já passou", "Renewal time has passed"),
+    (
+        "Há agentes trabalhando. Reiniciar interrompe todos. As conversas e as mensagens ficam salvas, e a atualização também vale na próxima vez que você abrir o Sirus.",
+        "Agents are working. Restarting interrupts all of them. Conversations and messages are kept, and the update also applies the next time you open Sirus.",
+    ),
     ("Há comandos rodando em: {}. Fechar encerra esses shells e o que estiver rodando neles.", "Commands are running in: {}. Closing ends these shells and whatever runs in them."),
     ("Há conflitos com o branch base.", "There are conflicts with the base branch."),
     (
@@ -1270,8 +1285,8 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Mostrar {} anteriores", "Show {} earlier"),
     ("Mostrar/ocultar Ambiente", "Toggle Environment"),
     (
-        "Mostre notificações e toque sons também enquanto o Sirus Code estiver ativo.",
-        "Also show system alerts and play sounds while Sirus Code is active.",
+        "Mostre notificações e toque sons também enquanto o Sirus estiver ativo.",
+        "Also show system alerts and play sounds while Sirus is active.",
     ),
     (
         "Mostre um aviso para sessões que você não está visualizando.",
@@ -1361,7 +1376,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Nenhuma pasta criada", "No folders created"),
     ("Nenhuma skill encontrada", "No skills found"),
     ("Neste projeto · {}", "In this project · {}"),
-    ("No Sirus Code", "In Sirus Code"),
+    ("No Sirus", "In Sirus"),
     (
         "No botão de enviar, nos seus balões e na guia ativa.",
         "On the send button, your bubbles and the active tab.",
@@ -1421,6 +1436,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Não foi possível abrir {}.", "Could not open {}."),
     ("Não foi possível anexar.", "Couldn't attach."),
+    ("Não foi possível atualizar: {}", "Could not update: {}"),
     (
         "Não foi possível capturar a página.",
         "Could not capture the page.",
@@ -1620,8 +1636,8 @@ const ENTRIES: &[(&str, &str)] = &[
         "Older diffs were released. The summary and acknowledgment are preserved.",
     ),
     (
-        "Os nomes e ícones dos provedores indicam onde cada cópia foi encontrada. Skills invocadas ficam disponíveis entre provedores. Os switches controlam o catálogo do Sirus Code; não alteram a descoberta nas CLIs externas.",
-        "Provider names and icons show where each copy was found. Invoked skills are available across providers. The switches control the Sirus Code catalog; they do not change discovery in the external CLIs.",
+        "Os nomes e ícones dos provedores indicam onde cada cópia foi encontrada. Skills invocadas ficam disponíveis entre provedores. Os switches controlam o catálogo do Sirus; não alteram a descoberta nas CLIs externas.",
+        "Provider names and icons show where each copy was found. Invoked skills are available across providers. The switches control the Sirus catalog; they do not change discovery in the external CLIs.",
     ),
     (
         "Os pedidos aguardam você continuar a fila.",
@@ -1675,7 +1691,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Passa a conversa a outro provedor nesta pasta. A recapitulação vai com a primeira mensagem.", "Hands the conversation to another provider in this folder. The recap goes with the first message."),
     ("Passou", "Passed"),
     ("Pasta", "Folder"),
-    ("Pasta de skills do Sirus Code", "Sirus Code skills folder"),
+    ("Pasta de skills do Sirus", "Sirus skills folder"),
     ("Pasta do projeto", "Project folder"),
     (
         "Pasta onde os worktrees são criados. Escolha uma pasta ou digite o caminho.",
@@ -1804,8 +1820,8 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Pronto", "Ready"),
     ("Pronto para revisão", "Ready for review"),
     (
-        "Proteção permanente. O Sirus Code não executa operações destrutivas do Git automaticamente.",
-        "Cannot be turned off. Sirus Code never runs reset --hard, clean -fd, or worktree remove --force automatically.",
+        "Proteção permanente. O Sirus não executa operações destrutivas do Git automaticamente.",
+        "Cannot be turned off. Sirus never runs reset --hard, clean -fd, or worktree remove --force automatically.",
     ),
     ("Provedor", "Provider"),
     ("Provedor padrão", "Default provider"),
@@ -1829,12 +1845,12 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Quadros, itens e atualizações", "Boards, items and updates"),
     ("Qualquer pessoa", "Anyone"),
     (
-        "Quando os checks do PR aberto de uma sessão falham, o agente dela recebe os erros e corrige; depois o Sirus Code faz commit e push do branch da sessão (nunca forçado). Até 3 tentativas por falha; senão pausa e avisa.",
-        "When the checks of a session's open pull request fail, its agent gets the errors and fixes them, then Sirus Code commits and pushes the session branch (never forced). Up to 3 attempts per failure; it pauses and notifies you otherwise.",
+        "Quando os checks do PR aberto de uma sessão falham, o agente dela recebe os erros e corrige; depois o Sirus faz commit e push do branch da sessão (nunca forçado). Até 3 tentativas por falha; senão pausa e avisa.",
+        "When the checks of a session's open pull request fail, its agent gets the errors and fixes them, then Sirus commits and pushes the session branch (never forced). Up to 3 attempts per failure; it pauses and notifies you otherwise.",
     ),
     (
-        "Quando outra pessoa abre um pull request ou pede sua revisão no repositório de um projeto salvo. Verificado ao abrir o Sirus Code e quando você volta para ele.",
-        "When someone else opens a pull request or asks for your review in a saved project's repository. Checked when Sirus Code opens and when you come back to it.",
+        "Quando outra pessoa abre um pull request ou pede sua revisão no repositório de um projeto salvo. Verificado ao abrir o Sirus e quando você volta para ele.",
+        "When someone else opens a pull request or asks for your review in a saved project's repository. Checked when Sirus opens and when you come back to it.",
     ),
     (
         "Quando um agente pede uma escolha ou resposta.",
@@ -1876,8 +1892,8 @@ const ENTRIES: &[(&str, &str)] = &[
         "Reopen the newest-created session in the last project. Other sessions remain in the sidebar; agents do not start automatically.",
     ),
     (
-        "Reabre o último projeto ativo ao iniciar o Sirus Code.",
-        "Automatically reopen the last active project when Sirus Code starts.",
+        "Reabre o último projeto ativo ao iniciar o Sirus.",
+        "Automatically reopen the last active project when Sirus starts.",
     ),
     ("Reabrir", "Reopen"),
     ("Reabrir guia fechada", "Reopen closed tab"),
@@ -1891,6 +1907,9 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Recolher turnos terminados", "Fold finished turns"),
     ("Recusar", "Decline"),
     ("Reduzir movimento", "Reduce motion"),
+    ("Reiniciar agora", "Restart now"),
+    ("Reiniciar e interromper", "Restart and interrupt"),
+    ("Reiniciar para atualizar?", "Restart to update?"),
     (
         "Remove sessões encerradas e seus worktrees isolados. Worktrees com alterações são preservados.",
         "Removes isolated worktrees for completed, failed, or stopped sessions. Dirty trees are refused without --force.",
@@ -1913,8 +1932,8 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Restaurar", "Reset"),
     (
-        "Restaurar configurações do Sirus Code",
-        "Reset Sirus Code settings",
+        "Restaurar configurações do Sirus",
+        "Reset Sirus settings",
     ),
     ("Restaurar layout da janela", "Reset window layout"),
     ("Restaurar os padrões desta página?", "Restore this page's defaults?"),
@@ -1989,8 +2008,8 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Script de término interrompido", "On-finish script stopped"),
     ("Script de término passou do tempo", "On-finish script ran out of time"),
     (
-        "Se o Sirus Code fechar inesperadamente enquanto um agente trabalha, a conversa continua na próxima abertura, pedindo que o agente confira primeiro o que já aconteceu. No máximo três vezes seguidas; conversas paradas, adiadas ou aguardando você ficam como estão.",
-        "If Sirus Code closes unexpectedly while an agent works, that conversation continues on the next launch, asking the agent to check what already happened first. At most three times in a row; stopped, snoozed and waiting conversations are left alone.",
+        "Se o Sirus fechar inesperadamente enquanto um agente trabalha, a conversa continua na próxima abertura, pedindo que o agente confira primeiro o que já aconteceu. No máximo três vezes seguidas; conversas paradas, adiadas ou aguardando você ficam como estão.",
+        "If Sirus closes unexpectedly while an agent works, that conversation continues on the next launch, asking the agent to check what already happened first. At most three times in a row; stopped, snoozed and waiting conversations are left alone.",
     ),
     (
         "Se outro app já usa a combinação, escolha outra.",
@@ -2040,6 +2059,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Shell padrão", "Default shell"),
     ("Sim", "Yes"),
     ("Simulador", "Simulator"),
+    ("Sirus {} disponível · Instalar", "Sirus {} available · Install"),
     ("Sistema", "System"),
     ("Sites, lojas e agendamentos", "Sites, stores and bookings"),
     ("Sites, páginas e CMS", "Sites, pages and CMS"),
@@ -2221,8 +2241,8 @@ const ENTRIES: &[(&str, &str)] = &[
         "Use PDF, DOCX, XLSX, PPTX or CSV. Convert older DOC/XLS/PPT files first.",
     ),
     (
-        "Use o Sirus Code pelo celular ou por outro computador. O trabalho continua rodando neste Mac; o outro aparelho só controla, pela sua rede privada da Tailscale.",
-        "Use Sirus Code from your phone or another computer. The work still runs on this Mac; the other device only drives it, over your private Tailscale network.",
+        "Use o Sirus pelo celular ou por outro computador. O trabalho continua rodando neste Mac; o outro aparelho só controla, pela sua rede privada da Tailscale.",
+        "Use Sirus from your phone or another computer. The work still runs on this Mac; the other device only drives it, over your private Tailscale network.",
     ),
     (
         "Use um endereço http(s) localhost com porta.",
@@ -2279,11 +2299,13 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Verificar de novo", "Check again"),
     ("Versão", "Version"),
     ("Versão {}", "Version {}"),
+    ("Versão {}.", "Version {}."),
     ("Vidro fumê", "Smoked glass"),
     ("Visibilidade na sessão", "Session visibility"),
     ("Visibilidade no chat vazio", "Empty chat visibility"),
     ("Visualização", "View"),
     ("Você", "You"),
+    ("Você está na versão mais recente ({}).", "You are on the latest version ({})."),
     ("Você pode recuperar pela Lixeira no Finder. Tudo que estiver dentro da pasta vai junto.", "You can restore it from the Trash in Finder. Anything inside a folder goes with it."),
     ("Voltar", "Back"),
     ("Voltar ao app", "Back to app"),

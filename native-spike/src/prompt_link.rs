@@ -355,7 +355,7 @@ impl Shell {
             (true, Some(link)) => {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(link.to_owned()));
                 crate::native_notify::banner(
-                    "Sirus Native",
+                    "Sirus",
                     t(
                         "Link do prompt copiado. Quem abrir recebe o prompt como rascunho; nada é enviado.",
                     ),

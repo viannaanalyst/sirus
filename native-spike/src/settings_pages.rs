@@ -411,7 +411,7 @@ fn build(page: &str, s: &Value, d: &HashMap<&'static str, Value>) -> Page {
         "Notificações" => page_of(
             t("Notificações"),
             t(
-                "Escolha como o Sirus Code avisa quando o trabalho termina ou precisa da sua atenção.",
+                "Escolha como o Sirus avisa quando o trabalho termina ou precisa da sua atenção.",
             ),
             notifications(s),
         ),
@@ -503,7 +503,7 @@ fn build(page: &str, s: &Value, d: &HashMap<&'static str, Value>) -> Page {
         "Conexões" => page_of(
             t("Conexões"),
             t(
-                "Use o Sirus Code pelo celular ou por outro computador. O trabalho continua rodando neste Mac; o outro aparelho só controla, pela sua rede privada da Tailscale.",
+                "Use o Sirus pelo celular ou por outro computador. O trabalho continua rodando neste Mac; o outro aparelho só controla, pela sua rede privada da Tailscale.",
             ),
             connections(d),
         ),
@@ -1388,7 +1388,7 @@ fn provider_name(id: &str) -> String {
 fn origin_label(origin: &str) -> String {
     match origin {
         "agents" => t("Compartilhadas (.agents)").to_string(),
-        "sirus" => "Sirus Code".to_string(),
+        "sirus" => "Sirus".to_string(),
         other => provider_name(other),
     }
 }
@@ -1405,7 +1405,7 @@ fn general(s: &Value) -> Vec<Group> {
     let startup_rows: &[SwitchRow] = &[
         (
             t("Reabrir último projeto"),
-            t("Reabre o último projeto ativo ao iniciar o Sirus Code."),
+            t("Reabre o último projeto ativo ao iniciar o Sirus."),
             top("openLastProject"),
         ),
         (
@@ -1602,7 +1602,7 @@ fn chat(s: &Value) -> Vec<Group> {
         (
             t("Continuar conversas interrompidas após uma falha"),
             t(
-                "Se o Sirus Code fechar inesperadamente enquanto um agente trabalha, a conversa continua na próxima abertura, pedindo que o agente confira primeiro o que já aconteceu. No máximo três vezes seguidas; conversas paradas, adiadas ou aguardando você ficam como estão.",
+                "Se o Sirus fechar inesperadamente enquanto um agente trabalha, a conversa continua na próxima abertura, pedindo que o agente confira primeiro o que já aconteceu. No máximo três vezes seguidas; conversas paradas, adiadas ou aguardando você ficam como estão.",
             ),
             top("continueInterruptedSessions"),
         ),
@@ -1709,7 +1709,7 @@ fn chat(s: &Value) -> Vec<Group> {
             vec![pick(
                 s,
                 top("githubLinksInApp"),
-                &[("true", t("No Sirus Code")), ("false", t("Navegador"))],
+                &[("true", t("No Sirus")), ("false", t("Navegador"))],
             )],
         ),
     ];
@@ -1788,7 +1788,7 @@ fn notifications(s: &Value) -> Vec<Group> {
         ),
         (
             t("Avisar com o app em foco"),
-            t("Mostre notificações e toque sons também enquanto o Sirus Code estiver ativo."),
+            t("Mostre notificações e toque sons também enquanto o Sirus estiver ativo."),
             inner("notifications", "foreground"),
         ),
         (
@@ -1850,7 +1850,7 @@ fn notifications(s: &Value) -> Vec<Group> {
         s,
         &[(
             "Pull requests",
-            t("Quando outra pessoa abre um pull request ou pede sua revisão no repositório de um projeto salvo. Verificado ao abrir o Sirus Code e quando você volta para ele."),
+            t("Quando outra pessoa abre um pull request ou pede sua revisão no repositório de um projeto salvo. Verificado ao abrir o Sirus e quando você volta para ele."),
             inner("notifications", "pullRequests"),
         )],
     ));
@@ -2029,7 +2029,7 @@ fn git(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
                     s,
                     t("Corrigir CI automaticamente"),
                     t(
-                        "Quando os checks do PR aberto de uma sessão falham, o agente dela recebe os erros e corrige; depois o Sirus Code faz commit e push do branch da sessão (nunca forçado). Até 3 tentativas por falha; senão pausa e avisa.",
+                        "Quando os checks do PR aberto de uma sessão falham, o agente dela recebe os erros e corrige; depois o Sirus faz commit e push do branch da sessão (nunca forçado). Até 3 tentativas por falha; senão pausa e avisa.",
                     ),
                     top("ciAutoFix"),
                 ),
@@ -2058,7 +2058,7 @@ fn git(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
                 row(
                     t("Confirmar ações destrutivas do Git"),
                     t(
-                        "Proteção permanente. O Sirus Code não executa operações destrutivas do Git automaticamente.",
+                        "Proteção permanente. O Sirus não executa operações destrutivas do Git automaticamente.",
                     ),
                     vec![fixed(true)],
                 ),
@@ -2402,6 +2402,43 @@ fn open_button(path: String, disabled: bool) -> Ctl {
     }
 }
 
+/// The row that says where updates stand and offers Buscar atualização, then Baixar e instalar or
+/// Reiniciar agora (app_update.rs; the restart asks first when agents are running).
+fn update_row() -> Row {
+    use crate::app_update::{Phase, status};
+    let u = status();
+    let version = u.version.clone().unwrap_or_default();
+    let about = match u.phase {
+        Phase::Idle => tf("Versão {}.", &[&u.current]),
+        Phase::Checking => t("Buscando atualização…").to_string(),
+        Phase::UpToDate => tf("Você está na versão mais recente ({}).", &[&u.current]),
+        Phase::Available => tf("A versão {} está disponível.", &[&version]),
+        Phase::Downloading => tf("Baixando a versão {}…", &[&version]),
+        Phase::Installed => tf(
+            "A versão {} está instalada. Ela começa quando você reiniciar ou abrir o app de novo.",
+            &[&version],
+        ),
+        Phase::Failed => tf(
+            "Não foi possível atualizar: {}",
+            &[&u.error.as_deref().unwrap_or_default()],
+        ),
+    };
+    let idle = !matches!(u.phase, Phase::Checking | Phase::Downloading);
+    let button = |label: &'static str, kind: &str, enabled: bool| Ctl::Button {
+        label,
+        act: act_run("native_app_update", json!({ "type": kind })),
+        enabled,
+        danger: false,
+    };
+    let mut controls = vec![button(t("Buscar atualização"), "check", idle)];
+    match u.phase {
+        Phase::Available => controls.push(button(t("Baixar e instalar"), "install", true)),
+        Phase::Installed => controls.push(button(t("Reiniciar agora"), "restart", true)),
+        _ => {}
+    }
+    row(t("Atualizações"), about, controls)
+}
+
 fn advanced(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
     let host = get_data(d, "host");
     let data_dir = host["dataDir"].as_str().unwrap_or_default();
@@ -2425,10 +2462,11 @@ fn advanced(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
                 switch_row(
                     s,
                     t("Procurar atualizações automaticamente"),
-                    t("Ao abrir o Sirus Code e a cada poucas horas."),
+                    t("Ao abrir o Sirus e a cada poucas horas."),
                     top("appUpdateAutoCheck"),
                 ),
                 download,
+                update_row(),
                 switch_row(
                     s,
                     t("Mostrar o que há de novo depois de atualizar"),
@@ -2447,7 +2485,7 @@ fn advanced(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
                     top("developerLogs"),
                 ),
                 row(
-                    t("Abrir diretório de dados do Sirus Code"),
+                    t("Abrir diretório de dados do Sirus"),
                     host["dataDir"].as_str().unwrap_or_default(),
                     vec![open_button(data_dir.to_string(), data_dir.is_empty())],
                 ),
@@ -2489,7 +2527,7 @@ fn advanced(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
             // `save_settings` with only the default agent: the host fills every other field with its
             // default (AppSettings is `serde(default)`), as the Tauri page does.
             vec![row(
-                t("Restaurar configurações do Sirus Code"),
+                t("Restaurar configurações do Sirus"),
                 t("Restaurar preferências não apaga pastas de projetos. Requer confirmação."),
                 vec![confirm_button(
 t("Restaurar"),
@@ -2798,7 +2836,7 @@ fn skills(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
             t("Skills portáteis"),
             vec![
                 row(
-                    t("Pasta de skills do Sirus Code"),
+                    t("Pasta de skills do Sirus"),
                     t(
                         "Adicione pastas com SKILL.md aqui. Skills invocadas funcionam entre provedores; a cópia do próprio provedor tem prioridade.",
                     ),
@@ -2820,7 +2858,7 @@ fn skills(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
             ],
         ),
         note(t(
-            "Os nomes e ícones dos provedores indicam onde cada cópia foi encontrada. Skills invocadas ficam disponíveis entre provedores. Os switches controlam o catálogo do Sirus Code; não alteram a descoberta nas CLIs externas.",
+            "Os nomes e ícones dos provedores indicam onde cada cópia foi encontrada. Skills invocadas ficam disponíveis entre provedores. Os switches controlam o catálogo do Sirus; não alteram a descoberta nas CLIs externas.",
         )),
     ];
     if catalog["truncated"].as_bool() == Some(true) {
@@ -2875,7 +2913,7 @@ fn computer(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
             s,
             t("Atalho global de captura"),
             t(
-                "Em qualquer app, o atalho captura a janela da frente e anexa à conversa aberta no Sirus Code. Nada é enviado.",
+                "Em qualquer app, o atalho captura a janela da frente e anexa à conversa aberta no Sirus. Nada é enviado.",
             ),
             top("windowSnapEnabled"),
         ),
@@ -2944,7 +2982,7 @@ fn computer(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
     ];
     if !(accessibility && screen) {
         out.push(note(
-            t("Depois de permitir nos Ajustes do Sistema, feche e reabra o Sirus Code se o status não atualizar."),
+            t("Depois de permitir nos Ajustes do Sistema, feche e reabra o Sirus se o status não atualizar."),
         ));
     }
     out.push(group(

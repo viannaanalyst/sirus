@@ -121,7 +121,7 @@ pub fn deliver(alert: &Value, window_active: bool) {
     }
     if alert["system"].as_bool() == Some(true) {
         banner(
-            alert["title"].as_str().unwrap_or("Sirus Native"),
+            alert["title"].as_str().unwrap_or("Sirus"),
             alert["body"].as_str().unwrap_or(""),
         );
     }

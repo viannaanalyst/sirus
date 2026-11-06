@@ -2728,7 +2728,7 @@ impl Browser {
                         if reveal && let Some(path) = value["path"].as_str() {
                             let _ = std::process::Command::new("open").arg("-R").arg(path).spawn();
                         }
-                        this.say(t("Gravação salva em Filmes › Sirus Code"), cx);
+                        this.say(t("Gravação salva em Filmes › Sirus"), cx);
                     }
                     Err(error) => this.say(error, cx),
                     _ => {}

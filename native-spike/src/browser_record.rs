@@ -2,7 +2,7 @@
 //! Sirus Code takes snapshots of the page and encodes them in the web view with MediaRecorder;
 //! here the same snapshots (`takeSnapshot`, which works for a hidden page when asked to paint)
 //! are drawn into BGRA pixel buffers with the clicks and the key caption on top, and
-//! AVAssetWriter encodes them to H.264 in an MP4 under Movies/Sirus Code. Everything runs on the
+//! AVAssetWriter encodes them to H.264 in an MP4 under Movies/Sirus. Everything runs on the
 //! main thread; the frame loop is driven by `panel_browser`.
 use crate::browser_tab::Answer;
 use block2::RcBlock;
@@ -143,10 +143,10 @@ pub fn file_name(stamp: &str) -> String {
     format!("Browser recording {stamp}.mp4")
 }
 
-/// A new recording's file in Movies/Sirus Code (the folder is created).
+/// A new recording's file in Movies/Sirus (the folder is created).
 pub fn new_path() -> Result<PathBuf, String> {
     let home = std::env::var_os("HOME").ok_or("The Movies folder is unavailable.")?;
-    let dir = Path::new(&home).join("Movies").join("Sirus Code");
+    let dir = Path::new(&home).join("Movies").join("Sirus");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let stamp = chrono::Local::now().format("%Y-%m-%d %H.%M.%S").to_string();
     Ok(dir.join(file_name(&stamp)))

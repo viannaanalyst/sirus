@@ -255,7 +255,7 @@ fn ensure_host(dir: &Path) -> Result<(), String> {
             "--https-port",
             &HTTPS_PORT.to_string(),
             "--label",
-            "Sirus Native",
+            "Sirus",
             "--data-dir",
         ])
         .arg(dir);
@@ -316,7 +316,7 @@ fn pair(dir: &Path) -> Result<String, String> {
         .chars()
         .filter(char::is_ascii_digit)
         .collect();
-    let body = json!({ "code": code, "name": "Sirus Native" }).to_string();
+    let body = json!({ "code": code, "name": "Sirus" }).to_string();
     let reply = http(([127, 0, 0, 1], PORT).into(), "POST /api/pair", Some(&body))
         .ok_or(t("O pareamento não respondeu."))?;
     let value: Value = serde_json::from_str(&reply).map_err(|e| e.to_string())?;

@@ -1,6 +1,7 @@
 //! Part 1 of the native spike: tabs, pinning, sidebar and motion on GPUI with sample data,
 //! to compare by feel against the Tauri app. GPUI is vendored from Monocode (Apache-2.0);
 //! a few presentation files are ported from Monocode (MIT, LICENSE-MONOCODE-MIT).
+mod app_update;
 mod attachment_doc;
 mod attachment_html;
 mod attachment_ooxml;
@@ -229,7 +230,7 @@ fn main() {
                     window_background: gpui::WindowBackgroundAppearance::Blurred,
                     app_owns_titlebar_drag: true,
                     titlebar: Some(TitlebarOptions {
-                        title: Some("Sirus Native".into()),
+                        title: Some("Sirus".into()),
                         appears_transparent: true,
                         traffic_light_position: Some(point(
                             px(12.),

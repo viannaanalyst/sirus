@@ -1,6 +1,6 @@
-# Sirus Native
+# Sirus
 
-The Sirus Code window rewritten in GPUI (Rust and Metal). It runs beside Sirus Code with its own app id and data, and drives the headless `sirus-host` over the phone protocol. See [ADR-189](../docs/decisions/ADR-189-sirus-native.md).
+The Sirus Code window rewritten in GPUI (Rust and Metal), shown as "Sirus" (formerly "Sirus Native"). It runs beside Sirus Code with its own app id (`com.siruscode.native`, unchanged by the rename, so its data folder and macOS permissions stay) and data, and drives the headless `sirus-host` over the phone protocol. See [ADR-189](../docs/decisions/ADR-189-sirus-native.md).
 
 ## Build and run
 
@@ -11,10 +11,10 @@ CARGO_TARGET_DIR=../native-spike/target/host cargo build --release --no-default-
 # The window, from native-spike
 cargo build --release
 ./bundle.sh
-open "Sirus Native.app"
+open Sirus.app
 ```
 
-`bundle.sh` signs with the local identity "Sirus Code Local Signing", so macOS keeps "Always allow" between builds.
+`/Applications/Sirus.app` replaces `/Applications/Sirus Native.app` (an in-app update does that swap itself). `bundle.sh` signs with the local identity "Sirus Code Local Signing", so macOS keeps "Always allow" between builds.
 
 `bundle.sh` also builds the phone's web UI (`npm run build` at the repository root, once; `BUILD_UI=1` to redo it) and puts it in `Contents/Resources/ui`, about 97 MB. Other devices reach this Mac only while Settings → Conexões allows it (port 7711, HTTPS on 8443; Sirus Code keeps 7710 and 443).
 
@@ -36,6 +36,7 @@ Quitting with `pkill` leaves the host running. Kill it too after rebuilding it, 
 - `src/file_editor.rs`: the editor in the Files panel. `src/git_sync.rs`, `src/project_scripts.rs`, `src/cli_diagnostics.rs`, `src/delegated_tasks.rs`, `src/agent_resources.rs`, `src/conversation_export.rs`, `src/chat_background.rs`, `src/simulator.rs` (hidden for now).
 - `src/first_run.rs`: the welcome of the very first launch (agents, project, look) over the letters robot of `new_tab_field.rs`; once seen it is remembered in `native-first-run.json`, and Settings → Geral plays it again. `src/global_search.rs`: ⌘⇧F and the palette's message results, from the host's `transcript_action` search (3 characters, debounced). ⌃⇧F toggles the frame-time overlay.
 - `src/workspace_follow.rs`: follows a session's folder on disk for the Files and Changes panels. `src/prompt_link.rs`: `sirus://new` prompt links and "Copiar link do prompt".
+- `src/app_update.rs`: in-app updates. It reads `sirus-latest.json` from the fixed `sirus-channel` release (never Sirus Code's `latest.json`), verifies the archive's minisign signature against the key in `src-tauri/tauri.conf.json`, swaps the bundle and relaunches only when asked, after the running-agents confirmation. Releases: `node scripts/release-sirus.ts` (dry run) or `--publish`.
 - `src/i18n.rs`: English and Portuguese, with the Portuguese text as the key.
 - `src/visuals/`: native visuals, run from a JavaScript program.
 

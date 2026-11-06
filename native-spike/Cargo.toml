@@ -25,6 +25,8 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 tungstenite = { version = "0.26", default-features = false, features = ["handshake"] }
 # Attachment viewer: base64 payloads from the host, and the page rasters of PDFs.
 base64 = "0.22"
+# In-app updates: checks the minisign signature of the downloaded bundle (app_update.rs).
+minisign-verify = "0.3"
 image = { version = "0.25", default-features = false }
 smallvec = "1"
 # Attachment viewer: the Office files' zip parts and their XML, read in Rust (no scripting engine).

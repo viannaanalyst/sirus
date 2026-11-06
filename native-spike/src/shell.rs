@@ -1244,6 +1244,17 @@ impl Shell {
             }
         })
         .detach();
+        // Updates (app_update.rs): the first check once the window has settled, then every few hours.
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(crate::app_update::START_DELAY).await;
+            loop {
+                if this.update(cx, |this, _| this.app_update_auto()).is_err() {
+                    break;
+                }
+                cx.background_executor().timer(crate::app_update::CHECK_INTERVAL).await;
+            }
+        })
+        .detach();
         // Sirus Code's incoming check: every 5 minutes while the window is visible. Answers only
         // redraw when they change (git_sync.rs), so an idle window stays still.
         cx.spawn(async move |this, cx| {
@@ -2232,6 +2243,103 @@ impl Shell {
     }
 
     /// Runs a blocking action off the interface; its result lands in the page's data.
+    /// Checks the update feed, or downloads and installs the version on offer (app_update.rs), off
+    /// the UI thread; every phase change redraws. `then_install` installs what a check found
+    /// (the automatic download). Nothing here restarts the app.
+    fn app_update_run(&mut self, install: bool, then_install: bool) {
+        let tx = self.native_tx.clone();
+        std::thread::spawn(move || {
+            let ping = || {
+                let _ = tx.send_blocking(("app_update", Value::Null));
+            };
+            ping();
+            if install {
+                crate::app_update::install(ping);
+            } else {
+                let found = crate::app_update::check();
+                if then_install && found.phase == crate::app_update::Phase::Available {
+                    ping();
+                    crate::app_update::install(ping);
+                }
+            }
+            ping();
+        });
+    }
+
+    /// The timed check: only in a release build, only when Settings allows it, and it downloads
+    /// only when "Baixar atualizações em segundo plano" is on.
+    fn app_update_auto(&mut self) {
+        let on = |key: &str| self.settings[key].as_bool().unwrap_or(false);
+        if !crate::app_update::automatic_allowed()
+            || !on("appUpdateAutoCheck")
+            || !crate::app_update::automatic_due()
+        {
+            return;
+        }
+        let download = on("appUpdateAutoDownload");
+        self.app_update_run(false, download);
+    }
+
+    /// Restarts into the installed update. With agents running and "confirm before closing" on, the
+    /// running-agents confirmation comes first (ADR-090); declining keeps everything as it is.
+    fn app_update_restart(&mut self, cx: &mut Context<Self>) {
+        let agents = self.conversations.iter().any(|c| c.working());
+        let confirm = self.settings["confirmCloseRunning"].as_bool().unwrap_or(true);
+        if agents && confirm {
+            self.ask(
+                t("Reiniciar para atualizar?").to_owned(),
+                t("Há agentes trabalhando. Reiniciar interrompe todos. As conversas e as mensagens ficam salvas, e a atualização também vale na próxima vez que você abrir o Sirus.").to_owned(),
+                t("Reiniciar e interromper"),
+                |this, cx| this.app_update_relaunch(cx),
+                cx,
+            );
+        } else {
+            self.app_update_relaunch(cx);
+        }
+    }
+
+    fn app_update_relaunch(&mut self, cx: &mut Context<Self>) {
+        match crate::app_update::relaunch() {
+            Ok(()) => cx.quit(),
+            Err(e) => {
+                self.problem = Some(e);
+                cx.notify();
+            }
+        }
+    }
+
+    /// The small notice in the footer: a version on offer, its download, or the restart it waits for.
+    fn update_notice(&self, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+        use crate::app_update::{Phase, status};
+        let u = status();
+        let version = u.version.clone().unwrap_or_default();
+        let (text, kind): (String, Option<&'static str>) = match u.phase {
+            Phase::Available => (tf("Sirus {} disponível · Instalar", &[&version]), Some("install")),
+            Phase::Downloading => (tf("Baixando o Sirus {}…", &[&version]), None),
+            Phase::Installed => (t("Atualização pronta · Reiniciar").to_owned(), Some("restart")),
+            _ => return None,
+        };
+        let notice = div()
+            .id("app-update-notice")
+            .h(px(22.))
+            .px(px(6.))
+            .rounded(px(crate::theme::RADIUS_SM))
+            .flex()
+            .items_center()
+            .text_size(px(12.))
+            .text_color(accent())
+            .child(text);
+        Some(match kind {
+            Some(kind) => notice
+                .cursor_pointer()
+                .hover(|s| s.bg(content(0.08)))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.run_setting("native_app_update", json!({ "type": kind }), cx)
+                })),
+            None => notice,
+        })
+    }
+
     fn native_task(&self, key: &'static str, work: impl FnOnce() -> Value + Send + 'static) {
         let (tx, rx) = async_channel::bounded(1);
         std::thread::spawn(move || {
@@ -2261,7 +2369,7 @@ impl Shell {
                     crate::native_notify::play(sound);
                 }
                 crate::native_notify::banner(
-                    "Sirus Native",
+                    "Sirus",
                     crate::i18n::t("Teste de notificação. Seus avisos de atividade aparecerão aqui."),
                 );
             }
@@ -2365,6 +2473,12 @@ impl Shell {
                 crate::native_actions::github_login_cancel();
                 self.settings_data.remove("github_device");
             }
+            "native_app_update" => match text("type").as_str() {
+                "check" => self.app_update_run(false, false),
+                "install" => self.app_update_run(true, false),
+                "restart" => self.app_update_restart(cx),
+                _ => {}
+            },
             "native_open_path" => {
                 let path = text("path");
                 std::thread::spawn(move || crate::native_actions::open_path(&path));
@@ -11177,6 +11291,7 @@ impl Shell {
                 )
             })
             .child(div().flex_1())
+            .when_some(self.update_notice(cx), |d, notice| d.child(notice))
             .when_some(self.resources_gauge(cx), |d, gauge| d.child(gauge))
             .child(self.usage_button(cx))
             .child(self.settings_button(cx))

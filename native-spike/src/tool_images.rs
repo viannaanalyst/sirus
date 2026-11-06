@@ -41,6 +41,11 @@ pub fn picture(url: &str) -> Option<Arc<gpui::Image>> {
     Some(Arc::new(gpui::Image::from_bytes(format, bytes)))
 }
 
+/// Whether a path is a picture the host saved from an agent's tool, named only by its hash.
+pub fn is_capture(path: &str) -> bool {
+    path.contains("/tool-images/")
+}
+
 /// The name a row shows: the path's last component.
 pub fn file_name(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)

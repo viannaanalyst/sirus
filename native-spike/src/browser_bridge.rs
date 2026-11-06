@@ -350,7 +350,9 @@ fn card(
         .rounded(px(crate::theme::RADIUS_LG))
         .border_1()
         .border_color(theme::accent_wash(0.4))
-        .bg(theme::field_fill())
+        .relative()
+        // The composer's own glass, so the card reads as part of it, not a dark plate above it.
+        .child(theme::composer_surface(crate::theme::RADIUS_LG - 1.))
         .flex()
         .items_start()
         .gap(px(10.))

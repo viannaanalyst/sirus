@@ -14,6 +14,10 @@ pub struct Step {
     pub image: Option<String>,
     /// The picture is a screenshot a tool returned, so its row says "Captura da tela".
     pub capture: bool,
+    /// The MCP tool's own name (`computer_click`), when the host sent it.
+    pub tool: Option<String>,
+    /// What the tool acted on, when the host names it: an app or a page.
+    pub target: Option<String>,
 }
 
 /// A subagent the turn launched, with its own status.
@@ -447,6 +451,8 @@ fn turns_of(messages: &[Value]) -> Vec<Turn> {
                     kind,
                     label: item["label"].as_str().unwrap_or("").to_owned(),
                     detail,
+                    tool: item["tool"].as_str().map(str::to_owned),
+                    target: item["target"].as_str().map(str::to_owned),
                     running: item["state"].as_str() == Some("running"),
                 });
             }

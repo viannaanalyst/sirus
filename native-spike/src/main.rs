@@ -57,6 +57,8 @@ mod settings_pages;
 mod shell;
 mod subagent_team;
 mod syntax;
+mod fonts;
+mod step_lines;
 mod tab_label;
 mod tab_tile;
 mod tool_images;
@@ -158,6 +160,9 @@ impl AssetSource for Assets {
             "upload" => include_bytes!("../assets/upload.svg"),
             "server" => include_bytes!("../assets/server.svg"),
             "folder" => include_bytes!("../assets/folder.svg"),
+            "eye" => include_bytes!("../assets/eye.svg"),
+            "file-text" => include_bytes!("../assets/file-text.svg"),
+            "wrench" => include_bytes!("../assets/wrench.svg"),
             "arrow-left" => include_bytes!("../assets/arrow-left.svg"),
             "bell" => include_bytes!("../assets/bell.svg"),
             "box" => include_bytes!("../assets/box.svg"),

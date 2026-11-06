@@ -1034,7 +1034,7 @@ impl Element for Grid {
         cx: &mut App,
     ) -> Painted {
         let font_size = px(FONT_SIZE);
-        let base = gpui::font("Menlo");
+        let base = crate::fonts::terminal(window.text_system());
         let text_system = window.text_system().clone();
         let font_id = text_system.resolve_font(&base);
         let cell_width = text_system

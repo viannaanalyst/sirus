@@ -245,7 +245,11 @@ impl FilesPanel {
             cx.notify();
             return;
         }
-        let name = path.rsplit('/').next().unwrap_or(&path).to_owned();
+        let name = if tool_images::is_capture(&path) {
+            t("Captura da tela").to_owned()
+        } else {
+            path.rsplit('/').next().unwrap_or(&path).to_owned()
+        };
         let mode = if is_markdown(&name) {
             Mode::Preview
         } else {
@@ -1237,7 +1241,10 @@ impl Render for FilesPanel {
         }
         match self.active.and_then(|ix| self.tabs.get(ix)) {
             Some(opened) => column
-                .child(self.breadcrumb(opened, cx))
+                // An agent's capture is opened from its row, not browsed to: no path bar above it.
+                .when(!tool_images::is_capture(&opened.path), |column| {
+                    column.child(self.breadcrumb(opened, cx))
+                })
                 .child(self.viewer(opened, cx))
                 .into_any_element(),
             None => {

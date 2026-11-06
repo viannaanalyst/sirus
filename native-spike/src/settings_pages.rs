@@ -110,14 +110,26 @@ enum Ctl {
         width: f32,
         button: Option<&'static str>,
     },
-    /// A sample line set in a font family and size, for the typography groups.
-    Sample { family: &'static str, size: f32 },
+    /// A provider's folder button; a click opens its labelled path field, with what was detected.
+    Path {
+        key: &'static str,
+        text: String,
+        detected: String,
+    },
 }
+
+/// The height of a page's title bar and the left inset it shares with the page's content.
+const TITLE_BAR_HEIGHT: f32 = 52.;
+pub const CONTENT_INSET: f32 = 28.;
 
 struct Row {
     title: String,
     about: String,
     controls: Vec<Ctl>,
+    /// A provider's mark at the head of the row.
+    provider: Option<&'static str>,
+    /// Not available: the whole row reads as dimmed.
+    faded: bool,
 }
 
 struct Group {
@@ -191,7 +203,7 @@ pub fn page<V: 'static>(
     edit: Edit<V>,
     run: Run<V>,
     cx: &mut Context<V>,
-) -> AnyElement {
+) -> (AnyElement, AnyElement) {
     let mut shown = build(page, settings, data);
     let loading = loads(page)
         .iter()
@@ -220,45 +232,60 @@ pub fn page<V: 'static>(
     for group in shown.groups {
         body.push(group_view(group, &mut ui, cx));
     }
-    let mut heading = div().flex().flex_col().min_w_0().child(
+    let about = (!shown.about.is_empty()).then(|| about_line(shown.about.clone()));
+    (
+        title_bar(shown.title.clone(), actions),
         div()
-            .text_size(px(19.))
-            .font_weight(FontWeight::MEDIUM)
-            .text_color(content(1.))
-            .child(shown.title),
-    );
-    if !shown.about.is_empty() {
-        heading = heading.child(
-            div()
-                .mt(px(6.))
-                .text_size(px(13.))
-                .text_color(content(0.5))
-                .child(shown.about),
-        );
-    }
-    let mut head = div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .children(about)
+            .children(body)
+            .into_any_element(),
+    )
+}
+
+/// The top of a settings page: its title and actions, on a rule that runs the pane's whole width.
+pub fn title_bar(title: impl Into<gpui::SharedString>, actions: Vec<AnyElement>) -> AnyElement {
+    div()
+        .flex_shrink_0()
+        .w_full()
+        .h(px(TITLE_BAR_HEIGHT))
+        .pl(px(CONTENT_INSET))
+        .pr(px(16.))
         .flex()
-        .items_start()
+        .items_center()
         .justify_between()
         .gap(px(16.))
-        .mb(px(28.))
-        .child(heading);
-    if !actions.is_empty() {
-        head = head.child(
+        .border_b_1()
+        .border_color(content(0.08))
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_size(px(15.))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(content(1.))
+                .child(title.into()),
+        )
+        .child(
             div()
                 .flex()
                 .items_center()
                 .gap(px(8.))
                 .flex_shrink_0()
                 .children(actions),
-        );
-    }
+        )
+        .into_any_element()
+}
+
+/// The page's description, first thing under the rule.
+pub fn about_line(about: impl Into<gpui::SharedString>) -> AnyElement {
     div()
-        .w_full()
-        .flex()
-        .flex_col()
-        .child(head)
-        .children(body)
+        .mb(px(20.))
+        .text_size(px(13.))
+        .text_color(content(0.5))
+        .child(about.into())
         .into_any_element()
 }
 
@@ -403,6 +430,8 @@ fn row(title: impl Into<String>, about: impl Into<String>, controls: Vec<Ctl>) -
         title: title.into(),
         about: about.into(),
         controls,
+        provider: None,
+        faded: false,
     }
 }
 
@@ -644,7 +673,23 @@ fn row_view<V: 'static>(item: Row, ui: &mut Ui<'_, V>, cx: &mut Context<V>) -> A
         .gap(px(20.))
         .border_b_1()
         .border_color(content(0.07))
-        .child(text)
+        .when(item.faded, |d| d.opacity(0.5))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .items_center()
+                .gap(px(10.))
+                .when_some(item.provider, |d, provider| {
+                    d.child(crate::tab_tile::mark_tile(
+                        &crate::tab_tile::ACTIVITY_TILE,
+                        crate::tab_tile::Face::provider(provider),
+                        crate::theme::provider_glyph(provider, 12.),
+                    ))
+                })
+                .child(text),
+        )
         .child(
             div()
                 .flex()
@@ -740,6 +785,57 @@ fn field_view<V: 'static>(
     }
 }
 
+/// The folder button of a provider row. While its path is edited, the field with its label: the
+/// field alone once read as the account, and an email saved there hid the CLI.
+fn path_view<V: 'static>(
+    key: &'static str,
+    text: String,
+    detected: String,
+    ui: &mut Ui<'_, V>,
+    cx: &mut Context<V>,
+) -> AnyElement {
+    let edit = ui.edit;
+    let editing = ui.editing.is_some_and(|(known, _)| known == key);
+    if !editing {
+        let id = next_id(&mut ui.ids);
+        return div()
+            .id(("setting", id))
+            .size(px(26.))
+            .rounded(px(crate::theme::RADIUS_SM))
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_pointer()
+            .hover(|style| style.bg(content(0.07)))
+            .on_click(cx.listener(move |this, _, _, cx| edit(this, key, text.clone(), cx)))
+            .child(crate::theme::icon("folder", 14.))
+            .into_any_element();
+    }
+    div()
+        .flex()
+        .flex_col()
+        .items_end()
+        .gap(px(4.))
+        .child(
+            div()
+                .text_size(px(11.5))
+                .text_color(content(0.5))
+                .child(t("Caminho do executável. Vazio usa o detectado.")),
+        )
+        .child(field_view(key, text, 300., None, ui, cx))
+        .when(!detected.is_empty(), |d| {
+            d.child(
+                div()
+                    .max_w(px(300.))
+                    .truncate()
+                    .text_size(px(11.5))
+                    .text_color(content(0.4))
+                    .child(tf("Detectado: {}", &[&detected])),
+            )
+        })
+        .into_any_element()
+}
+
 fn control_view<V: 'static>(ctl: Ctl, ui: &mut Ui<'_, V>, cx: &mut Context<V>) -> AnyElement {
     let (save, run) = (ui.save, ui.run);
     match ctl {
@@ -748,21 +844,11 @@ fn control_view<V: 'static>(ctl: Ctl, ui: &mut Ui<'_, V>, cx: &mut Context<V>) -
             .text_color(content(0.6))
             .child(value)
             .into_any_element(),
-        Ctl::Sample { family, size } => div()
-            .max_w(px(260.))
-            .px(px(10.))
-            .py(px(6.))
-            .rounded(px(crate::theme::RADIUS_MD))
-            .border_1()
-            .border_color(content(0.1))
-            .bg(content(0.03))
-            .overflow_hidden()
-            .whitespace_nowrap()
-            .font_family(family)
-            .text_size(px(size))
-            .text_color(content(0.8))
-            .child("const ok = (0O, il1) => {[]};")
-            .into_any_element(),
+        Ctl::Path {
+            key,
+            text,
+            detected,
+        } => path_view(key, text, detected, ui, cx),
         Ctl::Field {
             key,
             text,
@@ -1822,21 +1908,6 @@ fn worktrees(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
 
 fn terminal(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
     let host = get_data(d, "host");
-    let font = match current(s, top("terminalFont")).as_str() {
-        "plexMono" => "IBM Plex Mono".to_string(),
-        "jetbrains" => "JetBrains Mono".to_string(),
-        "fira" => "Fira Code".to_string(),
-        "geistMono" => "Geist Mono".to_string(),
-        "source" => "Source Code Pro".to_string(),
-        "roboto" => "Roboto Mono".to_string(),
-        "ubuntu" => "Ubuntu Mono".to_string(),
-        "sfMono" => "SF Mono".to_string(),
-        "menlo" => "Menlo".to_string(),
-        "cascadia" => "Cascadia Code".to_string(),
-        "hack" => "Hack".to_string(),
-        "consolas" => "Consolas".to_string(),
-        other => other.to_string(),
-    };
     vec![
         group(
             "Shell",
@@ -1861,20 +1932,6 @@ fn terminal(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
         group(
             t("Exibição"),
             vec![
-                row(t("Fonte do terminal"), "", vec![Ctl::Read(font)]),
-                row(
-                    t("Tamanho da fonte do terminal"),
-                    t("De 10 a 22 px."),
-                    vec![
-                        Ctl::Field {
-                            key: "terminalFontSize",
-                            text: current(s, top("terminalFontSize")),
-                            width: 72.,
-                            button: None,
-                        },
-                        Ctl::Read("px".to_string()),
-                    ],
-                ),
                 row(
                     t("Estilo do cursor"),
                     "",
@@ -2063,47 +2120,81 @@ fn providers(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
             .and_then(|items| items.iter().find(|item| item["id"].as_str() == Some(id)))
     };
     let disabled = strings(&s["disabledProviders"]);
-    let mut clis = Vec::new();
+    let (mut active, mut off, mut missing) = (Vec::new(), Vec::new(), Vec::new());
     for &(id, name) in PROVIDER_LIST {
         let found = install(id);
         let installed = found.and_then(|item| item["installed"].as_bool()) == Some(true);
-        let status = match (installed, found.and_then(|item| item["version"].as_str())) {
-            (true, Some(version)) => tf("Instalado · {}", &[&version]),
-            (true, None) => t("Instalado").to_string(),
-            (false, _) => t("Não detectado").to_string(),
-        };
-        let path = found
-            .and_then(|item| item["path"].as_str())
-            .unwrap_or(t("Nenhum executável"));
-        let on = !has(&disabled, id);
-        let flipped = if on {
-            with(&disabled, id)
+        let mut item = if installed {
+            let on = !has(&disabled, id);
+            let flipped = if on {
+                with(&disabled, id)
+            } else {
+                without(&disabled, id)
+            };
+            row(
+                name,
+                found
+                    .and_then(|item| item["version"].as_str())
+                    .unwrap_or(t("Instalado")),
+                vec![
+                    Ctl::Path {
+                        key: key_of(format!("providerPath:{id}")),
+                        text: s["providerPaths"][id]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_string(),
+                        detected: found
+                            .and_then(|item| item["path"].as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                    },
+                    Ctl::Switch {
+                        on,
+                        change: Some(Act::Save {
+                            key: "disabledProviders",
+                            value: json!(flipped),
+                        }),
+                    },
+                ],
+            )
         } else {
-            without(&disabled, id)
-        };
-        clis.push(row(
-            name,
-            status,
-            vec![
-                Ctl::Read(path.to_string()),
-                Ctl::Field {
+            let mut item = row(name, "", vec![
+                Ctl::Path {
                     key: key_of(format!("providerPath:{id}")),
                     text: s["providerPaths"][id]
                         .as_str()
                         .unwrap_or_default()
                         .to_string(),
-                    width: 200.,
-                    button: None,
+                    detected: String::new(),
                 },
-                Ctl::Switch {
-                    on,
-                    change: Some(Act::Save {
-                        key: "disabledProviders",
-                        value: json!(flipped),
-                    }),
-                },
-            ],
-        ));
+                Ctl::Read(t("Não instalado").to_string()),
+            ]);
+            item.faded = true;
+            item
+        };
+        item.provider = Some(id);
+        if !installed {
+            missing.push(item);
+        } else if has(&disabled, id) {
+            off.push(item);
+        } else {
+            active.push(item);
+        }
+    }
+    let (active_title, off_title, missing_title) = (
+        tf("Ativos {}", &[&active.len()]),
+        tf("Instalados, desligados {}", &[&off.len()]),
+        tf("Não encontrados {}", &[&missing.len()]),
+    );
+    let mut clis: Vec<Group> = Vec::new();
+    for (title, rows) in [
+        (active_title, active),
+        (off_title, off),
+        (missing_title, missing),
+    ] {
+        if !rows.is_empty() {
+            clis.push(group(title, rows));
+        }
     }
 
     // Up to two providers in the sidebar's usage rings (`USAGE_PROVIDER_IDS`, registry order).
@@ -2148,8 +2239,7 @@ fn providers(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
         Vec::new(),
     ));
 
-    vec![
-        group("CLIs", clis),
+    clis.extend([
         group(t("Diagnóstico das CLIs"), diagnostics_rows(d)),
         group(t("Consumo na barra lateral"), usage),
         group(
@@ -2184,7 +2274,8 @@ fn providers(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
                 top("enableProviderUpdateChecks"),
             )],
         ),
-    ]
+    ]);
+    clis
 }
 
 /// The catalog's name for a skill's origin, as `skillSections` groups it.
@@ -2760,11 +2851,33 @@ fn key_of(text: String) -> &'static str {
     leaked
 }
 
+/// Whether a provider path field's text can name an executable: empty, a path, or a bare program
+/// name. An account's email or a sentence cannot, and saved it would make the CLI read as missing.
+pub fn provider_path_like(text: &str) -> bool {
+    text.contains('/')
+        || text
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '+' | '-'))
+}
+
+/// Drops saved provider paths that cannot name an executable. True when something changed.
+pub fn repair_provider_paths(settings: &mut Value) -> bool {
+    let Some(paths) = settings["providerPaths"].as_object_mut() else {
+        return false;
+    };
+    let before = paths.len();
+    paths.retain(|_, path| path.as_str().is_some_and(provider_path_like));
+    paths.len() != before
+}
+
 /// The change a finished text edit makes, from the key `edit` started and the text typed. None
 /// when the text is not a value that key takes (the main app keeps the field open then).
 pub fn commit(settings: &Value, key: &str, text: &str) -> Option<Commit> {
     let text = text.trim();
     if let Some(id) = key.strip_prefix("providerPath:") {
+        if !provider_path_like(text) {
+            return None;
+        }
         // An empty path returns the provider to automatic detection.
         let mut paths = settings["providerPaths"]
             .as_object()
@@ -2812,9 +2925,6 @@ pub fn commit(settings: &Value, key: &str, text: &str) -> Option<Commit> {
         _ => {
             // Numeric fields, with the ranges of the React controls.
             const NUMBERS: &[(&str, i64, i64)] = &[
-                ("terminalFontSize", 10, 22),
-                ("codeFontSize", 10, 22),
-                ("uiFontSize", 11, 18),
                 ("chatBackgroundEmptyVisibility", 0, 100),
                 ("chatBackgroundSessionVisibility", 0, 100),
             ];
@@ -2826,38 +2936,6 @@ pub fn commit(settings: &Value, key: &str, text: &str) -> Option<Commit> {
             })
         }
     }
-}
-
-const UI_FONT_OPTIONS: &[(&str, &str)] = &[
-    ("inter", "Inter"),
-    ("geist", "Geist"),
-    ("dmSans", "DM Sans"),
-    ("plexSans", "IBM Plex Sans"),
-    ("humanist", "Humanist"),
-    ("helvetica", "Helvetica"),
-];
-
-const MONO_FONT_OPTIONS: &[(&str, &str)] = &[
-    ("plexMono", "IBM Plex Mono"),
-    ("jetbrains", "JetBrains Mono"),
-    ("fira", "Fira Code"),
-    ("geistMono", "Geist Mono"),
-    ("source", "Source Code Pro"),
-    ("roboto", "Roboto Mono"),
-    ("ubuntu", "Ubuntu Mono"),
-    ("sfMono", "SF Mono"),
-    ("menlo", "Menlo"),
-    ("cascadia", "Cascadia Code"),
-    ("hack", "Hack"),
-    ("consolas", "Consolas"),
-];
-
-/// The family a mono font id is set in, for its sample line.
-fn mono_family(id: &str) -> &'static str {
-    MONO_FONT_OPTIONS
-        .iter()
-        .find(|(known, _)| *known == id)
-        .map_or("Menlo", |(_, label)| *label)
 }
 
 /// Settings → Aparência: the groups the native appearance page shares with the others, from
@@ -2881,132 +2959,6 @@ pub fn appearance_groups<V: 'static>(
     };
     let support = &get_data(data, "host")["appearanceSupport"];
     let s = settings;
-
-    let system_font = flag(s, top("systemUiFont"));
-    let ui_font = if system_font {
-        row(
-            t("Fonte da interface"),
-            t("A fonte do sistema está ativa; a escolha fica guardada para depois."),
-            vec![Ctl::Read(
-                UI_FONT_OPTIONS
-                    .iter()
-                    .find(|(id, _)| *id == current(s, top("uiFont")))
-                    .map_or("Inter", |(_, label)| *label)
-                    .to_string(),
-            )],
-        )
-    } else {
-        row(
-            t("Fonte da interface"),
-            "",
-            vec![pick(s, top("uiFont"), UI_FONT_OPTIONS)],
-        )
-    };
-    let interface = group(
-        t("Tipografia da interface"),
-        vec![
-            switch_row(
-                s,
-                t("Usar fonte do sistema na interface"),
-                t("Mantém a fonte escolhida guardada para quando esta opção estiver desligada."),
-                top("systemUiFont"),
-            ),
-            ui_font,
-            row(
-                t("Tamanho da fonte da interface"),
-                t("De 11 a 18 px."),
-                vec![
-                    Ctl::Field {
-                        key: "uiFontSize",
-                        text: current(s, top("uiFontSize")),
-                        width: 72.,
-                        button: None,
-                    },
-                    Ctl::Read("px".to_string()),
-                ],
-            ),
-            switch_row(s, t("Suavização de fontes"), "", top("fontSmoothing")),
-            row(
-                t("Densidade da interface"),
-                t("Ajusta o espaçamento sem mudar o tamanho do texto."),
-                vec![pick(
-                    s,
-                    top("density"),
-                    &[
-                        ("compact", t("Compacta")),
-                        ("default", t("Confortável")),
-                        ("comfortable", t("Espaçosa")),
-                    ],
-                )],
-            ),
-        ],
-    );
-
-    let code_font = top("codeFont");
-    let code = group(
-        t("Tipografia de código"),
-        vec![
-            row(
-                t("Fonte de código"),
-                t("Vale para código nas transcrições, diffs e no editor."),
-                vec![pick(s, code_font, MONO_FONT_OPTIONS)],
-            ),
-            row(
-                t("Tamanho da fonte de código"),
-                t("De 10 a 22 px."),
-                vec![
-                    Ctl::Field {
-                        key: "codeFontSize",
-                        text: current(s, top("codeFontSize")),
-                        width: 72.,
-                        button: None,
-                    },
-                    Ctl::Read("px".to_string()),
-                ],
-            ),
-            row(
-                t("Amostra"),
-                "",
-                vec![Ctl::Sample {
-                    family: mono_family(&current(s, code_font)),
-                    size: s["codeFontSize"].as_f64().unwrap_or(13.) as f32,
-                }],
-            ),
-        ],
-    );
-
-    let terminal_font = top("terminalFont");
-    let terminal_group = group(
-        t("Tipografia do terminal"),
-        vec![
-            row(
-                t("Fonte do terminal"),
-                "",
-                vec![pick(s, terminal_font, MONO_FONT_OPTIONS)],
-            ),
-            row(
-                t("Tamanho da fonte do terminal"),
-                t("De 10 a 22 px."),
-                vec![
-                    Ctl::Field {
-                        key: "terminalFontSize",
-                        text: current(s, top("terminalFontSize")),
-                        width: 72.,
-                        button: None,
-                    },
-                    Ctl::Read("px".to_string()),
-                ],
-            ),
-            row(
-                t("Amostra"),
-                "",
-                vec![Ctl::Sample {
-                    family: mono_family(&current(s, terminal_font)),
-                    size: s["terminalFontSize"].as_f64().unwrap_or(13.) as f32,
-                }],
-            ),
-        ],
-    );
 
     let effects = group(
         t("Efeitos e movimento"),
@@ -3182,9 +3134,6 @@ pub fn appearance_groups<V: 'static>(
     );
 
     [
-        interface,
-        code,
-        terminal_group,
         effects,
         background,
         sidebar,
@@ -3193,4 +3142,34 @@ pub fn appearance_groups<V: 'static>(
     .into_iter()
     .map(|item| group_view(item, &mut ui, cx))
     .collect()
+}
+
+#[cfg(test)]
+mod provider_path_tests {
+    use super::*;
+
+    #[test]
+    fn an_email_is_not_a_provider_path() {
+        for good in ["", "claude", "cursor-agent", "/Users/me/.local/bin/claude", "./bin/x"] {
+            assert!(provider_path_like(good), "{good}");
+        }
+        for bad in ["me@gmail.com", "my claude"] {
+            assert!(!provider_path_like(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_finished_edit_refuses_an_email_and_keeps_the_path() {
+        let settings = json!({ "providerPaths": { "codex": "/bin/codex" } });
+        assert!(commit(&settings, "providerPath:claude", "me@gmail.com").is_none());
+        assert!(commit(&settings, "providerPath:claude", "/bin/claude").is_some());
+    }
+
+    #[test]
+    fn repair_removes_only_what_cannot_be_a_path() {
+        let mut settings = json!({ "providerPaths": { "claude": "me@gmail.com", "codex": "/bin/codex" } });
+        assert!(repair_provider_paths(&mut settings));
+        assert_eq!(settings["providerPaths"], json!({ "codex": "/bin/codex" }));
+        assert!(!repair_provider_paths(&mut settings), "already clean");
+    }
 }

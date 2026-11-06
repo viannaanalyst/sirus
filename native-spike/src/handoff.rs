@@ -712,17 +712,19 @@ impl Shell {
         let handoff = conv.handoff.as_ref().filter(|handoff| handoff.pending)?;
         let session = conv.session_id.clone();
         let (from, to) = (handoff.from, conv.provider);
+        // A shelf on the composer's top edge, like the approvals' in Monocode (composer_shelf.rs).
         Some(
             div()
-                .mx(px(12.))
-                .mt(px(8.))
-                .px(px(10.))
-                .py(px(6.))
+                .mx(px(14.))
+                .pl(px(12.))
+                .pr(px(6.))
+                .py(px(4.))
                 .flex()
                 .items_center()
                 .gap(px(8.))
-                .rounded(px(crate::theme::RADIUS_LG))
+                .rounded_t(px(crate::theme::RADIUS_MD))
                 .border_1()
+                .border_b_0()
                 .border_color(content(0.08))
                 .bg(content(0.03))
                 .child(
@@ -731,38 +733,26 @@ impl Shell {
                         .flex()
                         .items_center()
                         .gap(px(6.))
-                        .text_size(px(12.))
-                        .text_color(content(0.5))
-                        .child(icon("handoff", 14.))
-                        .child(t("Handoff")),
-                )
-                .child(
-                    div()
-                        .flex_shrink_0()
-                        .flex()
-                        .items_center()
-                        .gap(px(6.))
-                        .text_size(px(13.))
-                        .text_color(content(0.92))
+                        .text_size(px(12.5))
+                        .text_color(content(0.85))
                         .child(provider_glyph(from, 14.))
                         .child(name_of(from))
-                        .child(icon("chevron-right", 12.).text_color(content(0.5)))
+                        .child(icon("chevron-right", 11.).text_color(content(0.45)))
                         .child(provider_glyph(to, 14.))
                         .child(name_of(to)),
                 )
+                .child(div().flex_1())
                 .child(
                     div()
-                        .min_w_0()
-                        .flex_1()
-                        .truncate()
+                        .flex_shrink_0()
                         .text_size(px(12.))
-                        .text_color(content(0.5))
-                        .child(handoff.request.clone()),
+                        .text_color(content(0.45))
+                        .child(t("Leva o contexto ao enviar")),
                 )
                 .child(
                     div()
                         .id("handoff-dismiss")
-                        .size(px(24.))
+                        .size(px(22.))
                         .flex_shrink_0()
                         .rounded(px(crate::theme::RADIUS_SM))
                         .flex()

@@ -358,6 +358,18 @@ mod platform {
     }
 
     /// Launches by bundle id without activating it, then waits for the process.
+    /// The name Finder shows for an installed app, in the person's language: "Calculadora".
+    pub fn installed_name(bundle_id: &str) -> Option<String> {
+        let url = NSWorkspace::sharedWorkspace()
+            .URLForApplicationWithBundleIdentifier(&NSString::from_str(bundle_id))?;
+        let path = url.path()?;
+        let name = objc2_foundation::NSFileManager::defaultManager()
+            .displayNameAtPath(&path)
+            .to_string();
+        let name = name.strip_suffix(".app").unwrap_or(&name);
+        (!name.is_empty()).then(|| name.to_owned())
+    }
+
     pub fn launch(bundle_id: &str) -> Result<AppInfo, String> {
         let workspace = NSWorkspace::sharedWorkspace();
         let url = workspace

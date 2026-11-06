@@ -26,6 +26,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <plist version="1.0"><dict>
 <key>CFBundleExecutable</key><string>sirus-native-spike</string>
 <key>CFBundleIdentifier</key><string>com.siruscode.native</string>
+<key>CFBundleAllowMixedLocalizations</key><true/>
 <key>CFBundleName</key><string>Sirus Native</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
 <key>CFBundlePackageType</key><string>APPL</string>

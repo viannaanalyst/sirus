@@ -1490,10 +1490,7 @@ impl Shell {
                     if let Some(page) = self.usage_accounts.as_mut() {
                         page.signing_in = None;
                         if !ok {
-                            page.problem = value
-                                .as_str()
-                                .map(str::to_owned)
-                                .or(Some(t("O login não foi concluído.").to_owned()));
+                            page.problem = Some(error_text(&value));
                         }
                     }
                     if ok {
@@ -1754,7 +1751,8 @@ impl Shell {
         self.connected = true;
         self.problem = None;
         self.settings = state["settings"].clone();
-        if crate::chat_background::seed_monocode_default(&mut self.settings) {
+        let repaired = crate::settings_pages::repair_provider_paths(&mut self.settings);
+        if crate::chat_background::seed_monocode_default(&mut self.settings) || repaired {
             self.backend
                 .invoke("save_settings", json!({ "settings": self.settings }));
         }
@@ -8702,9 +8700,46 @@ impl Shell {
                         linear_color_stop(transparent(), 1.),
                     )),
             )
+            .children(self.new_tab_greeting(index))
             .child(self.composer(live, cx))
             .children(self.switch_view(now, moving))
             .into_any_element()
+    }
+
+    /// A conversation with nothing in it yet: its project's icon in the middle, a line under it,
+    /// and the composer stays at the bottom.
+    fn new_tab_greeting(&self, index: usize) -> Option<AnyElement> {
+        let conversation = &self.conversations[index];
+        if !conversation.turns.is_empty() || conversation.handoff.is_some() {
+            return None;
+        }
+        let project = self.projects.get(self.project_of(index)?)?;
+        Some(
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .right_0()
+                .bottom(px(150.))
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .gap(px(14.))
+                .child(crate::project_avatar::project_avatar(
+                    &project.name,
+                    &project.appearance,
+                    56.,
+                ))
+                .child(
+                    div()
+                        .text_size(px(20.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(content(0.92))
+                        .child(tf("O que vamos fazer em {}?", &[&project.name])),
+                )
+                .into_any_element(),
+        )
     }
 
     /// Composer B: the field is a raised card over a shelf holding the session's settings.
@@ -10329,8 +10364,8 @@ impl Shell {
                 )
             })
             .when_some(queue_card, |d, card| d.child(card))
-            .when_some(self.handoff_card(ix, cx), |d, card| d.child(card))
             .when_some(self.script_notice(ix, cx), |d, card| d.child(card))
+            .when_some(self.handoff_card(ix, cx), |d, card| d.child(card))
             .child(
                 div()
                     .rounded(px(crate::theme::RADIUS_LG))
@@ -10845,13 +10880,7 @@ impl Shell {
                 .child(inner)
                 .into_any_element()
         };
-        let step_text = |step: &data::Step| {
-            if step.detail.is_empty() {
-                step.label.clone()
-            } else {
-                format!("{} {}", step.label, step.detail)
-            }
-        };
+        let step_text = |step: &data::Step| crate::step_lines::text(&step_line(step));
         if live {
             // The last few steps as they happen, the one running on a spinner.
             let start = turn.steps.len().saturating_sub(6);
@@ -10878,8 +10907,8 @@ impl Shell {
                     .child(match &step.image {
                         Some(path) => self
                             .image_row(
-                                path,
-                                crate::tool_images::row_label(path, step.capture),
+ path,
+ step,
                                 format!("image-step-{index}-{i}"),
                                 cx,
                             )
@@ -10943,7 +10972,7 @@ impl Shell {
             rows.push((STEP_ROW + 2., child_row(STEP_ROW + 2., true, inner)));
             if nested_turn > 0.001 {
                 for (i, step) in turn.steps.iter().enumerate() {
-                    let height = 22. * nested_turn;
+                    let height = if step.capture { 28. } else { 22. } * nested_turn;
                     rows.push((
                         height,
                         div()
@@ -10960,18 +10989,13 @@ impl Shell {
                             .child(match &step.image {
                                 Some(path) => self
                                     .image_row(
-                                        path,
-                                        crate::tool_images::row_label(path, step.capture),
+ path,
+ step,
                                         format!("image-step-{index}-{i}"),
                                         cx,
                                     )
                                     .into_any_element(),
-                                None => div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .truncate()
-                                    .child(step_text(step))
-                                    .into_any_element(),
+                                None => step_row(step).into_any_element(),
                             })
                             .into_any_element(),
                     ));
@@ -11094,24 +11118,40 @@ impl Shell {
     fn image_row(
         &self,
         path: &str,
-        label: String,
+        step: &data::Step,
         id: String,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let open = path.to_owned();
         let name = crate::tool_images::file_name(path).to_owned();
+        let label = crate::tool_images::row_label(path, step.capture);
+        let mark = if step.capture {
+            // The shot itself says which one it is, without opening it.
+            gpui::img(std::path::PathBuf::from(path))
+                .w(px(26.))
+                .h(px(20.))
+                .flex_shrink_0()
+                .rounded(px(4.))
+                .border_1()
+                .border_color(content(0.16))
+                .object_fit(gpui::ObjectFit::Cover)
+                .into_any_element()
+        } else {
+            crate::file_icons::file_icon(&name, false, 14.).into_any_element()
+        };
         div()
             .id(SharedString::from(id))
             .flex()
             .flex_1()
             .min_w_0()
             .items_center()
-            .gap(px(6.))
+            .gap(px(7.))
             .cursor_pointer()
             .hover(|s| s.text_color(content(0.8)))
             .on_click(cx.listener(move |this, _, _, cx| this.open_image_file(open.clone(), cx)))
-            .child(crate::file_icons::file_icon(&name, false, 14.))
-            .child(div().min_w_0().truncate().child(label))
+            .child(mark)
+            .child(div().flex_shrink_0().child(label))
+            .when_some(step.target.clone(), |d, target| d.child(target_chip(target)))
     }
 
     /// Opens an image an agent read or changed: the Files pane comes up with it in a tab.
@@ -12473,8 +12513,11 @@ impl Shell {
                         )
                     }))
             }));
-        let body: AnyElement = if self.settings_page == APPEARANCE {
-            self.appearance_page(cx)
+        let (bar, body): (AnyElement, AnyElement) = if self.settings_page == APPEARANCE {
+            (
+                crate::settings_pages::title_bar(t("Aparência"), Vec::new()),
+                self.appearance_page(cx),
+            )
         } else {
             crate::settings_connectors::set_context(
                 self.projects
@@ -12518,24 +12561,31 @@ impl Shell {
                 .child(nav)
                 .child(
                     div()
-                        .id("settings-main")
                         .flex_1()
                         .min_w_0()
                         .h_full()
+                        .flex()
+                        .flex_col()
                         .bg(pane_fill())
-                        .overflow_y_scroll()
+                        .child(div().opacity(page_t).child(bar))
                         .child(
                             div()
-                                .relative()
-                                .top(px((1. - page_t) * 22. * self.settings_direction))
-                                .opacity(page_t)
-                                .mx_auto()
-                                .w_full()
-                                .max_w(px(780.))
-                                .pt(px(TITLE_BAR + 12.))
-                                .pb(px(40.))
-                                .px(px(32.))
-                                .child(body),
+                                .id("settings-main")
+                                .flex_1()
+                                .min_h_0()
+                                .overflow_y_scroll()
+                                .child(
+                                    div()
+                                        .relative()
+                                        .top(px((1. - page_t) * 22. * self.settings_direction))
+                                        .opacity(page_t)
+                                        .w_full()
+                                        .max_w(px(1040.))
+                                        .pt(px(16.))
+                                        .pb(px(40.))
+                                        .px(px(crate::settings_pages::CONTENT_INSET))
+                                        .child(body),
+                                ),
                         ),
                 )
                 .children(crate::settings_connectors::overlay(
@@ -13009,21 +13059,9 @@ impl Shell {
             )
         };
         div()
-            .child(
-                div()
-                    .text_size(px(19.))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(content(1.))
-                    .child(t("Aparência")),
-            )
-            .child(
-                div()
-                    .mt(px(6.))
-                    .mb(px(24.))
-                    .text_size(px(13.))
-                    .text_color(content(0.5))
-                    .child(t("Personalize materiais, tipografia e movimento.")),
-            )
+            .child(crate::settings_pages::about_line(t(
+                "Personalize materiais e movimento.",
+            )))
             .child(
                 div()
                     .mb(px(32.))
@@ -13457,6 +13495,45 @@ fn summary(steps: &[data::Step]) -> String {
         }
     }
     parts.join(" · ")
+}
+
+fn step_line(step: &data::Step) -> crate::step_lines::Line {
+    crate::step_lines::line(
+        &step.label,
+        &step.detail,
+        step.tool.as_deref(),
+        step.target.as_deref(),
+    )
+}
+
+/// What a tool acted on, in the tree: a small mono chip.
+fn target_chip(target: String) -> Div {
+    div()
+        .min_w_0()
+        .truncate()
+        .px(px(5.))
+        .rounded(px(4.))
+        .bg(content(0.06))
+        .font_family("Menlo")
+        .text_size(px(11.5))
+        .text_color(content(0.7))
+        .child(target)
+}
+
+/// A finished row of the opened tree: a quiet icon, the verb and what it acted on.
+fn step_row(step: &data::Step) -> Div {
+    let line = step_line(step);
+    div()
+        .flex()
+        .flex_1()
+        .min_w_0()
+        .items_center()
+        .gap(px(7.))
+        .child(icon(line.icon, 14.).text_color(content(0.42)))
+        .when(!line.verb.is_empty(), |d| {
+            d.child(div().flex_shrink_0().child(crate::i18n::t(line.verb)))
+        })
+        .when_some(line.target, |d, target| d.child(target_chip(target)))
 }
 
 fn step_glyph(step: &data::Step) -> &'static str {

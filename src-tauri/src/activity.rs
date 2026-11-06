@@ -118,6 +118,12 @@ pub struct ActivityItem {
     /// path is kept: the image bytes never reach the activity or a transcript.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_path: Option<String>,
+    /// An MCP tool's own name (`computer_click`), whatever the row's detail holds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+    /// What a browser or computer tool acted on, from `tool_target`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
     /// Child rows only: native observation window, never inferred from the parent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_at: Option<i64>,
@@ -396,6 +402,12 @@ impl TurnActivity {
             if item.image_path.is_none() {
                 item.image_path.clone_from(&old.image_path);
             }
+            if item.tool.is_none() {
+                item.tool.clone_from(&old.tool);
+            }
+            if item.target.is_none() {
+                item.target.clone_from(&old.target);
+            }
             if item.output.is_empty() {
                 item.output.clone_from(&old.output);
             }
@@ -634,6 +646,8 @@ fn item(
         output: String::new(),
         output_bytes: None,
         image_path: None,
+        tool: None,
+        target: None,
         started_at: None,
         ended_at: None,
         steps: vec![],
@@ -968,6 +982,10 @@ pub fn codex(v: &Value, started: bool) -> Vec<ActivityItem> {
         Some("mcpToolCall" | "dynamicToolCall") => {
             let mut row = item(id, ItemKind::Tool, "Tool call", state, None);
             row.detail = v["tool"].as_str().unwrap_or("").to_owned();
+            if !row.detail.is_empty() {
+                row.tool = Some(row.detail.clone());
+                row.target = tool_target(&row.detail, &v["arguments"]);
+            }
             if !started {
                 row.image_path = result_image(&v["result"]["content"]);
             }
@@ -1067,6 +1085,28 @@ fn mcp_tool(name: &str) -> Option<&str> {
         .split_once("__")
         .map(|(_, tool)| tool)
         .filter(|tool| !tool.is_empty())
+}
+/// What a browser or computer tool acted on: the app, or the page without its query, which can
+/// hold a token. No other argument reaches a row: typed text and the like stay out of it.
+fn tool_target(tool: &str, arguments: &Value) -> Option<String> {
+    let parsed;
+    let arguments = match arguments.as_str() {
+        Some(text) => {
+            parsed = serde_json::from_str::<Value>(text).ok()?;
+            &parsed
+        }
+        None => arguments,
+    };
+    let text = if tool.starts_with("computer_") {
+        arguments["app"]
+            .as_str()
+            .or(arguments["bundleId"].as_str())?
+    } else if matches!(tool, "browser_open" | "browser_navigate") {
+        arguments["url"].as_str()?.split(['?', '#']).next()?
+    } else {
+        return None;
+    };
+    (!text.is_empty()).then(|| short(text, 100))
 }
 /// The first picture a tool result carries, as an MCP image block or Claude's base64 image
 /// block, saved by tool_images.rs. Only its path comes back: the bytes are not kept.
@@ -1224,7 +1264,8 @@ pub fn claude(v: &Value) -> Vec<ActivityItem> {
             let mut observed = if block["type"] == "tool_use" {
                 let name = block["name"].as_str()?;
                 let (kind, label) = tool_kind(name);
-                // The delegation's model choice names its child; no other input is read.
+                // The delegation's model choice names its child; of other inputs, only the row's
+                // detail and `tool_target`'s app or page are read.
                 let model = matches!(name, "Agent" | "Task")
                     .then(|| block["input"]["model"].as_str())
                     .flatten();
@@ -1239,6 +1280,10 @@ pub fn claude(v: &Value) -> Vec<ActivityItem> {
                 // An MCP tool's own name stands in when its input names nothing, as Codex's does.
                 if row.detail.is_empty() {
                     row.detail = mcp_tool(name).unwrap_or("").to_owned();
+                }
+                if let Some(tool) = mcp_tool(name) {
+                    row.tool = Some(tool.to_owned());
+                    row.target = tool_target(tool, &block["input"]);
                 }
                 row
             } else if block["type"] == "tool_result" {
@@ -1414,6 +1459,39 @@ pub fn opencode(v: &Value) -> Vec<ActivityItem> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_tool_target_is_only_the_app_or_the_page_without_its_query() {
+        assert_eq!(
+            tool_target("computer_click", &json!({"app":"Calculator","ref":"e1"})).as_deref(),
+            Some("Calculator")
+        );
+        assert_eq!(
+            tool_target(
+                "computer_type",
+                &json!("{\"app\":\"Notes\",\"text\":\"secret\"}")
+            )
+            .as_deref(),
+            Some("Notes")
+        );
+        assert_eq!(
+            tool_target("browser_open", &json!({"url":"https://a.com/x?token=1#y"})).as_deref(),
+            Some("https://a.com/x")
+        );
+        assert_eq!(
+            tool_target(
+                "computer_launch",
+                &json!({"bundleId":"com.apple.calculator"})
+            )
+            .as_deref(),
+            Some("com.apple.calculator")
+        );
+        assert_eq!(tool_target("browser_type", &json!({"text":"secret"})), None);
+        assert_eq!(
+            tool_target("computer_type", &json!({"text":"secret"})),
+            None
+        );
+    }
     use serde_json::json;
     #[test]
     fn clock_pauses_and_finalization_does_not_invent_success() {

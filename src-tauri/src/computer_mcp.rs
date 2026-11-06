@@ -648,7 +648,7 @@ fn execute(app: &AppHandle, session_id: &str, tool: &str, args: &Value) -> Resul
             let placeholder = AppInfo {
                 pid: 0,
                 bundle_id: bundle.clone(),
-                name: bundle.clone(),
+                name: computer::installed_name(&bundle).unwrap_or_else(|| bundle.clone()),
                 active: false,
             };
             authorize(app, session_id, &placeholder, &provider)?;

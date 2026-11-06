@@ -438,6 +438,21 @@ fn receive(app: &AppHandle, url: &Url) {
     let _ = app.run_on_main_thread(move || crate::window_reveal::bring_forward(&handle));
 }
 
+/// A link read and matched to the projects of `state`.
+fn outcome_of(state: &AppState, raw: &str) -> PromptLinkOutcome {
+    let link = match parse(raw) {
+        Ok(link) => link,
+        Err(reason) => return PromptLinkOutcome::Invalid { reason },
+    };
+    let projects = state.data.lock().projects.clone();
+    let remote = |project: &Project| {
+        crate::git::remote_web_url(Path::new(&project.path))
+            .ok()
+            .flatten()
+    };
+    resolve(link, &projects, remote)
+}
+
 /// The waiting link, read and matched to a project; none when nothing is waiting.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn take_prompt_link(
@@ -447,20 +462,19 @@ pub async fn take_prompt_link(
         return Ok(None);
     };
     let state = state.inner().clone();
-    native_task(move || {
-        let link = match parse(&raw) {
-            Ok(link) => link,
-            Err(reason) => return Ok(Some(PromptLinkOutcome::Invalid { reason })),
-        };
-        let projects = state.data.lock().projects.clone();
-        let remote = |project: &Project| {
-            crate::git::remote_web_url(Path::new(&project.path))
-                .ok()
-                .flatten()
-        };
-        Ok(Some(resolve(link, &projects, remote)))
-    })
-    .await
+    native_task(move || Ok(Some(outcome_of(&state, &raw)))).await
+}
+
+/// A link the caller received itself, read and matched to a project exactly as a waiting one is.
+/// Sirus Native hears `sirus://` links from macOS in its own process and has no pending slot to
+/// take from. Nothing is stored and nothing is opened: the answer is the checked outcome.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn resolve_prompt_link(
+    state: State<'_, Arc<AppState>>,
+    url: String,
+) -> Result<PromptLinkOutcome> {
+    let state = state.inner().clone();
+    native_task(move || Ok(outcome_of(&state, &url))).await
 }
 
 /// A link to the given draft: the project's GitHub repository when it has one, otherwise

@@ -117,7 +117,7 @@ async fn settle(rx: async_channel::Receiver<Result<Value, Value>>) -> Result<Val
 }
 
 /// Um UUID v4 aleatório, um por envio.
-fn uuid() -> String {
+pub(crate) fn uuid() -> String {
     let mut bytes = [0u8; 16];
     if let Ok(mut random) = std::fs::File::open("/dev/urandom") {
         use std::io::Read;

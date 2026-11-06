@@ -25,10 +25,19 @@ pub(super) struct TermState {
     bottom_open: bool,
     /// The plus button's menu in the title strip: left edge and fade-in.
     plus_menu: Option<(f32, Tween)>,
-    /// The Pull requests page, a tab of its own in every placement (pull_requests_page.rs).
-    pulls: Option<Entity<PullRequestsPage>>,
-    pulls_active: bool,
+    /// The Pull requests page, a tab among the session tabs in every placement (pull_requests_page.rs).
+    pub(super) pulls: Option<Entity<PullRequestsPage>>,
+    pub(super) pulls_active: bool,
+    /// Its tab in the strip of session tabs, drawn and laid out with them (see `layout_tabs`).
+    pub(super) pulls_tab: Option<PageTab>,
     _pulls_events: Option<Subscription>,
+}
+
+/// A page's tab among the session tabs: it is not a conversation, so it has no `Tab`.
+pub(super) struct PageTab {
+    pub x: Tween,
+    pub w: Tween,
+    pub closing: bool,
 }
 
 impl TermState {
@@ -42,6 +51,7 @@ impl TermState {
             plus_menu: None,
             pulls: None,
             pulls_active: false,
+            pulls_tab: None,
             _pulls_events: None,
         }
     }
@@ -51,7 +61,7 @@ impl TermState {
         } else {
             0
         };
-        terminals + usize::from(self.pulls.is_some())
+        terminals
     }
     pub fn chips_width(&self) -> f32 {
         match self.chip_count() {
@@ -222,6 +232,18 @@ impl Shell {
         } else if let Some(view) = self.term.pulls.clone() {
             view.update(cx, |page, cx| page.reload(cx));
         }
+        match self.term.pulls_tab.as_mut() {
+            Some(tab) => tab.closing = false,
+            None => {
+                // Starts at the end of the strip with no width, then grows, like a new session.
+                let now = Instant::now();
+                self.term.pulls_tab = Some(PageTab {
+                    x: Tween::still(self.new_tab_x.at(now).max(0.), now),
+                    w: Tween::still(0., now),
+                    closing: false,
+                });
+            }
+        }
         self.term.active = None;
         self.term.pulls_active = true;
         self.term.plus_menu = None;
@@ -229,11 +251,112 @@ impl Shell {
         cx.notify();
     }
 
-    fn close_pull_requests(&mut self, cx: &mut Context<Self>) {
+    /// Closes the page's tab. If it was the one showing, the neighbour in the strip takes over:
+    /// the tab to its left (it is the last one), or the conversation it came from.
+    pub(super) fn close_pull_requests(&mut self, cx: &mut Context<Self>) {
+        let was_active = self.term.pulls_active;
+        match self.term.pulls_tab.as_mut() {
+            Some(tab) if !tab.closing => tab.closing = true,
+            _ => return,
+        }
         self.term.pulls = None;
         self.term._pulls_events = None;
         self.term.pulls_active = false;
+        if was_active {
+            let strip: Vec<u64> = self
+                .tabs
+                .iter()
+                .filter(|t| !t.pinned && !t.closing)
+                .map(|t| t.id)
+                .collect();
+            let next = neighbour_on_close(strip.len() + 1, strip.len())
+                .and_then(|at| strip.get(at).copied())
+                .unwrap_or(self.active);
+            self.select(next, cx);
+        }
         cx.notify();
+    }
+
+    /// The Pull requests tab, drawn like a session tab: a neutral tile with the pull request
+    /// glyph, the title and a close that shows on hover.
+    pub(super) fn pulls_tab_view(&self, now: Instant, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let tab = self.term.pulls_tab.as_ref()?;
+        let active = self.term.pulls_active && !tab.closing;
+        let width = tab.w.at(now);
+        let ink = if active { 1. } else { 0.5 };
+        let closable = active || width >= 72.;
+        let title = ((width - PIN_WIDTH) / 60.).clamp(0., 1.);
+        let mark = mark_tile(
+            &TAB_TILE,
+            Face::Neutral,
+            crate::theme::icon("git-pull-request", 14.).text_color(content(0.9)),
+        );
+        Some(
+            div()
+                .id("pulls-tab")
+                .group("pulls-tab")
+                .absolute()
+                .left(px(tab.x.at(now)))
+                .top(px((TITLE_BAR - PLATE) / 2.))
+                .w(px(width))
+                .h(px(PLATE))
+                .rounded(px(crate::theme::RADIUS_MD))
+                .overflow_hidden()
+                .flex()
+                .items_center()
+                .pl(px(tab_tile_inset()))
+                .gap(px(8.))
+                .bg(content(if active { 0.1 } else { 0.04 }))
+                .when(!active, |d| d.hover(|s| s.bg(content(0.07))))
+                .when(tab.closing, |d| {
+                    d.opacity((width / PIN_WIDTH).clamp(0., 1.))
+                })
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.open_pull_requests(cx);
+                }))
+                .child(mark)
+                // The title keeps its width while the plate narrows, so it clips instead of rewrapping.
+                .when(title > 0., |d| {
+                    d.child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .h(px(20.))
+                            .mr(px(if closable { 24. } else { 8. }))
+                            .opacity(title)
+                            .text_size(px(13.))
+                            .text_color(content(ink))
+                            .group_hover("pulls-tab", |s| s.text_color(content(1.)))
+                            .child(crate::tab_label::tab_label(t("Pull requests"))),
+                    )
+                })
+                .when(closable, |d| {
+                    d.child(
+                        div()
+                            .id("pulls-tab-close")
+                            .absolute()
+                            .right(px(4.))
+                            .top(px(4.5))
+                            .size(px(18.))
+                            .rounded(px(crate::theme::RADIUS_SM))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .when(!active, |d| {
+                                d.opacity(0.).group_hover("pulls-tab", |s| s.opacity(1.))
+                            })
+                            .hover(|s| s.bg(content(0.12)))
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.close_pull_requests(cx);
+                            }))
+                            .child(icon("close", 12.).text_color(content(0.6))),
+                    )
+                })
+                .into_any_element(),
+        )
     }
 
     /// The tab shown in place of the conversation.
@@ -291,7 +414,7 @@ impl Shell {
         } else {
             &[]
         };
-        let mut chips: Vec<AnyElement> = terminals
+        let chips: Vec<AnyElement> = terminals
             .iter()
             .map(|tab| {
                 let id = tab.id;
@@ -349,9 +472,6 @@ impl Shell {
                     .into_any_element()
             })
             .collect();
-        if self.term.pulls.is_some() {
-            chips.insert(0, self.pulls_chip(cx));
-        }
         Some(
             div()
                 .absolute()
@@ -362,63 +482,6 @@ impl Shell {
                 .children(chips)
                 .into_any_element(),
         )
-    }
-
-    /// The Pull requests tab, drawn like a terminal's.
-    fn pulls_chip(&self, cx: &mut Context<Self>) -> AnyElement {
-        let active = self.term.pulls_active;
-        div()
-            .id("pulls-chip")
-            .relative()
-            .w(px(CHIP_WIDTH))
-            .flex_shrink_0()
-            .h(px(PLATE))
-            .pl(px(8.))
-            .pr(px(26.))
-            .rounded(px(crate::theme::RADIUS_MD))
-            .flex()
-            .items_center()
-            .gap(px(6.))
-            .text_size(px(12.5))
-            .cursor_pointer()
-            .bg(content(if active { 0.1 } else { 0.04 }))
-            .text_color(content(if active { 1. } else { 0.55 }))
-            .hover(|s| s.bg(content(0.07)))
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(icon("git-pull-request", 12.).text_color(content(0.7)))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .child(t("Pull requests")),
-            )
-            .child(
-                div()
-                    .id("pulls-chip-close")
-                    .absolute()
-                    .right(px(3.))
-                    .top(px(3.5))
-                    .size(px(20.))
-                    .rounded(px(crate::theme::RADIUS_SM))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .hover(|s| s.bg(content(0.07)))
-                    .child(icon("close", 12.))
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        cx.stop_propagation();
-                        this.close_pull_requests(cx);
-                    })),
-            )
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.term.active = None;
-                this.term.pulls_active = true;
-                this.term.plus_menu = None;
-                cx.notify();
-            }))
-            .into_any_element()
     }
 
     /// The strip under the conversation: the active conversation's Terminal pane.

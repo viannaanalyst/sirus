@@ -27,6 +27,8 @@ pub(super) enum Call {
     /// A message sent to a subagent: its session and task.
     Message(String, String),
     Stop,
+    /// A running subagent sent to the background.
+    Background,
     /// Its feed was asked for: session and key.
     Feed(String, String),
 }
@@ -371,6 +373,9 @@ impl Shell {
         let actions = (controls && member.running()).then(|| {
             let (message_session, message_task) = (session.to_owned(), member.task.clone());
             let (stop_session, stop_task) = (session.to_owned(), member.task.clone());
+            let background = member.backgroundable().map(|source| {
+                (session.to_owned(), member.task.clone(), source.to_owned())
+            });
             div()
                 .absolute()
                 // Clear of the elapsed time, which keeps ticking.
@@ -404,6 +409,26 @@ impl Shell {
                         }))
                         .child(theme_icon("message-square", 13.).text_color(content(0.7))),
                 )
+                .children(background.map(|(bg_session, bg_task, bg_source)| {
+                    div()
+                        .id(("sub-background", uid))
+                        .size(px(24.))
+                        .rounded(px(crate::theme::RADIUS_SM))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor_pointer()
+                        .hover(|s| s.bg(content(0.07)))
+                        .tooltip(crate::shell::message_actions::name_tip(t(
+                            "Enviar para segundo plano",
+                        )))
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.background_subagent(&bg_session, &bg_task, &bg_source, cx);
+                        }))
+                        .child(theme_icon("zap", 13.).text_color(content(0.7)))
+                }))
                 .child(
                     div()
                         .id(("sub-stop", uid))
@@ -902,6 +927,17 @@ impl Shell {
         cx.notify();
     }
 
+    /// Moves this running foreground subagent to the background: the reply goes on without
+    /// waiting for it. The row then reads as background through the next activity update.
+    fn background_subagent(&mut self, session: &str, task: &str, source: &str, cx: &mut Context<Self>) {
+        let call = self.backend.invoke(
+            "background_subagent",
+            background_args(session, task, source),
+        );
+        self.waiting.insert(call, Waiting::Subagent(Call::Background));
+        cx.notify();
+    }
+
     /// Opens (or shuts) a subagent's own conversation under its row.
     fn toggle_feed(&mut self, session: &str, key: &str, cx: &mut Context<Self>) {
         let now = Instant::now();
@@ -942,7 +978,7 @@ impl Shell {
 
     pub(super) fn subagent_reply(&mut self, call: Call, ok: bool, value: &Value, cx: &mut Context<Self>) {
         match call {
-            Call::Stop => {
+            Call::Stop | Call::Background => {
                 if !ok {
                     self.problem = Some(error_text(value));
                 }
@@ -1018,6 +1054,11 @@ impl Shell {
     }
 }
 
+/// The arguments of `background_subagent`: the CLI's task id and its launching tool call.
+fn background_args(session: &str, task: &str, source: &str) -> Value {
+    json!({ "sessionId": session, "taskId": task, "toolUseId": source })
+}
+
 fn note(text: String) -> AnyElement {
     div()
         .px(px(6.))
@@ -1064,6 +1105,14 @@ mod tests {
         assert_eq!(summary(&p), "5 de 5 concluídos · 1 falhou");
         let p = team::Progress { done: 4, total: 4, running: 0, failed: 2, background: 0 };
         assert_eq!(summary(&p), "4 de 4 concluídos · 2 falharam");
+    }
+
+    #[test]
+    fn background_args_name_the_task_and_its_launching_call() {
+        let args = background_args("s1", "t1", "toolu_9");
+        assert_eq!(args["sessionId"], "s1");
+        assert_eq!(args["taskId"], "t1");
+        assert_eq!(args["toolUseId"], "toolu_9");
     }
 
     #[test]

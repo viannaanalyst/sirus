@@ -231,7 +231,7 @@ impl Render for NameTip {
 }
 
 /// The tooltip builder for a button's name: the label, shown on hover.
-fn name_tip(name: &'static str) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
+pub(crate) fn name_tip(name: &'static str) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
     move |_, cx| cx.new(|_| NameTip(name)).into()
 }
 

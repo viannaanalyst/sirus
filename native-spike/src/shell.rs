@@ -76,6 +76,9 @@ pub(crate) mod message_actions;
 
 #[path = "handoff.rs"]
 pub(crate) mod handoff;
+
+#[path = "prompt_link.rs"]
+pub(crate) mod prompt_link;
 /// The changed files under a finished reply, opened in place (turn_review.rs).
 #[path = "turn_review.rs"]
 mod turn_review;
@@ -111,7 +114,7 @@ const PANES: [(&str, &str, &str); 6] = [
 ];
 /// The Simulator is built but hidden for now: the owner doesn't need it yet.
 const VISIBLE_PANES: usize = 5;
-const COMMANDS: [&str; 16] = [
+const COMMANDS: [&str; 17] = [
     "Nova conversa",
     "Abrir ou fechar a sidebar",
     "Abrir ou fechar o painel lateral",
@@ -128,6 +131,7 @@ const COMMANDS: [&str; 16] = [
     "Trocar de projeto",
     "Abrir Uso",
     "Abrir Pull Requests",
+    "Copiar link do prompt",
 ];
 
 /// One line of the palette and what choosing it does.
@@ -251,6 +255,16 @@ fn bulk_close_marks(
         .filter(|(ix, (id, pinned))| *id != keep && !pinned && closes(*ix, at))
         .map(|(_, (id, _))| *id)
         .collect()
+}
+
+/// Where the selection goes when the tab at `at` of `count` closes: the one to its right, else
+/// the one to its left, as in a browser. None when it was the only one.
+fn neighbour_on_close(count: usize, at: usize) -> Option<usize> {
+    if at + 1 < count {
+        Some(at + 1)
+    } else {
+        at.checked_sub(1)
+    }
 }
 
 /// A random version 4 UUID, one per send.
@@ -806,6 +820,12 @@ enum Waiting {
     /// `detect_agents` for the first run's agents step (first_run.rs).
     FirstRunAgents,
     Created,
+    /// `resolve_prompt_link` for a `sirus://` link (prompt_link.rs).
+    PromptLink,
+    /// `build_prompt_link` for the palette's "Copiar link do prompt".
+    PromptLinkCopy,
+    /// The conversation a prompt link asked for, and the prompt that goes in its composer.
+    LinkCreated(String),
     Session(usize),
     /// A queued request sent to the host: its session and queue item.
     Queued(String, String),
@@ -861,6 +881,8 @@ const PEEK_INSET: f32 = 6.;
 const PEEK_DRIFT: f32 = 12.;
 const PEEK_CLOSE: Duration = Duration::from_millis(180);
 const SIDEBAR_SEARCH: f32 = 42.;
+/// Where the sidebar menu's switches start numbering, clear of Settings' own.
+const SIDEBAR_SWITCH_ID: usize = 800_000;
 /// Settings, same pages in the same order as Sirus's SettingsSidebar.
 const SETTINGS_NAV: [(&str, &[(&str, &str)]); 3] = [
     (
@@ -984,6 +1006,8 @@ pub struct Shell {
     scripts_output: bool,
     waiting: HashMap<u64, Waiting>,
     drafts: HashMap<usize, Draft>,
+    /// A `sirus://` link heard before the host was connected (prompt_link.rs).
+    link_pending: Option<String>,
     /// The draft text the host holds per draft key, so only changes are saved.
     saved_drafts: HashMap<String, String>,
     /// When a draft was last edited and not yet saved; the save timer waits for the composer to go quiet.
@@ -1052,6 +1076,11 @@ pub struct Shell {
     usage_value: Value,
     session_filter: SessionFilter,
     filter_button_at: std::rc::Rc<std::cell::Cell<Option<gpui::Bounds<Pixels>>>>,
+    /// The sidebar entries turned off (sidebar_items.rs), and the three-dots menu that turns
+    /// them on or off: its fade, heading to 0 while it closes, and its button's bounds.
+    sidebar_items: crate::sidebar_items::Hidden,
+    sidebar_options: Option<Tween>,
+    sidebar_options_at: std::rc::Rc<std::cell::Cell<Option<gpui::Bounds<Pixels>>>>,
     context_menu: Option<ContextMenu>,
     confirm: Option<ConfirmDialog>,
     /// Where the terminal lives: the strip, the title tabs (`shell_terminal.rs`).
@@ -1273,6 +1302,7 @@ impl Shell {
             scripts_output: false,
             waiting: HashMap::new(),
             drafts: HashMap::new(),
+            link_pending: None,
             saved_drafts: HashMap::new(),
             draft_edited: None,
             draft_timer: false,
@@ -1321,6 +1351,9 @@ impl Shell {
             usage_value: Value::Null,
             session_filter: SessionFilter::default(),
             filter_button_at: Default::default(),
+            sidebar_items: crate::sidebar_items::load(),
+            sidebar_options: None,
+            sidebar_options_at: Default::default(),
             context_menu: None,
             confirm: None,
             term: shell_terminal::TermState::new(),
@@ -1657,6 +1690,8 @@ impl Shell {
                             }
                         }
                     }
+                    // A prompt link that started the app waited for the providers to be known.
+                    self.take_prompt_link(cx);
                 }
                 Some(Waiting::Branches) if ok => {
                     self.env_branches = value
@@ -1763,6 +1798,9 @@ impl Shell {
                     self.conversations[ix].loaded = true;
                     self.open(ix, cx);
                 }
+                Some(Waiting::PromptLink) => self.prompt_link_resolved(ok, &value, cx),
+                Some(Waiting::PromptLinkCopy) => self.prompt_link_copied(ok, &value, cx),
+                Some(Waiting::LinkCreated(prompt)) if ok => self.link_created(prompt, &value, cx),
                 Some(Waiting::Queued(session, item)) => {
                     self.queued_reply(&session, &item, ok, &value, cx)
                 }
@@ -3736,12 +3774,12 @@ impl Shell {
         if self.active == id {
             // Like a browser: the next tab to the right, then the one to the left.
             let at = live.iter().position(|t| *t == id).unwrap_or(0);
-            let next = live
-                .get(at + 1)
-                .or_else(|| at.checked_sub(1).and_then(|i| live.get(i)))
-                .copied();
+            let next = neighbour_on_close(live.len(), at).and_then(|ix| live.get(ix).copied());
             if let Some(next) = next {
+                // A page tab being shown stays shown; only the conversation underneath moves on.
+                let page = self.term.pulls_active;
                 self.select(next, cx);
+                self.term.pulls_active = page;
             }
         }
         if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == id) {
@@ -3815,7 +3853,10 @@ impl Shell {
             (TAB_OPEN, REORDER, FAN)
         };
         let pinned = self.tabs.iter().filter(|t| t.pinned && !t.closing).count();
-        let free = self.tabs.iter().filter(|t| !t.pinned && !t.closing).count() as f32;
+        let pulls_live = self.term.pulls_tab.as_ref().is_some_and(|t| !t.closing);
+        let pulls_shown = pulls_live && self.term.pulls_active;
+        let free = (self.tabs.iter().filter(|t| !t.pinned && !t.closing).count()
+            + usize::from(pulls_live)) as f32;
         let menu_on_pin = self
             .menu
             .as_ref()
@@ -3843,7 +3884,8 @@ impl Shell {
         } else {
             0.
         };
-        let active_free = self.tabs.iter().any(|t| t.id == self.active && !t.pinned);
+        let active_free = pulls_shown
+            || self.tabs.iter().any(|t| t.id == self.active && !t.pinned);
         let (selected, others) = if active_free && even < SELECTED_MIN && free > 1. {
             (
                 SELECTED_MIN,
@@ -3861,7 +3903,7 @@ impl Shell {
             }
             let width = if tab.closing {
                 0.
-            } else if tab.id == self.active {
+            } else if tab.id == self.active && !pulls_shown {
                 selected
             } else {
                 others
@@ -3878,6 +3920,27 @@ impl Shell {
             moving |= !tab.x.done(now) || !tab.w.done(now);
             if !tab.closing {
                 x += width + GAP;
+            }
+        }
+        // The page tab follows the session tabs, in the same strip.
+        if let Some(page) = self.term.pulls_tab.as_mut() {
+            let width = match (page.closing, pulls_shown) {
+                (true, _) => 0.,
+                (false, true) => selected,
+                (false, false) => others,
+            };
+            if page.x.to < 0. {
+                page.x.snap(x, now);
+                page.w.snap(width, now);
+            }
+            page.w.set(width, now, open, Curve::Quad);
+            page.x.set(x, now, reorder, Curve::Expo);
+            moving |= !page.x.done(now) || !page.w.done(now);
+            if !page.closing {
+                x += width + GAP;
+            }
+            if page.closing && page.w.done(now) {
+                self.term.pulls_tab = None;
             }
         }
         self.new_tab_x.set(x, now, reorder, Curve::Expo);
@@ -4503,6 +4566,9 @@ impl Shell {
         {
             return;
         }
+        if key == "escape" && self.close_sidebar_options(cx) {
+            return;
+        }
         if key == "escape" && self.session_filter.open.take().is_some() {
             cx.notify();
             return;
@@ -4755,6 +4821,7 @@ impl Shell {
         match (cmd, shift, ctrl, key) {
             (true, false, false, "q") => cx.quit(),
             (true, false, false, "t") | (true, false, false, "n") => self.new_conversation(None, cx),
+            (true, false, false, "w") if self.term.pulls_active => self.close_pull_requests(cx),
             (true, false, false, "w") => self.close(self.active, cx),
             (true, true, false, "p") => self.toggle_pin(self.active, cx),
             (true, false, false, "s") => self.toggle_sidebar(cx),
@@ -5550,7 +5617,7 @@ impl Shell {
     fn tab(&self, tab: &Tab, now: Instant, cx: &mut Context<Self>) -> AnyElement {
         let id = tab.id;
         let conversation = &self.conversations[tab.conversation];
-        let active = id == self.active && !tab.closing;
+        let active = id == self.active && !tab.closing && !self.term.pulls_active;
         let group: gpui::SharedString = format!("tab{id}").into();
         let width = tab.w.at(now);
         let dragged = self.drag.as_ref().is_some_and(|d| d.active && d.id == id);
@@ -5723,6 +5790,7 @@ impl Shell {
                 let tab = &self.tabs[ix];
                 out.push(self.tab(tab, now, cx));
             }
+            out.extend(self.pulls_tab_view(now, cx));
             out
         };
         let dock = self.pinned_dock(now, moving, reduced, cx);
@@ -5959,6 +6027,9 @@ impl Shell {
         if self.peek.as_ref().is_some_and(|p| !p.open && p.t.done(now)) {
             self.peek = None;
         }
+        if self.sidebar_options.is_some_and(|t| t.to < 0.5 && t.done(now)) {
+            self.sidebar_options = None;
+        }
         let open = self.sidebar.at(now);
         *moving |= !self.sidebar.done(now);
         let (rows, height, rows_moving) = self.layout_rows(now, reduced);
@@ -5999,7 +6070,8 @@ impl Shell {
                     .flex()
                     .flex_col()
                     .child(this.project_header(cx))
-                    .child(this.sidebar_search(cx))
+                    .children(this.sidebar_search(cx))
+                    .children(this.sidebar_pulls(cx))
                     .child(
                         div()
                             .relative()
@@ -7253,6 +7325,8 @@ impl Shell {
                     )
                     .child(chevron_down().flex_shrink_0()),
             )
+            .child(div().flex_1())
+            .child(self.sidebar_options_button(cx))
             .into_any_element()
     }
 
@@ -7261,6 +7335,7 @@ impl Shell {
             let now = Instant::now();
             self.composer_menu = None;
             self.usage_popup = None;
+            self.sidebar_options = None;
             self.project_menu = Some(ProjectMenu {
                 open: Tween::from_to(
                     0.,
@@ -8425,8 +8500,11 @@ impl Shell {
     }
 
     /// ⌘K lives in the sidebar, as Monocode's: conversations, messages, projects and commands.
-    fn sidebar_search(&self, cx: &mut Context<Self>) -> AnyElement {
-        div()
+    fn sidebar_search(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.sidebar_items.shown("search") {
+            return None;
+        }
+        Some(div()
             .flex_shrink_0()
             .h(px(SIDEBAR_SEARCH))
             .px(px(6.))
@@ -8457,7 +8535,167 @@ impl Shell {
                             .child("⌘K"),
                     ),
             )
+            .into_any_element())
+    }
+
+    /// The Pull requests entry below the search field, a row like the conversations' that is lit
+    /// while its tab is the one showing.
+    fn sidebar_pulls(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.sidebar_items.shown("pulls") {
+            return None;
+        }
+        let active = self.term.pulls_active;
+        let search = self.sidebar_items.shown("search");
+        Some(
+            div()
+                .flex_shrink_0()
+                .px(px(6.))
+                .pt(px(if search { 0. } else { 4. }))
+                .pb(px(6.))
+                .child(
+                    div()
+                        .id("sidebar-pulls")
+                        .h(px(CONV_ROW - 2.))
+                        .pl(px(10.))
+                        .pr(px(8.))
+                        .rounded(px(crate::theme::RADIUS_MD))
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .text_size(px(13.))
+                        .text_color(content(if active { 1. } else { 0.68 }))
+                        .cursor_pointer()
+                        .when(active, |d| d.bg(content(0.09)))
+                        .when(!active, |d| {
+                            d.hover(|s| s.bg(content(0.07)).text_color(content(0.95)))
+                        })
+                        .on_click(cx.listener(|this, _, _, cx| this.open_pull_requests(cx)))
+                        .child(
+                            icon("git-pull-request", 14.)
+                                .text_color(content(if active { 0.9 } else { 0.55 })),
+                        )
+                        .child(div().flex_1().min_w_0().truncate().child(t("Pull requests"))),
+                )
+                .into_any_element(),
+        )
+    }
+
+    /// Opens the three-dots menu, or fades it out when it is open.
+    fn toggle_sidebar_options(&mut self, cx: &mut Context<Self>) {
+        if self.close_sidebar_options(cx) {
+            return;
+        }
+        self.close_project_menu();
+        self.sidebar_options = Some(Tween::from_to(
+            0.,
+            1.,
+            Instant::now(),
+            if cx.reduce_motion() { 0. } else { 0.16 },
+            Curve::Expo,
+        ));
+        cx.notify();
+    }
+
+    /// Starts the menu's fade-out; says whether it was open (and not already leaving).
+    fn close_sidebar_options(&mut self, cx: &mut Context<Self>) -> bool {
+        let duration = if cx.reduce_motion() { 0. } else { 0.12 };
+        match self.sidebar_options.as_mut() {
+            Some(open) if open.to > 0.5 => {
+                open.set(0., Instant::now(), duration, Curve::Expo);
+                cx.notify();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// The three dots beside the project's name.
+    fn sidebar_options_button(&self, cx: &mut Context<Self>) -> AnyElement {
+        let store = self.sidebar_options_at.clone();
+        let open = self.sidebar_options.is_some_and(|t| t.to > 0.5);
+        div()
+            .id("sidebar-options")
+            .relative()
+            .flex_shrink_0()
+            .size(px(28.))
+            .rounded(px(crate::theme::RADIUS_MD))
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_pointer()
+            .when(open, |d| d.bg(content(0.09)))
+            .hover(|s| s.bg(content(0.07)))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(|this, _, _, cx| this.toggle_sidebar_options(cx)))
+            .child(
+                gpui::canvas(move |bounds, _, _| store.set(Some(bounds)), |_, _, _, _| {})
+                    .absolute()
+                    .size_full(),
+            )
+            .child(icon("more-horizontal", 16.).text_color(content(0.6)))
             .into_any_element()
+    }
+
+    /// A switch per optional sidebar entry (the table in sidebar_items.rs), under the button.
+    fn sidebar_options_view(
+        &self,
+        now: Instant,
+        moving: &mut bool,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let open = self.sidebar_options.as_ref()?;
+        let button = self.sidebar_options_at.get()?;
+        if !open.done(now) {
+            *moving = true;
+        }
+        let shown = open.at(now).clamp(0., 1.);
+        let rows = crate::sidebar_items::ITEMS.iter().enumerate().map(|(at, item)| {
+            let on = self.sidebar_items.shown(item.id);
+            let id = item.id;
+            div()
+                .id(("sidebar-option", at))
+                .h(px(34.))
+                .pl(px(8.))
+                .pr(px(6.))
+                .rounded(px(crate::theme::RADIUS_MD))
+                .flex()
+                .items_center()
+                .gap(px(9.))
+                .text_size(px(13.))
+                .text_color(content(0.92))
+                .cursor_pointer()
+                .hover(|s| s.bg(content(0.07)))
+                .child(icon(item.icon, 14.).text_color(content(0.65)))
+                .child(div().flex_1().min_w_0().truncate().child(t(item.label)))
+                .child(crate::settings_pages::switch_track(SIDEBAR_SWITCH_ID + at, on, true))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.sidebar_items.toggle(id);
+                    crate::sidebar_items::save(&this.sidebar_items);
+                    cx.notify();
+                }))
+        });
+        const WIDTH: f32 = 230.;
+        Some(
+            div()
+                .id("sidebar-options-menu")
+                .occlude()
+                .absolute()
+                .left(px((f32::from(button.right()) - WIDTH).max(8.)))
+                .top(px(f32::from(button.bottom()) + 4. + (1. - shown) * -6.))
+                .w(px(WIDTH))
+                .p(px(4.))
+                .flex()
+                .flex_col()
+                .opacity(shown)
+                .rounded(px(crate::theme::RADIUS_LG))
+                .border_1()
+                .border_color(content(0.12))
+                .child(crate::theme::floating_surface(crate::theme::RADIUS_LG))
+                .shadow_lg()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .children(rows)
+                .into_any_element(),
+        )
     }
 
     /// The Usage page, right beside Configurações.
@@ -8477,25 +8715,6 @@ impl Shell {
             .on_click(cx.listener(|this, _, _, cx| this.toggle_usage_page(cx)))
             .child(icon("chart-column", 13.).text_color(content(0.55)))
             .child(t("Uso"))
-    }
-
-    /// The Pull requests page, a tab in the title bar, beside Uso.
-    fn pulls_button(&self, cx: &mut Context<Self>) -> Stateful<Div> {
-        div()
-            .id("sidebar-pulls")
-            .h(px(22.))
-            .px(px(6.))
-            .rounded(px(crate::theme::RADIUS_SM))
-            .flex()
-            .items_center()
-            .gap(px(6.))
-            .text_size(px(12.))
-            .text_color(content(0.55))
-            .cursor_pointer()
-            .hover(|s| s.bg(content(0.08)).text_color(content(0.95)))
-            .on_click(cx.listener(|this, _, _, cx| this.open_pull_requests(cx)))
-            .child(icon("git-pull-request", 13.).text_color(content(0.55)))
-            .child(t("Pull requests"))
     }
 
     /// Settings stay one click away at the footer's right end.
@@ -10959,7 +11178,6 @@ impl Shell {
             })
             .child(div().flex_1())
             .when_some(self.resources_gauge(cx), |d, gauge| d.child(gauge))
-            .child(self.pulls_button(cx))
             .child(self.usage_button(cx))
             .child(self.settings_button(cx))
             .into_any_element()
@@ -11686,6 +11904,7 @@ impl Shell {
             }
             PaletteHit::Command(14) => self.toggle_usage_page(cx),
             PaletteHit::Command(15) => self.open_pull_requests(cx),
+            PaletteHit::Command(16) => self.copy_prompt_link(cx),
             PaletteHit::Command(pane) => self.open_pane(pane - 5, cx),
         }
         cx.notify();
@@ -14176,6 +14395,7 @@ impl Render for Shell {
         let sidebar_card = self.sidebar_card_view(now, &mut moving, cx);
         let project_menu = self.project_menu_view(now, &mut moving, cx);
         let filter_menu = self.filter_menu_view(now, &mut moving, cx);
+        let sidebar_options = self.sidebar_options_view(now, &mut moving, cx);
         let context_menu = self.context_menu_view(now, &mut moving, cx);
         let select_menu = self.select_menu_view(now, &mut moving, cx);
         let handoff_popup = self.handoff_popup_view(now, &mut moving, cx);
@@ -14289,7 +14509,7 @@ impl Render for Shell {
                 if this.select.clear_unless_claimed() {
                     cx.notify();
                 }
-                let closed = [this.incoming.close(), this.menu.take().is_some(), this.environment.take().is_some(),this.composer_menu.take().is_some(), this.add_menu.take().is_some(), this.usage_popup.take().is_some(), this.resources.close(), this.context.close(), this.close_project_menu(), this.session_filter.open.take().is_some(), this.context_menu.take().is_some(), this.term.close_menu()];
+                let closed = [this.incoming.close(), this.menu.take().is_some(), this.environment.take().is_some(),this.composer_menu.take().is_some(), this.add_menu.take().is_some(), this.usage_popup.take().is_some(), this.resources.close(), this.context.close(), this.close_project_menu(), this.session_filter.open.take().is_some(), this.context_menu.take().is_some(), this.term.close_menu(), this.close_sidebar_options(cx)];
                 this.goal_input = None;
                 if closed.contains(&true) {
                     cx.notify();
@@ -14377,6 +14597,7 @@ impl Render for Shell {
             .children(peek_panel)
             .children(project_menu)
             .children(filter_menu)
+            .children(sidebar_options)
             .children(context_menu)
             .children(select_menu)
             .children(handoff_popup)
@@ -14413,6 +14634,15 @@ mod tests {
         assert_eq!(bulk_close_marks(&tabs, 3, |_, _| true), vec![2, 5]);
         assert_eq!(bulk_close_marks(&tabs, 3, |ix, at| ix > at), vec![5]);
         assert_eq!(bulk_close_marks(&tabs, 3, |ix, at| ix < at), vec![2]);
+    }
+
+    #[test]
+    fn closing_a_tab_selects_the_right_neighbour_then_the_left() {
+        assert_eq!(neighbour_on_close(3, 0), Some(1));
+        assert_eq!(neighbour_on_close(3, 1), Some(2));
+        assert_eq!(neighbour_on_close(3, 2), Some(1));
+        assert_eq!(neighbour_on_close(2, 1), Some(0));
+        assert_eq!(neighbour_on_close(1, 0), None);
     }
 
     #[test]

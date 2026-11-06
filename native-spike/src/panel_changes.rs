@@ -33,7 +33,14 @@ pub fn new(context: PanelContext, cx: &mut App) -> AnyView {
                 TextFieldEvent::Cancel => {}
             },
         );
+        let follow = crate::workspace_follow::Follow::start(
+            context.backend.clone(),
+            context.session_id.clone(),
+            ChangesPanel::disk_changed,
+            cx,
+        );
         let mut panel = ChangesPanel {
+            _follow: follow,
             backend: context.backend,
             session_id: context.session_id,
             root: context.worktree,
@@ -48,6 +55,9 @@ pub fn new(context: PanelContext, cx: &mut App) -> AnyView {
             loading_older: false,
             commit,
             committing: false,
+            title_job: None,
+            title_note: None,
+            push: PushState::default(),
             _commit_events: commit_events,
             pr: PullRequestForm::new(cx),
         };
@@ -86,6 +96,9 @@ struct Snapshot {
     token: String,
     repo: bool,
     branch: Option<String>,
+    detached: bool,
+    ahead: Option<u64>,
+    behind: Option<u64>,
     /// The commit HEAD points to; older pages of the Histórico continue from it.
     head: Option<String>,
     history: Vec<Commit>,
@@ -128,6 +141,8 @@ struct CommitDiff {
 }
 
 struct ChangesPanel {
+    /// Reads the status again when files change on disk; stops with the panel.
+    _follow: crate::workspace_follow::Follow,
     backend: Backend,
     session_id: String,
     /// The session's folder, where `git` runs for the history views.
@@ -146,9 +161,31 @@ struct ChangesPanel {
     loading_older: bool,
     commit: Entity<TextField>,
     committing: bool,
+    /// The generated title being written, if any (commit_title_action).
+    title_job: Option<TitleJob>,
+    /// Who wrote the last generated title, or why it was dropped.
+    title_note: Option<String>,
+    /// Pushing: the confirmation after "Commit e Push" and what the last push said.
+    push: PushState,
     _commit_events: Subscription,
     /// The Criar PR form of the footer, as the Environment panel's.
     pr: PullRequestForm,
+}
+
+/// A commit title being generated: its request id (the host takes one job at a time) and whether
+/// Cancel was already sent.
+struct TitleJob {
+    id: String,
+    cancelling: bool,
+}
+
+/// Pushing is never implicit: Commit e Push commits, then asks to confirm, as in React's pane.
+#[derive(Default)]
+struct PushState {
+    confirm: bool,
+    pushing: bool,
+    /// The last push: a message and whether it failed.
+    result: Option<(String, bool)>,
 }
 
 /// Criar PR: the title, the description and the draft toggle, and what the last try gave.
@@ -342,6 +379,11 @@ impl ChangesPanel {
     /// Commits the staged files with the typed title. The index token makes a stale view fail, so
     /// the pane reads the status again afterwards either way.
     fn commit(&mut self, cx: &mut Context<Self>) {
+        self.commit_with(false, cx);
+    }
+
+    /// Commits, and with `then_push` asks to confirm a push once the commit is made.
+    fn commit_with(&mut self, then_push: bool, cx: &mut Context<Self>) {
         let Some(snapshot) = self.snapshot.as_ref() else {
             return;
         };
@@ -352,6 +394,8 @@ impl ChangesPanel {
         let token = snapshot.token.clone();
         self.committing = true;
         self.error = None;
+        self.title_note = None;
+        self.push.result = None;
         let rx = self.backend.request(
             "git_commit",
             json!({ "sessionId": self.session_id, "message": message, "expectedIndex": token }),
@@ -361,9 +405,112 @@ impl ChangesPanel {
             let _ = this.update(cx, |this, cx| {
                 this.committing = false;
                 match reply {
-                    Ok(_) => this.commit.update(cx, |field, cx| field.set_text("", cx)),
+                    Ok(_) => {
+                        this.commit.update(cx, |field, cx| field.set_text("", cx));
+                        this.push.confirm = then_push;
+                    }
                     Err(error) => this.error = Some(error),
                 }
+                this.refresh(cx);
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Asks the host to write a title for the staged changes. A title typed meanwhile, or a
+    /// changed index, keeps the person's text.
+    fn generate_title(&mut self, cx: &mut Context<Self>) {
+        let Some(snapshot) = self.snapshot.as_ref() else {
+            return;
+        };
+        if self.title_job.is_some() || self.committing || snapshot.staged.is_empty() {
+            return;
+        }
+        let token = snapshot.token.clone();
+        let started_with = self.commit.read(cx).text().to_owned();
+        let id = crate::panel_sidechat::uuid();
+        self.title_job = Some(TitleJob { id: id.clone(), cancelling: false });
+        self.title_note = None;
+        self.error = None;
+        let rx = self
+            .backend
+            .request("commit_title_action", title_action(&self.session_id, &token, &id));
+        cx.spawn(async move |this, cx| {
+            let reply = settle(rx).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.title_job.as_ref().map(|job| job.id.as_str()) != Some(id.as_str()) {
+                    return;
+                }
+                this.title_job = None;
+                match reply.map(|value| title_reply(&value)) {
+                    Ok(TitleReply::Title { title, provider, partial }) => {
+                        let now = this.commit.read(cx).text().to_owned();
+                        let current = this.snapshot.as_ref().map(|s| s.token.as_str());
+                        if keeps_typed(&started_with, &now, &token, current.unwrap_or("")) {
+                            this.title_note = Some(t("Seu texto foi mantido.").into());
+                        } else {
+                            this.commit.update(cx, |field, cx| field.set_text(&title, cx));
+                            this.title_note = Some(attribution(&provider, partial));
+                        }
+                    }
+                    Ok(TitleReply::Cancelled) => {
+                        this.title_note = Some(t("Geração do título cancelada.").into())
+                    }
+                    Ok(TitleReply::Invalid) => {
+                        this.error = Some(t("Resposta inesperada do título do commit.").into())
+                    }
+                    Err(error) => this.error = Some(error),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn cancel_title(&mut self, cx: &mut Context<Self>) {
+        let Some(job) = self.title_job.as_mut() else {
+            return;
+        };
+        if job.cancelling {
+            return;
+        }
+        job.cancelling = true;
+        // The pending generate returns Cancelled; this answer only matters when it fails.
+        let rx = self
+            .backend
+            .request("commit_title_action", cancel_title_action(&self.session_id, &job.id));
+        cx.spawn(async move |this, cx| {
+            if let Err(error) = settle(rx).await {
+                let _ = this.update(cx, |this, cx| {
+                    this.error = Some(error);
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Pushes the session's branch. Only reached from the confirmation.
+    fn push_now(&mut self, cx: &mut Context<Self>) {
+        let blocked = self.snapshot.as_ref().is_none_or(|s| !can_push(s.repo, s.detached, &s.head));
+        if self.push.pushing || blocked {
+            return;
+        }
+        self.push.pushing = true;
+        self.push.result = None;
+        let rx = self.backend.request("git_push", json!({ "sessionId": self.session_id }));
+        cx.spawn(async move |this, cx| {
+            let reply = settle(rx).await;
+            let _ = this.update(cx, |this, cx| {
+                this.push.pushing = false;
+                this.push.confirm = false;
+                this.push.result = Some(match reply {
+                    Ok(value) => (pushed_text(&value), false),
+                    Err(error) => (error, true),
+                });
                 this.refresh(cx);
             });
         })
@@ -538,6 +685,14 @@ impl ChangesPanel {
                     ),
             )
             .into_any_element()
+    }
+
+    /// Files changed on disk (an agent, a terminal, an editor): read the status again, unless a
+    /// read or a commit is already on its way, which will see them.
+    fn disk_changed(&mut self, cx: &mut Context<Self>) {
+        if !self.loading && !self.committing {
+            self.refresh(cx);
+        }
     }
 
     /// Reads the workspace's status and the line counts; both are fresh when this returns.
@@ -934,7 +1089,88 @@ impl ChangesPanel {
         if let Some(error) = &self.error {
             footer = footer.child(note(error, true));
         }
-        footer
+        if let Some(text) = &self.title_note {
+            footer = footer.child(note(text, false));
+        }
+        let can_push = can_push(snapshot.repo, snapshot.detached, &snapshot.head);
+        let small = |id: &'static str, label: &'static str, on: bool| {
+            let base = div()
+                .id(id)
+                .h(px(26.))
+                .px(px(10.))
+                .rounded(px(crate::theme::RADIUS_MD))
+                .flex()
+                .items_center()
+                .flex_shrink_0()
+                .text_size(px(12.))
+                .bg(content(0.07))
+                .text_color(content(0.85))
+                .child(label);
+            if on {
+                base.cursor_pointer().hover(|style| style.opacity(0.9))
+            } else {
+                base.opacity(0.4)
+            }
+        };
+        let busy_title = self.title_job.is_some();
+        let sparkle_on = !busy_title && !self.committing && !snapshot.staged.is_empty();
+        let sparkle = div()
+            .id("commit-generate")
+            .size(px(26.))
+            .rounded(px(crate::theme::RADIUS_SM))
+            .flex()
+            .items_center()
+            .justify_center()
+            .flex_shrink_0()
+            .child(
+                svg()
+                    .path(if busy_title { "square" } else { "zap" })
+                    .size(px(14.))
+                    .text_color(content(0.6))
+                    .flex_shrink_0(),
+            );
+        let sparkle = if busy_title {
+            let cancelling = self.title_job.as_ref().is_some_and(|job| job.cancelling);
+            sparkle
+                .opacity(if cancelling { 0.4 } else { 1.0 })
+                .tooltip(crate::shell::message_actions::name_tip(t("Cancelar geração do título")))
+                .when(!cancelling, |d| {
+                    d.cursor_pointer()
+                        .hover(|style| style.bg(content(0.08)))
+                        .on_click(cx.listener(|this, _, _, cx| this.cancel_title(cx)))
+                })
+        } else if sparkle_on {
+            sparkle
+                .tooltip(crate::shell::message_actions::name_tip(t("Gerar título do commit")))
+                .cursor_pointer()
+                .hover(|style| style.bg(content(0.08)))
+                .on_click(cx.listener(|this, _, _, cx| this.generate_title(cx)))
+        } else {
+            sparkle.opacity(0.4)
+        };
+        let both_on = enabled && can_push;
+        let push_row = div()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .px(px(8.))
+            .pb(px(8.))
+            .child(small("commit-push", t("Commit e Push"), both_on).when(both_on, |b| {
+                b.on_click(cx.listener(|this, _, _, cx| this.commit_with(true, cx)))
+            }))
+            .child(
+                small("push-only", t("Push"), can_push && !self.push.pushing).when(
+                    can_push && !self.push.pushing,
+                    |b| {
+                        b.on_click(cx.listener(|this, _, _, cx| {
+                            this.push.confirm = true;
+                            this.push.result = None;
+                            cx.notify();
+                        }))
+                    },
+                ),
+            );
+        footer = footer
             .child(
                 div()
                     .flex()
@@ -942,8 +1178,54 @@ impl ChangesPanel {
                     .gap(px(6.))
                     .p(px(8.))
                     .child(div().flex_1().min_w_0().child(self.commit.clone()))
+                    .child(sparkle)
                     .child(button),
             )
+            .child(push_row);
+        if self.push.confirm {
+            let branch = snapshot.branch.clone().unwrap_or_default();
+            let pushing = self.push.pushing;
+            footer = footer.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.))
+                    .px(px(8.))
+                    .pb(px(8.))
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(content(0.7))
+                            .child(tf("Enviar {} para o remoto?", &[&branch])),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .justify_end()
+                            .gap(px(6.))
+                            .child(small("push-cancel", t("Cancelar"), !pushing).when(!pushing, |b| {
+                                b.on_click(cx.listener(|this, _, _, cx| {
+                                    this.push.confirm = false;
+                                    cx.notify();
+                                }))
+                            }))
+                            .child(
+                                small(
+                                    "push-confirm",
+                                    if pushing { t("Enviando…") } else { t("Confirmar push") },
+                                    !pushing,
+                                )
+                                .when(!pushing, |b| {
+                                    b.on_click(cx.listener(|this, _, _, cx| this.push_now(cx)))
+                                }),
+                            ),
+                    ),
+            );
+        }
+        if let Some((text, failed)) = &self.push.result {
+            footer = footer.child(note(text, *failed));
+        }
+        footer
             .when(snapshot.branch.is_some(), |footer| {
                 footer.child(self.pull_request_row(cx))
             })
@@ -1182,7 +1464,13 @@ impl Render for ChangesPanel {
                 let branch = self
                     .snapshot
                     .as_ref()
-                    .and_then(|snapshot| snapshot.branch.clone())
+                    .and_then(|snapshot| {
+                        let name = snapshot.branch.clone()?;
+                        Some(match (snapshot.ahead, snapshot.behind) {
+                            (Some(ahead), Some(behind)) => format!("{name}  ↑{ahead} ↓{behind}"),
+                            _ => name,
+                        })
+                    })
                     .unwrap_or_else(|| t("Alterações").into());
                 let status = if self.loading {
                     t("Atualizando…")
@@ -1290,6 +1578,9 @@ fn snapshot_of(value: &Value) -> Option<Snapshot> {
         token: snapshot["indexToken"].as_str().unwrap_or("").to_owned(),
         repo: snapshot["identity"]["isRepo"].as_bool().unwrap_or(false),
         branch: snapshot["identity"]["branch"].as_str().map(str::to_owned),
+        detached: snapshot["identity"]["detached"].as_bool().unwrap_or(false),
+        ahead: snapshot["ahead"].as_u64(),
+        behind: snapshot["behind"].as_u64(),
         head: snapshot["head"].as_str().map(str::to_owned),
         history: commits_of(&snapshot["history"]),
         history_truncated: snapshot["historyTruncated"].as_bool().unwrap_or(false),
@@ -1298,6 +1589,75 @@ fn snapshot_of(value: &Value) -> Option<Snapshot> {
         conflicts: snapshot["conflicts"].as_bool().unwrap_or(false),
         truncated: snapshot["truncated"].as_bool().unwrap_or(false),
     })
+}
+
+/// `commit_title_action` generate request for the staged index the pane read.
+fn title_action(session_id: &str, token: &str, request_id: &str) -> Value {
+    json!({ "action": {
+        "type": "generate", "sessionId": session_id, "expectedIndex": token, "requestId": request_id
+    } })
+}
+
+fn cancel_title_action(session_id: &str, request_id: &str) -> Value {
+    json!({ "action": { "type": "cancel", "sessionId": session_id, "requestId": request_id } })
+}
+
+/// What `commit_title_action` answered.
+#[derive(Debug, PartialEq)]
+enum TitleReply {
+    Title { title: String, provider: String, partial: bool },
+    Cancelled,
+    Invalid,
+}
+
+/// Reads the reply with the checks of the React client: a trimmed one-line title of at most 72
+/// characters from codex or claude.
+fn title_reply(value: &Value) -> TitleReply {
+    match value["type"].as_str() {
+        Some("cancelled") => TitleReply::Cancelled,
+        Some("title") => {
+            let title = value["title"].as_str().unwrap_or("");
+            let provider = value["provider"].as_str().unwrap_or("");
+            let sane = !title.is_empty()
+                && title.trim() == title
+                && title.chars().count() <= 72
+                && !title.chars().any(char::is_control)
+                && !title.contains(['\u{2028}', '\u{2029}'])
+                && matches!(provider, "codex" | "claude");
+            match (sane, value["partial"].as_bool()) {
+                (true, Some(partial)) => TitleReply::Title {
+                    title: title.to_owned(),
+                    provider: provider.to_owned(),
+                    partial,
+                },
+                _ => TitleReply::Invalid,
+            }
+        }
+        _ => TitleReply::Invalid,
+    }
+}
+
+/// A generated title yields to what the person typed meanwhile, or to a changed index.
+fn keeps_typed(started_with: &str, now: &str, token_then: &str, token_now: &str) -> bool {
+    started_with != now || token_then != token_now
+}
+
+fn attribution(provider: &str, partial: bool) -> String {
+    let who = if provider == "codex" { "Codex" } else { "Claude" };
+    let text = tf("Título escrito por {}", &[&who]);
+    if partial { format!("{text} · {}", t("parcial")) } else { text }
+}
+
+/// A push needs a repository, a commit and a branch (React's `pushBlocked`).
+fn can_push(repo: bool, detached: bool, head: &Option<String>) -> bool {
+    repo && !detached && head.is_some()
+}
+
+fn pushed_text(value: &Value) -> String {
+    match value["branch"].as_str() {
+        Some(branch) => tf("Enviado {}", &[&branch]),
+        None => t("Enviado.").into(),
+    }
 }
 
 fn entries(list: &Value) -> Vec<Entry> {
@@ -1596,6 +1956,55 @@ mod tests {
         assert_eq!(action["action"]["body"], "body");
         assert_eq!(action["action"]["draft"], true);
         assert_eq!(action["action"]["confirm"], true);
+    }
+
+    #[test]
+    fn title_actions_carry_the_request_and_index() {
+        let generate = title_action("s1", "tok", "r1");
+        assert_eq!(generate["action"]["type"], "generate");
+        assert_eq!(generate["action"]["expectedIndex"], "tok");
+        assert_eq!(generate["action"]["requestId"], "r1");
+        let cancel = cancel_title_action("s1", "r1");
+        assert_eq!(cancel["action"]["type"], "cancel");
+        assert!(cancel["action"].get("expectedIndex").is_none());
+    }
+
+    #[test]
+    fn title_reply_follows_the_react_checks() {
+        let ok = json!({ "type": "title", "title": "Fix login", "provider": "claude", "partial": false });
+        assert_eq!(
+            title_reply(&ok),
+            TitleReply::Title { title: "Fix login".into(), provider: "claude".into(), partial: false }
+        );
+        assert_eq!(title_reply(&json!({ "type": "cancelled" })), TitleReply::Cancelled);
+        for bad in [
+            json!({ "type": "title", "title": " padded", "provider": "claude", "partial": false }),
+            json!({ "type": "title", "title": "two\nlines", "provider": "claude", "partial": false }),
+            json!({ "type": "title", "title": "", "provider": "claude", "partial": false }),
+            json!({ "type": "title", "title": "x", "provider": "other", "partial": false }),
+            json!({ "type": "title", "title": "x", "provider": "codex" }),
+            json!({ "type": "title", "title": "x".repeat(73), "provider": "codex", "partial": true }),
+            json!({ "type": "unknown" }),
+        ] {
+            assert_eq!(title_reply(&bad), TitleReply::Invalid, "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_generated_title_yields_to_typing_or_a_moved_index() {
+        assert!(!keeps_typed("", "", "a", "a"));
+        assert!(keeps_typed("", "my own", "a", "a"));
+        assert!(keeps_typed("", "", "a", "b"));
+    }
+
+    #[test]
+    fn pushing_needs_a_commit_on_a_branch() {
+        let head = Some("abc".to_owned());
+        assert!(can_push(true, false, &head));
+        assert!(!can_push(true, true, &head));
+        assert!(!can_push(true, false, &None));
+        assert!(!can_push(false, false, &head));
+        assert_eq!(pushed_text(&json!({ "branch": "main" })), "Enviado main");
     }
 
     #[test]

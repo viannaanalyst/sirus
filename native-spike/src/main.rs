@@ -27,6 +27,7 @@ mod file_icons;
 mod folder_icon_data;
 mod git_sync;
 mod hover_track;
+mod workspace_follow;
 mod i18n;
 mod local_git;
 mod markdown;
@@ -53,6 +54,7 @@ mod reply_rich;
 mod reply_view;
 mod settings_connectors;
 mod settings_pair;
+mod sidebar_items;
 mod simulator;
 mod settings_pages;
 mod shell;
@@ -94,6 +96,7 @@ impl AssetSource for Assets {
             "devin" => include_bytes!("../assets/devin.svg"),
             "hermes" => include_bytes!("../assets/hermes.svg"),
             "close" => include_bytes!("../assets/close.svg"),
+            "more-horizontal" => include_bytes!("../assets/more-horizontal.svg"),
             "sidebar" => include_bytes!("../assets/sidebar.svg"),
             "sidebar-right" => include_bytes!("../assets/sidebar-right.svg"),
             "chevron-right" => include_bytes!("../assets/chevron-right.svg"),
@@ -204,13 +207,21 @@ impl AssetSource for Assets {
 
 fn main() {
     let launched = std::time::Instant::now();
-    gpui::Application::with_platform(gpui_platform::current_platform(false))
-        .with_assets(Assets)
-        .run(move |cx: &mut App| {
+    let app = gpui::Application::with_platform(gpui_platform::current_platform(false))
+        .with_assets(Assets);
+    // `sirus://new?…` prompt links (ADR-122): macOS hands them over as an Apple Event, and the
+    // window takes them from this channel (shell/prompt_link.rs).
+    let (links, link_events) = async_channel::unbounded::<String>();
+    app.on_open_urls(move |urls| {
+        if let Some(url) = shell::prompt_link::link_in(&urls) {
+            let _ = links.try_send(url);
+        }
+    });
+    app.run(move |cx: &mut App| {
             cx.on_window_closed(|cx, _| cx.quit()).detach();
             cx.on_app_quit(|_| async { backend::stop_host() }).detach();
             let bounds = Bounds::centered(None, size(px(1320.), px(860.)), cx);
-            cx.open_window(
+            let window = cx.open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
                     window_min_size: Some(size(px(820.), px(520.))),
@@ -242,6 +253,15 @@ fn main() {
                 },
             )
             .expect("open window");
+            cx.spawn(async move |cx| {
+                while let Ok(url) = link_events.recv().await {
+                    let _ = window.update(cx, |shell, window, cx| {
+                        window.activate_window();
+                        shell.prompt_link_received(url, cx);
+                    });
+                }
+            })
+            .detach();
             cx.activate(true);
         });
 }

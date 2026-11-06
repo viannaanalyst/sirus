@@ -33,6 +33,10 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <key>CFBundleShortVersionString</key><string>0.0.1</string>
 <key>LSMinimumSystemVersion</key><string>13.0</string>
 <key>NSHighResolutionCapable</key><true/>
+<key>CFBundleURLTypes</key><array><dict>
+<key>CFBundleURLName</key><string>com.siruscode.native.prompt-link</string>
+<key>CFBundleURLSchemes</key><array><string>sirus</string></array>
+</dict></array>
 <key>NSMicrophoneUsageDescription</key><string>O Sirus Native usa o microfone para o ditado no composer.</string>
 <key>NSSpeechRecognitionUsageDescription</key><string>O Sirus Native transcreve o ditado no composer.</string>
 </dict></plist>

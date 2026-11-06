@@ -1191,6 +1191,63 @@ fn switch_motion(id: usize, on: bool) -> Option<usize> {
     })
 }
 
+/// The switch of Settings: a track and a knob that slides when `on` changes and stretches while
+/// pressed. `id` keys its animation, so it must stay the same for the same switch across frames;
+/// `live` false dims it. The caller adds the click.
+pub(crate) fn switch_track(id: usize, on: bool, live: bool) -> gpui::Stateful<gpui::Div> {
+    let group: gpui::SharedString = format!("switch-{id}").into();
+    let knob = div()
+        .id(("switch-knob", id))
+        .absolute()
+        .top(px(2.))
+        .left(px(if on { SWITCH_ON } else { SWITCH_OFF }))
+        .h(px(18.))
+        .w(px(18.))
+        .rounded_full()
+        .bg(gpui::white())
+        .shadow_sm()
+        // While pressed the knob stretches toward where it is going, as on iOS.
+        .when(live, |d| {
+            d.group_active(group.clone(), move |style| {
+                let style = style.w(px(23.));
+                if on {
+                    style.left(px(SWITCH_ON - 5.))
+                } else {
+                    style
+                }
+            })
+        });
+    use gpui::AnimationExt as _;
+    let knob = match switch_motion(id, on) {
+        Some(generation) => knob
+            .with_animation(
+                ("switch-slide", generation),
+                gpui::Animation::new(std::time::Duration::from_millis(240))
+                    .with_easing(gpui::ease_out_quint()),
+                move |knob, t| {
+                    let (from, to) = if on {
+                        (SWITCH_OFF, SWITCH_ON)
+                    } else {
+                        (SWITCH_ON, SWITCH_OFF)
+                    };
+                    knob.left(px(from + (to - from) * t))
+                },
+            )
+            .into_any_element(),
+        None => knob.into_any_element(),
+    };
+    div()
+        .id(("setting", id))
+        .group(group)
+        .relative()
+        .w(px(40.))
+        .h(px(22.))
+        .rounded_full()
+        .bg(if on { accent() } else { content(0.16) })
+        .when(!live, |d| d.opacity(0.45))
+        .child(knob)
+}
+
 fn control_view<V: 'static>(ctl: Ctl, ui: &mut Ui<'_, V>, cx: &mut Context<V>) -> AnyElement {
     let (save, run) = (ui.save, ui.run);
     match ctl {
@@ -1252,57 +1309,7 @@ fn control_view<V: 'static>(ctl: Ctl, ui: &mut Ui<'_, V>, cx: &mut Context<V>) -
         Ctl::Switch { on, change } => {
             let live = change.is_some();
             let id = next_id(&mut ui.ids);
-            let group: gpui::SharedString = format!("switch-{id}").into();
-            let knob = div()
-                .id(("switch-knob", id))
-                .absolute()
-                .top(px(2.))
-                .left(px(if on { SWITCH_ON } else { SWITCH_OFF }))
-                .h(px(18.))
-                .w(px(18.))
-                .rounded_full()
-                .bg(gpui::white())
-                .shadow_sm()
-                // While pressed the knob stretches toward where it is going, as on iOS.
-                .when(live, |d| {
-                    d.group_active(group.clone(), move |style| {
-                        let style = style.w(px(23.));
-                        if on {
-                            style.left(px(SWITCH_ON - 5.))
-                        } else {
-                            style
-                        }
-                    })
-                });
-            use gpui::AnimationExt as _;
-            let knob = match switch_motion(id, on) {
-                Some(generation) => knob
-                    .with_animation(
-                        ("switch-slide", generation),
-                        gpui::Animation::new(std::time::Duration::from_millis(240))
-                            .with_easing(gpui::ease_out_quint()),
-                        move |knob, t| {
-                            let (from, to) = if on {
-                                (SWITCH_OFF, SWITCH_ON)
-                            } else {
-                                (SWITCH_ON, SWITCH_OFF)
-                            };
-                            knob.left(px(from + (to - from) * t))
-                        },
-                    )
-                    .into_any_element(),
-                None => knob.into_any_element(),
-            };
-            let track = div()
-                .id(("setting", id))
-                .group(group)
-                .relative()
-                .w(px(40.))
-                .h(px(22.))
-                .rounded_full()
-                .bg(if on { accent() } else { content(0.16) })
-                .when(!live, |d| d.opacity(0.45))
-                .child(knob);
+            let track = switch_track(id, on, live);
             match change {
                 Some(act) => track
                     .cursor_pointer()

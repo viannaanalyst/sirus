@@ -56,7 +56,14 @@ pub fn new(context: PanelContext, cx: &mut App) -> AnyView {
                 TextFieldEvent::Submit => this.open_first_hit(cx),
             },
         );
+        let follow = crate::workspace_follow::Follow::start(
+            context.backend.clone(),
+            context.session_id.clone(),
+            FilesPanel::disk_changed,
+            cx,
+        );
         let mut panel = FilesPanel {
+            _follow: follow,
             backend: context.backend,
             session_id: context.session_id,
             root: context.worktree,
@@ -74,6 +81,7 @@ pub fn new(context: PanelContext, cx: &mut App) -> AnyView {
             searching: false,
             search_seq: 0,
             creating: None,
+            trash_error: None,
             _search_events: search_events,
         };
         let root = panel.root.clone();
@@ -152,6 +160,8 @@ struct Creating {
 }
 
 struct FilesPanel {
+    /// Lists the open folders again when files change on disk; stops with the panel.
+    _follow: crate::workspace_follow::Follow,
     backend: crate::backend::Backend,
     session_id: String,
     /// The session's folder; the tree's root and the default for `list_dir`.
@@ -179,6 +189,8 @@ struct FilesPanel {
     /// Counts keystrokes, so an older search's answer is dropped.
     search_seq: u64,
     creating: Option<Creating>,
+    /// Why the last move to the Trash failed.
+    trash_error: Option<String>,
     _search_events: Subscription,
 }
 
@@ -203,6 +215,20 @@ impl FilesPanel {
             });
         })
         .detach();
+    }
+
+    /// Files changed on disk: every shown folder is listed again (each keeps its rows meanwhile),
+    /// and the next search reads the file index anew.
+    fn disk_changed(&mut self, cx: &mut Context<Self>) {
+        let mut shown: Vec<String> = self.open.iter().cloned().collect();
+        if self.root_open {
+            shown.push(self.root.clone());
+        }
+        for dir in shown {
+            self.list(dir, cx);
+        }
+        self.index = None;
+        cx.notify();
     }
 
     fn select(&mut self, path: String, is_dir: bool, cx: &mut Context<Self>) {
@@ -709,6 +735,71 @@ impl FilesPanel {
         .detach();
     }
 
+    /// The Lixeira button of a row: asks in the shell's popup first, as the React tree does.
+    fn ask_trash(
+        &mut self,
+        path: String,
+        name: String,
+        is_dir: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let panel = cx.entity();
+        let (title, message) = trash_texts(&name, is_dir);
+        if let Some(Some(shell)) = window.root::<crate::shell::Shell>() {
+            shell.update(cx, |shell, cx| {
+                shell.confirm(
+                    title,
+                    message,
+                    t("Mover para a Lixeira"),
+                    move |cx: &mut App| {
+                        let _ = panel.update(cx, |this, cx| this.trash(path, cx));
+                    },
+                    cx,
+                )
+            });
+        }
+    }
+
+    /// Moves the entry to the system Trash (recoverable), then drops what pointed into it.
+    fn trash(&mut self, path: String, cx: &mut Context<Self>) {
+        self.trash_error = None;
+        let rx = self.backend.request(
+            "trash_workspace_entry",
+            json!({ "sessionId": self.session_id, "path": path.clone() }),
+        );
+        cx.spawn(async move |this, cx| {
+            let reply = settle(rx).await;
+            let _ = this.update(cx, |this, cx| {
+                match reply {
+                    Ok(_) => {
+                        let gone: Vec<String> = this
+                            .tabs
+                            .iter()
+                            .filter(|tab| is_under(&path, &tab.path))
+                            .map(|tab| tab.path.clone())
+                            .collect();
+                        for tab in gone {
+                            this.close_path(&tab, cx);
+                        }
+                        if this.selected.as_ref().is_some_and(|(sel, _)| is_under(&path, sel)) {
+                            this.selected = None;
+                        }
+                        this.open.retain(|dir| !is_under(&path, dir));
+                        this.folders.retain(|dir, _| !is_under(&path, dir));
+                        let parent = parent_dir(&path, &this.root);
+                        this.list(parent, cx);
+                        this.index = None;
+                    }
+                    Err(error) => this.trash_error = Some(error),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
     /// The tree below `dir`: its rows, and each open folder's rows fading in beneath it.
     fn tree_rows(&self, dir: &str, depth: usize, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let nodes = match self.folders.get(dir) {
@@ -753,8 +844,11 @@ impl FilesPanel {
             .as_ref()
             .is_some_and(|(path, _)| path == &node.path);
         let (path, is_dir) = (node.path.clone(), node.is_dir);
+        let (trash_path, trash_name) = (node.path.clone(), node.name.clone());
+        let group = format!("row-group:{}", node.path);
         let row = div()
             .id(format!("row:{}", node.path))
+            .group(group.clone())
             .h(px(30.))
             .w_full()
             .pl(px(8. + depth as f32 * 14.))
@@ -783,7 +877,26 @@ impl FilesPanel {
                 .when(is_dir, |column| column.child(chevron(open))),
         )
         .child(icon)
-        .child(div().min_w_0().truncate().child(node.name.clone()))
+        .child(div().min_w_0().flex_1().truncate().child(node.name.clone()))
+        .child(
+            div()
+                .id(format!("trash:{}", node.path))
+                .size(px(22.))
+                .rounded(px(crate::theme::RADIUS_SM))
+                .flex()
+                .items_center()
+                .justify_center()
+                .flex_shrink_0()
+                .opacity(0.)
+                .group_hover(group, |style| style.opacity(1.))
+                .hover(|style| style.bg(content(0.1)))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    cx.stop_propagation();
+                    this.ask_trash(trash_path.clone(), trash_name.clone(), is_dir, window, cx);
+                }))
+                .child(theme::icon("trash", 13.).text_color(content(0.6))),
+        )
         .into_any_element()
     }
 
@@ -910,11 +1023,14 @@ impl FilesPanel {
     }
 
     fn tree(&self, cx: &mut Context<Self>) -> AnyElement {
-        let rows = if self.root_open {
+        let mut rows = if self.root_open {
             self.tree_rows(&self.root, 0, cx)
         } else {
             Vec::new()
         };
+        if let Some(error) = &self.trash_error {
+            rows.insert(0, note(error, 0, true));
+        }
         div()
             .id("files-tree")
             .flex_1()
@@ -1320,6 +1436,21 @@ fn root_name(root: &str) -> String {
         .next()
         .unwrap_or(root)
         .to_owned()
+}
+
+/// True when `entry` is `path` itself or inside it (a trashed folder takes its files along).
+fn is_under(path: &str, entry: &str) -> bool {
+    entry == path || entry.strip_prefix(path).is_some_and(|rest| rest.starts_with('/'))
+}
+
+/// The confirmation's title and its help, as React's explorer.trash* texts.
+fn trash_texts(name: &str, is_dir: bool) -> (String, String) {
+    let title = if is_dir {
+        tf("Mover a pasta “{}” para a Lixeira?", &[&name])
+    } else {
+        tf("Mover “{}” para a Lixeira?", &[&name])
+    };
+    (title, t("Você pode recuperar pela Lixeira no Finder. Tudo que estiver dentro da pasta vai junto.").to_owned())
 }
 
 /// The folder holding `path`, kept inside the root.
@@ -2010,5 +2141,24 @@ impl EntityInputHandler for TextField {
         _: &mut Context<Self>,
     ) -> Option<usize> {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_trashed_folder_takes_its_files_but_not_its_namesakes() {
+        assert!(is_under("/w/src", "/w/src"));
+        assert!(is_under("/w/src", "/w/src/a/b.rs"));
+        assert!(!is_under("/w/src", "/w/src2/a.rs"));
+        assert!(!is_under("/w/src", "/w"));
+    }
+
+    #[test]
+    fn the_confirmation_names_the_entry() {
+        assert!(trash_texts("a.rs", false).0.contains("a.rs"));
+        assert!(trash_texts("src", true).0.contains("pasta"));
     }
 }

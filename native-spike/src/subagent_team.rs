@@ -47,6 +47,10 @@ pub struct Member {
     /// What it is doing now (the running step), else its last step.
     pub step: String,
     pub background: bool,
+    /// The launching tool call, which `background_subagent` takes (empty for a workflow).
+    pub source: Option<String>,
+    /// A workflow's row: its members are not moved one by one.
+    pub workflow: bool,
     /// The phase it was launched in, from 1.
     pub phase: usize,
 }
@@ -88,7 +92,22 @@ impl Member {
             tools,
             step,
             background: item["background"].as_bool().unwrap_or(false),
+            source: item["source"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned),
+            workflow: item.get("workflow").is_some_and(|w| !w.is_null()),
             phase,
+        }
+    }
+
+    /// The tool call to send a running foreground subagent to the background with, as React's
+    /// SubagentControls offers it: not already in the background, not a workflow, and known.
+    pub fn backgroundable(&self) -> Option<&str> {
+        if self.running() && !self.background && !self.workflow {
+            self.source.as_deref()
+        } else {
+            None
         }
     }
 
@@ -261,7 +280,7 @@ pub fn headline(prompt: &str, reply_head: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     fn member(phase: usize, status: Status) -> Member {
         Member::from_item(&json!({ "id": "agent:a", "label": "x" }), phase).with(status)
@@ -360,7 +379,22 @@ mod tests {
         assert!(m.running() && m.background);
         // Without steps it has no current step; the key falls back to the row id.
         let bare = Member::from_item(&json!({ "id": "agent:t2", "state": "completed" }), 1);
+        assert_eq!(bare.backgroundable(), None);
         assert_eq!((bare.step.as_str(), bare.key.as_str(), bare.tools), ("", "agent:t2", 0));
+    }
+
+    #[test]
+    fn only_a_running_foreground_subagent_with_a_source_can_go_to_the_background() {
+        let item = |extra: Value| {
+            let mut base = json!({ "id": "agent:a", "source": "toolu_1", "state": "running" });
+            base.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            Member::from_item(&base, 1)
+        };
+        assert_eq!(item(json!({})).backgroundable(), Some("toolu_1"));
+        assert_eq!(item(json!({ "background": true })).backgroundable(), None);
+        assert_eq!(item(json!({ "workflow": { "agents": [] } })).backgroundable(), None);
+        assert_eq!(item(json!({ "state": "completed" })).backgroundable(), None);
+        assert_eq!(item(json!({ "source": "" })).backgroundable(), None);
     }
 
     #[test]

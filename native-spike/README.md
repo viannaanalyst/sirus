@@ -35,6 +35,7 @@ Quitting with `pkill` leaves the host running. Kill it too after rebuilding it, 
 - `src/message_actions.rs`, `src/handoff.rs`, `src/transcript_select.rs`, `src/transcript_find.rs`, `src/turn_review.rs`: what a reply offers. `src/reply_rich.rs`, `src/reply_render.rs`, `src/reply_view.rs`: images, video, Mermaid, KaTeX and HTML in replies.
 - `src/file_editor.rs`: the editor in the Files panel. `src/git_sync.rs`, `src/project_scripts.rs`, `src/cli_diagnostics.rs`, `src/delegated_tasks.rs`, `src/agent_resources.rs`, `src/conversation_export.rs`, `src/chat_background.rs`, `src/simulator.rs` (hidden for now).
 - `src/first_run.rs`: the welcome of the very first launch (agents, project, look) over the letters robot of `new_tab_field.rs`; once seen it is remembered in `native-first-run.json`, and Settings → Geral plays it again. `src/global_search.rs`: ⌘⇧F and the palette's message results, from the host's `transcript_action` search (3 characters, debounced). ⌃⇧F toggles the frame-time overlay.
+- `src/workspace_follow.rs`: follows a session's folder on disk for the Files and Changes panels. `src/prompt_link.rs`: `sirus://new` prompt links and "Copiar link do prompt".
 - `src/i18n.rs`: English and Portuguese, with the Portuguese text as the key.
 - `src/visuals/`: native visuals, run from a JavaScript program.
 

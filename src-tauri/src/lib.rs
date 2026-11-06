@@ -470,6 +470,7 @@ pub fn run() {
             commands::git_push,
             commands::project_remote_url,
             prompt_link::take_prompt_link,
+            prompt_link::resolve_prompt_link,
             prompt_link::build_prompt_link,
             commands::list_worktrees,
             commands::list_dir,

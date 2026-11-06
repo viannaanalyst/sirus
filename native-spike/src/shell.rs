@@ -21,7 +21,7 @@ use crate::theme::{
 use gpui::transparent_black as transparent;
 use gpui::{
     AnyElement, Context, Div, FocusHandle, FontWeight, KeyDownEvent, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, Stateful, Transformation, Window,
+    MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, SharedString, Stateful, Transformation, Window,
     WindowControlArea, div, linear_color_stop, linear_gradient, percentage, prelude::*, px, rgb,
     svg,
 };
@@ -3547,6 +3547,8 @@ impl Shell {
     fn show(&mut self, id: u64, cx: &mut Context<Self>) {
         self.active = id;
         self.marked = None;
+        // A failure in the footer belongs to what was on screen when it happened.
+        self.problem = None;
         self.split_sync();
         if let Some(ix) = self
             .tabs
@@ -4843,6 +4845,7 @@ impl Shell {
 
     /// Enter and the send button: sends, queues or steers (composer_queue.rs).
     fn send(&mut self, cx: &mut Context<Self>) {
+        self.problem = None;
         self.send_with(false, cx);
     }
 
@@ -10872,7 +10875,17 @@ impl Shell {
                         let (face, mark, _) = activity_face(step_glyph(step));
                         mark_tile(&ACTIVITY_TILE, face, mark).into_any_element()
                     })
-                    .child(div().flex_1().min_w_0().child(text))
+                    .child(match &step.image {
+                        Some(path) => self
+                            .image_row(
+                                path,
+                                crate::tool_images::row_label(path, step.capture),
+                                format!("image-step-{index}-{i}"),
+                                cx,
+                            )
+                            .into_any_element(),
+                        None => div().flex_1().min_w_0().child(text).into_any_element(),
+                    })
                     .into_any_element();
                 rows.push((
                     STEP_ROW,
@@ -10929,7 +10942,7 @@ impl Shell {
                 .into_any_element();
             rows.push((STEP_ROW + 2., child_row(STEP_ROW + 2., true, inner)));
             if nested_turn > 0.001 {
-                for step in &turn.steps {
+                for (i, step) in turn.steps.iter().enumerate() {
                     let height = 22. * nested_turn;
                     rows.push((
                         height,
@@ -10944,7 +10957,22 @@ impl Shell {
                             .gap(px(7.))
                             .text_size(px(12.5))
                             .text_color(content(0.45))
-                            .child(div().flex_1().min_w_0().truncate().child(step_text(step)))
+                            .child(match &step.image {
+                                Some(path) => self
+                                    .image_row(
+                                        path,
+                                        crate::tool_images::row_label(path, step.capture),
+                                        format!("image-step-{index}-{i}"),
+                                        cx,
+                                    )
+                                    .into_any_element(),
+                                None => div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .child(step_text(step))
+                                    .into_any_element(),
+                            })
                             .into_any_element(),
                     ));
                 }
@@ -11059,6 +11087,42 @@ impl Shell {
             if cx.reduce_motion() { 0. } else { SIDEBAR },
             Curve::Expo,
         );
+        cx.notify();
+    }
+
+    /// A step that is an image file: its file glyph and label. A click opens it in the Files pane.
+    fn image_row(
+        &self,
+        path: &str,
+        label: String,
+        id: String,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let open = path.to_owned();
+        let name = crate::tool_images::file_name(path).to_owned();
+        div()
+            .id(SharedString::from(id))
+            .flex()
+            .flex_1()
+            .min_w_0()
+            .items_center()
+            .gap(px(6.))
+            .cursor_pointer()
+            .hover(|s| s.text_color(content(0.8)))
+            .on_click(cx.listener(move |this, _, _, cx| this.open_image_file(open.clone(), cx)))
+            .child(crate::file_icons::file_icon(&name, false, 14.))
+            .child(div().min_w_0().truncate().child(label))
+    }
+
+    /// Opens an image an agent read or changed: the Files pane comes up with it in a tab.
+    fn open_image_file(&mut self, path: String, cx: &mut Context<Self>) {
+        self.open_pane(1, cx);
+        let session = self.conversations[self.active_conversation()]
+            .session_id
+            .clone();
+        if let Some(view) = self.pane_views.get(&(1, session)) {
+            crate::panel_files::show_file(view, path, cx);
+        }
         cx.notify();
     }
 

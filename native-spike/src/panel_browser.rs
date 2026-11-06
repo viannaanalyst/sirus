@@ -905,6 +905,17 @@ impl Browser {
     }
 
     /// The session browser's state, as `BrowserSessionState` serializes it.
+    /// True while the active page is loading (read from the web view, not the last wake-up).
+    pub fn page_loading(&self) -> bool {
+        self.active_tab().is_some_and(|t| unsafe { t.web.isLoading() })
+    }
+
+    /// The state with every tab's address, title and loading as they are now.
+    pub fn fresh_state(&mut self) -> Value {
+        self.read_tabs();
+        self.state_json()
+    }
+
     pub fn state_json(&self) -> Value {
         json!({
             "sessionId": self.session_id,

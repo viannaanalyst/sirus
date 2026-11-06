@@ -28,6 +28,35 @@ thread_local! {
     static COMPUTER: RefCell<Value> = const { RefCell::new(Value::Null) };
 }
 
+/// How long a tool waits for a page that is still loading (a slow page is then read as it is).
+const LOAD_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Tools that start a navigation: they answer once it has finished, as the page then stands.
+const NAVIGATING: [&str; 5] = [
+    "browser_open",
+    "browser_navigate",
+    "browser_back",
+    "browser_forward",
+    "browser_reload",
+];
+
+/// Tools that read or act on the page: a page script run while a navigation is in flight is
+/// destroyed with the old document (it answers an error, or nothing), so they wait for it.
+const ON_PAGE: [&str; 12] = [
+    "browser_snapshot",
+    "browser_click",
+    "browser_type",
+    "browser_press",
+    "browser_wait_for",
+    "browser_scroll",
+    "browser_logs",
+    "browser_hover",
+    "browser_select",
+    "browser_drag",
+    "browser_upload",
+    "browser_network",
+];
+
 /// How long a page may take to answer a tool (waiting scripts run up to 8 s inside it).
 const PAGE_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -104,12 +133,19 @@ async fn run(
         }
         entity
     });
+    if ON_PAGE.contains(&tool) || tool == "browser_screenshot" {
+        settle(&entity, cx).await;
+    }
     let step = entity.update(cx, |browser, cx| {
         let step = browser.tool(tool, args, cx);
         cx.notify();
         step
     });
     match step {
+        Step::Done(result) if NAVIGATING.contains(&tool) && result.is_ok() => {
+            settle(&entity, cx).await;
+            Ok(entity.update(cx, |browser, _| browser.fresh_state()))
+        }
         Step::Done(result) => result,
         Step::Script(answer) => {
             let raw = wait(answer, cx).await?;
@@ -120,6 +156,17 @@ async fn run(
             let png = wait(answer, cx).await?;
             Ok(json!({ "data": base64::engine::general_purpose::STANDARD.encode(png) }))
         }
+    }
+}
+
+/// Waits (up to `LOAD_TIMEOUT`) until the active page has finished loading.
+async fn settle(entity: &gpui::Entity<panel_browser::Browser>, cx: &mut AsyncApp) {
+    let started = std::time::Instant::now();
+    while entity.update(cx, |browser, _| browser.page_loading()) && started.elapsed() < LOAD_TIMEOUT
+    {
+        cx.background_executor()
+            .timer(Duration::from_millis(50))
+            .await;
     }
 }
 
@@ -359,6 +406,15 @@ mod tests {
         assert_eq!(err["ok"], false);
         assert_eq!(err["error"], "No browser tab is open.");
         assert!(err.get("value").is_none());
+    }
+
+    #[test]
+    fn navigations_and_page_tools_wait_for_the_load_but_status_does_not() {
+        assert!(NAVIGATING.contains(&"browser_open"));
+        assert!(ON_PAGE.contains(&"browser_snapshot") && ON_PAGE.contains(&"browser_wait_for"));
+        for tool in ["browser_status", "browser_tabs", "browser_close"] {
+            assert!(!NAVIGATING.contains(&tool) && !ON_PAGE.contains(&tool));
+        }
     }
 
     #[test]

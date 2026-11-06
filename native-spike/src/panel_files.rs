@@ -14,6 +14,7 @@ use crate::i18n::{t, tf};
 use crate::markdown;
 use crate::motion::{Curve, DISCLOSE, eased};
 use crate::panels::PanelContext;
+use crate::tool_images;
 use crate::project_files::{self, Hit};
 use crate::syntax::{self, Group, LineSpans};
 use crate::tab_tile::{Face, TAB_TILE, TAB_TILE_GAP, mark_tile, tab_tile_inset};
@@ -21,9 +22,9 @@ use crate::theme::{self, accent, content, is_light};
 use gpui::{
     Animation, AnimationExt, AnyElement, AnyView, App, Background, Context, ElementInputHandler,
     Entity, EntityInputHandler, EventEmitter, FocusHandle, FontWeight, HighlightStyle, Hsla,
-    KeyDownEvent, ListAlignment, ListState, MouseButton, Pixels, Point, Render, StyledText,
-    Subscription, Transformation, UTF16Selection, Window, canvas, div, linear_color_stop,
-    linear_gradient, list, prelude::*, px, radians, rgb, svg,
+    KeyDownEvent, ListAlignment, ListState, MouseButton, ObjectFit, Pixels, Point, Render,
+    StyledText, Subscription, Transformation, UTF16Selection, Window, canvas, div, img,
+    linear_color_stop, linear_gradient, list, prelude::*, px, radians, rgb, svg,
 };
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
@@ -36,6 +37,13 @@ use std::time::Duration;
 const RESULT_CAP: usize = 80;
 /// Quiet time after the last keystroke before the search runs.
 const SEARCH_DEBOUNCE_MS: u64 = 120;
+
+/// Shows `path` in the Files pane behind `view` (a pane built by `panels::open`), in a tab.
+pub fn show_file(view: &AnyView, path: String, cx: &mut App) {
+    if let Ok(panel) = view.clone().downcast::<FilesPanel>() {
+        panel.update(cx, |panel, cx| panel.open_file(path, cx));
+    }
+}
 
 pub fn new(context: PanelContext, cx: &mut App) -> AnyView {
     cx.new(|cx| {
@@ -96,6 +104,8 @@ enum Mode {
 enum Viewer {
     Loading,
     Text(Text),
+    /// An image, read through the host's `reply_image`.
+    Picture(Arc<gpui::Image>),
     Binary,
     Failed(String),
 }
@@ -252,8 +262,12 @@ impl FilesPanel {
         cx.notify();
     }
 
-    /// Reads `path` from the back end into its tab.
+    /// Reads `path` from the back end into its tab. An image comes through `reply_image`, which
+    /// is the host's rule for which picture files may be shown.
     fn load(&mut self, path: String, cx: &mut Context<Self>) {
+        if tool_images::is_image_path(&path) {
+            return self.load_picture(path, cx);
+        }
         let rx = self.backend.request(
             "read_text_file",
             json!({ "sessionId": self.session_id, "path": path.clone() }),
@@ -270,6 +284,30 @@ impl FilesPanel {
                     tab.viewer = viewer;
                 }
                 this.ensure_colors(&path, cx);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn load_picture(&mut self, path: String, cx: &mut Context<Self>) {
+        let rx = self.backend.request(
+            "reply_image",
+            json!({ "sessionId": self.session_id, "path": path.clone() }),
+        );
+        cx.spawn(async move |this, cx| {
+            let viewer = match settle(rx).await {
+                Ok(Value::String(url)) => match tool_images::picture(&url) {
+                    Some(image) => Viewer::Picture(image),
+                    None => Viewer::Failed(t("Não foi possível abrir esta imagem.").into()),
+                },
+                Ok(_) => Viewer::Failed(t("Não foi possível abrir esta imagem.").into()),
+                Err(error) => Viewer::Failed(error),
+            };
+            let _ = this.update(cx, |this, cx| {
+                if let Some(tab) = this.tabs.iter_mut().find(|tab| tab.path == path) {
+                    tab.viewer = viewer;
+                }
                 cx.notify();
             });
         })
@@ -1385,6 +1423,31 @@ impl FilesPanel {
                 );
             }
             Viewer::Failed(error) => return body_note(error, true),
+            Viewer::Picture(image) => {
+                // In normal flow an image takes its height from its aspect ratio, so a tall one keeps
+                // the panel's width and runs past the bottom. Absolute, it gets exactly this box.
+                return div()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .child(
+                        div()
+                            .absolute()
+                            .top(px(16.))
+                            .bottom(px(16.))
+                            .left(px(16.))
+                            .right(px(16.))
+                            .child(
+                                img(image.clone())
+                                    .absolute()
+                                    .top_0()
+                                    .left_0()
+                                    .size_full()
+                                    .object_fit(ObjectFit::Contain),
+                            ),
+                    )
+                    .into_any_element();
+            }
             Viewer::Text(text) if text.lines.is_empty() => {
                 return body_note(t("Arquivo vazio."), false);
             }

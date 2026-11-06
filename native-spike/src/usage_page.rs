@@ -1243,13 +1243,13 @@ impl Shell {
         if !page.swap.done(now) {
             *moving = true;
         }
-        // The dialog: min(window - 48, 1120) wide, window - 56 tall. It scales from 0.97 and
+        // The dialog: min(window - 48, 1120) wide, min(window - 96, 780) tall. It scales from 0.97 and
         // rises 6 px while it fades in; GPUI cannot scale a subtree, so its size does the scaling.
         let size = window.viewport_size();
         let (vw, vh) = (f32::from(size.width), f32::from(size.height));
         let scale = 0.97 + 0.03 * p;
         let width = (vw - 48.).min(1120.).max(320.);
-        let height = (vh - 56.).max(240.);
+        let height = (vh - 96.).min(780.).max(240.);
         let dialog = div()
             .id("usage-dialog")
             .relative()

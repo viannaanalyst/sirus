@@ -114,6 +114,10 @@ pub struct ActivityItem {
     /// lines, and this is the full output's size in bytes, fetched when the row opens.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_bytes: Option<u32>,
+    /// A picture the step's result carried (a screenshot), saved by tool_images.rs. Only its
+    /// path is kept: the image bytes never reach the activity or a transcript.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_path: Option<String>,
     /// Child rows only: native observation window, never inferred from the parent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_at: Option<i64>,
@@ -389,6 +393,9 @@ impl TurnActivity {
             if item.detail.is_empty() {
                 item.detail.clone_from(&old.detail);
             }
+            if item.image_path.is_none() {
+                item.image_path.clone_from(&old.image_path);
+            }
             if item.output.is_empty() {
                 item.output.clone_from(&old.output);
             }
@@ -626,6 +633,7 @@ fn item(
         offset: None,
         output: String::new(),
         output_bytes: None,
+        image_path: None,
         started_at: None,
         ended_at: None,
         steps: vec![],
@@ -795,6 +803,24 @@ pub fn observe(session: &mut Session, observation: ActivityItem) -> bool {
         crate::secrets::scrub(&session.id, std::mem::take(&mut observation.detail));
     observation.output =
         crate::secrets::scrub(&session.id, std::mem::take(&mut observation.output));
+    // A screenshot's picture, saved where the tool produced it (Codex truncates the result text,
+    // so the row's own result cannot carry it). The tool name is the row's detail.
+    if observation.kind == ItemKind::Tool
+        && observation.image_path.is_none()
+        && observation.state == ItemState::Completed
+    {
+        let known = current(session)
+            .and_then(|a| a.items.iter().find(|i| i.id == observation.id))
+            .map(|i| (i.detail.clone(), i.image_path.is_some()));
+        let tool = if observation.detail.is_empty() {
+            known.clone().map(|(detail, _)| detail).unwrap_or_default()
+        } else {
+            observation.detail.clone()
+        };
+        if crate::tool_images::is_image_tool(&tool) && !known.is_some_and(|(_, has)| has) {
+            observation.image_path = crate::tool_images::take(&session.id, &tool);
+        }
+    }
     // The reply so far, in the UTF-16 units the transcript slices by.
     let reply = session
         .messages
@@ -942,6 +968,9 @@ pub fn codex(v: &Value, started: bool) -> Vec<ActivityItem> {
         Some("mcpToolCall" | "dynamicToolCall") => {
             let mut row = item(id, ItemKind::Tool, "Tool call", state, None);
             row.detail = v["tool"].as_str().unwrap_or("").to_owned();
+            if !started {
+                row.image_path = result_image(&v["result"]["content"]);
+            }
             vec![row]
         }
         Some("webSearch") => {
@@ -1031,6 +1060,29 @@ pub(crate) fn tool_input_detail(input: &Value) -> &str {
     .iter()
     .find_map(|key| input[*key].as_str())
     .unwrap_or("")
+}
+/// The tool's own name inside an MCP server's `mcp__<server>__<tool>` name (`browser_screenshot`).
+fn mcp_tool(name: &str) -> Option<&str> {
+    name.strip_prefix("mcp__")?
+        .split_once("__")
+        .map(|(_, tool)| tool)
+        .filter(|tool| !tool.is_empty())
+}
+/// The first picture a tool result carries, as an MCP image block or Claude's base64 image
+/// block, saved by tool_images.rs. Only its path comes back: the bytes are not kept.
+fn result_image(blocks: &Value) -> Option<String> {
+    blocks
+        .as_array()?
+        .iter()
+        .filter(|block| block["type"] == "image")
+        .find_map(|block| {
+            let data = if block["source"]["type"] == "base64" {
+                block["source"]["data"].as_str()
+            } else {
+                block["data"].as_str()
+            };
+            crate::tool_images::save(data?)
+        })
 }
 pub(crate) fn tool_kind(name: &str) -> (ItemKind, &'static str) {
     match name {
@@ -1184,6 +1236,10 @@ pub fn claude(v: &Value) -> Vec<ActivityItem> {
                     model,
                 );
                 row.detail = tool_input_detail(&block["input"]).to_owned();
+                // An MCP tool's own name stands in when its input names nothing, as Codex's does.
+                if row.detail.is_empty() {
+                    row.detail = mcp_tool(name).unwrap_or("").to_owned();
+                }
                 row
             } else if block["type"] == "tool_result" {
                 let mut row = item(
@@ -1207,6 +1263,7 @@ pub fn claude(v: &Value) -> Vec<ActivityItem> {
                         .join("\n"),
                     _ => String::new(),
                 };
+                row.image_path = result_image(&block["content"]);
                 row
             } else {
                 return None;
@@ -1917,5 +1974,129 @@ mod tests {
         a.observe(update(&long));
         assert_eq!(a.plan[0].text.chars().count(), MAX_PLAN_TEXT);
         assert!(serde_json::to_string(&a).unwrap().contains("\"plan\""));
+    }
+
+    /// The picture folder is process-wide: the two picture tests take turns.
+    static PICTURES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn a_tool_result_picture_is_saved_once_and_only_its_path_is_kept() {
+        use base64::Engine as _;
+        let _turn = PICTURES
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        crate::tool_images::set_dir_for_tests(Some(dir.path().join("tool-images")));
+        let bytes = [
+            b"\x89PNG\r\n\x1a\n".as_slice(),
+            b"not-a-real-picture-but-bytes",
+        ]
+        .concat();
+        let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+        let mut turn = TurnActivity::new(AgentProviderId::Claude, None);
+        let frame = |id: &str| {
+            claude(&json!({"type":"assistant","message":{"content":[
+                {"type":"tool_use","id":id,"name":"mcp__sirus_browser__browser_screenshot","input":{}}]}}))
+        };
+        let result = |id: &str| {
+            claude(&json!({"type":"user","message":{"content":[
+                {"type":"tool_result","tool_use_id":id,"content":[
+                    {"type":"text","text":"Captured"},
+                    {"type":"image","source":{"type":"base64","media_type":"image/png","data":data}}]}]}}))
+        };
+        for item in frame("a").into_iter().chain(result("a")) {
+            turn.observe(item);
+        }
+        for item in frame("b").into_iter().chain(result("b")) {
+            turn.observe(item);
+        }
+        let step = turn.items.iter().find(|item| item.id == "a").unwrap();
+        assert_eq!(
+            step.detail, "browser_screenshot",
+            "the MCP tool keeps its name"
+        );
+        assert_eq!(step.label, "Tool call");
+        assert!(step.output.is_empty(), "only command rows keep output text");
+        let path = step
+            .image_path
+            .clone()
+            .expect("the picture path is on the item");
+        assert!(path.ends_with(".png"));
+        assert_eq!(
+            turn.items[1].image_path.as_deref(),
+            Some(path.as_str()),
+            "dedup by hash"
+        );
+        let saved: Vec<_> = std::fs::read_dir(dir.path().join("tool-images"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert_eq!(saved.len(), 1, "one file for two identical results");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        let json = serde_json::to_string(&turn).unwrap();
+        assert!(json.contains(&path), "the path is saved");
+        assert!(!json.contains(&data), "the base64 is never saved");
+        // Codex: an MCP result's image block is saved the same way.
+        let codex_row = codex(
+            &json!({"type":"mcpToolCall","id":"c","tool":"browser_screenshot","status":"completed",
+                "result":{"content":[{"type":"image","data":data,"mimeType":"image/png"}]}}),
+            false,
+        );
+        assert_eq!(codex_row[0].image_path.as_deref(), Some(path.as_str()));
+        assert_eq!(codex_row[0].detail, "browser_screenshot");
+        let json = serde_json::to_string(&codex_row).unwrap();
+        assert!(!json.contains(&data));
+        crate::tool_images::set_dir_for_tests(None);
+    }
+
+    #[test]
+    fn codex_truncated_result_takes_the_picture_saved_at_the_source() {
+        let _turn = PICTURES
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        crate::tool_images::set_dir_for_tests(Some(dir.path().join("tool-images")));
+        let bytes = [b"\x89PNG\r\n\x1a\n".as_slice(), b"source-saved"].concat();
+        use base64::Engine;
+        let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+        // The tool saves the picture where it is produced.
+        crate::tool_images::remember("s1", "browser_screenshot", &json!({"image":{"data":data}}));
+        crate::tool_images::remember("s1", "browser_click", &json!({"image":{"data":data}}));
+        // Codex's item holds the result as truncated text, with no image block.
+        let row = codex(
+            &json!({"type":"mcpToolCall","id":"exec-1","tool":"browser_screenshot","status":"completed",
+                "result":{"content":[{"type":"text","text":"{\"content\":[{\"type\":\"image\",\"data\":\"iVBORw0KGgoAAA"}]}}),
+            false,
+        );
+        assert_eq!(row[0].image_path, None);
+        assert_eq!(crate::tool_images::take("s2", "browser_screenshot"), None);
+        assert_eq!(crate::tool_images::take("s1", "browser_click"), None);
+        let path = crate::tool_images::take("s1", "browser_screenshot").expect("claimed");
+        assert!(path.ends_with(".png"));
+        assert_eq!(crate::tool_images::take("s1", "browser_screenshot"), None);
+        crate::tool_images::set_dir_for_tests(None);
+    }
+
+    #[test]
+    fn no_picture_path_without_a_folder_or_a_picture() {
+        let _turn = PICTURES
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        crate::tool_images::set_dir_for_tests(None);
+        let rows = claude(&json!({"type":"user","message":{"content":[
+            {"type":"tool_result","tool_use_id":"x","content":[
+                {"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0KGgo="}}]}]}}));
+        assert_eq!(rows[0].image_path, None);
+        let mcp = claude(&json!({"type":"assistant","message":{"content":[
+            {"type":"tool_use","id":"m","name":"mcp__sirus_computer__computer_click","input":{"x":1}}]}}));
+        assert_eq!(mcp[0].detail, "computer_click");
+        let plain = claude(&json!({"type":"assistant","message":{"content":[
+            {"type":"tool_use","id":"p","name":"Bash","input":{"command":"ls"}}]}}));
+        assert_eq!(plain[0].detail, "ls");
     }
 }

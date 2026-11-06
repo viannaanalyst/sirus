@@ -147,4 +147,15 @@ mod tests {
         assert!(resolve(cwd, Some(home), "/tmp/notes.svg").is_err());
         assert!(resolve(cwd, Some(home), "/tmp/archive").is_err());
     }
+
+    #[test]
+    fn saved_tool_pictures_open_like_any_linked_image() {
+        // reply_image has no folder rule (ADR-085: any image on the Mac): a screenshot saved in
+        // tool-images/ resolves like any other image path, with no extra allowance.
+        let saved = "/Users/me/Library/Application Support/app/tool-images/3f9c.png";
+        assert_eq!(
+            resolve(Path::new("/work"), None, saved).unwrap(),
+            PathBuf::from(saved)
+        );
+    }
 }

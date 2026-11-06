@@ -9,6 +9,11 @@ pub struct Step {
     pub label: String,
     pub detail: String,
     pub running: bool,
+    /// The image file a read or edit names, or the picture a tool's result carried (its path
+    /// from the host's `imagePath`), which the row opens.
+    pub image: Option<String>,
+    /// The picture is a screenshot a tool returned, so its row says "Captura da tela".
+    pub capture: bool,
 }
 
 /// A subagent the turn launched, with its own status.
@@ -432,10 +437,16 @@ fn turns_of(messages: &[Value]) -> Vec<Turn> {
                     continue;
                 }
                 phaser.other();
+                let kind = item["kind"].as_str().unwrap_or("tool").to_owned();
+                let detail = item["detail"].as_str().unwrap_or("").to_owned();
+                let named = crate::tool_images::step_image(&kind, &detail);
+                let saved = item["imagePath"].as_str().map(str::to_owned);
                 turn.steps.push(Step {
-                    kind: item["kind"].as_str().unwrap_or("tool").to_owned(),
+                    capture: named.is_none() && saved.is_some(),
+                    image: named.or(saved),
+                    kind,
                     label: item["label"].as_str().unwrap_or("").to_owned(),
-                    detail: item["detail"].as_str().unwrap_or("").to_owned(),
+                    detail,
                     running: item["state"].as_str() == Some("running"),
                 });
             }

@@ -59,6 +59,7 @@ mod subagent_team;
 mod syntax;
 mod tab_label;
 mod tab_tile;
+mod tool_images;
 mod terminal_place;
 mod theme;
 mod visuals;

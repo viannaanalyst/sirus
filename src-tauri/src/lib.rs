@@ -118,6 +118,7 @@ mod team;
 mod text_search;
 mod thumbnails;
 mod token_budget;
+mod tool_images;
 mod tool_output;
 mod transcript;
 mod transcript_store;
@@ -278,6 +279,7 @@ pub fn run() {
             }
             let data_path = app_dir.join("state.json");
             browser_mcp::init(app.handle().clone(), app_dir.clone());
+            tool_images::init(&app_dir);
             secrets::init(&app_dir);
             remote::init(app.handle().clone(), &app_dir);
             devices::init(app.handle().clone(), &app_dir);

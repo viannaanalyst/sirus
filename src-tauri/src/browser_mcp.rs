@@ -238,10 +238,15 @@ async fn bridge_request(app: &crate::runtime::AppHandle, request: &Value) -> Val
         .cloned()
         .unwrap_or_else(|| json!({}));
     let owned_app = app.clone();
-    let result =
-        tokio::task::spawn_blocking(move || execute(&owned_app, &session_id, &tool, arguments))
-            .await
-            .unwrap_or_else(|_| Err("the browser operation did not complete".into()));
+    let result = tokio::task::spawn_blocking(move || {
+        let result = execute(&owned_app, &session_id, &tool, arguments);
+        if let Ok(value) = &result {
+            crate::tool_images::remember(&session_id, &tool, value);
+        }
+        result
+    })
+    .await
+    .unwrap_or_else(|_| Err("the browser operation did not complete".into()));
     match result {
         Ok(value) => json!({ "id": id, "ok": true, "result": value }),
         Err(error) => json!({ "id": id, "ok": false, "error": error }),

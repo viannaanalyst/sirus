@@ -456,6 +456,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Caminho", "Path"),
     ("Cancelar", "Cancel"),
     ("Captura", "Screenshot"),
+    ("Captura da tela", "Screenshot"),
     ("Captura de janela", "Window snap"),
     ("Captura salva em {}", "Screenshot saved to {}"),
     ("Capturar uma janela aberta", "Capture an open app window"),
@@ -1280,6 +1281,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Could not prepare the data copy.",
     ),
     ("Não detectado", "Not detected"),
+    ("Não foi possível abrir esta imagem.", "Could not open this image."),
     (
         "Não foi possível abrir este documento.",
         "Could not open this document.",

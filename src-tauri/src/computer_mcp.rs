@@ -388,7 +388,11 @@ async fn handle_connection(stream: tokio::net::UnixStream, app: AppHandle) {
                     .unwrap_or_else(|| json!({}));
                 let owned = app.clone();
                 match tokio::task::spawn_blocking(move || {
-                    execute(&owned, &session, &tool, &arguments)
+                    let result = execute(&owned, &session, &tool, &arguments);
+                    if let Ok(value) = &result {
+                        crate::tool_images::remember(&session, &tool, value);
+                    }
+                    result
                 })
                 .await
                 {
@@ -465,7 +469,13 @@ fn resolve(name: &str) -> Result<AppInfo, String> {
         .find(|app| app.bundle_id.to_lowercase() == lower)
         .or_else(|| apps.iter().find(|app| app.name.to_lowercase() == lower))
         .or_else(|| apps.iter().find(|app| app.name.to_lowercase().contains(&lower)))
+        .or_else(|| {
+            apps.iter().find(|app| {
+                computer::app_file_name(app.pid).is_some_and(|file| file.to_lowercase() == lower)
+            })
+        })
         .cloned()
+        .or_else(|| computer::app_by_bundle(name))
         .ok_or_else(|| format!("{name} is not running. Use computer_apps to list apps or computer_launch with a bundle id."))
 }
 

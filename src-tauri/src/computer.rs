@@ -281,28 +281,80 @@ mod platform {
         )
     }
 
+    fn info_of(app: &NSRunningApplication) -> AppInfo {
+        AppInfo {
+            pid: app.processIdentifier(),
+            bundle_id: app
+                .bundleIdentifier()
+                .map(|id| id.to_string())
+                .unwrap_or_default(),
+            name: app
+                .localizedName()
+                .map(|name| name.to_string())
+                .unwrap_or_default(),
+            active: app.isActive(),
+        }
+    }
+
+    fn all_pids() -> Vec<i32> {
+        // `proc_listallpids` returns how many pids it wrote (its header says bytes). Grow the
+        // buffer until it is not full, so a busy machine is never cut short.
+        let mut capacity = 1024usize;
+        loop {
+            let mut pids = vec![0i32; capacity];
+            // SAFETY: the buffer holds `capacity` pids, `capacity * 4` bytes.
+            let filled = unsafe {
+                libc::proc_listallpids(pids.as_mut_ptr().cast(), (capacity * 4) as libc::c_int)
+            };
+            if filled <= 0 {
+                return Vec::new();
+            }
+            let filled = filled as usize;
+            if filled < capacity || capacity >= 1 << 20 {
+                pids.truncate(filled);
+                pids.retain(|pid| *pid > 0);
+                return pids;
+            }
+            capacity *= 4;
+        }
+    }
+
+    /// Regular apps that are running now. `NSWorkspace.runningApplications` is a cache
+    /// refreshed by main-queue notifications, so it goes stale (it never lists apps
+    /// started after launch) when the process has no AppKit run loop, as in `sirus-host`.
+    /// `NSRunningApplication` lookups by pid or bundle id ask LaunchServices directly, so
+    /// the list is built from the live process table instead.
     pub fn running_apps() -> Vec<AppInfo> {
-        let workspace = NSWorkspace::sharedWorkspace();
         let own = std::process::id() as i32;
-        workspace
-            .runningApplications()
-            .iter()
-            .filter(|app| {
-                app.activationPolicy() == NSApplicationActivationPolicy::Regular
-                    && app.processIdentifier() != own
-            })
-            .filter_map(|app| {
-                Some(AppInfo {
-                    pid: app.processIdentifier(),
-                    bundle_id: app.bundleIdentifier()?.to_string(),
-                    name: app
-                        .localizedName()
-                        .map(|name| name.to_string())
-                        .unwrap_or_default(),
-                    active: app.isActive(),
-                })
-            })
+        all_pids()
+            .into_iter()
+            .filter(|pid| *pid != own)
+            .filter_map(NSRunningApplication::runningApplicationWithProcessIdentifier)
+            .filter(|app| app.activationPolicy() == NSApplicationActivationPolicy::Regular)
+            .map(|app| info_of(&app))
+            .filter(|info| !info.bundle_id.is_empty())
             .collect()
+    }
+
+    /// The app's file name without `.app` ("Calculator" for "Calculadora"), a second name
+    /// to match when the localized one differs from what the agent typed.
+    pub fn app_file_name(pid: i32) -> Option<String> {
+        let url =
+            NSRunningApplication::runningApplicationWithProcessIdentifier(pid)?.bundleURL()?;
+        let name = url.lastPathComponent()?.to_string();
+        Some(name.strip_suffix(".app").unwrap_or(&name).to_string())
+    }
+
+    /// The live app for a bundle id, regardless of any run loop.
+    pub fn app_by_bundle(bundle_id: &str) -> Option<AppInfo> {
+        let own = std::process::id() as i32;
+        NSRunningApplication::runningApplicationsWithBundleIdentifier(&NSString::from_str(
+            bundle_id,
+        ))
+        .iter()
+        .filter(|app| app.processIdentifier() != own && !app.isTerminated())
+        .map(|app| info_of(&app))
+        .next()
     }
 
     /// Launches by bundle id without activating it, then waits for the process.
@@ -337,11 +389,29 @@ mod platform {
             &configuration,
             Some(&block),
         );
-        rx.recv_timeout(Duration::from_secs(15))
+        let launched = rx
+            .recv_timeout(Duration::from_secs(15))
             .ok()
             .flatten()
             .filter(|app| app.pid > 0)
-            .ok_or_else(|| "the application did not start".to_string())
+            .ok_or_else(|| "the application did not start".to_string())?;
+        // Wait (bounded) until the system lists it, so the next tool call can find it.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(live) =
+                NSRunningApplication::runningApplicationWithProcessIdentifier(launched.pid)
+                    .filter(|app| !app.isTerminated())
+            {
+                return Ok(AppInfo {
+                    active: false,
+                    ..info_of(&live)
+                });
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err("the application started but is not listed yet".into());
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 
     /// Brings an app to the front. Only used for explicit foreground requests.
@@ -1267,6 +1337,32 @@ mod tests {
         assert_eq!(key_code("f12"), Some(111));
         assert_eq!(key_code("hello"), None);
         assert_eq!(key_code("ç"), None);
+    }
+
+    /// Live check of the app list without a run loop (the `sirus-host` case):
+    /// `cargo test live_app_lookup -- --ignored --nocapture`. Quits Calculator first.
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore]
+    fn live_app_lookup() {
+        let _ = std::process::Command::new("pkill")
+            .args(["-x", "Calculator"])
+            .status();
+        std::thread::sleep(std::time::Duration::from_millis(1000));
+        assert!(app_by_bundle("com.apple.calculator").is_none());
+        let launched = launch("com.apple.calculator").expect("launch");
+        let listed = running_apps();
+        println!("launched {launched:?}, listed {listed:?}");
+        assert!(listed
+            .iter()
+            .any(|app| app.bundle_id == "com.apple.calculator"));
+        assert_eq!(
+            app_by_bundle("com.apple.calculator").map(|app| app.pid),
+            Some(launched.pid)
+        );
+        let _ = std::process::Command::new("pkill")
+            .args(["-x", "Calculator"])
+            .status();
     }
 
     /// Live check against Calculator: `cargo test live_calculator -- --ignored --nocapture`.

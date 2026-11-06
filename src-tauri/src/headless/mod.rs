@@ -397,6 +397,7 @@ fn start(dir: &Path) -> crate::error::Result<AppHandle> {
     app.manage(crate::html_preview::HtmlPreviews::default());
     let data_path = dir.join("state.json");
     crate::browser_mcp::init(app.clone(), dir.to_path_buf());
+    crate::tool_images::init(dir);
     crate::secrets::init(dir);
     let worktree_root = dir.join("worktrees");
     std::fs::create_dir_all(&worktree_root)?;

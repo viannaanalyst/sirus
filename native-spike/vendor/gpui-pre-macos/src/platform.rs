@@ -905,7 +905,16 @@ impl Platform for MacPlatform {
         let (done_tx, done_rx) = oneshot::channel();
         self.foreground_executor()
             .spawn(async move {
-                let panel = NSOpenPanel::openPanel(marker);
+                let _ = marker;
+                // AppKit answers nil when its panel service refuses this process, as it does when
+                // the app's bundle was replaced while it runs. `openPanel` would abort on that.
+                let panel: Option<objc2::rc::Retained<NSOpenPanel>> = unsafe {
+                    objc2::msg_send![objc2::class!(NSOpenPanel), openPanel]
+                };
+                let Some(panel) = panel else {
+                    _ = done_tx.send(Err(anyhow::anyhow!("the open panel is unavailable")));
+                    return;
+                };
                 panel.setCanChooseDirectories(options.directories);
                 panel.setCanChooseFiles(options.files);
                 panel.setAllowsMultipleSelection(options.multiple);
@@ -956,7 +965,14 @@ impl Platform for MacPlatform {
         let marker = self.1;
         self.foreground_executor()
             .spawn(async move {
-                let panel = NSSavePanel::savePanel(marker);
+                let _ = marker;
+                let panel: Option<objc2::rc::Retained<NSSavePanel>> = unsafe {
+                    objc2::msg_send![objc2::class!(NSSavePanel), savePanel]
+                };
+                let Some(panel) = panel else {
+                    _ = done_tx.send(Err(anyhow::anyhow!("the save panel is unavailable")));
+                    return;
+                };
                 panel.setDirectoryURL(url.as_deref());
 
                 if let Some(suggested_name) = suggested_name {

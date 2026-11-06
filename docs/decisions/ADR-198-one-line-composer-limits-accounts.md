@@ -9,7 +9,7 @@ A conversation stays on the account that started it, so one on the default accou
 
 ## Decision
 
-- **Composer.** One box with no divider, as in Monocode: attach, model, access, then the meter, microphone and send on a single line.
+- **Composer.** One box with no divider, as in Monocode: attach, access and the context meter on the left, then the model, microphone and send on the right, on a single line.
 - **Failure ledge (`account_card.rs`).** One line on the composer's top edge, like the queue. A usage limit says when it returns, read from the provider's words, and offers each other account next to "Try again".
 - **Removing an account.** `remove_provider_account` deletes an app-managed account and its folder. It refuses the default account, which is the Mac's own CLI login, and any account a conversation still uses.
 - **Sounds.** The host names the cue for each event (`cue`): permissions and questions take "input", pull requests "linked", the rest "finished". Settings keep each event's switch and "Listen"; the sound picker is gone. The stored sound fields remain unused by the window.

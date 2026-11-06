@@ -5596,8 +5596,12 @@ impl Shell {
             prompt: None,
         });
         cx.spawn(async move |this, cx| {
-            if let Ok(Ok(Some(paths))) = paths.await {
-                let _ = this.update(cx, |this, cx| this.attach_paths(paths, cx));
+            match paths.await {
+                Ok(Ok(Some(paths))) => {
+                    let _ = this.update(cx, |this, cx| this.attach_paths(paths, cx));
+                }
+                Ok(Err(_)) => panel_failed(&this, cx),
+                _ => {}
             }
         })
         .detach();
@@ -7933,7 +7937,12 @@ impl Shell {
             prompt: None,
         });
         cx.spawn(async move |this, cx| {
-            if let Ok(Ok(Some(paths))) = paths.await {
+            let paths = match paths.await {
+                Ok(Ok(Some(paths))) => paths,
+                Ok(Err(_)) => return panel_failed(&this, cx),
+                _ => return,
+            };
+            {
                 let Some(path) = paths.first().map(|p| p.display().to_string()) else {
                     return;
                 };
@@ -9595,8 +9604,10 @@ impl Shell {
                 }
                 let view = if last && anchored {
                     div()
-                        // Leaves room above the sent message, clear of the fade at the top.
-                        .min_h(px((view_height - 28. - ANCHOR_TOP).max(0.)))
+                        // Fills the view, so nothing of the turn before shows above it; the room
+                        // over the sent message is inside.
+                        .min_h(px((view_height - 28.).max(0.)))
+                        .pt(px(ANCHOR_TOP))
                         .child(view)
                         .into_any_element()
                 } else {
@@ -11557,7 +11568,38 @@ impl Shell {
                                                 cx.notify();
                                             })),
                                     )
-                                    // One line of controls, as Monocode's composer.
+                                    // One line of controls, as Monocode's: what shapes the work on the left, the model and
+                                    // sending on the right.
+                                    .child(
+                                div()
+                                    .id("composer-access")
+                                    .h(px(26.))
+                                    .px(px(8.))
+                                    .border_1()
+                                    .border_color(content(0.1))
+                                    .rounded(px(crate::theme::RADIUS_SM))
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(6.))
+                                    .text_size(px(12.))
+                                    .text_color(access_color)
+                                    .cursor_pointer()
+                                    .hover(|s| s.bg(content(0.07)))
+                                    .child(icon(access_glyph, 14.).text_color(access_color))
+                                    .child(access)
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, window, cx| {
+                                            this.keep_typing_focus(window, cx);
+                                            cx.stop_propagation();
+                                        }),
+                                    )
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.toggle_composer_menu(ComposerMenu::Access, cx)
+                                    })),
+                            )
+                                    .children(ring)
+                                    .child(div().flex_1())
                                     .child(
                                 shelf_button("composer-model")
                                     .relative()
@@ -11596,36 +11638,6 @@ impl Shell {
                                         this.toggle_composer_menu(ComposerMenu::Effort, cx)
                                     })),
                             )
-                                    .child(
-                                div()
-                                    .id("composer-access")
-                                    .h(px(26.))
-                                    .px(px(8.))
-                                    .border_1()
-                                    .border_color(content(0.1))
-                                    .rounded(px(crate::theme::RADIUS_SM))
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(6.))
-                                    .text_size(px(12.))
-                                    .text_color(access_color)
-                                    .cursor_pointer()
-                                    .hover(|s| s.bg(content(0.07)))
-                                    .child(icon(access_glyph, 14.).text_color(access_color))
-                                    .child(access)
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(|this, _, window, cx| {
-                                            this.keep_typing_focus(window, cx);
-                                            cx.stop_propagation();
-                                        }),
-                                    )
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.toggle_composer_menu(ComposerMenu::Access, cx)
-                                    })),
-                            )
-                                    .child(div().flex_1())
-                                    .children(ring)
                                     .child(
                                         round("composer-mic", "mic")
                                             .when(dictating, |d| d.bg(rgb(0xe0654d)))
@@ -12424,7 +12436,8 @@ impl Shell {
                     .flex()
                     .flex_col()
                     .gap(px(8.))
-                    .min_h(px((view - 28. - ANCHOR_TOP).max(0.)))
+                    .min_h(px((view - 28.).max(0.)))
+                    .pt(px(ANCHOR_TOP))
                     .children(stretch)
                     .into_any_element(),
             );
@@ -15259,7 +15272,15 @@ fn caret_lit(since: f32) -> bool {
     since % 1.06 < 0.58
 }
 
-/// How far below the top of the view a sent message comes to rest.
+/// The system's file panel would not open: said in the footer instead of doing nothing.
+fn panel_failed(this: &gpui::WeakEntity<Shell>, cx: &mut gpui::AsyncApp) {
+    let _ = this.update(cx, |this, cx| {
+        this.problem = Some(t("Não foi possível abrir a janela de arquivos. Feche e abra o Sirus.").to_owned());
+        cx.notify();
+    });
+}
+
+/// How far below the top of the view a sent message comes to rest, with its turn filling the view.
 const ANCHOR_TOP: f32 = 32.;
 
 /// The first fold key among `phase_open`'s (conversation, turn, key); below it are step indexes.

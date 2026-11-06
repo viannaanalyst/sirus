@@ -1658,6 +1658,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Não encontrei certificados do sistema.",
         "No system certificates were found.",
     ),
+    ("Não foi possível abrir a janela de arquivos. Feche e abra o Sirus.", "The file window could not open. Quit and reopen Sirus."),
     (
         "Não foi possível abrir esta imagem.",
         "Could not open this image.",

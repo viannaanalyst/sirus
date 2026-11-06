@@ -127,7 +127,9 @@ impl State {
         }
         let query_changed = self.searched != self.query;
         let scope_changed = self.scope.is_none_or(|(c, _)| c != conversation);
-        let turns_changed = self.scope.is_some_and(|(c, n)| c == conversation && n != count);
+        let turns_changed = self
+            .scope
+            .is_some_and(|(c, n)| c == conversation && n != count);
         if !query_changed && !scope_changed && !turns_changed {
             return None;
         }
@@ -170,7 +172,9 @@ impl Shell {
         self.context.close();
         let duration = Self::find_duration(cx);
         self.find.shown = true;
-        self.find.phase.set(1., Instant::now(), duration, Curve::Expo);
+        self.find
+            .phase
+            .set(1., Instant::now(), duration, Curve::Expo);
         window.focus(&self.focus, cx);
         cx.notify();
     }
@@ -179,7 +183,9 @@ impl Shell {
     fn close_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.find.shown = false;
         let duration = Self::find_duration(cx);
-        self.find.phase.set(0., Instant::now(), duration, Curve::Expo);
+        self.find
+            .phase
+            .set(0., Instant::now(), duration, Curve::Expo);
         window.focus(&self.focus, cx);
         cx.notify();
     }
@@ -273,18 +279,18 @@ impl Shell {
                         .items_center()
                         .overflow_hidden()
                         .text_size(px(13.))
-                        .text_color(if placeholder { content(0.4) } else { content(0.92) })
-                        .child(
-                            div()
-                                .min_w_0()
-                                .overflow_hidden()
-                                .whitespace_nowrap()
-                                .child(if placeholder {
-                                    t("Buscar nesta conversa").to_owned()
-                                } else {
-                                    query
-                                }),
-                        )
+                        .text_color(if placeholder {
+                            content(0.4)
+                        } else {
+                            content(0.92)
+                        })
+                        .child(div().min_w_0().overflow_hidden().whitespace_nowrap().child(
+                            if placeholder {
+                                t("Buscar nesta conversa").to_owned()
+                            } else {
+                                query
+                            },
+                        ))
                         .when(shown, |d| {
                             d.child(div().flex_shrink_0().w(px(1.5)).h(px(15.)).bg(content(0.8)))
                         }),
@@ -306,9 +312,10 @@ impl Shell {
                     find_button("find-next", "chevron-down")
                         .on_click(cx.listener(|this, _, _, cx| this.find_go(true, cx))),
                 )
-                .child(find_button("find-close", "close").on_click(cx.listener(
-                    |this, _, window, cx| this.close_find(window, cx),
-                )))
+                .child(
+                    find_button("find-close", "close")
+                        .on_click(cx.listener(|this, _, window, cx| this.close_find(window, cx))),
+                )
                 .into_any_element(),
         )
     }
@@ -358,7 +365,11 @@ mod tests {
         assert_eq!(wrap(Some(0), 3, false), Some(2));
         assert_eq!(wrap(Some(1), 3, false), Some(0));
         assert_eq!(wrap(Some(0), 1, true), Some(0));
-        assert_eq!(wrap(Some(7), 3, true), Some(0), "a stale index is clamped first");
+        assert_eq!(
+            wrap(Some(7), 3, true),
+            Some(0),
+            "a stale index is clamped first"
+        );
         assert_eq!(wrap(Some(0), 0, true), None);
     }
 
@@ -411,7 +422,11 @@ mod tests {
         let mut state = State::default();
         state.query = "x".into();
         let turns = [("a", "x")];
-        assert_eq!(sync_with(&mut state, 0, &turns), None, "a hidden bar does not search");
+        assert_eq!(
+            sync_with(&mut state, 0, &turns),
+            None,
+            "a hidden bar does not search"
+        );
         state.shown = true;
         assert_eq!(sync_with(&mut state, 0, &turns), Some(0));
         state.shown = false;

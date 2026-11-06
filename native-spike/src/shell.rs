@@ -21,9 +21,9 @@ use crate::theme::{
 use gpui::transparent_black as transparent;
 use gpui::{
     AnyElement, Context, Div, FocusHandle, FontWeight, KeyDownEvent, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, SharedString, Stateful, Transformation, Window,
-    WindowControlArea, div, linear_color_stop, linear_gradient, percentage, prelude::*, px, rgb,
-    svg,
+    MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, SharedString, Stateful, Transformation,
+    Window, WindowControlArea, div, linear_color_stop, linear_gradient, percentage, prelude::*, px,
+    rgb, svg,
 };
 use gpui::{
     Bounds, ElementInputHandler, EntityInputHandler, StyledText, TextLayout, UTF16Selection,
@@ -31,58 +31,62 @@ use gpui::{
 use serde_json::{Value, json};
 use std::cell::Cell;
 use std::collections::{HashMap, VecDeque};
-use std::rc::Rc;
 use std::ops::Range;
+use std::rc::Rc;
 
-/// The message queue, steering and the composer keys that go with them.
-#[path = "composer_queue.rs"]
-mod composer_queue;
-/// The subagents of a turn as one card.
-#[path = "subagent_card.rs"]
-mod subagent_card;
-/// The tasks a reply delegated to other models, under the reply (delegated_tasks.rs).
-#[path = "delegated_tasks.rs"]
-mod delegated_tasks;
 /// What the running agents cost the Mac: the footer's gauge and its panel (agent_resources.rs).
 #[path = "agent_resources.rs"]
 mod agent_resources;
-/// The Usage page: Custo, Tokens and Limites over the window (usage_page.rs).
-#[path = "usage_page.rs"]
-mod usage_page;
-/// Saving a conversation as Markdown from its context menu (conversation_export.rs).
-#[path = "conversation_export.rs"]
-mod conversation_export;
+/// The message queue, steering and the composer keys that go with them.
+#[path = "composer_queue.rs"]
+mod composer_queue;
 /// The composer's context ring, its popup, Compact and Compact and send (ADR-057).
 #[path = "context_meter.rs"]
 pub(crate) mod context_meter;
+/// Saving a conversation as Markdown from its context menu (conversation_export.rs).
+#[path = "conversation_export.rs"]
+mod conversation_export;
+/// The tasks a reply delegated to other models, under the reply (delegated_tasks.rs).
+#[path = "delegated_tasks.rs"]
+mod delegated_tasks;
 /// The sidebar's hover card: a conversation's model, work time, title and folder (sidebar_card.rs).
 #[path = "sidebar_card.rs"]
 pub(crate) mod sidebar_card;
-/// ⌘F: the find bar over the open conversation (transcript_find.rs).
-#[path = "transcript_find.rs"]
-pub(crate) mod transcript_find;
+/// The subagents of a turn as one card.
+#[path = "subagent_card.rs"]
+mod subagent_card;
+/// The Usage page: Custo, Tokens and Limites over the window (usage_page.rs).
+#[path = "usage_page.rs"]
+mod usage_page;
+
+/// Cards and project badges for other conversations (activity_cards.rs).
+#[path = "activity_cards.rs"]
+pub(crate) mod activity_cards;
 /// The first run: a full-window welcome over the letters robot (first_run.rs).
 #[path = "first_run.rs"]
 pub(crate) mod first_run;
 /// All-conversation search: ⌘⇧F and the palette's message results (global_search.rs).
 #[path = "global_search.rs"]
 pub(crate) mod global_search;
-/// Selecting the text of replies and user messages (transcript_select.rs).
-#[path = "transcript_select.rs"]
-pub(crate) mod transcript_select;
 /// The row of actions under a finished reply: copy, try again, undo, side chat (ADR-187).
 #[path = "message_actions.rs"]
 pub(crate) mod message_actions;
+/// ⌘F: the find bar over the open conversation (transcript_find.rs).
+#[path = "transcript_find.rs"]
+pub(crate) mod transcript_find;
+/// Selecting the text of replies and user messages (transcript_select.rs).
+#[path = "transcript_select.rs"]
+pub(crate) mod transcript_select;
 
 #[path = "handoff.rs"]
 pub(crate) mod handoff;
 
-#[path = "prompt_link.rs"]
-pub(crate) mod prompt_link;
 #[path = "computer_switch.rs"]
 pub(crate) mod computer_switch;
 #[path = "computer_ui.rs"]
 pub(crate) mod computer_ui;
+#[path = "prompt_link.rs"]
+pub(crate) mod prompt_link;
 /// The changed files under a finished reply, opened in place (turn_review.rs).
 #[path = "turn_review.rs"]
 mod turn_review;
@@ -875,6 +879,10 @@ fn load_look() -> Look {
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
         .map_or_else(Look::default, |value| crate::theme::look_from_json(&value))
 }
+/// The accent the phone wears, kept by the host (`phone_look_set`).
+fn phone_look_args(look: &Look) -> Value {
+    json!({ "accent": crate::theme::accent_hex(look) })
+}
 fn save_look(look: &Look) {
     let bytes = crate::theme::look_to_json(look).to_string();
     let _ = std::fs::write(look_file(), bytes);
@@ -1029,6 +1037,10 @@ pub struct Shell {
     context: context_meter::State,
     /// The sidebar's hover card for a conversation row (sidebar_card.rs).
     sidebar_card: sidebar_card::State,
+    /// Cards for other conversations that finished, failed or wait for the person.
+    cards: activity_cards::State,
+    /// The accent last sent to the host for the phone, `#rrggbb`.
+    phone_accent: String,
     /// The ⌘F find bar and its hits (transcript_find.rs).
     find: transcript_find::State,
     /// The text selected in a reply, and its menu (transcript_select.rs).
@@ -1234,7 +1246,8 @@ impl Shell {
         .detach();
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
-        cx.observe_window_activation(window, |_, _, cx| cx.notify()).detach();
+        cx.observe_window_activation(window, |_, _, cx| cx.notify())
+            .detach();
         // Loops (spinners, shimmers, streaming text) tick together at 30 Hz, as Monocode's pulse.
         cx.spawn(async move |this, cx| {
             loop {
@@ -1246,7 +1259,8 @@ impl Shell {
                     // slower out of focus.
                     this.tick = this.tick.wrapping_add(1);
                     let every = if this.window_active { 2 } else { 12 };
-                    let pulse = this.tick % every == 0 && this.conversations.iter().any(Conversation::working);
+                    let pulse = this.tick % every == 0
+                        && this.conversations.iter().any(Conversation::working);
                     if pulse {
                         cx.notify();
                     }
@@ -1259,12 +1273,16 @@ impl Shell {
         .detach();
         // Updates (app_update.rs): the first check once the window has settled, then every few hours.
         cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(crate::app_update::START_DELAY).await;
+            cx.background_executor()
+                .timer(crate::app_update::START_DELAY)
+                .await;
             loop {
                 if this.update(cx, |this, _| this.app_update_auto()).is_err() {
                     break;
                 }
-                cx.background_executor().timer(crate::app_update::CHECK_INTERVAL).await;
+                cx.background_executor()
+                    .timer(crate::app_update::CHECK_INTERVAL)
+                    .await;
             }
         })
         .detach();
@@ -1272,7 +1290,9 @@ impl Shell {
         // redraw when they change (git_sync.rs), so an idle window stays still.
         cx.spawn(async move |this, cx| {
             loop {
-                cx.background_executor().timer(git_sync::INCOMING_REFRESH).await;
+                cx.background_executor()
+                    .timer(git_sync::INCOMING_REFRESH)
+                    .await;
                 let alive = this.update(cx, |this, _| {
                     if this.incoming.due() {
                         this.incoming_fetch();
@@ -1336,6 +1356,8 @@ impl Shell {
             usage_page: usage_page::State::default(),
             context: Default::default(),
             sidebar_card: Default::default(),
+            cards: Default::default(),
+            phone_accent: String::new(),
             message_actions: Default::default(),
             turn_review: Default::default(),
             find: Default::default(),
@@ -1493,11 +1515,19 @@ impl Shell {
                 Some(Waiting::CliAgents) if ok => self.cli_agents_arrived(value, cx),
                 Some(Waiting::CliAgents) => self.problem = Some(error_text(&value)),
                 Some(Waiting::CliProbe(id)) => {
-                    let reply = if ok { value } else { json!({ "error": error_text(&value) }) };
+                    let reply = if ok {
+                        value
+                    } else {
+                        json!({ "error": error_text(&value) })
+                    };
                     self.cli_reply("cliProbes", id, reply);
                 }
                 Some(Waiting::CliLogin(id)) => {
-                    let reply = if ok { value } else { json!({ "error": error_text(&value) }) };
+                    let reply = if ok {
+                        value
+                    } else {
+                        json!({ "error": error_text(&value) })
+                    };
                     self.cli_reply("cliLogins", id, reply);
                 }
                 Some(Waiting::ScriptsSaved(ix)) if ok => {
@@ -1561,7 +1591,7 @@ impl Shell {
                         name: value["name"].as_str().unwrap_or("").to_owned(),
                         path: value["path"].as_str().unwrap_or("").to_owned(),
                         appearance: value["appearance"].clone(),
-                scripts: crate::project_scripts::Saved::of(&value["scripts"]),
+                        scripts: crate::project_scripts::Saved::of(&value["scripts"]),
                         open: true,
                         pinned: false,
                         conversations: Vec::new(),
@@ -1834,7 +1864,9 @@ impl Shell {
                     self.queued_reply(&session, &item, ok, &value, cx)
                 }
                 Some(Waiting::Steered(wait)) => self.steered_reply(wait, ok, &value, cx),
-                Some(Waiting::Compacted(ix, then)) => self.compacted_reply(ix, then, ok, &value, cx),
+                Some(Waiting::Compacted(ix, then)) => {
+                    self.compacted_reply(ix, then, ok, &value, cx)
+                }
                 Some(Waiting::Declined(key)) => self.declined_reply(key, ok, &value, cx),
                 Some(Waiting::Subagent(call)) => self.subagent_reply(call, ok, &value, cx),
                 Some(Waiting::BranchCreate) => self.branch_created(ok, &value, cx),
@@ -1852,7 +1884,11 @@ impl Shell {
                 _ => {}
             },
             Incoming::Event { name, payload } => match name.as_str() {
-                "session-updated" => self.session_updated(&payload, cx),
+                "session-updated" => {
+                    self.session_updated(&payload, cx);
+                    self.cards_settle();
+                }
+                "notification-activity" => self.activity_event(&payload, cx),
                 "agent-output" => self.agent_output(&payload),
                 "agent-exit" => self.refresh_diff(),
                 "notification-native" => {
@@ -1875,10 +1911,13 @@ impl Shell {
         self.connected = true;
         self.problem = None;
         self.settings = state["settings"].clone();
+        self.push_phone_look(true);
         // These two fix up this Mac's own settings; another computer's are left as they are.
         let remote = self.on_remote();
         let repaired = !remote && crate::settings_pages::repair_provider_paths(&mut self.settings);
-        if !remote && (crate::chat_background::seed_monocode_default(&mut self.settings) || repaired) {
+        if !remote
+            && (crate::chat_background::seed_monocode_default(&mut self.settings) || repaired)
+        {
             self.backend
                 .invoke("save_settings", json!({ "settings": self.settings }));
         }
@@ -1894,7 +1933,11 @@ impl Shell {
             json!({})
         };
         // Drafts are keyed by conversation index, which the rebuild renumbers: carry each by session.
-        let sessions: Vec<String> = self.conversations.iter().map(|c| c.session_id.clone()).collect();
+        let sessions: Vec<String> = self
+            .conversations
+            .iter()
+            .map(|c| c.session_id.clone())
+            .collect();
         let mut by_session = Vec::new();
         let mut sessionless = Vec::new();
         for (ix, draft) in std::mem::take(&mut self.drafts) {
@@ -1991,7 +2034,11 @@ impl Shell {
             self.next_id += 1;
         }
         for (session, draft) in by_session {
-            if let Some(ix) = self.conversations.iter().position(|c| c.session_id == session) {
+            if let Some(ix) = self
+                .conversations
+                .iter()
+                .position(|c| c.session_id == session)
+            {
                 self.drafts.insert(ix, draft);
             }
         }
@@ -2005,7 +2052,11 @@ impl Shell {
             .flatten()
             .filter_map(|(key, value)| Some((key.clone(), value.as_str()?.to_owned())))
             .collect();
-        let sessions: Vec<String> = self.conversations.iter().map(|c| c.session_id.clone()).collect();
+        let sessions: Vec<String> = self
+            .conversations
+            .iter()
+            .map(|c| c.session_id.clone())
+            .collect();
         restore_drafts(&mut self.drafts, &sessions, &self.saved_drafts);
         // Text typed while disconnected differs from the host's copy: it is saved now.
         self.save_drafts();
@@ -2093,7 +2144,12 @@ impl Shell {
         cx.notify();
     }
 
-    fn run_script_in(&mut self, session: &str, kind: crate::project_scripts::Kind, cx: &mut Context<Self>) {
+    fn run_script_in(
+        &mut self,
+        session: &str,
+        kind: crate::project_scripts::Kind,
+        cx: &mut Context<Self>,
+    ) {
         self.scripts_output = false;
         self.script_action(crate::project_scripts::run_args(session, kind), cx);
     }
@@ -2138,7 +2194,10 @@ impl Shell {
         self.toggle_project_row("scripts", cx);
         if opening {
             if let Some(ix) = self.current_project {
-                self.scripts_edit = Some(crate::project_scripts::Edit::new(ix, &self.projects[ix].scripts));
+                self.scripts_edit = Some(crate::project_scripts::Edit::new(
+                    ix,
+                    &self.projects[ix].scripts,
+                ));
             }
         }
     }
@@ -2146,27 +2205,33 @@ impl Shell {
     /// The Scripts block of the settings popup, scrolling inside its own area.
     fn scripts_fields_view(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
         let project = &self.projects[index];
-        let edit = self.scripts_edit.as_ref().filter(|edit| edit.project == index);
+        let edit = self
+            .scripts_edit
+            .as_ref()
+            .filter(|edit| edit.project == index);
         let draft = edit.map_or_else(
             || crate::project_scripts::Draft::of(&project.scripts),
             |edit| edit.draft.clone(),
         );
         let focus = edit.and_then(|edit| edit.focus);
-        let can_save = edit.is_some_and(|edit| {
-            edit.draft.changed(&project.scripts) && edit.draft.valid()
-        });
+        let can_save =
+            edit.is_some_and(|edit| edit.draft.changed(&project.scripts) && edit.draft.valid());
         use crate::project_scripts::Field;
         let handlers = [
             crate::project_scripts_view::click(cx, |this, cx| this.focus_script(Field::Setup, cx)),
             crate::project_scripts_view::click(cx, |this, cx| this.focus_script(Field::Finish, cx)),
-            crate::project_scripts_view::click(cx, |this, cx| this.focus_script(Field::Preview, cx)),
+            crate::project_scripts_view::click(cx, |this, cx| {
+                this.focus_script(Field::Preview, cx)
+            }),
         ];
-        let toggle = crate::project_scripts_view::click(cx, |this, cx| this.toggle_script_preview(cx));
+        let toggle =
+            crate::project_scripts_view::click(cx, |this, cx| this.toggle_script_preview(cx));
         let save = crate::project_scripts_view::click(cx, |this, cx| {
             this.save_project_scripts(false);
             cx.notify();
         });
-        let fields = crate::project_scripts_view::fields(&draft, focus, handlers, toggle, save, can_save);
+        let fields =
+            crate::project_scripts_view::fields(&draft, focus, handlers, toggle, save, can_save);
         div()
             .id("project-scripts-scroll")
             .max_h(px(crate::project_scripts_view::SETTINGS_HEIGHT - 20.))
@@ -2198,7 +2263,12 @@ impl Shell {
                 cx.notify();
             }),
         ];
-        Some(crate::project_scripts_view::notice(&run, shown, self.scripts_output, handlers))
+        Some(crate::project_scripts_view::notice(
+            &run,
+            shown,
+            self.scripts_output,
+            handlers,
+        ))
     }
 
     /// The composer's add menu rows that run the project's saved scripts in this conversation.
@@ -2308,7 +2378,9 @@ impl Shell {
     /// running-agents confirmation comes first (ADR-090); declining keeps everything as it is.
     fn app_update_restart(&mut self, cx: &mut Context<Self>) {
         let agents = self.conversations.iter().any(|c| c.working());
-        let confirm = self.settings["confirmCloseRunning"].as_bool().unwrap_or(true);
+        let confirm = self.settings["confirmCloseRunning"]
+            .as_bool()
+            .unwrap_or(true);
         if agents && confirm {
             self.ask(
                 t("Reiniciar para atualizar?").to_owned(),
@@ -2338,9 +2410,15 @@ impl Shell {
         let u = status();
         let version = u.version.clone().unwrap_or_default();
         let (text, kind): (String, Option<&'static str>) = match u.phase {
-            Phase::Available => (tf("Sirus {} disponível · Instalar", &[&version]), Some("install")),
+            Phase::Available => (
+                tf("Sirus {} disponível · Instalar", &[&version]),
+                Some("install"),
+            ),
             Phase::Downloading => (tf("Baixando o Sirus {}…", &[&version]), None),
-            Phase::Installed => (t("Atualização pronta · Reiniciar").to_owned(), Some("restart")),
+            Phase::Installed => (
+                t("Atualização pronta · Reiniciar").to_owned(),
+                Some("restart"),
+            ),
             _ => return None,
         };
         let notice = div()
@@ -2394,7 +2472,9 @@ impl Shell {
                 }
                 crate::native_notify::banner(
                     "Sirus",
-                    crate::i18n::t("Teste de notificação. Seus avisos de atividade aparecerão aqui."),
+                    crate::i18n::t(
+                        "Teste de notificação. Seus avisos de atividade aparecerão aqui.",
+                    ),
                 );
             }
             // Keys left out come back at their defaults: the host fills them in when it reads.
@@ -2518,6 +2598,7 @@ impl Shell {
                 self.sidebar_width = SIDEBAR_MIN;
                 self.look = Look::default();
                 save_look(&self.look);
+                self.push_phone_look(false);
             }
             "cli_diagnostics" => self.refresh_cli_diagnostics(),
             "native_first_run" => self.first_run_start(cx),
@@ -2772,7 +2853,8 @@ impl Shell {
             "login_provider_account",
             json!({ "provider": provider, "accountId": id }),
         );
-        self.waiting.insert(call, Waiting::AccountLogin(provider, id));
+        self.waiting
+            .insert(call, Waiting::AccountLogin(provider, id));
     }
 
     fn select_account(&mut self, provider: &'static str, id: String) {
@@ -3210,7 +3292,10 @@ impl Shell {
             .hover(|s| s.bg(content(0.09)).text_color(content(0.95)))
             .on_click(cx.listener(|this, _, _, cx| {
                 let provider = this.conversations[this.active_conversation()].provider;
-                this.usage_accounts = Some(AccountsPage { provider, ..Default::default() });
+                this.usage_accounts = Some(AccountsPage {
+                    provider,
+                    ..Default::default()
+                });
                 this.load_account_usage(provider);
                 cx.notify();
             }))
@@ -3271,9 +3356,7 @@ impl Shell {
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .child(
-                                        provider_mark(provider, 18.),
-                                    ),
+                                    .child(provider_mark(provider, 18.)),
                             )
                             .child(
                                 div()
@@ -3490,7 +3573,12 @@ impl Shell {
                 }
                 // Usually only the newest turn is in the window.
                 let at = from.saturating_sub(conversation.base);
-                if conversation.messages.iter().rposition(|m| m["role"] == "user").is_some_and(|last| last <= at) {
+                if conversation
+                    .messages
+                    .iter()
+                    .rposition(|m| m["role"] == "user")
+                    .is_some_and(|last| last <= at)
+                {
                     conversation.rebuild_last();
                 } else {
                     conversation.rebuild();
@@ -3569,7 +3657,11 @@ impl Shell {
             let conversation = &self.conversations[ix];
             let blank = conversation.is_blank() && !conversation.working();
             blank
-                .then(|| self.tabs.iter().find(|t| t.conversation == ix && !t.closing))
+                .then(|| {
+                    self.tabs
+                        .iter()
+                        .find(|t| t.conversation == ix && !t.closing)
+                })
                 .flatten()
                 .map(|tab| tab.id)
         });
@@ -3650,7 +3742,11 @@ impl Shell {
             return Some(&mut self.find.query);
         }
         // The settings popup's focused script field takes the typing.
-        if self.scripts_edit.as_ref().is_some_and(|edit| edit.focus.is_some()) {
+        if self
+            .scripts_edit
+            .as_ref()
+            .is_some_and(|edit| edit.focus.is_some())
+        {
             let edit = self.scripts_edit.as_mut()?;
             let field = edit.focus?;
             return Some(edit.draft.field_mut(field));
@@ -3766,7 +3862,10 @@ impl Shell {
             .enumerate()
             .filter(|(_, conversation)| !conversation.session_id.is_empty())
             .map(|(ix, conversation)| {
-                let text = self.drafts.get(&ix).map_or(String::new(), |d| d.text.clone());
+                let text = self
+                    .drafts
+                    .get(&ix)
+                    .map_or(String::new(), |d| d.text.clone());
                 (draft_key(&conversation.session_id), text)
             })
             .collect();
@@ -3778,10 +3877,10 @@ impl Shell {
                 continue;
             }
             self.saved_drafts.insert(key.clone(), text.clone());
-            replies.push(self.backend.request(
-                "save_composer_draft",
-                json!({ "key": key, "value": text }),
-            ));
+            replies.push(
+                self.backend
+                    .request("save_composer_draft", json!({ "key": key, "value": text })),
+            );
         }
         replies
     }
@@ -4046,8 +4145,7 @@ impl Shell {
         } else {
             0.
         };
-        let active_free = pulls_shown
-            || self.tabs.iter().any(|t| t.id == self.active && !t.pinned);
+        let active_free = pulls_shown || self.tabs.iter().any(|t| t.id == self.active && !t.pinned);
         let (selected, others) = if active_free && even < SELECTED_MIN && free > 1. {
             (
                 SELECTED_MIN,
@@ -4271,15 +4369,19 @@ impl Shell {
                         .w(px(width))
                         .h(px(PLATE))
                         .rounded(px(crate::theme::RADIUS_MD))
-                        .child(div().absolute().size_full().rounded(px(crate::theme::RADIUS_MD)).bg(content(
-                            if any_selected {
-                                0.1
-                            } else if any_hovered {
-                                0.07
-                            } else {
-                                0.04
-                            },
-                        )))
+                        .child(
+                            div()
+                                .absolute()
+                                .size_full()
+                                .rounded(px(crate::theme::RADIUS_MD))
+                                .bg(content(if any_selected {
+                                    0.1
+                                } else if any_hovered {
+                                    0.07
+                                } else {
+                                    0.04
+                                })),
+                        )
                         .children(cards)
                         .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
                             this.deck_hovered = *hovered;
@@ -4982,7 +5084,9 @@ impl Shell {
             .collect();
         match (cmd, shift, ctrl, key) {
             (true, false, false, "q") => cx.quit(),
-            (true, false, false, "t") | (true, false, false, "n") => self.new_conversation(None, cx),
+            (true, false, false, "t") | (true, false, false, "n") => {
+                self.new_conversation(None, cx)
+            }
             (true, false, false, "w") if self.term.pulls_active => self.close_pull_requests(cx),
             (true, false, false, "w") => self.close(self.active, cx),
             (true, true, false, "p") => self.toggle_pin(self.active, cx),
@@ -5102,7 +5206,9 @@ impl Shell {
                 let clipboard = cx.read_from_clipboard();
                 let image = clipboard.as_ref().and_then(|item| {
                     item.entries().iter().find_map(|entry| match entry {
-                        gpui::ClipboardEntry::Image(image) => Some((image.bytes.clone(), image.format)),
+                        gpui::ClipboardEntry::Image(image) => {
+                            Some((image.bytes.clone(), image.format))
+                        }
                         _ => None,
                     })
                 });
@@ -5375,29 +5481,29 @@ impl Shell {
                     about: &'static str,
                     on: bool| {
             track.row_named(
-            div()
-                .id(id)
-                .h(px(32.))
-                .px(px(8.))
-                .rounded(px(crate::theme::RADIUS_MD))
-                .flex()
-                .items_center()
-                .gap(px(10.))
-                .text_size(px(13.))
-                .text_color(content(0.92))
-                .cursor_pointer()
-                .when(on, |d| d.bg(accent_wash(0.14)))
-                .child(icon(glyph, 15.).text_color(if on { accent() } else { content(0.6) }))
-                .child(div().flex_shrink_0().child(title))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_size(px(12.))
-                        .text_color(content(0.45))
-                        .child(about),
-                ),
+                div()
+                    .id(id)
+                    .h(px(32.))
+                    .px(px(8.))
+                    .rounded(px(crate::theme::RADIUS_MD))
+                    .flex()
+                    .items_center()
+                    .gap(px(10.))
+                    .text_size(px(13.))
+                    .text_color(content(0.92))
+                    .cursor_pointer()
+                    .when(on, |d| d.bg(accent_wash(0.14)))
+                    .child(icon(glyph, 15.).text_color(if on { accent() } else { content(0.6) }))
+                    .child(div().flex_shrink_0().child(title))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(px(12.))
+                            .text_color(content(0.45))
+                            .child(about),
+                    ),
                 id,
                 on,
             )
@@ -5497,48 +5603,51 @@ impl Shell {
                 .enumerate()
                 .map(|(at, (name, about))| {
                     let chosen = name.clone();
-                    skills.row(
-                    div()
-                        .id(("skill-pick", at))
-                        .px(px(8.))
-                        .py(px(6.))
-                        .rounded(px(crate::theme::RADIUS_MD))
-                        .flex()
-                        .items_start()
-                        .gap(px(8.))
-                        .cursor_pointer()
-                        .on_click(cx.listener(move |this, _, _, cx| this.use_skill(&chosen, cx)))
-                        .child(
+                    skills
+                        .row(
                             div()
-                                .mt(px(2.))
-                                .child(icon("box", 13.).text_color(content(0.5))),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
+                                .id(("skill-pick", at))
+                                .px(px(8.))
+                                .py(px(6.))
+                                .rounded(px(crate::theme::RADIUS_MD))
                                 .flex()
-                                .flex_col()
-                                .child(
-                                    div()
-                                        .truncate()
-                                        .text_size(px(13.))
-                                        .text_color(content(0.95))
-                                        .child(name.clone()),
+                                .items_start()
+                                .gap(px(8.))
+                                .cursor_pointer()
+                                .on_click(
+                                    cx.listener(move |this, _, _, cx| this.use_skill(&chosen, cx)),
                                 )
                                 .child(
                                     div()
-                                        .mt(px(1.))
-                                        .text_size(px(11.5))
-                                        .line_clamp(2)
-                                        .text_color(content(0.45))
-                                        .child(about.clone()),
+                                        .mt(px(2.))
+                                        .child(icon("box", 13.).text_color(content(0.5))),
+                                )
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .flex()
+                                        .flex_col()
+                                        .child(
+                                            div()
+                                                .truncate()
+                                                .text_size(px(13.))
+                                                .text_color(content(0.95))
+                                                .child(name.clone()),
+                                        )
+                                        .child(
+                                            div()
+                                                .mt(px(1.))
+                                                .text_size(px(11.5))
+                                                .line_clamp(2)
+                                                .text_color(content(0.45))
+                                                .child(about.clone()),
+                                        ),
                                 ),
-                        ),
-                    at,
-                    false,
-                    )
-                    .into_any_element()
+                            at,
+                            false,
+                        )
+                        .into_any_element()
                 })
                 .collect();
             let empty = list.is_empty();
@@ -5943,7 +6052,8 @@ impl Shell {
         let controls = (80. + 28. * open_dock + 72.).max(width - dock_edge - 16. + 6.);
         let (added, removed) = self.diff_stat();
         let (add_color, remove_color) = diff_colors(self.look.diff);
-        let strip = width - strip_left - 12. - PLATE - 6. - controls - 10. - self.term.chips_width();
+        let strip =
+            width - strip_left - 12. - PLATE - 6. - controls - 10. - self.term.chips_width();
         *moving |= self.layout_tabs(strip, now, reduced);
         let tabs: Vec<AnyElement> = {
             // Pinned tabs live in the dock, not the strip.
@@ -6099,37 +6209,39 @@ impl Shell {
                         .items_center()
                         .gap(px(2.))
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .children(PANES.iter().take(VISIBLE_PANES).enumerate().map(|(ix, (glyph, name, _))| {
-                            let chosen = active_pane == Some(ix);
-                            div()
-                                .id(("pane-tab", ix))
-                                .h(px(26.))
-                                .px(px(6.))
-                                .rounded(px(crate::theme::RADIUS_MD))
-                                .flex()
-                                .items_center()
-                                .gap(px(5.))
-                                .text_size(px(12.5))
-                                .text_color(content(0.95))
-                                .when(chosen, |d| d.bg(content(0.1)))
-                                .when(!chosen, |d| d.hover(|s| s.bg(content(0.07))))
-                                .cursor_pointer()
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    if this.dock_active == Some(ix) {
-                                        this.dock_active = None;
-                                        this.chooser_since = Instant::now();
-                                        cx.notify();
+                        .children(PANES.iter().take(VISIBLE_PANES).enumerate().map(
+                            |(ix, (glyph, name, _))| {
+                                let chosen = active_pane == Some(ix);
+                                div()
+                                    .id(("pane-tab", ix))
+                                    .h(px(26.))
+                                    .px(px(6.))
+                                    .rounded(px(crate::theme::RADIUS_MD))
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(5.))
+                                    .text_size(px(12.5))
+                                    .text_color(content(0.95))
+                                    .when(chosen, |d| d.bg(content(0.1)))
+                                    .when(!chosen, |d| d.hover(|s| s.bg(content(0.07))))
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        if this.dock_active == Some(ix) {
+                                            this.dock_active = None;
+                                            this.chooser_since = Instant::now();
+                                            cx.notify();
+                                        } else {
+                                            this.open_pane(ix, cx);
+                                        }
+                                    }))
+                                    .child(icon(glyph, 15.).text_color(content(if chosen {
+                                        0.95
                                     } else {
-                                        this.open_pane(ix, cx);
-                                    }
-                                }))
-                                .child(icon(glyph, 15.).text_color(content(if chosen {
-                                    0.95
-                                } else {
-                                    0.5
-                                })))
-                                .when(chosen, |d| d.child(crate::i18n::t(*name)))
-                        })),
+                                        0.5
+                                    })))
+                                    .when(chosen, |d| d.child(crate::i18n::t(*name)))
+                            },
+                        )),
                 )
             })
             .child(nav_button(
@@ -6195,7 +6307,10 @@ impl Shell {
         if self.peek.as_ref().is_some_and(|p| !p.open && p.t.done(now)) {
             self.peek = None;
         }
-        if self.sidebar_options.is_some_and(|t| t.to < 0.5 && t.done(now)) {
+        if self
+            .sidebar_options
+            .is_some_and(|t| t.to < 0.5 && t.done(now))
+        {
             self.sidebar_options = None;
         }
         let open = self.sidebar.at(now);
@@ -6227,35 +6342,37 @@ impl Shell {
                 }
             });
         }
-        let contents =
-            |id: &'static str, this: &Self, cx: &mut Context<Self>, drawn: Vec<AnyElement>| {
-                div()
-                    .absolute()
-                    .top_0()
-                    .bottom_0()
-                    .left_0()
-                    .w(px(width))
-                    .flex()
-                    .flex_col()
-                    .child(this.project_header(cx))
-                    .children(this.sidebar_pulls(cx))
-                    .child(
-                        div()
-                            .relative()
-                            .flex_1()
-                            .min_h_0()
-                            .flex()
-                            .flex_col()
-                            .child(
-                                div()
-                                    .id(id)
-                                    .flex_1()
-                                    .min_h_0()
-                                    .overflow_y_scroll()
-                                    .on_scroll_wheel(cx.listener(|this, _, _, cx| {
-                                        this.sidebar_card_scrolled(cx)
-                                    }))
-                                    .child(
+        let contents = |id: &'static str,
+                        this: &Self,
+                        cx: &mut Context<Self>,
+                        drawn: Vec<AnyElement>| {
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left_0()
+                .w(px(width))
+                .flex()
+                .flex_col()
+                .child(this.project_header(cx))
+                .children(this.sidebar_pulls(cx))
+                .child(
+                    div()
+                        .relative()
+                        .flex_1()
+                        .min_h_0()
+                        .flex()
+                        .flex_col()
+                        .child(
+                            div()
+                                .id(id)
+                                .flex_1()
+                                .min_h_0()
+                                .overflow_y_scroll()
+                                .on_scroll_wheel(
+                                    cx.listener(|this, _, _, cx| this.sidebar_card_scrolled(cx)),
+                                )
+                                .child(
                                     div()
                                         .relative()
                                         .w_full()
@@ -6263,10 +6380,10 @@ impl Shell {
                                         .child(crate::hover_track::list("sidebar").pill())
                                         .children(drawn),
                                 ),
-                            )
-                            .child(this.filter_button(cx)),
-                    )
-            };
+                        )
+                        .child(this.filter_button(cx)),
+                )
+        };
         // A collapsed sidebar slides out over the workspace while the pointer holds it there.
         if open < 0.001 {
             let Some(peek) = self.peek.as_ref() else {
@@ -6323,9 +6440,10 @@ impl Shell {
     /// Whether the project's sidebar list shows this conversation (its checkout and filters pass).
     fn in_sidebar_list(&self, project: usize, conversation: usize) -> bool {
         let conversation = &self.conversations[conversation];
-        self.checkout_filter.get(&project).is_none_or(|wanted| {
-            *wanted == checkout_of(conversation, &self.projects[project].path)
-        }) && self.passes_filter(conversation)
+        self.checkout_filter
+            .get(&project)
+            .is_none_or(|wanted| *wanted == checkout_of(conversation, &self.projects[project].path))
+            && self.passes_filter(conversation)
     }
 
     /// The conversation whose title edits in place in its sidebar row, when a rename is
@@ -6513,39 +6631,38 @@ impl Shell {
             .into_iter()
             .enumerate()
             .map(|(at, provider)| {
-                track.row(
-                div()
-                    .id(("filter-provider", at))
-                    .h(px(30.))
-                    .px(px(8.))
-                    .rounded(px(crate::theme::RADIUS_MD))
-                    .flex()
-                    .items_center()
-                    .gap(px(9.))
-                    .text_size(px(13.))
-                    .text_color(content(0.92))
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        let hidden = &mut this.session_filter.hidden_providers;
-                        match hidden.iter().position(|p| *p == provider) {
-                            Some(found) => {
-                                hidden.remove(found);
-                            }
-                            None => hidden.push(provider),
-                        }
-                        cx.notify();
-                    }))
-                    .child(
-                        provider_mark(provider, 15.),
+                track
+                    .row(
+                        div()
+                            .id(("filter-provider", at))
+                            .h(px(30.))
+                            .px(px(8.))
+                            .rounded(px(crate::theme::RADIUS_MD))
+                            .flex()
+                            .items_center()
+                            .gap(px(9.))
+                            .text_size(px(13.))
+                            .text_color(content(0.92))
+                            .cursor_pointer()
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                let hidden = &mut this.session_filter.hidden_providers;
+                                match hidden.iter().position(|p| *p == provider) {
+                                    Some(found) => {
+                                        hidden.remove(found);
+                                    }
+                                    None => hidden.push(provider),
+                                }
+                                cx.notify();
+                            }))
+                            .child(provider_mark(provider, 15.))
+                            .child(div().flex_1().child(provider_title(provider)))
+                            .when(!filter.hidden_providers.contains(&provider), |d| {
+                                d.child(icon("check", 13.).text_color(content(0.8)))
+                            }),
+                        100 + at,
+                        false,
                     )
-                    .child(div().flex_1().child(provider_title(provider)))
-                    .when(!filter.hidden_providers.contains(&provider), |d| {
-                        d.child(icon("check", 13.).text_color(content(0.8)))
-                    }),
-                100 + at,
-                false,
-                )
-                .into_any_element()
+                    .into_any_element()
             })
             .collect();
         Some(
@@ -6697,7 +6814,12 @@ impl Shell {
     }
 
     /// The browser's custom profiles and the profile new tabs open in, kept with the settings.
-    pub fn save_browser_profiles(&mut self, profiles: Value, default: &str, cx: &mut Context<Self>) {
+    pub fn save_browser_profiles(
+        &mut self,
+        profiles: Value,
+        default: &str,
+        cx: &mut Context<Self>,
+    ) {
         self.settings["browserProfiles"] = profiles;
         self.settings["defaultBrowserProfile"] = json!(default);
         crate::panel_browser::note_settings(&self.settings);
@@ -7491,7 +7613,8 @@ impl Shell {
                             .text_color(content(0.95))
                             .child(name),
                     )
-                    .child(chevron_down().flex_shrink_0()),
+                    .child(chevron_down().flex_shrink_0())
+                    .children(self.other_projects_badge().map(|b| self.badge_view(b))),
             )
             .child(div().flex_1())
             .children(self.sidebar_search_button(cx))
@@ -7551,7 +7674,11 @@ impl Shell {
     }
 
     fn open_project_sub(&mut self, sub: ProjectSub, cx: &mut Context<Self>) {
-        if self.project_menu.as_ref().is_some_and(|m| m.sub != Some(sub)) {
+        if self
+            .project_menu
+            .as_ref()
+            .is_some_and(|m| m.sub != Some(sub))
+        {
             self.save_project_scripts(true);
         }
         let Some(ix) = self.current_project else {
@@ -7861,36 +7988,36 @@ impl Shell {
                    cx: &mut Context<Self>| {
             let active = sub == Some(target);
             track.row_named(
-            div()
-                .id(id)
-                .h(px(32.))
-                .px(px(8.))
-                .rounded(px(crate::theme::RADIUS_MD))
-                .flex()
-                .items_center()
-                .gap(px(10.))
-                .text_size(px(13.))
-                .text_color(content(0.92))
-                .cursor_pointer()
-                .when(active, |d| d.bg(content(0.09)))
-                .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                    if *hovered {
-                        this.open_project_sub(target, cx);
-                    }
-                }))
-                .on_click(cx.listener(move |this, _, _, cx| this.open_project_sub(target, cx)))
-                .child(icon(glyph, 15.).text_color(content(0.65)))
-                .child(div().flex_shrink_0().child(label))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_size(px(12.))
-                        .text_color(content(0.42))
-                        .children(value),
-                )
-                .child(icon("chevron-right", 12.).text_color(content(0.45))),
+                div()
+                    .id(id)
+                    .h(px(32.))
+                    .px(px(8.))
+                    .rounded(px(crate::theme::RADIUS_MD))
+                    .flex()
+                    .items_center()
+                    .gap(px(10.))
+                    .text_size(px(13.))
+                    .text_color(content(0.92))
+                    .cursor_pointer()
+                    .when(active, |d| d.bg(content(0.09)))
+                    .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                        if *hovered {
+                            this.open_project_sub(target, cx);
+                        }
+                    }))
+                    .on_click(cx.listener(move |this, _, _, cx| this.open_project_sub(target, cx)))
+                    .child(icon(glyph, 15.).text_color(content(0.65)))
+                    .child(div().flex_shrink_0().child(label))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(px(12.))
+                            .text_color(content(0.42))
+                            .children(value),
+                    )
+                    .child(icon("chevron-right", 12.).text_color(content(0.45))),
                 id,
                 active,
             )
@@ -8007,61 +8134,61 @@ impl Shell {
                             target: Option<String>,
                             cx: &mut Context<Self>| {
                     crate::hover_track::list("checkout-list").row(
-                    div()
-                        .id(("checkout-row", id))
-                        .min_h(px(44.))
-                        .px(px(8.))
-                        .rounded(px(crate::theme::RADIUS_MD))
-                        .flex()
-                        .items_center()
-                        .gap(px(9.))
-                        .cursor_pointer()
-                        .when(focus, |d| d.bg(content(0.09)))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            match target.clone() {
-                                Some(path) => {
-                                    this.checkout_filter.insert(index, path);
+                        div()
+                            .id(("checkout-row", id))
+                            .min_h(px(44.))
+                            .px(px(8.))
+                            .rounded(px(crate::theme::RADIUS_MD))
+                            .flex()
+                            .items_center()
+                            .gap(px(9.))
+                            .cursor_pointer()
+                            .when(focus, |d| d.bg(content(0.09)))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                match target.clone() {
+                                    Some(path) => {
+                                        this.checkout_filter.insert(index, path);
+                                    }
+                                    None => {
+                                        this.checkout_filter.remove(&index);
+                                    }
                                 }
-                                None => {
-                                    this.checkout_filter.remove(&index);
-                                }
-                            }
-                            this.close_project_menu();
-                            cx.notify();
-                        }))
-                        .child(icon(glyph, 15.).text_color(content(0.6)))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .flex()
-                                .flex_col()
-                                .child(
-                                    div()
-                                        .truncate()
-                                        .text_size(px(13.))
-                                        .text_color(content(0.95))
-                                        .child(name),
-                                )
-                                .child(
-                                    div()
-                                        .truncate()
-                                        .text_size(px(11.5))
-                                        .text_color(content(0.45))
-                                        .child(about),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(12.))
-                                .text_color(content(0.45))
-                                .child(count.to_string()),
-                        )
-                        .when(chosen, |d| {
-                            d.child(icon("check", 13.).text_color(content(0.8)))
-                        }),
-                    id,
-                    focus,
+                                this.close_project_menu();
+                                cx.notify();
+                            }))
+                            .child(icon(glyph, 15.).text_color(content(0.6)))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .flex()
+                                    .flex_col()
+                                    .child(
+                                        div()
+                                            .truncate()
+                                            .text_size(px(13.))
+                                            .text_color(content(0.95))
+                                            .child(name),
+                                    )
+                                    .child(
+                                        div()
+                                            .truncate()
+                                            .text_size(px(11.5))
+                                            .text_color(content(0.45))
+                                            .child(about),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(content(0.45))
+                                    .child(count.to_string()),
+                            )
+                            .when(chosen, |d| {
+                                d.child(icon("check", 13.).text_color(content(0.8)))
+                            }),
+                        id,
+                        focus,
                     )
                 };
                 let mut list: Vec<AnyElement> = vec![
@@ -8145,62 +8272,70 @@ impl Shell {
                     .enumerate()
                     .map(|(at, project)| {
                         let info = &self.projects[project];
-                        crate::hover_track::list("project-list").row(
-                        div()
-                            .id(("project-pick", at))
-                            .h(px(40.))
-                            .px(px(8.))
-                            .rounded(px(crate::theme::RADIUS_MD))
-                            .flex()
-                            .items_center()
-                            .gap(px(8.))
-                            .cursor_pointer()
-                            .when(selected == at, |d| d.bg(content(0.09)))
-                            .on_click(
-                                cx.listener(move |this, _, _, cx| this.switch_project(project, cx)),
-                            )
-                            .on_mouse_down(
-                                MouseButton::Right,
-                                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                                    cx.stop_propagation();
-                                    this.open_context_menu(MenuTarget::Project(project), event, cx);
-                                }),
-                            )
-                            .child(
+                        crate::hover_track::list("project-list")
+                            .row(
                                 div()
-                                    .w(px(14.))
-                                    .flex_shrink_0()
-                                    .when(current == Some(project), |d| {
-                                        d.child(icon("check", 13.).text_color(content(0.8)))
-                                    }),
+                                    .id(("project-pick", at))
+                                    .h(px(40.))
+                                    .px(px(8.))
+                                    .rounded(px(crate::theme::RADIUS_MD))
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(8.))
+                                    .cursor_pointer()
+                                    .when(selected == at, |d| d.bg(content(0.09)))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.switch_project(project, cx)
+                                    }))
+                                    .on_mouse_down(
+                                        MouseButton::Right,
+                                        cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                                            cx.stop_propagation();
+                                            this.open_context_menu(
+                                                MenuTarget::Project(project),
+                                                event,
+                                                cx,
+                                            );
+                                        }),
+                                    )
+                                    .child(
+                                        div().w(px(14.)).flex_shrink_0().when(
+                                            current == Some(project),
+                                            |d| {
+                                                d.child(icon("check", 13.).text_color(content(0.8)))
+                                            },
+                                        ),
+                                    )
+                                    .child(
+                                        div()
+                                            .w(px(24.))
+                                            .flex_shrink_0()
+                                            .child(self.project_avatar_for(project, 24.)),
+                                    )
+                                    .child(
+                                        div()
+                                            .min_w_0()
+                                            .truncate()
+                                            .text_size(px(13.))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(content(0.95))
+                                            .child(info.name.clone()),
+                                    )
+                                    .children(
+                                        self.project_badge(project).map(|b| self.badge_view(b)),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_shrink_0()
+                                            .font_family("Menlo")
+                                            .text_size(px(11.))
+                                            .text_color(content(0.4))
+                                            .child(tilde_parent(&info.path)),
+                                    ),
+                                at,
+                                selected == at,
                             )
-                            .child(
-                                div()
-                                    .w(px(24.))
-                                    .flex_shrink_0()
-                                    .child(self.project_avatar_for(project, 24.)),
-                            )
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .truncate()
-                                    .text_size(px(13.))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(content(0.95))
-                                    .child(info.name.clone()),
-                            )
-                            .child(
-                                div()
-                                    .flex_shrink_0()
-                                    .font_family("Menlo")
-                                    .text_size(px(11.))
-                                    .text_color(content(0.4))
-                                    .child(tilde_parent(&info.path)),
-                            ),
-                        at,
-                        selected == at,
-                        )
-                        .into_any_element()
+                            .into_any_element()
                     })
                     .collect();
                 let count = list.len().min(9) as f32;
@@ -8451,13 +8586,17 @@ impl Shell {
                     Vec::new()
                 };
                 let scripts_open = expanded == Some("scripts");
-        let scripts_rows: Vec<AnyElement> = if scripts_open {
-            vec![self.scripts_fields_view(index, cx)]
-        } else {
-            Vec::new()
-        };
-        let extra = (move_rows.len() + editor_rows.len()) as f32 * 28.
-            + if scripts_open { crate::project_scripts_view::SETTINGS_HEIGHT } else { 0. };
+                let scripts_rows: Vec<AnyElement> = if scripts_open {
+                    vec![self.scripts_fields_view(index, cx)]
+                } else {
+                    Vec::new()
+                };
+                let extra = (move_rows.len() + editor_rows.len()) as f32 * 28.
+                    + if scripts_open {
+                        crate::project_scripts_view::SETTINGS_HEIGHT
+                    } else {
+                        0.
+                    };
                 let reveal_path = project_path.clone();
                 let divider = || div().mx(px(4.)).my(px(5.)).h(px(1.)).bg(content(0.08));
                 let body = div()
@@ -8583,7 +8722,9 @@ impl Shell {
                     .child(crate::project_scripts_view::settings_row(
                         "project-scripts",
                         scripts_open,
-                        crate::project_scripts_view::click(cx, |this, cx| this.toggle_scripts_row(cx)),
+                        crate::project_scripts_view::click(cx, |this, cx| {
+                            this.toggle_scripts_row(cx)
+                        }),
                     ))
                     .children(scripts_rows)
                     .child(
@@ -8729,11 +8870,18 @@ impl Shell {
                             d.hover(|s| s.bg(content(0.07)).text_color(content(0.95)))
                         })
                         .on_click(cx.listener(|this, _, _, cx| this.open_pull_requests(cx)))
+                        .child(icon("git-pull-request", 14.).text_color(content(if active {
+                            0.9
+                        } else {
+                            0.55
+                        })))
                         .child(
-                            icon("git-pull-request", 14.)
-                                .text_color(content(if active { 0.9 } else { 0.55 })),
-                        )
-                        .child(div().flex_1().min_w_0().truncate().child(t("Pull requests"))),
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .child(t("Pull requests")),
+                        ),
                 )
                 .into_any_element(),
         )
@@ -8808,31 +8956,38 @@ impl Shell {
             *moving = true;
         }
         let shown = open.at(now).clamp(0., 1.);
-        let rows = crate::sidebar_items::ITEMS.iter().enumerate().map(|(at, item)| {
-            let on = self.sidebar_items.shown(item.id);
-            let id = item.id;
-            div()
-                .id(("sidebar-option", at))
-                .h(px(34.))
-                .pl(px(8.))
-                .pr(px(6.))
-                .rounded(px(crate::theme::RADIUS_MD))
-                .flex()
-                .items_center()
-                .gap(px(9.))
-                .text_size(px(13.))
-                .text_color(content(0.92))
-                .cursor_pointer()
-                .hover(|s| s.bg(content(0.07)))
-                .child(icon(item.icon, 14.).text_color(content(0.65)))
-                .child(div().flex_1().min_w_0().truncate().child(t(item.label)))
-                .child(crate::settings_pages::switch_track(SIDEBAR_SWITCH_ID + at, on, true))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.sidebar_items.toggle(id);
-                    crate::sidebar_items::save(&this.sidebar_items);
-                    cx.notify();
-                }))
-        });
+        let rows = crate::sidebar_items::ITEMS
+            .iter()
+            .enumerate()
+            .map(|(at, item)| {
+                let on = self.sidebar_items.shown(item.id);
+                let id = item.id;
+                div()
+                    .id(("sidebar-option", at))
+                    .h(px(34.))
+                    .pl(px(8.))
+                    .pr(px(6.))
+                    .rounded(px(crate::theme::RADIUS_MD))
+                    .flex()
+                    .items_center()
+                    .gap(px(9.))
+                    .text_size(px(13.))
+                    .text_color(content(0.92))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(content(0.07)))
+                    .child(icon(item.icon, 14.).text_color(content(0.65)))
+                    .child(div().flex_1().min_w_0().truncate().child(t(item.label)))
+                    .child(crate::settings_pages::switch_track(
+                        SIDEBAR_SWITCH_ID + at,
+                        on,
+                        true,
+                    ))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.sidebar_items.toggle(id);
+                        crate::sidebar_items::save(&this.sidebar_items);
+                        cx.notify();
+                    }))
+            });
         const WIDTH: f32 = 230.;
         Some(
             div()
@@ -9004,7 +9159,10 @@ impl Shell {
                 d.cursor_pointer()
                     .on_click(cx.listener(move |this, _, _, cx| this.open(index, cx)))
                     .on_drag(
-                        split_panes::ConvDrag { session: conversation.session_id.clone(), title: conversation.title.clone() },
+                        split_panes::ConvDrag {
+                            session: conversation.session_id.clone(),
+                            title: conversation.title.clone(),
+                        },
                         |drag, _, _, cx| cx.new(|_| split_panes::DragChip::new(drag.title.clone())),
                     )
             })
@@ -9111,8 +9269,8 @@ impl Shell {
                         .child(
                             div()
                                 .w_full()
-                                .max_w(px(760.))
-                                .px(px(24.))
+                                .max_w(px(832.))
+                                .px(px(23.))
                                 .pb(px(bottom))
                                 .child(content),
                         )
@@ -9270,8 +9428,7 @@ impl Shell {
             return None;
         }
         let project = self.projects.get(self.project_of(index)?)?;
-        let (shape, color) =
-            crate::project_avatar::look_of(&project.name, &project.appearance);
+        let (shape, color) = crate::project_avatar::look_of(&project.name, &project.appearance);
         *moving |= self.new_tab_fx.moving(now);
         Some(crate::new_tab_field::field(
             shape,
@@ -9821,52 +9978,53 @@ impl Shell {
                 .map(|(i, mode)| {
                     let (glyph, label, about, color) = access_look(mode);
                     let chosen = approval == mode;
-                    track.row(
-                    div()
-                        .id(("access", i))
-                        .px(px(8.))
-                        .py(px(6.))
-                        .rounded(px(crate::theme::RADIUS_MD))
-                        .flex()
-                        .gap(px(8.))
-                        .cursor_pointer()
-                        .when(chosen, |d| d.bg(content(0.1)))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            let ix = this.active_conversation();
-                            this.conversations[ix].approval = mode.to_owned();
-                            if mode == "full" {
-                                this.conversations[ix].planning = false;
-                            }
-                            this.composer_menu = None;
-                            cx.notify();
-                        }))
-                        .child(div().mt(px(2.)).child(icon(glyph, 15.).text_color(color)))
-                        .child(
+                    track
+                        .row(
                             div()
-                                .flex_1()
+                                .id(("access", i))
+                                .px(px(8.))
+                                .py(px(6.))
+                                .rounded(px(crate::theme::RADIUS_MD))
                                 .flex()
-                                .flex_col()
-                                .text_size(px(13.))
-                                .text_color(content(0.92))
-                                .child(label)
+                                .gap(px(8.))
+                                .cursor_pointer()
+                                .when(chosen, |d| d.bg(content(0.1)))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    let ix = this.active_conversation();
+                                    this.conversations[ix].approval = mode.to_owned();
+                                    if mode == "full" {
+                                        this.conversations[ix].planning = false;
+                                    }
+                                    this.composer_menu = None;
+                                    cx.notify();
+                                }))
+                                .child(div().mt(px(2.)).child(icon(glyph, 15.).text_color(color)))
                                 .child(
                                     div()
-                                        .text_size(px(11.5))
-                                        .text_color(content(0.5))
-                                        .child(about),
-                                ),
+                                        .flex_1()
+                                        .flex()
+                                        .flex_col()
+                                        .text_size(px(13.))
+                                        .text_color(content(0.92))
+                                        .child(label)
+                                        .child(
+                                            div()
+                                                .text_size(px(11.5))
+                                                .text_color(content(0.5))
+                                                .child(about),
+                                        ),
+                                )
+                                .when(chosen, |d| {
+                                    d.child(
+                                        div()
+                                            .mt(px(3.))
+                                            .child(icon("check", 13.).text_color(content(0.6))),
+                                    )
+                                }),
+                            i,
+                            chosen,
                         )
-                        .when(chosen, |d| {
-                            d.child(
-                                div()
-                                    .mt(px(3.))
-                                    .child(icon("check", 13.).text_color(content(0.6))),
-                            )
-                        }),
-                    i,
-                    chosen,
-                    )
-                    .into_any_element()
+                        .into_any_element()
                 }),
         );
         rows
@@ -10106,103 +10264,104 @@ impl Shell {
         ];
         for (index, provider) in tabs.iter().enumerate() {
             let active = scope == *provider;
-            let mark = provider_mark(provider, if active { 16. } else { 15. })
-                .into_any_element();
+            let mark = provider_mark(provider, if active { 16. } else { 15. }).into_any_element();
             rail_tabs
                 .push(tab(index + 1, active, mark, (*provider).to_owned(), cx).into_any_element());
         }
         let models = crate::hover_track::list("model-list");
-        let list: Vec<AnyElement> = rows
-            .iter()
-            .enumerate()
-            .map(|(index, row)| {
-                let (provider, id, star_id, favorite) =
-                    (row.provider, row.id.clone(), row.id.clone(), row.favorite);
-                models.row(
-                div()
-                    .id(("model-row", index))
-                    .flex()
-                    .items_center()
-                    .gap(px(4.))
-                    .rounded(px(crate::theme::RADIUS_MD))
-                    .when(row.selected || selected_row == Some(index), |d| {
-                        d.bg(content(0.09))
-                    })
-                    .child(
-                        div()
-                            .id(("model-pick", index))
-                            .flex_1()
-                            .min_w_0()
-                            .min_h(px(28.))
-                            .px(px(8.))
-                            .py(px(4.))
-                            .flex()
-                            .items_center()
-                            .gap(px(8.))
-                            .cursor_pointer()
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.pick_model(provider, id.clone(), cx)
-                            }))
-                            .child(
-                                    provider_mark(provider, 16.),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .flex()
-                                    .flex_col()
-                                    .child(
-                                        div()
-                                            .truncate()
-                                            .text_size(px(13.))
-                                            .text_color(content(0.95))
-                                            .child(row.name.clone()),
-                                    )
-                                    .when(favorites_scope, |d| {
-                                        d.child(
+        let list: Vec<AnyElement> =
+            rows.iter()
+                .enumerate()
+                .map(|(index, row)| {
+                    let (provider, id, star_id, favorite) =
+                        (row.provider, row.id.clone(), row.id.clone(), row.favorite);
+                    models
+                        .row(
+                            div()
+                                .id(("model-row", index))
+                                .flex()
+                                .items_center()
+                                .gap(px(4.))
+                                .rounded(px(crate::theme::RADIUS_MD))
+                                .when(row.selected || selected_row == Some(index), |d| {
+                                    d.bg(content(0.09))
+                                })
+                                .child(
+                                    div()
+                                        .id(("model-pick", index))
+                                        .flex_1()
+                                        .min_w_0()
+                                        .min_h(px(28.))
+                                        .px(px(8.))
+                                        .py(px(4.))
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(8.))
+                                        .cursor_pointer()
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.pick_model(provider, id.clone(), cx)
+                                        }))
+                                        .child(provider_mark(provider, 16.))
+                                        .child(
                                             div()
-                                                .truncate()
-                                                .text_size(px(12.))
-                                                .text_color(content(0.45))
-                                                .child(provider_title(provider)),
+                                                .flex_1()
+                                                .min_w_0()
+                                                .flex()
+                                                .flex_col()
+                                                .child(
+                                                    div()
+                                                        .truncate()
+                                                        .text_size(px(13.))
+                                                        .text_color(content(0.95))
+                                                        .child(row.name.clone()),
+                                                )
+                                                .when(favorites_scope, |d| {
+                                                    d.child(
+                                                        div()
+                                                            .truncate()
+                                                            .text_size(px(12.))
+                                                            .text_color(content(0.45))
+                                                            .child(provider_title(provider)),
+                                                    )
+                                                }),
                                         )
-                                    }),
-                            )
-                            .when(row.selected, |d| {
-                                d.child(icon("check", 13.).text_color(content(0.6)))
-                            }),
-                    )
-                    .child(
-                        div()
-                            .id(("model-star", index))
-                            .size(px(24.))
-                            .mr(px(4.))
-                            .flex_shrink_0()
-                            .rounded(px(crate::theme::RADIUS_SM))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .cursor_pointer()
-                            .hover(|s| s.bg(content(0.07)))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.toggle_favorite_model(provider, &star_id, cx)
-                            }))
-                            .child(
-                                theme_icon(if favorite { "star-fill" } else { "star" }, 14.)
-                                    .text_color(if favorite {
-                                        content(0.95)
-                                    } else {
-                                        content(0.4)
-                                    }),
-                            ),
-                    ),
-                    index,
-                    row.selected || selected_row == Some(index),
-                )
-                .into_any_element()
-            })
-            .collect();
+                                        .when(row.selected, |d| {
+                                            d.child(icon("check", 13.).text_color(content(0.6)))
+                                        }),
+                                )
+                                .child(
+                                    div()
+                                        .id(("model-star", index))
+                                        .size(px(24.))
+                                        .mr(px(4.))
+                                        .flex_shrink_0()
+                                        .rounded(px(crate::theme::RADIUS_SM))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .cursor_pointer()
+                                        .hover(|s| s.bg(content(0.07)))
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.toggle_favorite_model(provider, &star_id, cx)
+                                        }))
+                                        .child(
+                                            theme_icon(
+                                                if favorite { "star-fill" } else { "star" },
+                                                14.,
+                                            )
+                                            .text_color(if favorite {
+                                                content(0.95)
+                                            } else {
+                                                content(0.4)
+                                            }),
+                                        ),
+                                ),
+                            index,
+                            row.selected || selected_row == Some(index),
+                        )
+                        .into_any_element()
+                })
+                .collect();
         let empty = if loading {
             t("Carregando catálogo de modelos…")
         } else if !self.model_query.trim().is_empty() {
@@ -10473,19 +10632,15 @@ impl Shell {
                     clock,
                     self.runner_width.clone(),
                 ))
-                .child(
-                    div()
-                        .absolute()
-                        .left(px(x))
-                        .top(px(8. - hop))
-                        .child(crate::project_avatar::project_avatar_state(
-                            &project.name,
-                            &project.appearance,
-                            26.,
-                            crate::project_avatar::AvatarState::Idle,
-                            clock,
-                        )),
-                )
+                .child(div().absolute().left(px(x)).top(px(8. - hop)).child(
+                    crate::project_avatar::project_avatar_state(
+                        &project.name,
+                        &project.appearance,
+                        26.,
+                        crate::project_avatar::AvatarState::Idle,
+                        clock,
+                    ),
+                ))
                 .into_any_element(),
         )
     }
@@ -10580,7 +10735,10 @@ impl Shell {
                     {
                         window.paint_quad(
                             gpui::fill(
-                                Bounds::new(origin, gpui::size(px(crate::theme::CARET_WIDTH), line)),
+                                Bounds::new(
+                                    origin,
+                                    gpui::size(px(crate::theme::CARET_WIDTH), line),
+                                ),
                                 crate::theme::caret_color(),
                             )
                             .corner_radii(px(1.)),
@@ -10666,8 +10824,8 @@ impl Shell {
             .flex_shrink_0()
             .mx_auto()
             .w_full()
-            .max_w(px(760.))
-            .px(px(24.))
+            .max_w(px(832.))
+            .px(px(23.))
             .pb(px(14.))
             .child(
                 gpui::canvas(
@@ -10715,40 +10873,40 @@ impl Shell {
                             |(i, (name, about))| {
                                 let chosen = name.clone();
                                 crate::hover_track::list("mention-menu").row(
-                                div()
-                                    .id(("mention", i))
-                                    .h(px(30.))
-                                    .px(px(8.))
-                                    .rounded(px(crate::theme::RADIUS_MD))
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(10.))
-                                    .text_size(px(13.))
-                                    .text_color(content(0.92))
-                                    .cursor_pointer()
-                                    .when(i == selected, |d| d.bg(content(0.1)))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.accept_mention(&chosen, cx)
-                                    }))
-                                    .when(about.is_empty(), |d| {
-                                        d.child(crate::file_icons::file_icon(
-                                            name.rsplit('/').next().unwrap_or(&name),
-                                            false,
-                                            15.,
-                                        ))
-                                    })
-                                    .child(div().flex_shrink_0().child(name))
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .truncate()
-                                            .text_size(px(11.5))
-                                            .text_color(content(0.45))
-                                            .child(about),
-                                    ),
-                                i,
-                                i == selected,
+                                    div()
+                                        .id(("mention", i))
+                                        .h(px(30.))
+                                        .px(px(8.))
+                                        .rounded(px(crate::theme::RADIUS_MD))
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(10.))
+                                        .text_size(px(13.))
+                                        .text_color(content(0.92))
+                                        .cursor_pointer()
+                                        .when(i == selected, |d| d.bg(content(0.1)))
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.accept_mention(&chosen, cx)
+                                        }))
+                                        .when(about.is_empty(), |d| {
+                                            d.child(crate::file_icons::file_icon(
+                                                name.rsplit('/').next().unwrap_or(&name),
+                                                false,
+                                                15.,
+                                            ))
+                                        })
+                                        .child(div().flex_shrink_0().child(name))
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_w_0()
+                                                .truncate()
+                                                .text_size(px(11.5))
+                                                .text_color(content(0.45))
+                                                .child(about),
+                                        ),
+                                    i,
+                                    i == selected,
                                 )
                             },
                         )),
@@ -11116,7 +11274,9 @@ impl Shell {
                                                     this.send(cx);
                                                     this.context.skip_compact = false;
                                                 }))
-                                                .child(icon("arrow-up", 15.).text_color(content(0.7))),
+                                                .child(
+                                                    icon("arrow-up", 15.).text_color(content(0.7)),
+                                                ),
                                         )
                                     })
                                     .when(live || !queueing || has_text, |d| {
@@ -11148,18 +11308,28 @@ impl Shell {
                                             self.send_moving.set(true);
                                         }
                                         d.child(
-                                            crate::send_morph::button("send", face, &frame, has_text || stopping)
-                                                .ml(px(2.))
-                                                .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
-                                                    if stopping {
-                                                        this.stop(cx);
-                                                    } else if has_text {
-                                                        // Shift-click sends without compacting.
-                                                        this.context.skip_compact = event.modifiers().shift;
-                                                        this.send(cx);
-                                                        this.context.skip_compact = false;
-                                                    }
-                                                })),
+                                            crate::send_morph::button(
+                                                "send",
+                                                face,
+                                                &frame,
+                                                has_text || stopping,
+                                            )
+                                            .ml(px(2.))
+                                            .on_click(
+                                                cx.listener(
+                                                    move |this, event: &gpui::ClickEvent, _, cx| {
+                                                        if stopping {
+                                                            this.stop(cx);
+                                                        } else if has_text {
+                                                            // Shift-click sends without compacting.
+                                                            this.context.skip_compact =
+                                                                event.modifiers().shift;
+                                                            this.send(cx);
+                                                            this.context.skip_compact = false;
+                                                        }
+                                                    },
+                                                ),
+                                            ),
                                         )
                                     }),
                             ),
@@ -11218,9 +11388,7 @@ impl Shell {
                                         .absolute()
                                         .size_full(),
                                     )
-                                    .child(
-                                        provider_mark(provider, 16.),
-                                    )
+                                    .child(provider_mark(provider, 16.))
                                     .child(div().min_w_0().truncate().child(model))
                                     .children(effort.map(|e| {
                                         div().flex_shrink_0().text_color(content(0.4)).child(e)
@@ -11493,12 +11661,7 @@ impl Shell {
                     })
                     .child(match &step.image {
                         Some(path) => self
-                            .image_row(
- path,
- step,
-                                format!("image-step-{index}-{i}"),
-                                cx,
-                            )
+                            .image_row(path, step, format!("image-step-{index}-{i}"), cx)
                             .into_any_element(),
                         None => div().flex_1().min_w_0().child(text).into_any_element(),
                     })
@@ -11575,12 +11738,7 @@ impl Shell {
                             .text_color(content(0.45))
                             .child(match &step.image {
                                 Some(path) => self
-                                    .image_row(
- path,
- step,
-                                        format!("image-step-{index}-{i}"),
-                                        cx,
-                                    )
+                                    .image_row(path, step, format!("image-step-{index}-{i}"), cx)
                                     .into_any_element(),
                                 None => step_row(step).into_any_element(),
                             })
@@ -11608,17 +11766,41 @@ impl Shell {
                 d.child(
                     div().flex().justify_end().child(
                         div()
-                            .max_w(px(520.))
-                            .rounded(px(crate::theme::RADIUS_LG))
+                            .relative()
+                            .max_w(px(576.))
+                            .min_w_0()
                             .px(px(12.))
                             .py(px(8.))
-                            .bg(accent_wash(0.16))
                             .text_size(px(14.))
-                            .line_height(px(21.))
-                            .text_color(content(0.95))
+                            .line_height(px(20.))
+                            .text_color(content(1.))
+                            .child(
+                                gpui::canvas(
+                                    |_, _, _| {},
+                                    |bounds, _, window, _| {
+                                        let radius = if bounds.size.height <= px(37.) {
+                                            f32::from(bounds.size.height) * 0.5
+                                        } else {
+                                            12.
+                                        };
+                                        window.paint_quad(
+                                            gpui::fill(bounds, accent_wash(0.24))
+                                                .corner_radii(px(radius)),
+                                        );
+                                    },
+                                )
+                                .absolute()
+                                .top_0()
+                                .left_0()
+                                .size_full(),
+                            )
                             .child(transcript_select::user_text(
                                 &self.select,
-                                transcript_select::Reply { conversation, turn: index, user: true },
+                                transcript_select::Reply {
+                                    conversation,
+                                    turn: index,
+                                    user: true,
+                                },
                                 turn.user.clone(),
                                 styled_tokens(turn.user.clone()),
                             )),
@@ -11657,7 +11839,11 @@ impl Shell {
             .when(!turn.answer.is_empty(), |d| {
                 d.child(transcript_select::scoped(
                     &self.select,
-                    transcript_select::Reply { conversation, turn: index, user: false },
+                    transcript_select::Reply {
+                        conversation,
+                        turn: index,
+                        user: false,
+                    },
                     || {
                         // Linked pictures and videos, diagrams, formulas and HTML open from here.
                         let rich = crate::reply_view::Rich {
@@ -11677,9 +11863,10 @@ impl Shell {
                 ))
             })
             .when_some(self.delegated_tasks_view(turn, cx), |d, row| d.child(row))
-            .when_some(self.turn_actions(conversation, index, turn, cx), |d, row| {
-                d.child(row)
-            })
+            .when_some(
+                self.turn_actions(conversation, index, turn, cx),
+                |d, row| d.child(row),
+            )
             .when_some(
                 self.turn_review_view(conversation, index, turn, cx),
                 |d, review| d.child(review),
@@ -11738,7 +11925,9 @@ impl Shell {
             .on_click(cx.listener(move |this, _, _, cx| this.open_image_file(open.clone(), cx)))
             .child(mark)
             .child(div().flex_shrink_0().child(label))
-            .when_some(step.target.clone(), |d, target| d.child(target_chip(target)))
+            .when_some(step.target.clone(), |d, target| {
+                d.child(target_chip(target))
+            })
     }
 
     /// Opens an image an agent read or changed: the Files pane comes up with it in a tab.
@@ -11821,54 +12010,56 @@ impl Shell {
                 if since < 0.4 && !reduced {
                     *moving = true;
                 }
-                let cards = PANES.iter().take(VISIBLE_PANES).enumerate().map(|(ix, (glyph, name, about))| {
-                    // Each card rises in just after the one before it.
-                    let t = if reduced {
-                        1.
-                    } else {
-                        eased((since - ix as f32 * 0.03) / 0.22, Curve::Expo)
-                    };
-                    div()
-                        .id(("pane-option", ix))
-                        .relative()
-                        .top(px((1. - t) * 6.))
-                        .opacity(t)
-                        .w(px(205.))
-                        .h(px(70.))
-                        .p(px(12.))
-                        .rounded(px(crate::theme::RADIUS_LG))
-                        .border_1()
-                        .border_color(content(0.1))
-                        .bg(content(0.03))
-                        .hover(|s| s.bg(content(0.07)).border_color(content(0.16)))
-                        .cursor_pointer()
-                        .on_click(cx.listener(move |this, _, _, cx| this.open_pane(ix, cx)))
-                        .flex()
-                        .flex_col()
-                        .gap(px(5.))
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(px(8.))
-                                .child(icon(glyph, 15.).text_color(content(0.75)))
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .text_size(px(13.5))
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .text_color(content(0.95))
-                                        .child(crate::i18n::t(*name)),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .truncate()
-                                .text_size(px(12.))
-                                .text_color(content(0.5))
-                                .child(crate::i18n::t(*about)),
-                        )
-                });
+                let cards = PANES.iter().take(VISIBLE_PANES).enumerate().map(
+                    |(ix, (glyph, name, about))| {
+                        // Each card rises in just after the one before it.
+                        let t = if reduced {
+                            1.
+                        } else {
+                            eased((since - ix as f32 * 0.03) / 0.22, Curve::Expo)
+                        };
+                        div()
+                            .id(("pane-option", ix))
+                            .relative()
+                            .top(px((1. - t) * 6.))
+                            .opacity(t)
+                            .w(px(205.))
+                            .h(px(70.))
+                            .p(px(12.))
+                            .rounded(px(crate::theme::RADIUS_LG))
+                            .border_1()
+                            .border_color(content(0.1))
+                            .bg(content(0.03))
+                            .hover(|s| s.bg(content(0.07)).border_color(content(0.16)))
+                            .cursor_pointer()
+                            .on_click(cx.listener(move |this, _, _, cx| this.open_pane(ix, cx)))
+                            .flex()
+                            .flex_col()
+                            .gap(px(5.))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(8.))
+                                    .child(icon(glyph, 15.).text_color(content(0.75)))
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .text_size(px(13.5))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(content(0.95))
+                                            .child(crate::i18n::t(*name)),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_size(px(12.))
+                                    .text_color(content(0.5))
+                                    .child(crate::i18n::t(*about)),
+                            )
+                    },
+                );
                 div()
                     .flex_1()
                     .min_h_0()
@@ -12180,59 +12371,60 @@ impl Shell {
             let hit = hit.clone();
             let two_lines = matches!(hit, PaletteHit::File(..));
             rows.push(
-                crate::hover_track::list("palette").row(
-                div()
-                    .id(("palette-row", ix))
-                    .mx(px(6.))
-                    .h(px(if two_lines { 46. } else { 34. }))
-                    .px(px(8.))
-                    .rounded(px(crate::theme::RADIUS_MD))
-                    .flex()
-                    .items_center()
-                    .gap(px(10.))
-                    .text_size(px(13.))
-                    .text_color(content(0.9))
-                    .when(ix == selected, |d| d.bg(content(0.1)))
-                    .cursor_pointer()
-                    .on_click(cx.listener({
-                        let hit = hit.clone();
-                        move |this, _, _, cx| this.run_hit(hit.clone(), cx)
-                    }))
-                    .child(mark)
-                    .map(|d| {
-                        if two_lines {
-                            d.child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .flex()
-                                    .flex_col()
-                                    .child(div().truncate().child(title))
-                                    .children(detail.clone().map(|d| {
+                crate::hover_track::list("palette")
+                    .row(
+                        div()
+                            .id(("palette-row", ix))
+                            .mx(px(6.))
+                            .h(px(if two_lines { 46. } else { 34. }))
+                            .px(px(8.))
+                            .rounded(px(crate::theme::RADIUS_MD))
+                            .flex()
+                            .items_center()
+                            .gap(px(10.))
+                            .text_size(px(13.))
+                            .text_color(content(0.9))
+                            .when(ix == selected, |d| d.bg(content(0.1)))
+                            .cursor_pointer()
+                            .on_click(cx.listener({
+                                let hit = hit.clone();
+                                move |this, _, _, cx| this.run_hit(hit.clone(), cx)
+                            }))
+                            .child(mark)
+                            .map(|d| {
+                                if two_lines {
+                                    d.child(
                                         div()
-                                            .truncate()
-                                            .text_size(px(11.5))
-                                            .text_color(content(0.45))
-                                            .child(d)
-                                    })),
-                            )
-                        } else {
-                            d.child(div().flex_1().min_w_0().truncate().child(title))
-                                .children(detail.clone().map(|d| {
-                                    div()
-                                        .flex_shrink_0()
-                                        .max_w(px(170.))
-                                        .truncate()
-                                        .text_size(px(11.5))
-                                        .text_color(content(0.4))
-                                        .child(d)
-                                }))
-                        }
-                    }),
-                    ix,
-                    ix == selected,
-                )
-                .into_any_element(),
+                                            .flex_1()
+                                            .min_w_0()
+                                            .flex()
+                                            .flex_col()
+                                            .child(div().truncate().child(title))
+                                            .children(detail.clone().map(|d| {
+                                                div()
+                                                    .truncate()
+                                                    .text_size(px(11.5))
+                                                    .text_color(content(0.45))
+                                                    .child(d)
+                                            })),
+                                    )
+                                } else {
+                                    d.child(div().flex_1().min_w_0().truncate().child(title))
+                                        .children(detail.clone().map(|d| {
+                                            div()
+                                                .flex_shrink_0()
+                                                .max_w(px(170.))
+                                                .truncate()
+                                                .text_size(px(11.5))
+                                                .text_color(content(0.4))
+                                                .child(d)
+                                        }))
+                                }
+                            }),
+                        ix,
+                        ix == selected,
+                    )
+                    .into_any_element(),
             );
         }
         if hits.is_empty() {
@@ -12557,19 +12749,37 @@ impl Shell {
                     cx.notify();
                 }))
                 .child(t("Puxar da origem")).into_any_element());
-            list.push(div().id("env-branch-new").h(px(24.)).px(px(6.)).rounded(px(crate::theme::RADIUS_SM)).flex().items_center().text_size(px(12.)).text_color(content(0.6)).cursor_pointer().hover(|s| s.bg(content(0.07)))
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.branch_draft = Some(String::new());
-                    this.branch_error = None;
-                    cx.notify();
-                }))
-                .child(t("Criar branch…")).into_any_element());
+            list.push(
+                div()
+                    .id("env-branch-new")
+                    .h(px(24.))
+                    .px(px(6.))
+                    .rounded(px(crate::theme::RADIUS_SM))
+                    .flex()
+                    .items_center()
+                    .text_size(px(12.))
+                    .text_color(content(0.6))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(content(0.07)))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.branch_draft = Some(String::new());
+                        this.branch_error = None;
+                        cx.notify();
+                    }))
+                    .child(t("Criar branch…"))
+                    .into_any_element(),
+            );
             // The name field (git_sync.rs): the problem with the typed name shows under it, else
             // the host's last answer.
             if let Some(draft) = self.branch_draft.clone() {
                 let checked = git_sync::check_branch_name(&draft, &self.env_branches);
-                let problem = checked.as_ref().err().and_then(|p| git_sync::problem_text(*p));
-                let error = problem.map(str::to_owned).or_else(|| self.branch_error.clone());
+                let problem = checked
+                    .as_ref()
+                    .err()
+                    .and_then(|p| git_sync::problem_text(*p));
+                let error = problem
+                    .map(str::to_owned)
+                    .or_else(|| self.branch_error.clone());
                 list.push(git_sync::branch_field(
                     &draft,
                     error.as_deref(),
@@ -12790,7 +13000,13 @@ impl Shell {
         cx.notify();
     }
 
-    fn incoming_pulled(&mut self, generation: u64, ok: bool, value: &Value, cx: &mut Context<Self>) {
+    fn incoming_pulled(
+        &mut self,
+        generation: u64,
+        ok: bool,
+        value: &Value,
+        cx: &mut Context<Self>,
+    ) {
         let answer = git_sync::pull_answer(ok, value);
         let done = matches!(answer, git_sync::Pulled::Done(_));
         if !self.incoming.pulled(generation, answer) {
@@ -12871,12 +13087,24 @@ impl Shell {
         cx.notify();
     }
 
+    /// Tells the host which accent the phone should wear; only when it changed, unless forced
+    /// (a new connection to the host starts without it).
+    fn push_phone_look(&mut self, force: bool) {
+        let args = phone_look_args(&self.look);
+        let accent = args["accent"].as_str().unwrap_or_default().to_owned();
+        if force || accent != self.phone_accent {
+            self.phone_accent = accent;
+            self.backend.invoke("phone_look_set", args);
+        }
+    }
+
     /// Colors ease to the new look instead of cutting to it.
     fn set_look(&mut self, change: impl FnOnce(&mut Look), cx: &mut Context<Self>) {
         let now = Instant::now();
         self.palette_from = crate::theme::current_palette();
         change(&mut self.look);
         save_look(&self.look);
+        self.push_phone_look(false);
         self.palette_t = Tween::from_to(
             0.,
             1.,
@@ -12914,6 +13142,7 @@ impl Shell {
             (hue, 0.35 + v * 0.5)
         });
         save_look(&self.look);
+        self.push_phone_look(false);
         cx.notify();
     }
 
@@ -13007,28 +13236,30 @@ impl Shell {
             .flex_shrink_0()
             .pt(px(TITLE_BAR))
             .px(px(8.))
-            .child(crate::hover_track::list("settings-nav").row_named(
-                div()
-                    .id("settings-back")
-                    .h(px(30.))
-                    .mb(px(10.))
-                    .px(px(10.))
-                    .rounded(px(crate::theme::RADIUS_MD))
-                    .flex()
-                    .items_center()
-                    .gap(px(10.))
-                    .text_size(px(13.))
-                    .text_color(content(0.95))
-                    .cursor_pointer()
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.appearance = None;
-                        cx.notify();
-                    }))
-                    .child(icon("arrow-left", 16.).text_color(content(0.65)))
-                    .child(t("Voltar ao app")),
-                "settings-back",
-                false,
-            ))
+            .child(
+                crate::hover_track::list("settings-nav").row_named(
+                    div()
+                        .id("settings-back")
+                        .h(px(30.))
+                        .mb(px(10.))
+                        .px(px(10.))
+                        .rounded(px(crate::theme::RADIUS_MD))
+                        .flex()
+                        .items_center()
+                        .gap(px(10.))
+                        .text_size(px(13.))
+                        .text_color(content(0.95))
+                        .cursor_pointer()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.appearance = None;
+                            cx.notify();
+                        }))
+                        .child(icon("arrow-left", 16.).text_color(content(0.65)))
+                        .child(t("Voltar ao app")),
+                    "settings-back",
+                    false,
+                ),
+            )
             .child(
                 div()
                     .h(px(34.))
@@ -13044,8 +13275,7 @@ impl Shell {
                     .text_color(content(0.4))
                     .child(icon("search", 14.).text_color(content(0.45)))
                     .child(t("Buscar configurações")),
-            )
-            ;
+            );
         let nav_list = div()
             .id("settings-nav")
             .flex_1()
@@ -13068,49 +13298,49 @@ impl Shell {
                         let name: &'static str = name;
                         let chosen = name == self.settings_page;
                         crate::hover_track::list("settings-nav").row_named(
-                        div()
-                            .id(name)
-                            .h(px(32.))
-                            .px(px(10.))
-                            .rounded(px(crate::theme::RADIUS_MD))
-                            .flex()
-                            .items_center()
-                            .gap(px(10.))
-                            .text_size(px(13.))
-                            .text_color(content(if chosen { 1. } else { 0.72 }))
-                            .when(chosen, |d| d.bg(content(0.1)))
-                            .cursor_pointer()
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if this.settings_page == name {
-                                    return;
-                                }
-                                let order = |n: &str| {
-                                    SETTINGS_NAV
-                                        .iter()
-                                        .flat_map(|(_, items)| items.iter())
-                                        .position(|(_, i)| *i == n)
-                                        .unwrap_or(0)
-                                };
-                                this.settings_direction = if order(name) > order(this.settings_page)
-                                {
-                                    1.
+                            div()
+                                .id(name)
+                                .h(px(32.))
+                                .px(px(10.))
+                                .rounded(px(crate::theme::RADIUS_MD))
+                                .flex()
+                                .items_center()
+                                .gap(px(10.))
+                                .text_size(px(13.))
+                                .text_color(content(if chosen { 1. } else { 0.72 }))
+                                .when(chosen, |d| d.bg(content(0.1)))
+                                .cursor_pointer()
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    if this.settings_page == name {
+                                        return;
+                                    }
+                                    let order = |n: &str| {
+                                        SETTINGS_NAV
+                                            .iter()
+                                            .flat_map(|(_, items)| items.iter())
+                                            .position(|(_, i)| *i == n)
+                                            .unwrap_or(0)
+                                    };
+                                    this.settings_direction =
+                                        if order(name) > order(this.settings_page) {
+                                            1.
+                                        } else {
+                                            -1.
+                                        };
+                                    this.settings_page = name;
+                                    this.settings_since = Instant::now();
+                                    this.theme_menu = None;
+                                    this.load_settings_page();
+                                    cx.notify();
+                                }))
+                                .child(icon(glyph, 16.).text_color(content(if chosen {
+                                    0.9
                                 } else {
-                                    -1.
-                                };
-                                this.settings_page = name;
-                                this.settings_since = Instant::now();
-                                this.theme_menu = None;
-                                this.load_settings_page();
-                                cx.notify();
-                            }))
-                            .child(icon(glyph, 16.).text_color(content(if chosen {
-                                0.9
-                            } else {
-                                0.55
-                            })))
-                            .child(t(nav_label(name))),
-                        name,
-                        chosen,
+                                    0.55
+                                })))
+                                .child(t(nav_label(name))),
+                            name,
+                            chosen,
                         )
                     }))
             }));
@@ -13163,7 +13393,11 @@ impl Shell {
                     }),
                 )
                 // Over glass the app underneath fades out instead, so the desktop shows through.
-                .bg(if pane_fill().a < 0.5 { chrome_wash() } else { pane_opaque() })
+                .bg(if pane_fill().a < 0.5 {
+                    chrome_wash()
+                } else {
+                    pane_opaque()
+                })
                 .flex()
                 .child(
                     div()
@@ -13190,30 +13424,26 @@ impl Shell {
                         .overflow_hidden()
                         .child(div().opacity(page_t).child(bar))
                         .child(
-                            div()
-                                .flex_1()
-                                .min_h_0()
-                                .flex()
-                                .child(
-                                    div()
-                                        .id("settings-main")
-                                        .flex_1()
-                                        .min_w_0()
-                                        .h_full()
-                                        .overflow_y_scroll()
-                                        .child(
-                                            div()
-                                                .relative()
-                                                .top(px((1. - page_t) * 22. * self.settings_direction))
-                                                .opacity(page_t)
-                                                .w_full()
-                                                .max_w(px(crate::settings_pages::CONTENT_WIDTH))
-                                                .pt(px(16.))
-                                                .pb(px(40.))
-                                                .px(px(crate::settings_pages::CONTENT_INSET))
-                                                .child(body),
-                                        ),
-                                )
+                            div().flex_1().min_h_0().flex().child(
+                                div()
+                                    .id("settings-main")
+                                    .flex_1()
+                                    .min_w_0()
+                                    .h_full()
+                                    .overflow_y_scroll()
+                                    .child(
+                                        div()
+                                            .relative()
+                                            .top(px((1. - page_t) * 22. * self.settings_direction))
+                                            .opacity(page_t)
+                                            .w_full()
+                                            .max_w(px(crate::settings_pages::CONTENT_WIDTH))
+                                            .pt(px(16.))
+                                            .pb(px(40.))
+                                            .px(px(crate::settings_pages::CONTENT_INSET))
+                                            .child(body),
+                                    ),
+                            ),
                         ),
                 )
                 .children(crate::settings_connectors::overlay(
@@ -13328,7 +13558,11 @@ impl Shell {
         // Theme, as ThemeModePicker: three small windows to choose from.
         let modes = segmented_icons(
             "theme-mode",
-            &[("monitor", t("Sistema")), ("sun", t("Claro")), ("moon", t("Escuro"))],
+            &[
+                ("monitor", t("Sistema")),
+                ("sun", t("Claro")),
+                ("moon", t("Escuro")),
+            ],
             [0, 2, 1].iter().position(|m| *m == look.mode).unwrap_or(0),
             cx,
             |l, ix| l.mode = [0, 2, 1][ix],
@@ -13365,26 +13599,29 @@ impl Shell {
                 .enumerate()
                 .map(|(row, (ix, preset))| {
                     let highlighted = row == menu.selected;
-                    crate::hover_track::list("theme-menu").row(
-                    div()
-                        .id(("theme", ix))
-                        .h(px(30.))
-                        .px(px(7.))
-                        .rounded(px(crate::theme::RADIUS_MD))
-                        .flex()
-                        .items_center()
-                        .gap(px(8.))
-                        .text_size(px(13.))
-                        .text_color(content(0.92))
-                        .when(highlighted, |d| d.bg(content(0.1)))
-                        .cursor_pointer()
-                        .on_click(cx.listener(move |this, _, _, cx| this.pick_theme(ix, cx)))
-                        .child(swatch(ix))
-                        .child(crate::i18n::t(preset.name)),
-                    ix,
-                    highlighted,
-                    )
-                    .into_any_element()
+                    crate::hover_track::list("theme-menu")
+                        .row(
+                            div()
+                                .id(("theme", ix))
+                                .h(px(30.))
+                                .px(px(7.))
+                                .rounded(px(crate::theme::RADIUS_MD))
+                                .flex()
+                                .items_center()
+                                .gap(px(8.))
+                                .text_size(px(13.))
+                                .text_color(content(0.92))
+                                .when(highlighted, |d| d.bg(content(0.1)))
+                                .cursor_pointer()
+                                .on_click(
+                                    cx.listener(move |this, _, _, cx| this.pick_theme(ix, cx)),
+                                )
+                                .child(swatch(ix))
+                                .child(crate::i18n::t(preset.name)),
+                            ix,
+                            highlighted,
+                        )
+                        .into_any_element()
                 })
                 .collect();
             gpui::deferred(
@@ -14031,13 +14268,41 @@ const CLAUDE_ALIASES: [(&str, &str); 4] = [
 
 /// Earlier models Claude Code still takes by full name (`--model`), each with its effort levels.
 const CLAUDE_EARLIER: [(&str, &str, &[&str]); 8] = [
-    ("claude-fable-5", "Fable 5", &["low", "medium", "high", "xhigh", "max"]),
-    ("claude-opus-5", "Opus 5", &["low", "medium", "high", "xhigh", "max"]),
-    ("claude-opus-4-8", "Opus 4.8", &["low", "medium", "high", "xhigh", "max"]),
-    ("claude-opus-4-7", "Opus 4.7", &["low", "medium", "high", "xhigh", "max"]),
-    ("claude-opus-4-6", "Opus 4.6", &["low", "medium", "high", "max"]),
-    ("claude-sonnet-5", "Sonnet 5", &["low", "medium", "high", "xhigh", "max"]),
-    ("claude-sonnet-4-6", "Sonnet 4.6", &["low", "medium", "high", "max"]),
+    (
+        "claude-fable-5",
+        "Fable 5",
+        &["low", "medium", "high", "xhigh", "max"],
+    ),
+    (
+        "claude-opus-5",
+        "Opus 5",
+        &["low", "medium", "high", "xhigh", "max"],
+    ),
+    (
+        "claude-opus-4-8",
+        "Opus 4.8",
+        &["low", "medium", "high", "xhigh", "max"],
+    ),
+    (
+        "claude-opus-4-7",
+        "Opus 4.7",
+        &["low", "medium", "high", "xhigh", "max"],
+    ),
+    (
+        "claude-opus-4-6",
+        "Opus 4.6",
+        &["low", "medium", "high", "max"],
+    ),
+    (
+        "claude-sonnet-5",
+        "Sonnet 5",
+        &["low", "medium", "high", "xhigh", "max"],
+    ),
+    (
+        "claude-sonnet-4-6",
+        "Sonnet 4.6",
+        &["low", "medium", "high", "max"],
+    ),
     ("claude-haiku-4-5", "Haiku 4.5", &[]),
 ];
 
@@ -14066,7 +14331,10 @@ fn claude_catalog(mut models: Vec<ModelInfo>) -> Vec<ModelInfo> {
     }
     let rank = |name: &str| {
         let order = ["Fable", "Opus", "Sonnet", "Haiku"];
-        let family = order.iter().position(|f| name.starts_with(f)).unwrap_or(order.len());
+        let family = order
+            .iter()
+            .position(|f| name.starts_with(f))
+            .unwrap_or(order.len());
         let version: Vec<u32> = name
             .split_whitespace()
             .nth(1)
@@ -14473,6 +14741,7 @@ impl Render for Shell {
         let reduced = cx.reduce_motion();
         let size = window.viewport_size();
         self.window_active = window.is_window_active();
+        self.cards_seen();
         // The header's incoming check follows the selected conversation, its folder and its turns.
         if !self.conversations.is_empty() {
             let conversation = &self.conversations[self.active_conversation()];
@@ -14481,7 +14750,10 @@ impl Render for Shell {
                 conversation.worktree.clone(),
                 conversation.working(),
             );
-            if self.incoming.observe(&session, &folder, working, self.window_active) {
+            if self
+                .incoming
+                .observe(&session, &folder, working, self.window_active)
+            {
                 self.incoming_fetch();
             }
         }
@@ -14528,7 +14800,9 @@ impl Render for Shell {
         };
         let transcript = self.split_view(now, &mut moving, cx);
         // Settings → Aparência → Fundo do chat: under the card, clipped by its corner masks.
-        let empty_chat = self.conversations[self.active_conversation()].turns.is_empty();
+        let empty_chat = self.conversations[self.active_conversation()]
+            .turns
+            .is_empty();
         let chat_background = crate::chat_background::layer(&self.settings, empty_chat, window, cx);
         let menu = self.menu_view(now, &mut moving, cx);
         let open = self.sidebar.at(now);
@@ -14553,13 +14827,15 @@ impl Render for Shell {
                 || self.project_menu.is_some()
                 || self.confirm.is_some()
                 || self.first_run.active()
-                || self.viewer.visible(),
+                || self.viewer.visible()
+                || self.cards_visible(),
         );
         let composer_menu = self.composer_menu_view(now, &mut moving, cx);
         let usage_popup = self.usage_popup_view(now, &mut moving, cx);
         let resources_popup = self.resources_popup_view(now, &mut moving, cx);
         let context_popup = self.context_popup_view(now, &mut moving, cx);
         let sidebar_card = self.sidebar_card_view(now, &mut moving, cx);
+        let activity_cards = self.cards_view(cx);
         let project_menu = self.project_menu_view(now, &mut moving, cx);
         let filter_menu = self.filter_menu_view(now, &mut moving, cx);
         let sidebar_options = self.sidebar_options_view(now, &mut moving, cx);
@@ -14779,6 +15055,7 @@ impl Render for Shell {
             .children(resources_popup)
             .children(context_popup)
             .children(sidebar_card)
+            .children(activity_cards)
             .children(add_menu)
             .children(environment)
             .children(incoming_card)
@@ -14821,8 +15098,20 @@ mod tests {
     #[test]
     fn a_tab_is_dashed_only_for_unsent_text() {
         let mut drafts = HashMap::new();
-        drafts.insert(0, Draft { text: "hello".into(), ..Default::default() });
-        drafts.insert(1, Draft { text: " \n".into(), ..Default::default() });
+        drafts.insert(
+            0,
+            Draft {
+                text: "hello".into(),
+                ..Default::default()
+            },
+        );
+        drafts.insert(
+            1,
+            Draft {
+                text: " \n".into(),
+                ..Default::default()
+            },
+        );
         assert!(tab_has_draft(&drafts, 0));
         assert!(!tab_has_draft(&drafts, 1));
         assert!(!tab_has_draft(&drafts, 2));
@@ -14836,18 +15125,33 @@ mod tests {
     #[test]
     fn a_saved_draft_is_restored_with_the_caret_at_its_end() {
         let draft = restored_draft("olá");
-        assert_eq!((draft.text.as_str(), draft.cursor, draft.anchor), ("olá", "olá".len(), "olá".len()));
+        assert_eq!(
+            (draft.text.as_str(), draft.cursor, draft.anchor),
+            ("olá", "olá".len(), "olá".len())
+        );
     }
 
     #[test]
     fn restoring_fills_empty_composers_and_keeps_typed_text() {
-        let sessions = vec!["a".to_owned(), "b".to_owned(), String::new(), "c".to_owned()];
+        let sessions = vec![
+            "a".to_owned(),
+            "b".to_owned(),
+            String::new(),
+            "c".to_owned(),
+        ];
         let saved = HashMap::from([
             ("session:a".to_owned(), "from host".to_owned()),
             ("session:b".to_owned(), "older".to_owned()),
         ]);
         let mut drafts = HashMap::new();
-        drafts.insert(1, Draft { text: "typed".into(), cursor: 5, anchor: 5 });
+        drafts.insert(
+            1,
+            Draft {
+                text: "typed".into(),
+                cursor: 5,
+                anchor: 5,
+            },
+        );
         restore_drafts(&mut drafts, &sessions, &saved);
         assert_eq!(drafts[&0].text, "from host");
         assert_eq!(drafts[&0].cursor, "from host".len());
@@ -14865,7 +15169,10 @@ mod tests {
             Some(Duration::from_millis(250))
         );
         assert_eq!(draft_save_delay(edited, edited + DRAFT_SAVE_QUIET), None);
-        assert_eq!(draft_save_delay(edited, edited + Duration::from_secs(5)), None);
+        assert_eq!(
+            draft_save_delay(edited, edited + Duration::from_secs(5)),
+            None
+        );
     }
 }
 
@@ -14879,35 +15186,37 @@ fn segmented_icons(
 ) -> Div {
     // Its own row, so the control takes the width of its options, not of the page.
     div().flex().child(
-    div()
-        .flex()
-        .flex_none()
-        .gap(px(2.))
-        .p(px(3.))
-        .rounded(px(crate::theme::RADIUS_MD))
-        .bg(content(0.06))
-        .children(options.iter().enumerate().map(|(ix, (glyph, label))| {
-            let on = ix == chosen;
-            div()
-                .id((id, ix))
-                .flex()
-                .items_center()
-                .justify_center()
-                .gap(px(7.))
-                .h(px(28.))
-                .w(px(108.))
-                .rounded(px(crate::theme::RADIUS_SM))
-                .text_size(px(13.))
-                .text_color(content(if on { 1. } else { 0.65 }))
-                .when(on, |d| d.bg(content(0.14)))
-                .when(!on, |d| d.hover(|s| s.bg(content(0.06))))
-                .cursor_pointer()
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.set_look(|look| apply(look, ix), cx)
-                }))
-                .child(icon(glyph, 16.).text_color(content(if on { 0.95 } else { 0.6 })))
-                .child(*label)
-        })),
+        div()
+            .flex()
+            .flex_none()
+            .gap(px(2.))
+            .p(px(3.))
+            .rounded(px(crate::theme::RADIUS_MD))
+            .bg(content(0.06))
+            .children(options.iter().enumerate().map(|(ix, (glyph, label))| {
+                let on = ix == chosen;
+                div()
+                    .id((id, ix))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .gap(px(7.))
+                    .h(px(28.))
+                    .w(px(108.))
+                    .rounded(px(crate::theme::RADIUS_SM))
+                    .text_size(px(13.))
+                    .text_color(content(if on { 1. } else { 0.65 }))
+                    .when(on, |d| d.bg(content(0.14)))
+                    .when(!on, |d| d.hover(|s| s.bg(content(0.06))))
+                    .cursor_pointer()
+                    .on_click(
+                        cx.listener(move |this, _, _, cx| {
+                            this.set_look(|look| apply(look, ix), cx)
+                        }),
+                    )
+                    .child(icon(glyph, 16.).text_color(content(if on { 0.95 } else { 0.6 })))
+                    .child(*label)
+            })),
     )
 }
 
@@ -14940,8 +15249,18 @@ mod claude_catalog_tests {
         assert_eq!(
             names,
             [
-                "Fable 5.1", "Fable 5", "Opus 5.5", "Opus 5", "Opus 4.8", "Opus 4.7", "Opus 4.6",
-                "Sonnet 5.5", "Sonnet 5", "Sonnet 4.6", "Haiku 5.5", "Haiku 4.5",
+                "Fable 5.1",
+                "Fable 5",
+                "Opus 5.5",
+                "Opus 5",
+                "Opus 4.8",
+                "Opus 4.7",
+                "Opus 4.6",
+                "Sonnet 5.5",
+                "Sonnet 5",
+                "Sonnet 4.6",
+                "Haiku 5.5",
+                "Haiku 4.5",
             ]
         );
         assert_eq!(list[2].id, "opus", "the alias stays what is sent");

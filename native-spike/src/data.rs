@@ -274,7 +274,11 @@ impl Conversation {
         let Some(last) = self.messages.iter().rposition(|m| m["role"] == "user") else {
             return self.rebuild();
         };
-        let before = self.messages[..last].iter().filter(|m| m["role"] == "user").count() + usize::from(last > 0 && self.messages[0]["role"] != "user");
+        let before = self.messages[..last]
+            .iter()
+            .filter(|m| m["role"] == "user")
+            .count()
+            + usize::from(last > 0 && self.messages[0]["role"] != "user");
         if self.turns.len() < before {
             return self.rebuild();
         }

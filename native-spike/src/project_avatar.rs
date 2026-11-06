@@ -155,12 +155,20 @@ fn body_image(shape: &'static str, color: u32, side: f32) -> Arc<Image> {
 fn shape_path(shape: &str) -> &'static str {
     match shape {
         "square" => r#"<rect x="7" y="7" width="50" height="50" rx="16"/>"#,
-        "cloud" => r#"<path d="M20 50a13 13 0 0 1-2.6-25.7A16 16 0 0 1 47 21.5 14.5 14.5 0 0 1 45 50z"/>"#,
-        "ghost" => r#"<path d="M10 30a22 22 0 0 1 44 0v22c0 3-3 4-5 2l-4-3-4 3a4 4 0 0 1-5 0l-4-3-4 3a4 4 0 0 1-5 0l-4-3-4 3c-2 2-5 1-5-2z"/>"#,
-        "hex" => r#"<path d="M28 6.5a8 8 0 0 1 8 0l16 9.3a8 8 0 0 1 4 7V41a8 8 0 0 1-4 7l-16 9.3a8 8 0 0 1-8 0L12 48a8 8 0 0 1-4-7V22.8a8 8 0 0 1 4-7z"/>"#,
+        "cloud" => {
+            r#"<path d="M20 50a13 13 0 0 1-2.6-25.7A16 16 0 0 1 47 21.5 14.5 14.5 0 0 1 45 50z"/>"#
+        }
+        "ghost" => {
+            r#"<path d="M10 30a22 22 0 0 1 44 0v22c0 3-3 4-5 2l-4-3-4 3a4 4 0 0 1-5 0l-4-3-4 3a4 4 0 0 1-5 0l-4-3-4 3c-2 2-5 1-5-2z"/>"#
+        }
+        "hex" => {
+            r#"<path d="M28 6.5a8 8 0 0 1 8 0l16 9.3a8 8 0 0 1 4 7V41a8 8 0 0 1-4 7l-16 9.3a8 8 0 0 1-8 0L12 48a8 8 0 0 1-4-7V22.8a8 8 0 0 1 4-7z"/>"#
+        }
         "capsule" => r#"<rect x="13" y="5" width="38" height="54" rx="19"/>"#,
         "tv" => r#"<rect x="6" y="15" width="52" height="42" rx="13"/>"#,
-        "bean" => r#"<path d="M32 6c15 0 26 10 26 25 0 8-3 12-6 15-4 4-10 12-22 12C16 58 6 48 6 33 6 17 17 6 32 6z"/>"#,
+        "bean" => {
+            r#"<path d="M32 6c15 0 26 10 26 25 0 8-3 12-6 15-4 4-10 12-22 12C16 58 6 48 6 33 6 17 17 6 32 6z"/>"#
+        }
         _ => r#"<circle cx="32" cy="32" r="26"/>"#,
     }
 }
@@ -385,15 +393,24 @@ mod tests {
 
     #[test]
     fn a_saved_look_wins_and_an_old_accessory_falls_back_to_a_shape() {
-        let look = resolve_look("p", &json!({"color":"#112233","eyes":"happy","accessory":"cloud"}));
-        assert_eq!((look.color, look.eyes, look.shape), (0x112233, "happy", "cloud"));
+        let look = resolve_look(
+            "p",
+            &json!({"color":"#112233","eyes":"happy","accessory":"cloud"}),
+        );
+        assert_eq!(
+            (look.color, look.eyes, look.shape),
+            (0x112233, "happy", "cloud")
+        );
         let old = resolve_look("p", &json!({"accessory":"crown"}));
         assert!(SHAPES.contains(&old.shape));
     }
 
     #[test]
     fn the_same_name_keeps_its_default_look() {
-        let (a, b) = (resolve_look("site", &Value::Null), resolve_look("site", &Value::Null));
+        let (a, b) = (
+            resolve_look("site", &Value::Null),
+            resolve_look("site", &Value::Null),
+        );
         assert_eq!((a.color, a.shape), (b.color, b.shape));
     }
 

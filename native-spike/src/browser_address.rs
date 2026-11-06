@@ -90,7 +90,11 @@ pub fn note_visit(history: &mut Vec<String>, url: &str) {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Suggestion {
     /// An open tab: selecting it switches to the tab.
-    Tab { id: String, url: String, title: String },
+    Tab {
+        id: String,
+        url: String,
+        title: String,
+    },
     /// A page visited before.
     History { url: String },
     /// Search for the typed text.
@@ -183,7 +187,8 @@ pub fn suggestions(
         .collect();
     // Typing something that would be searched, not opened: offer the search itself.
     if !query.is_empty()
-        && normalize_input(query).is_some_and(|url| url.starts_with("https://www.google.com/search?q="))
+        && normalize_input(query)
+            .is_some_and(|url| url.starts_with("https://www.google.com/search?q="))
     {
         rows.truncate(SUGGESTIONS - 1);
         rows.push(Suggestion::Search {
@@ -243,7 +248,10 @@ mod tests {
             normalize_input("https://a.dev/x").as_deref(),
             Some("https://a.dev/x")
         );
-        assert_eq!(normalize_input("about:blank").as_deref(), Some("about:blank"));
+        assert_eq!(
+            normalize_input("about:blank").as_deref(),
+            Some("about:blank")
+        );
         assert_eq!(
             normalize_input("example.com").as_deref(),
             Some("https://example.com")
@@ -299,8 +307,16 @@ mod tests {
     #[test]
     fn suggestions_list_tabs_then_history_then_a_search() {
         let tabs = vec![
-            ("tab-1".to_owned(), "https://docs.rs".to_owned(), "Docs".to_owned()),
-            ("tab-2".to_owned(), "https://now.dev".to_owned(), String::new()),
+            (
+                "tab-1".to_owned(),
+                "https://docs.rs".to_owned(),
+                "Docs".to_owned(),
+            ),
+            (
+                "tab-2".to_owned(),
+                "https://now.dev".to_owned(),
+                String::new(),
+            ),
             ("tab-3".to_owned(), "about:blank".to_owned(), String::new()),
         ];
         let history = vec![
@@ -318,7 +334,12 @@ mod tests {
         assert_eq!(docs.len(), 3);
         assert_eq!(docs[0].title(), "Docs");
         assert_eq!(docs[0].detail(), Some("https://docs.rs"));
-        assert_eq!(docs[2], Suggestion::Search { query: "DOCS".into() });
+        assert_eq!(
+            docs[2],
+            Suggestion::Search {
+                query: "DOCS".into()
+            }
+        );
         assert_eq!(
             suggestion_url(&docs[2]).as_deref(),
             Some("https://www.google.com/search?q=DOCS")

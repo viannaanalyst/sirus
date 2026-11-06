@@ -564,13 +564,17 @@ impl Shell {
     /// Instruct now: steers the running reply with the draft and its attachments, whatever the
     /// "steer while running" setting says. The queued path is `queue_draft`.
     pub(super) fn steer_draft_now(&mut self, cx: &mut Context<Self>) {
-        let by_default = self.settings["steerWhileRunning"].as_bool().unwrap_or(false);
+        let by_default = self.settings["steerWhileRunning"]
+            .as_bool()
+            .unwrap_or(false);
         self.send_with(!by_default, cx);
     }
 
     /// Puts the draft and its attachments in the queue, whatever the setting says.
     pub(super) fn queue_draft(&mut self, cx: &mut Context<Self>) {
-        let by_default = self.settings["steerWhileRunning"].as_bool().unwrap_or(false);
+        let by_default = self.settings["steerWhileRunning"]
+            .as_bool()
+            .unwrap_or(false);
         self.send_with(by_default, cx);
     }
 
@@ -581,7 +585,10 @@ impl Shell {
             return;
         }
         // A typed `/compact` is the command, never text for the model (context_meter.rs).
-        let typed = self.drafts.get(&ix).map_or(String::new(), |d| d.text.clone());
+        let typed = self
+            .drafts
+            .get(&ix)
+            .map_or(String::new(), |d| d.text.clone());
         let files = self.attachments.get(&ix).is_some_and(|a| !a.is_empty());
         if self.typed_compact(ix, &typed, files, cx) {
             return;
@@ -685,7 +692,13 @@ impl Shell {
     }
 
     /// Steers, queues or sends, as Sirus Code's `send` decides after any redirect.
-    pub(super) fn dispatch(&mut self, out: Outgoing, redirect: bool, invert: bool, cx: &mut Context<Self>) {
+    pub(super) fn dispatch(
+        &mut self,
+        out: Outgoing,
+        redirect: bool,
+        invert: bool,
+        cx: &mut Context<Self>,
+    ) {
         // Compact and send: a heavy conversation idle past its prompt cache compacts first and
         // the message follows (context_meter.rs).
         if !self.queues.has_items(&out.session_id) && self.compacts_first(out.ix) {
@@ -733,10 +746,9 @@ impl Shell {
         attachments: &[(String, String)],
         wait: SteerWait,
     ) {
-        let call = self.backend.invoke(
-            "steer_turn",
-            steer_args(session_id, text, attachments),
-        );
+        let call = self
+            .backend
+            .invoke("steer_turn", steer_args(session_id, text, attachments));
         self.waiting.insert(call, Waiting::Steered(wait));
     }
 
@@ -1443,7 +1455,7 @@ impl Shell {
                                         .child(t(RETRY_ONLY)),
                                 )
                             },
-                        )
+                        ),
                 )
                 .children(actions)
         });

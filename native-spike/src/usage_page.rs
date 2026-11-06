@@ -22,8 +22,12 @@ const WEEK_MINUTES: i64 = 7 * 24 * 60;
 /// Days of readings kept in the file.
 const KEEP_DAYS: usize = 21;
 /// The providers whose quota the host reads (`provider_usage::reports_usage`).
-const LIMIT_PROVIDERS: [(&str, &str); 4] =
-    [("codex", "Codex"), ("claude", "Claude"), ("cursor", "Cursor"), ("opencode", "OpenCode")];
+const LIMIT_PROVIDERS: [(&str, &str); 4] = [
+    ("codex", "Codex"),
+    ("claude", "Claude"),
+    ("cursor", "Cursor"),
+    ("opencode", "OpenCode"),
+];
 const AMBER: u32 = 0xe9b44c;
 
 // ---------------------------------------------------------------- providers and history
@@ -64,7 +68,14 @@ impl Prov {
             Prov::Claude => 0xc9774a,
             Prov::Codex => 0x1ea3b8,
             Prov::OpenCode => 0x9180ee,
-            Prov::Other => return gpui::hsla(0., 0., if crate::theme::is_light() { 0.5 } else { 0.55 }, 1.),
+            Prov::Other => {
+                return gpui::hsla(
+                    0.,
+                    0.,
+                    if crate::theme::is_light() { 0.5 } else { 0.55 },
+                    1.,
+                );
+            }
         };
         let mut color: gpui::Hsla = rgb(base).into();
         if crate::theme::is_light() {
@@ -146,12 +157,25 @@ pub(crate) fn parse_prices(value: &Value) -> HashMap<String, Price> {
         .as_object()
         .into_iter()
         .flatten()
-        .filter_map(|(name, p)| Some((name.clone(), Price { rates: rates_of(p)?, fast: rates_of(&p["fast"]) })))
+        .filter_map(|(name, p)| {
+            Some((
+                name.clone(),
+                Price {
+                    rates: rates_of(p)?,
+                    fast: rates_of(&p["fast"]),
+                },
+            ))
+        })
         .collect()
 }
 
 fn list_price(input: f64, output: f64, cache_read: Option<f64>) -> Rates {
-    Rates { input, cache_read: cache_read.unwrap_or(input / 10.), cache_write: input * 1.25, output }
+    Rates {
+        input,
+        cache_read: cache_read.unwrap_or(input / 10.),
+        cache_write: input * 1.25,
+        output,
+    }
 }
 
 /// Anthropic list prices, used when the downloaded table has no entry; the longest prefix wins.
@@ -179,7 +203,11 @@ fn built_in_price(model: &str) -> Option<Rates> {
 /// The rates an entry was billed at: fast prices for fast entries when the table has them.
 fn entry_rates(entry: &Entry, prices: &HashMap<String, Price>) -> Option<Rates> {
     match prices.get(&entry.model) {
-        Some(price) => Some(if entry.fast { price.fast.unwrap_or(price.rates) } else { price.rates }),
+        Some(price) => Some(if entry.fast {
+            price.fast.unwrap_or(price.rates)
+        } else {
+            price.rates
+        }),
         None => built_in_price(&entry.model),
     }
 }
@@ -191,7 +219,10 @@ pub(crate) fn entry_cost(entry: &Entry, prices: &HashMap<String, Price>) -> Opti
     }
     let r = entry_rates(entry, prices)?;
     Some(
-        (entry.input * r.input + entry.cached * r.cache_read + entry.cache_write * r.cache_write + entry.output * r.output)
+        (entry.input * r.input
+            + entry.cached * r.cache_read
+            + entry.cache_write * r.cache_write
+            + entry.output * r.output)
             / 1_000_000.,
     )
 }
@@ -240,14 +271,17 @@ pub(crate) struct Summary {
 
 pub(crate) fn date_start(date: NaiveDate) -> i64 {
     let midnight = date.and_hms_opt(0, 0, 0).unwrap_or_default();
-    Local
-        .from_local_datetime(&midnight)
-        .earliest()
-        .map_or_else(|| midnight.and_utc().timestamp_millis(), |d| d.timestamp_millis())
+    Local.from_local_datetime(&midnight).earliest().map_or_else(
+        || midnight.and_utc().timestamp_millis(),
+        |d| d.timestamp_millis(),
+    )
 }
 
 pub(crate) fn local_date(ms: i64) -> NaiveDate {
-    Local.timestamp_millis_opt(ms).single().map_or_else(|| chrono::Utc::now().date_naive(), |d| d.date_naive())
+    Local
+        .timestamp_millis_opt(ms)
+        .single()
+        .map_or_else(|| chrono::Utc::now().date_naive(), |d| d.date_naive())
 }
 
 /// Bucket starts covering the range, oldest first: 24 hours, or `range` local days ending today.
@@ -257,17 +291,30 @@ pub(crate) fn bucket_starts(range: u32, now: i64) -> Vec<i64> {
         return (0..24).map(|i| last - (23 - i) * HOUR).collect();
     }
     let today = local_date(now);
-    (0..range as i64).map(|i| date_start(today - chrono::Duration::days(range as i64 - 1 - i))).collect()
+    (0..range as i64)
+        .map(|i| date_start(today - chrono::Duration::days(range as i64 - 1 - i)))
+        .collect()
 }
 
-pub(crate) fn summarize(entries: &[Entry], range: u32, now: i64, prices: &HashMap<String, Price>) -> Summary {
+pub(crate) fn summarize(
+    entries: &[Entry],
+    range: u32,
+    now: i64,
+    prices: &HashMap<String, Price>,
+) -> Summary {
     let starts = bucket_starts(range, now);
     let hourly = range <= 1;
     let from = starts[0];
     let index: HashMap<i64, usize> = starts.iter().enumerate().map(|(i, s)| (*s, i)).collect();
     let mut out = Summary {
         hourly,
-        buckets: starts.iter().map(|at| Bucket { at: *at, ..Default::default() }).collect(),
+        buckets: starts
+            .iter()
+            .map(|at| Bucket {
+                at: *at,
+                ..Default::default()
+            })
+            .collect(),
         ..Default::default()
     };
     let mut totals: [ProviderTotal; 4] = Default::default();
@@ -305,17 +352,23 @@ pub(crate) fn summarize(entries: &[Entry], range: u32, now: i64, prices: &HashMa
         totals[p].cost += cost.unwrap_or(0.);
         totals[p].tokens += amount;
         sessions[p].insert(entry.session.as_str());
-        let row = models.entry((p, entry.model.as_str())).or_insert_with(|| ModelRow {
-            provider: prov,
-            model: entry.model.clone(),
-            cost: None,
-            tokens: 0.,
-        });
+        let row = models
+            .entry((p, entry.model.as_str()))
+            .or_insert_with(|| ModelRow {
+                provider: prov,
+                model: entry.model.clone(),
+                cost: None,
+                tokens: 0.,
+            });
         row.tokens += amount;
         if let Some(cost) = cost {
             row.cost = Some(row.cost.unwrap_or(0.) + cost);
         }
-        let start = if hourly { entry.at.div_euclid(HOUR) * HOUR } else { date_start(local_date(entry.at)) };
+        let start = if hourly {
+            entry.at.div_euclid(HOUR) * HOUR
+        } else {
+            date_start(local_date(entry.at))
+        };
         if let Some(slot) = index.get(&start) {
             out.buckets[*slot].cost[p] += cost.unwrap_or(0.);
             out.buckets[*slot].tokens[p] += amount;
@@ -351,9 +404,11 @@ impl Bucket {
 pub(crate) fn sort_models(rows: &mut [ModelRow], metric: Metric) {
     rows.sort_by(|a, b| match metric {
         Metric::Tokens => b.tokens.total_cmp(&a.tokens),
-        Metric::Cost => {
-            b.cost.unwrap_or(-1.).total_cmp(&a.cost.unwrap_or(-1.)).then(b.tokens.total_cmp(&a.tokens))
-        }
+        Metric::Cost => b
+            .cost
+            .unwrap_or(-1.)
+            .total_cmp(&a.cost.unwrap_or(-1.))
+            .then(b.tokens.total_cmp(&a.tokens)),
     });
 }
 
@@ -374,7 +429,11 @@ pub(crate) fn stack(buckets: &[Bucket], metric: Metric, hidden: [bool; 4]) -> (V
 
 /// `stack` with each provider's share of the stack between 0 (hidden) and 1 (shown), so hiding
 /// or showing one can slide the others instead of jumping.
-pub(crate) fn stack_weighted(buckets: &[Bucket], metric: Metric, weights: [f64; 4]) -> (Vec<Layer>, f64) {
+pub(crate) fn stack_weighted(
+    buckets: &[Bucket],
+    metric: Metric,
+    weights: [f64; 4],
+) -> (Vec<Layer>, f64) {
     let mut below = vec![0.; buckets.len()];
     let mut layers = Vec::new();
     for (p, prov) in PROVS.iter().enumerate() {
@@ -390,7 +449,11 @@ pub(crate) fn stack_weighted(buckets: &[Bucket], metric: Metric, weights: [f64; 
                 below[i] + running
             })
             .collect();
-        layers.push(Layer { prov: *prov, bottom: below.clone(), top: top.clone() });
+        layers.push(Layer {
+            prov: *prov,
+            bottom: below.clone(),
+            top: top.clone(),
+        });
         below = top;
     }
     let max = below.iter().copied().fold(0., f64::max);
@@ -398,7 +461,11 @@ pub(crate) fn stack_weighted(buckets: &[Bucket], metric: Metric, weights: [f64; 
 }
 
 fn frac(part: f64, whole: f64) -> f32 {
-    if whole > 0. { (part / whole).clamp(0., 1.) as f32 } else { 0. }
+    if whole > 0. {
+        (part / whole).clamp(0., 1.) as f32
+    } else {
+        0.
+    }
 }
 
 // ---------------------------------------------------------------- number and date text
@@ -409,7 +476,9 @@ fn separators(en: bool) -> (char, char) {
 
 fn trim_zeros(text: String, decimal: char) -> String {
     if text.contains(decimal) {
-        text.trim_end_matches('0').trim_end_matches(decimal).to_owned()
+        text.trim_end_matches('0')
+            .trim_end_matches(decimal)
+            .to_owned()
     } else {
         text
     }
@@ -435,7 +504,11 @@ pub(crate) fn usd(value: f64, en: bool) -> String {
     let cents = (value.abs() * 100.).round() as u64;
     let sign = if value < 0. { "-" } else { "" };
     let prefix = if en { "$" } else { "US$ " };
-    format!("{sign}{prefix}{}{decimal}{:02}", grouped(cents / 100, en), cents % 100)
+    format!(
+        "{sign}{prefix}{}{decimal}{:02}",
+        grouped(cents / 100, en),
+        cents % 100
+    )
 }
 
 /// A count in full, with no abbreviation: "2.070.123.456" (pt) or "2,070,123,456" (en).
@@ -482,22 +555,38 @@ pub(crate) fn share(part: f64, whole: f64, en: bool) -> String {
     if percent > 0. && percent < 0.1 {
         return format!("<0{decimal}1%");
     }
-    format!("{}%", trim_zeros(format!("{percent:.1}").replace('.', &decimal.to_string()), decimal))
+    format!(
+        "{}%",
+        trim_zeros(
+            format!("{percent:.1}").replace('.', &decimal.to_string()),
+            decimal
+        )
+    )
 }
 
 /// A percentage with at most one decimal: "14,3", "8".
 pub(crate) fn percent(value: f64, en: bool) -> String {
     let (_, decimal) = separators(en);
-    trim_zeros(format!("{value:.1}").replace('.', &decimal.to_string()), decimal)
+    trim_zeros(
+        format!("{value:.1}").replace('.', &decimal.to_string()),
+        decimal,
+    )
 }
 
-const MONTHS_PT: [&str; 12] = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
-const MONTHS_EN: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const MONTHS_PT: [&str; 12] = [
+    "jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez",
+];
+const MONTHS_EN: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
 const DAYS_PT: [&str; 7] = ["seg", "ter", "qua", "qui", "sex", "sáb", "dom"];
 const DAYS_EN: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 fn local_time(ms: i64) -> NaiveDateTime {
-    Local.timestamp_millis_opt(ms).single().map_or_else(|| chrono::Utc::now().naive_utc(), |d| d.naive_local())
+    Local
+        .timestamp_millis_opt(ms)
+        .single()
+        .map_or_else(|| chrono::Utc::now().naive_utc(), |d| d.naive_local())
 }
 
 /// An axis label: "14:00" for hours, "5 nov" / "Nov 5" for days.
@@ -507,16 +596,25 @@ pub(crate) fn bucket_label(at: i64, hourly: bool, en: bool) -> String {
         return format!("{:02}:00", when.hour());
     }
     let month = if en { MONTHS_EN } else { MONTHS_PT }[when.month0() as usize];
-    if en { format!("{month} {}", when.day()) } else { format!("{} {month}", when.day()) }
+    if en {
+        format!("{month} {}", when.day())
+    } else {
+        format!("{} {month}", when.day())
+    }
 }
 
 /// The tooltip's title: the weekday and date, with the hour's span for hourly buckets.
 pub(crate) fn bucket_title(at: i64, hourly: bool, en: bool) -> String {
     let when = local_time(at);
-    let weekday = if en { DAYS_EN } else { DAYS_PT }[when.weekday().num_days_from_monday() as usize];
+    let weekday =
+        if en { DAYS_EN } else { DAYS_PT }[when.weekday().num_days_from_monday() as usize];
     let date = bucket_label(at, false, en);
     if hourly {
-        format!("{weekday}, {date} · {:02}:00–{:02}:00", when.hour(), (when.hour() + 1) % 24)
+        format!(
+            "{weekday}, {date} · {:02}:00–{:02}:00",
+            when.hour(),
+            (when.hour() + 1) % 24
+        )
     } else {
         format!("{weekday}, {date}")
     }
@@ -541,7 +639,9 @@ pub(crate) fn parse_windows(value: &Value) -> Vec<Win> {
             id: w["id"].as_str().unwrap_or("").to_owned(),
             used: w["usedPercent"].as_f64(),
             // Seconds or milliseconds, as the shell's own reading accepts both.
-            resets_at: w["resetsAt"].as_i64().map(|at| if at > 100_000_000_000 { at } else { at * 1000 }),
+            resets_at: w["resetsAt"]
+                .as_i64()
+                .map(|at| if at > 100_000_000_000 { at } else { at * 1000 }),
             minutes: w["durationMinutes"].as_i64(),
         })
         .collect()
@@ -558,8 +658,11 @@ fn ordered(windows: &[Win]) -> Vec<&Win> {
 pub(crate) fn weekly(windows: &[Win]) -> Option<&Win> {
     windows.iter().find(|w| {
         !w.id.starts_with("base_model_inference/")
-            && !["_opus", "_sonnet", "_oauth_apps"].iter().any(|s| w.id.ends_with(s))
-            && (w.minutes == Some(WEEK_MINUTES) || matches!(w.id.as_str(), "seven_day" | "opencode-go/weekly"))
+            && !["_opus", "_sonnet", "_oauth_apps"]
+                .iter()
+                .any(|s| w.id.ends_with(s))
+            && (w.minutes == Some(WEEK_MINUTES)
+                || matches!(w.id.as_str(), "seven_day" | "opencode-go/weekly"))
             && w.used.is_some()
             && w.resets_at.is_some()
     })
@@ -579,7 +682,11 @@ fn window_label(w: &Win) -> &'static str {
         "cursor/member" => t("Limite individual"),
         "cursor/team" => t("Pool da equipe"),
         id if id.starts_with("base_model_inference/") => {
-            if w.minutes == Some(300) { t("5 horas · modelo reserva") } else { t("Semanal · modelo reserva") }
+            if w.minutes == Some(300) {
+                t("5 horas · modelo reserva")
+            } else {
+                t("Semanal · modelo reserva")
+            }
         }
         _ if w.minutes == Some(300) => t("Uso em 5 horas"),
         _ if w.minutes == Some(WEEK_MINUTES) => t("Uso semanal"),
@@ -609,7 +716,10 @@ impl Readings {
     }
 
     pub(crate) fn load() -> Self {
-        std::fs::read_to_string(Self::path()).ok().and_then(|text| Self::from_json(&text)).unwrap_or_default()
+        std::fs::read_to_string(Self::path())
+            .ok()
+            .and_then(|text| Self::from_json(&text))
+            .unwrap_or_default()
     }
 
     pub(crate) fn from_json(text: &str) -> Option<Self> {
@@ -639,7 +749,9 @@ impl Readings {
         }
         days.insert(day.to_owned(), reading);
         while days.len() > KEEP_DAYS {
-            let Some(oldest) = days.keys().next().cloned() else { break };
+            let Some(oldest) = days.keys().next().cloned() else {
+                break;
+            };
             days.remove(&oldest);
         }
         true
@@ -651,7 +763,9 @@ impl Readings {
 
     /// Whether the account has a reading from before `day`; without one it is the first day.
     pub(crate) fn has_earlier(&self, key: &str, day: &str) -> bool {
-        self.accounts.get(key).is_some_and(|days| days.keys().any(|d| d.as_str() < day))
+        self.accounts
+            .get(key)
+            .is_some_and(|days| days.keys().any(|d| d.as_str() < day))
     }
 }
 
@@ -698,10 +812,25 @@ pub(crate) fn pace(
     };
     let today = (used - start).max(0.);
     let allowance = (100. - start).max(0.) / f64::from(days_left.max(1));
-    let fill = if allowance > 0. { today / allowance } else if today > 0. { f64::INFINITY } else { 0. };
+    let fill = if allowance > 0. {
+        today / allowance
+    } else if today > 0. {
+        f64::INFINITY
+    } else {
+        0.
+    };
     let span = duration_minutes.filter(|m| *m > 0).unwrap_or(WEEK_MINUTES) * 60_000;
     let elapsed = (1. - (resets_at - now) as f64 / span as f64).clamp(0., 1.);
-    Pace { start, today, allowance, fill, over: today > allowance + 1e-9, days_left, elapsed, ahead: used > elapsed * 100. }
+    Pace {
+        start,
+        today,
+        allowance,
+        fill,
+        over: today > allowance + 1e-9,
+        days_left,
+        elapsed,
+        ahead: used > elapsed * 100.,
+    }
 }
 
 // ---------------------------------------------------------------- the window's state
@@ -811,7 +940,13 @@ impl Counts {
 
     /// The value to show for `key` at `now` on its way to `target`, and whether it is still
     /// counting. A zero duration (reduced motion) shows the target at once.
-    pub(super) fn sample(&mut self, key: String, target: f64, now: Instant, duration: f32) -> (f64, bool) {
+    pub(super) fn sample(
+        &mut self,
+        key: String,
+        target: f64,
+        now: Instant,
+        duration: f32,
+    ) -> (f64, bool) {
         let count = self.0.entry(key).or_insert_with(|| Count::at_rest(0., now));
         let value = count.sample(target, now, duration);
         (value, !count.done(now))
@@ -820,7 +955,11 @@ impl Counts {
 
 /// Whether a reading that arrives starts the count-up: the first data, or data that differs from
 /// what the page shows. A refresh that changes nothing leaves the numbers where they are.
-pub(crate) fn data_changed(shown: Option<(&[Entry], &HashMap<String, Price>)>, entries: &[Entry], prices: &HashMap<String, Price>) -> bool {
+pub(crate) fn data_changed(
+    shown: Option<(&[Entry], &HashMap<String, Price>)>,
+    entries: &[Entry],
+    prices: &HashMap<String, Price>,
+) -> bool {
     match shown {
         None => true,
         Some((old, old_prices)) => old != entries || old_prices != prices,
@@ -842,16 +981,34 @@ impl State {
 
     /// Slides a segmented control's thumb from option `from` to `to`.
     fn slide(&mut self, id: &'static str, from: usize, to: usize, now: Instant, reduced: bool) {
-        let tween = self.segs.entry(id).or_insert_with(|| Tween::still(from as f32, now));
+        let tween = self
+            .segs
+            .entry(id)
+            .or_insert_with(|| Tween::still(from as f32, now));
         if (tween.to - from as f32).abs() > 0.5 {
             tween.snap(from as f32, now);
         }
-        tween.set(to as f32, now, if reduced { 0. } else { SLIDE }, Curve::Expo);
+        tween.set(
+            to as f32,
+            now,
+            if reduced { 0. } else { SLIDE },
+            Curve::Expo,
+        );
     }
 
     /// The number to show for `target` under `key`, counting up from what showed before.
-    fn counted(&self, key: String, target: f64, now: Instant, reduced: bool, moving: &mut bool) -> f64 {
-        let (value, running) = self.counts.borrow_mut().sample(key, target, now, if reduced { 0. } else { COUNT });
+    fn counted(
+        &self,
+        key: String,
+        target: f64,
+        now: Instant,
+        reduced: bool,
+        moving: &mut bool,
+    ) -> f64 {
+        let (value, running) =
+            self.counts
+                .borrow_mut()
+                .sample(key, target, now, if reduced { 0. } else { COUNT });
         if running {
             *moving = true;
         }
@@ -873,7 +1030,9 @@ impl Shell {
     pub(super) fn close_usage_page(&mut self, cx: &mut Context<Self>) -> bool {
         let length = secs(cx, CLOSE);
         let page = &mut self.usage_page;
-        let Some(open) = page.open.as_mut() else { return false };
+        let Some(open) = page.open.as_mut() else {
+            return false;
+        };
         if page.closing {
             return false;
         }
@@ -917,7 +1076,9 @@ impl Shell {
         page.segs.clear();
         page.swap = Tween::still(1., now);
         page.restart_chart(now, reduced);
-        page.vis = page.hidden.map(|h| Tween::still(if h { 0. } else { 1. }, now));
+        page.vis = page
+            .hidden
+            .map(|h| Tween::still(if h { 0. } else { 1. }, now));
         self.usage_load_history(cx);
         if self.usage_page.tab == Tab::Limits {
             self.usage_load_limits(false, cx);
@@ -942,16 +1103,24 @@ impl Shell {
                         .as_array()
                         .into_iter()
                         .flatten()
-                        .map(|p| format!("{}: {}", p["provider"].as_str().unwrap_or(""), p["message"].as_str().unwrap_or("")))
+                        .map(|p| {
+                            format!(
+                                "{}: {}",
+                                p["provider"].as_str().unwrap_or(""),
+                                p["message"].as_str().unwrap_or("")
+                            )
+                        })
                         .collect();
                     let mut models: Vec<&str> = entries.iter().map(|e| e.model.as_str()).collect();
                     models.sort_unstable();
                     models.dedup();
                     // Without prices the built-in list applies.
-                    let prices = message_actions::settle(backend.request("usage_prices", json!({ "models": models })))
-                        .await
-                        .ok()
-                        .map(|value| parse_prices(&value));
+                    let prices = message_actions::settle(
+                        backend.request("usage_prices", json!({ "models": models })),
+                    )
+                    .await
+                    .ok()
+                    .map(|value| parse_prices(&value));
                     (Some(entries), problems, prices)
                 }
                 Err(_) => (None, Vec::new(), None),
@@ -963,7 +1132,10 @@ impl Shell {
                     (Some(entries), _) => {
                         // The count-up starts here, when the reading arrives, not when the popup opened.
                         let next_prices = prices.clone().unwrap_or_else(|| page.prices.clone());
-                        let shown = page.entries.as_ref().map(|old| (old.as_slice(), &page.prices));
+                        let shown = page
+                            .entries
+                            .as_ref()
+                            .map(|old| (old.as_slice(), &page.prices));
                         if data_changed(shown, &entries, &next_prices) {
                             page.counts.borrow_mut().restart();
                         }
@@ -1051,17 +1223,28 @@ impl Shell {
         cx.notify();
     }
 
-    fn usage_limits_arrived(&mut self, generation: u64, ix: usize, reply: Result<Value, String>, cx: &mut Context<Self>) {
+    fn usage_limits_arrived(
+        &mut self,
+        generation: u64,
+        ix: usize,
+        reply: Result<Value, String>,
+        cx: &mut Context<Self>,
+    ) {
         if generation != self.usage_page.generation {
             return;
         }
         let page = &mut self.usage_page;
-        let Some(card) = page.cards.get_mut(ix) else { return };
+        let Some(card) = page.cards.get_mut(ix) else {
+            return;
+        };
         card.loaded = true;
         match reply {
             Ok(value) => {
                 card.windows = parse_windows(&value);
-                card.email = value["account"]["email"].as_str().or(value["account"]["name"].as_str()).map(str::to_owned);
+                card.email = value["account"]["email"]
+                    .as_str()
+                    .or(value["account"]["name"].as_str())
+                    .map(str::to_owned);
                 card.note = value["note"].as_str().map(str::to_owned);
                 // Only a reading that arrives is written, and only the day's first.
                 if let Some(w) = weekly(&card.windows) {
@@ -1086,7 +1269,12 @@ impl Shell {
         let length = secs(cx, STACK);
         let page = &mut self.usage_page;
         page.hidden[ix] = !page.hidden[ix];
-        page.vis[ix].set(if page.hidden[ix] { 0. } else { 1. }, Instant::now(), length, Curve::Expo);
+        page.vis[ix].set(
+            if page.hidden[ix] { 0. } else { 1. },
+            Instant::now(),
+            length,
+            Curve::Expo,
+        );
         cx.notify();
     }
 
@@ -1136,10 +1324,20 @@ impl Shell {
         ];
         let ranges: Vec<(u32, String)> = RANGES
             .iter()
-            .map(|r| (*r, if *r == 1 { t("24 h").to_owned() } else { tf("{} dias", &[r]) }))
+            .map(|r| {
+                (
+                    *r,
+                    if *r == 1 {
+                        t("24 h").to_owned()
+                    } else {
+                        tf("{} dias", &[r])
+                    },
+                )
+            })
             .collect();
         // The refresh icon turns while anything loads and finishes its turn when it stops.
-        let busy = page.loading || (page.tab == Tab::Limits && page.cards.iter().any(|c| !c.loaded));
+        let busy =
+            page.loading || (page.tab == Tab::Limits && page.cards.iter().any(|c| !c.loaded));
         let turn = if reduced {
             None
         } else {
@@ -1214,7 +1412,9 @@ impl Shell {
                     .child(
                         icon("refresh", 14.)
                             .text_color(content(if busy { 0.45 } else { 0.6 }))
-                            .with_transformation(Transformation::rotate(gpui::percentage(turn.unwrap_or(0.)))),
+                            .with_transformation(Transformation::rotate(gpui::percentage(
+                                turn.unwrap_or(0.),
+                            ))),
                     ),
             )
             .child(
@@ -1236,7 +1436,16 @@ impl Shell {
         let body: AnyElement = if page.tab == Tab::Limits {
             self.limits_view(now, moving, cx)
         } else {
-            self.history_view(if page.tab == Tab::Cost { Metric::Cost } else { Metric::Tokens }, now, moving, cx)
+            self.history_view(
+                if page.tab == Tab::Cost {
+                    Metric::Cost
+                } else {
+                    Metric::Tokens
+                },
+                now,
+                moving,
+                cx,
+            )
         };
         // Tab and range changes: the new body fades in with a 4 px rise.
         let swap = page.swap.at(now).clamp(0., 1.);
@@ -1303,15 +1512,24 @@ impl Shell {
                 .items_center()
                 .justify_center()
                 .bg(gpui::black().opacity(0.32 * p))
-                .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
-                    this.close_usage_page(cx);
-                }))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, cx| {
+                        this.close_usage_page(cx);
+                    }),
+                )
                 .child(dialog)
                 .into_any_element(),
         )
     }
 
-    fn history_view(&self, metric: Metric, now: Instant, moving: &mut bool, cx: &mut Context<Self>) -> AnyElement {
+    fn history_view(
+        &self,
+        metric: Metric,
+        now: Instant,
+        moving: &mut bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let page = &self.usage_page;
         let en = is_en();
         let mut column = div().flex().flex_col().gap(px(18.));
@@ -1330,19 +1548,44 @@ impl Shell {
         let clock = chrono::Utc::now().timestamp_millis();
         let summary = summarize(entries, page.range, clock, &page.prices);
         let reduced = cx.reduce_motion();
-        let tag = if metric == Metric::Cost { "cost" } else { "tokens" };
+        let tag = if metric == Metric::Cost {
+            "cost"
+        } else {
+            "tokens"
+        };
         // The hero and the tiles count from what they showed to the new value.
         let mut counting = false;
-        let mut counted = |name: &str, target: f64| page.counted(format!("{tag}-{name}"), target, now, reduced, &mut counting);
+        let mut counted = |name: &str, target: f64| {
+            page.counted(format!("{tag}-{name}"), target, now, reduced, &mut counting)
+        };
         if summary.tokens <= 0. {
-            return column.child(muted(t("Nenhum uso nesse período."))).into_any_element();
+            return column
+                .child(muted(t("Nenhum uso nesse período.")))
+                .into_any_element();
         }
         let money = |v: f64| usd(v, en);
-        let amount = |v: f64| if metric == Metric::Cost { money(v) } else { count(v, en) };
-        let whole = if metric == Metric::Cost { summary.cost } else { summary.tokens };
+        let amount = |v: f64| {
+            if metric == Metric::Cost {
+                money(v)
+            } else {
+                count(v, en)
+            }
+        };
+        let whole = if metric == Metric::Cost {
+            summary.cost
+        } else {
+            summary.tokens
+        };
         let hero = counted("hero", whole);
-        let span = if page.range == 1 { t("últimas 24 horas").to_owned() } else { tf("últimos {} dias", &[&page.range]) };
-        let mut caption = format!("{} · {span}", tf("{} sessões", &[&grouped(summary.sessions as u64, en)]));
+        let span = if page.range == 1 {
+            t("últimas 24 horas").to_owned()
+        } else {
+            tf("últimos {} dias", &[&page.range])
+        };
+        let mut caption = format!(
+            "{} · {span}",
+            tf("{} sessões", &[&grouped(summary.sessions as u64, en)])
+        );
         if metric == Metric::Cost {
             caption.push_str(" · ");
             caption.push_str(if summary.partial {
@@ -1356,8 +1599,19 @@ impl Shell {
                 .flex()
                 .flex_col()
                 .gap(px(4.))
-                .child(div().text_size(px(34.)).font_weight(FontWeight::SEMIBOLD).text_color(content(1.)).child(amount(hero)))
-                .child(div().text_size(px(12.)).text_color(content(0.5)).child(caption)),
+                .child(
+                    div()
+                        .text_size(px(34.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(content(1.))
+                        .child(amount(hero)),
+                )
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(content(0.5))
+                        .child(caption),
+                ),
         );
         // Provider cards. Clicking one hides it from the chart; its colour never changes.
         let cards = crate::hover_track::list("usage-cards");
@@ -1365,90 +1619,151 @@ impl Shell {
             .providers
             .iter()
             .map(|(prov, total)| {
-                let value = if metric == Metric::Cost { total.cost } else { total.tokens };
+                let value = if metric == Metric::Cost {
+                    total.cost
+                } else {
+                    total.tokens
+                };
                 counted(&format!("card{}", prov.index()), value)
             })
             .collect();
-        column = column.child(div().relative().flex().gap(px(10.)).child(cards.pill()).children(summary.providers.iter().zip(card_values).enumerate().map(|(row, ((prov, total), number))| {
-            let prov = *prov;
-            let other = if metric == Metric::Cost {
-                tf("{} tokens", &[&count(total.tokens, en)])
-            } else {
-                money(total.cost)
-            };
-            let value = if metric == Metric::Cost { total.cost } else { total.tokens };
-            let mut sub = format!("{} · {other}", tf("{} sessões", &[&grouped(total.sessions as u64, en)]));
-            if total.unpriced && metric == Metric::Cost {
-                sub.push_str(" · ");
-                sub.push_str(t("sem preço"));
-            }
-            let shown = page.vis[prov.index()].at(now);
-            if !page.vis[prov.index()].done(now) {
-                *moving = true;
-            }
-            cards.row(div()
-                .id(("usage-card", prov.index()))
-                .flex_1()
-                .min_w_0()
-                .p(px(12.))
-                .rounded_xl()
-                .border_1()
-                .border_color(content(0.08))
-                .bg(content(0.03))
+        column = column.child(
+            div()
+                .relative()
                 .flex()
-                .flex_col()
-                .gap(px(6.))
-                .cursor_pointer()
-                .opacity(0.45 + 0.55 * shown)
-                .on_click(cx.listener(move |this, _, _, cx| this.usage_toggle_provider(prov.index(), cx)))
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(7.))
-                        .text_size(px(13.))
-                        .text_color(content(0.9))
-                        .child(div().size(px(9.)).rounded_full().bg(prov.color()))
-                        .child(div().flex_1().truncate().child(prov.name())),
-                )
-                // Its own line, so the full figure has the card's whole width.
-                .child(value_text(amount(number)))
-                .child(div().text_size(px(11.)).text_color(content(0.5)).child(sub))
-                .child(
-                    div().h(px(4.)).rounded_full().bg(content(0.08)).overflow_hidden().child(
-                        div().h_full().rounded_full().bg(prov.color()).w(gpui::relative(frac(value, whole))),
-                    ),
-                ), row, false)
-        })));
+                .gap(px(10.))
+                .child(cards.pill())
+                .children(summary.providers.iter().zip(card_values).enumerate().map(
+                    |(row, ((prov, total), number))| {
+                        let prov = *prov;
+                        let other = if metric == Metric::Cost {
+                            tf("{} tokens", &[&count(total.tokens, en)])
+                        } else {
+                            money(total.cost)
+                        };
+                        let value = if metric == Metric::Cost {
+                            total.cost
+                        } else {
+                            total.tokens
+                        };
+                        let mut sub = format!(
+                            "{} · {other}",
+                            tf("{} sessões", &[&grouped(total.sessions as u64, en)])
+                        );
+                        if total.unpriced && metric == Metric::Cost {
+                            sub.push_str(" · ");
+                            sub.push_str(t("sem preço"));
+                        }
+                        let shown = page.vis[prov.index()].at(now);
+                        if !page.vis[prov.index()].done(now) {
+                            *moving = true;
+                        }
+                        cards.row(
+                            div()
+                                .id(("usage-card", prov.index()))
+                                .flex_1()
+                                .min_w_0()
+                                .p(px(12.))
+                                .rounded_xl()
+                                .border_1()
+                                .border_color(content(0.08))
+                                .bg(content(0.03))
+                                .flex()
+                                .flex_col()
+                                .gap(px(6.))
+                                .cursor_pointer()
+                                .opacity(0.45 + 0.55 * shown)
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.usage_toggle_provider(prov.index(), cx)
+                                }))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(7.))
+                                        .text_size(px(13.))
+                                        .text_color(content(0.9))
+                                        .child(div().size(px(9.)).rounded_full().bg(prov.color()))
+                                        .child(div().flex_1().truncate().child(prov.name())),
+                                )
+                                // Its own line, so the full figure has the card's whole width.
+                                .child(value_text(amount(number)))
+                                .child(div().text_size(px(11.)).text_color(content(0.5)).child(sub))
+                                .child(
+                                    div()
+                                        .h(px(4.))
+                                        .rounded_full()
+                                        .bg(content(0.08))
+                                        .overflow_hidden()
+                                        .child(
+                                            div()
+                                                .h_full()
+                                                .rounded_full()
+                                                .bg(prov.color())
+                                                .w(gpui::relative(frac(value, whole))),
+                                        ),
+                                ),
+                            row,
+                            false,
+                        )
+                    },
+                )),
+        );
         // The chart: stacked cumulative areas.
-        let title = if metric == Metric::Cost { t("Custo acumulado") } else { t("Tokens acumulados") };
-        column = column.child(heading(title)).child(self.area_chart(&summary, metric, en, now, moving));
+        let title = if metric == Metric::Cost {
+            t("Custo acumulado")
+        } else {
+            t("Tokens acumulados")
+        };
+        column = column
+            .child(heading(title))
+            .child(self.area_chart(&summary, metric, en, now, moving));
         column = column.child(legend(page, &summary, now, cx));
         // Stat tiles.
         let tiles = [
-            (t("Processados"), count(counted("tile0", summary.tokens), en)),
-            (t("Entrada em cache"), count(counted("tile1", summary.cached), en)),
-            (t("Entrada sem cache"), count(counted("tile2", summary.input), en)),
+            (
+                t("Processados"),
+                count(counted("tile0", summary.tokens), en),
+            ),
+            (
+                t("Entrada em cache"),
+                count(counted("tile1", summary.cached), en),
+            ),
+            (
+                t("Entrada sem cache"),
+                count(counted("tile2", summary.input), en),
+            ),
             (t("Saída"), count(counted("tile3", summary.output), en)),
-            (t("Economia do cache"), money(counted("tile4", summary.savings))),
+            (
+                t("Economia do cache"),
+                money(counted("tile4", summary.savings)),
+            ),
         ];
         if counting {
             *moving = true;
         }
         // Tiles keep a whole figure's width; a narrow window wraps them to a second row.
-        column = column.child(div().flex().flex_wrap().gap(px(8.)).children(tiles.into_iter().map(|(label, value)| {
-            div()
-                .flex_1()
-                .min_w(px(156.))
-                .p(px(10.))
-                .rounded(px(crate::theme::RADIUS_LG))
-                .bg(content(0.04))
-                .flex()
-                .flex_col()
-                .gap(px(3.))
-                .child(div().text_size(px(11.)).text_color(content(0.5)).truncate().child(label))
-                .child(value_text(value))
-        })));
+        column = column.child(div().flex().flex_wrap().gap(px(8.)).children(
+            tiles.into_iter().map(|(label, value)| {
+                div()
+                    .flex_1()
+                    .min_w(px(156.))
+                    .p(px(10.))
+                    .rounded(px(crate::theme::RADIUS_LG))
+                    .bg(content(0.04))
+                    .flex()
+                    .flex_col()
+                    .gap(px(3.))
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(content(0.5))
+                            .truncate()
+                            .child(label),
+                    )
+                    .child(value_text(value))
+            }),
+        ));
         // By type.
         let parts: Vec<(&'static str, f64)> = if metric == Metric::Cost {
             vec![
@@ -1477,23 +1792,44 @@ impl Shell {
                 _ => content(0.16),
             };
             column = column
-                .child(heading(if metric == Metric::Cost { t("Custo por tipo") } else { t("Tokens por tipo") }))
-                .child(div().flex().h(px(8.)).gap(px(2.)).rounded_full().overflow_hidden().children(
-                    parts.iter().enumerate().map(|(i, (_, v))| div().h_full().bg(tone(i)).w(gpui::relative(frac(*v, sum))).flex_shrink_0()),
-                ))
-                .child(div().flex().flex_wrap().gap_x(px(16.)).gap_y(px(4.)).children(parts.iter().enumerate().map(
-                    |(i, (label, v))| {
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(6.))
-                            .text_size(px(12.))
-                            .text_color(content(0.6))
-                            .child(div().size(px(8.)).rounded_full().bg(tone(i)))
-                            .child(*label)
-                            .child(div().text_color(content(0.9)).child(amount(*v)))
-                    },
-                )));
+                .child(heading(if metric == Metric::Cost {
+                    t("Custo por tipo")
+                } else {
+                    t("Tokens por tipo")
+                }))
+                .child(
+                    div()
+                        .flex()
+                        .h(px(8.))
+                        .gap(px(2.))
+                        .rounded_full()
+                        .overflow_hidden()
+                        .children(parts.iter().enumerate().map(|(i, (_, v))| {
+                            div()
+                                .h_full()
+                                .bg(tone(i))
+                                .w(gpui::relative(frac(*v, sum)))
+                                .flex_shrink_0()
+                        })),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap_x(px(16.))
+                        .gap_y(px(4.))
+                        .children(parts.iter().enumerate().map(|(i, (label, v))| {
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(6.))
+                                .text_size(px(12.))
+                                .text_color(content(0.6))
+                                .child(div().size(px(8.)).rounded_full().bg(tone(i)))
+                                .child(*label)
+                                .child(div().text_color(content(0.9)).child(amount(*v)))
+                        })),
+                );
         }
         // By model.
         let mut rows = summary.models.clone();
@@ -1505,57 +1841,128 @@ impl Shell {
                 .items_center()
                 .gap(px(8.))
                 .child(div().flex_1().min_w_0().child(a))
-                .child(div().w(px(124.)).flex_shrink_0().flex().justify_end().child(b))
-                .child(div().w(px(76.)).flex_shrink_0().flex().justify_end().child(c))
-                .child(div().w(px(124.)).flex_shrink_0().flex().justify_end().child(d))
+                .child(
+                    div()
+                        .w(px(124.))
+                        .flex_shrink_0()
+                        .flex()
+                        .justify_end()
+                        .child(b),
+                )
+                .child(
+                    div()
+                        .w(px(76.))
+                        .flex_shrink_0()
+                        .flex()
+                        .justify_end()
+                        .child(c),
+                )
+                .child(
+                    div()
+                        .w(px(124.))
+                        .flex_shrink_0()
+                        .flex()
+                        .justify_end()
+                        .child(d),
+                )
         };
-        let head = |text: &'static str| div().text_size(px(11.)).text_color(content(0.45)).child(text).into_any_element();
+        let head = |text: &'static str| {
+            div()
+                .text_size(px(11.))
+                .text_color(content(0.45))
+                .child(text)
+                .into_any_element()
+        };
         column = column
             .child(heading(t("Por modelo")))
-            .child(div().px(px(10.)).child(columns(head(t("Modelo")), head(t("Custo")), head(t("Participação")), head(t("Tokens")))))
-            .child(div().relative().child(list.pill()).children(rows.iter().enumerate().map(|(ix, row)| {
-                let part = if metric == Metric::Cost { row.cost.unwrap_or(0.) } else { row.tokens };
-                let cost_text = row.cost.map_or_else(|| t("sem preço").to_owned(), |c| usd(c, en));
-                let cell = |text: String, dim: bool| {
-                    div().text_size(px(12.)).whitespace_nowrap().text_color(content(if dim { 0.4 } else { 0.8 })).child(text).into_any_element()
-                };
-                let name = div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(4.))
-                    .child(
-                        div()
+            .child(div().px(px(10.)).child(columns(
+                head(t("Modelo")),
+                head(t("Custo")),
+                head(t("Participação")),
+                head(t("Tokens")),
+            )))
+            .child(
+                div()
+                    .relative()
+                    .child(list.pill())
+                    .children(rows.iter().enumerate().map(|(ix, row)| {
+                        let part = if metric == Metric::Cost {
+                            row.cost.unwrap_or(0.)
+                        } else {
+                            row.tokens
+                        };
+                        let cost_text = row
+                            .cost
+                            .map_or_else(|| t("sem preço").to_owned(), |c| usd(c, en));
+                        let cell = |text: String, dim: bool| {
+                            div()
+                                .text_size(px(12.))
+                                .whitespace_nowrap()
+                                .text_color(content(if dim { 0.4 } else { 0.8 }))
+                                .child(text)
+                                .into_any_element()
+                        };
+                        let name = div()
                             .flex()
-                            .items_center()
-                            .gap(px(6.))
-                            .child(div().size(px(8.)).flex_shrink_0().rounded_full().bg(row.provider.color()))
-                            .child(div().truncate().text_size(px(12.)).text_color(content(0.9)).child(row.model.clone())),
-                    )
-                    .child(
-                        div()
-                            .h(px(2.))
-                            .rounded_full()
-                            .bg(row.provider.color())
-                            .w(gpui::relative(frac(part, whole).max(0.015))),
-                    )
-                    .into_any_element();
-                list.row(
-                    div().px(px(10.)).py(px(7.)).rounded(px(crate::theme::RADIUS_MD)).child(columns(
-                        name,
-                        cell(cost_text, row.cost.is_none()),
-                        cell(share(part, whole, en), false),
-                        cell(count(row.tokens, en), false),
-                    )),
-                    ix,
-                    false,
-                )
-            })));
+                            .flex_col()
+                            .gap(px(4.))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(6.))
+                                    .child(
+                                        div()
+                                            .size(px(8.))
+                                            .flex_shrink_0()
+                                            .rounded_full()
+                                            .bg(row.provider.color()),
+                                    )
+                                    .child(
+                                        div()
+                                            .truncate()
+                                            .text_size(px(12.))
+                                            .text_color(content(0.9))
+                                            .child(row.model.clone()),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .h(px(2.))
+                                    .rounded_full()
+                                    .bg(row.provider.color())
+                                    .w(gpui::relative(frac(part, whole).max(0.015))),
+                            )
+                            .into_any_element();
+                        list.row(
+                            div()
+                                .px(px(10.))
+                                .py(px(7.))
+                                .rounded(px(crate::theme::RADIUS_MD))
+                                .child(columns(
+                                    name,
+                                    cell(cost_text, row.cost.is_none()),
+                                    cell(share(part, whole, en), false),
+                                    cell(count(row.tokens, en), false),
+                                )),
+                            ix,
+                            false,
+                        )
+                    })),
+            );
         column.into_any_element()
     }
 
     /// The stacked cumulative area chart, drawn by hand: a 2 px gap between bands, a recessive
     /// grid, a crosshair and a card with the day's values per provider and the total.
-    fn area_chart(&self, summary: &Summary, metric: Metric, en: bool, now: Instant, moving: &mut bool) -> AnyElement {
+    fn area_chart(
+        &self,
+        summary: &Summary,
+        metric: Metric,
+        en: bool,
+        now: Instant,
+        moving: &mut bool,
+    ) -> AnyElement {
         let page = &self.usage_page;
         // Hiding or showing a provider slides the stack; the area grows in from the left.
         let weights = page.vis.map(|tween| tween.at(now).clamp(0., 1.) as f64);
@@ -1576,7 +1983,13 @@ impl Shell {
             .into_iter()
             .map(|i| (i, bucket_label(summary.buckets[i].at, hourly, en)))
             .collect();
-        let fmt = |v: f64| if metric == Metric::Cost { usd(v, en) } else { count(v, en) };
+        let fmt = |v: f64| {
+            if metric == Metric::Cost {
+                usd(v, en)
+            } else {
+                count(v, en)
+            }
+        };
         let mut running = 0.;
         let tips: Vec<(String, Vec<(gpui::Hsla, String, String)>)> = summary
             .buckets
@@ -1598,8 +2011,10 @@ impl Shell {
                 (bucket_title(b.at, hourly, en), rows)
             })
             .collect();
-        let bands: Vec<(gpui::Hsla, Vec<f64>, Vec<f64>)> =
-            layers.iter().map(|l| (l.prov.color(), l.bottom.clone(), l.top.clone())).collect();
+        let bands: Vec<(gpui::Hsla, Vec<f64>, Vec<f64>)> = layers
+            .iter()
+            .map(|l| (l.prov.color(), l.bottom.clone(), l.top.clone()))
+            .collect();
         hoverable("usage-chart".into())
             .w_full()
             .h(px(230.))
@@ -1608,7 +2023,10 @@ impl Shell {
                     |_, _, _| {},
                     move |bounds, _, window, cx| {
                         window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
-                            paint_area(bounds, &scale, &y_ticks, &x_ticks, &bands, &tips, n, grow, window, cx)
+                            paint_area(
+                                bounds, &scale, &y_ticks, &x_ticks, &bands, &tips, n, grow, window,
+                                cx,
+                            )
                         })
                     },
                 )
@@ -1622,9 +2040,16 @@ impl Shell {
         let en = is_en();
         let reduced = cx.reduce_motion();
         let blocks = crate::hover_track::list("usage-limits");
-        let mut column = div().relative().flex().flex_col().gap(px(14.)).child(blocks.pill());
+        let mut column = div()
+            .relative()
+            .flex()
+            .flex_col()
+            .gap(px(14.))
+            .child(blocks.pill());
         if page.cards.is_empty() {
-            return column.child(muted(t("Lendo os limites…"))).into_any_element();
+            return column
+                .child(muted(t("Lendo os limites…")))
+                .into_any_element();
         }
         let now = chrono::Utc::now().timestamp_millis();
         let today = local_date(now);
@@ -1636,9 +2061,18 @@ impl Shell {
             let provider = card.provider;
             let key = format!("{}/{}", card.provider, card.account);
             let color = Prov::of(card.provider).color();
-            let mut head = div().flex().items_center().gap(px(8.)).child(div().size(px(9.)).rounded_full().bg(color)).child(
-                div().text_size(px(14.)).font_weight(FontWeight::MEDIUM).text_color(content(0.95)).child(card.name),
-            );
+            let mut head = div()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .child(div().size(px(9.)).rounded_full().bg(color))
+                .child(
+                    div()
+                        .text_size(px(14.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(content(0.95))
+                        .child(card.name),
+                );
             if card.several {
                 head = head.child(
                     div()
@@ -1652,27 +2086,36 @@ impl Shell {
                 );
             }
             if let Some(email) = &card.email {
-                head = head.child(div().text_size(px(11.)).text_color(content(0.45)).truncate().child(email.clone()));
+                head = head.child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(content(0.45))
+                        .truncate()
+                        .child(email.clone()),
+                );
             }
             if first && matches!(provider, "claude" | "codex") {
-                head = head.child(div().flex_1()).child(
-                    div()
-                        .id(("usage-add-account", ix))
-                        .h(px(26.))
-                        .px(px(9.))
-                        .rounded(px(crate::theme::RADIUS_MD))
-                        .bg(content(0.04))
-                        .flex()
-                        .items_center()
-                        .gap(px(6.))
-                        .text_size(px(11.5))
-                        .text_color(content(0.72))
-                        .cursor_pointer()
-                        .hover(|s| s.bg(content(0.09)).text_color(content(0.95)))
-                        .on_click(cx.listener(move |this, _, _, cx| this.usage_open_accounts(provider, cx)))
-                        .child(icon("plus", 13.).text_color(content(0.6)))
-                        .child(t("Adicionar conta")),
-                );
+                head =
+                    head.child(div().flex_1()).child(
+                        div()
+                            .id(("usage-add-account", ix))
+                            .h(px(26.))
+                            .px(px(9.))
+                            .rounded(px(crate::theme::RADIUS_MD))
+                            .bg(content(0.04))
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .text_size(px(11.5))
+                            .text_color(content(0.72))
+                            .cursor_pointer()
+                            .hover(|s| s.bg(content(0.09)).text_color(content(0.95)))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.usage_open_accounts(provider, cx)
+                            }))
+                            .child(icon("plus", 13.).text_color(content(0.6)))
+                            .child(t("Adicionar conta")),
+                    );
             }
             let mut block = div()
                 .relative()
@@ -1690,11 +2133,18 @@ impl Shell {
                 let used = w.used;
                 let left = used.map(|u| (100. - u.round()).max(0.));
                 // The bar grows from 0 the first time it shows; the tick and pace text fade in after.
-                let since = *page.grown.borrow_mut().entry(format!("{key}/{}", w.id)).or_insert(at);
+                let since = *page
+                    .grown
+                    .borrow_mut()
+                    .entry(format!("{key}/{}", w.id))
+                    .or_insert(at);
                 let (grow, after) = if reduced {
                     (1., 1.)
                 } else {
-                    (progress(since, at, 0., BAR, Curve::Expo), progress(since, at, BAR, 0.2, Curve::Quad))
+                    (
+                        progress(since, at, 0., BAR, Curve::Expo),
+                        progress(since, at, BAR, 0.2, Curve::Quad),
+                    )
                 };
                 if grow < 1. || after < 1. {
                     *moving = true;
@@ -1705,7 +2155,11 @@ impl Shell {
                         div()
                             .h_full()
                             .rounded_full()
-                            .bg(if u >= 90. { rgb(0xe5675f).into() } else { color })
+                            .bg(if u >= 90. {
+                                rgb(0xe5675f).into()
+                            } else {
+                                color
+                            })
                             .w(gpui::relative(frac(u, 100.) * grow)),
                     );
                 }
@@ -1714,7 +2168,14 @@ impl Shell {
                     && let (Some(u), Some(reset)) = (w.used, w.resets_at)
                 {
                     let left_days = days_left(today, local_time(reset));
-                    let pace = pace(u, page.readings.baseline(&key, &day), reset, w.minutes, now, left_days);
+                    let pace = pace(
+                        u,
+                        page.readings.baseline(&key, &day),
+                        reset,
+                        w.minutes,
+                        now,
+                        left_days,
+                    );
                     // The tick where an even pace would be, on the weekly bar.
                     bar = bar.child(
                         div()
@@ -1727,14 +2188,21 @@ impl Shell {
                             .opacity(after)
                             .left(gpui::relative(pace.elapsed as f32)),
                     );
-                    let verdict = if pace.ahead { t("acima do ritmo") } else { t("abaixo do ritmo") };
+                    let verdict = if pace.ahead {
+                        t("acima do ritmo")
+                    } else {
+                        t("abaixo do ritmo")
+                    };
                     pace_lines.push(
                         div()
                             .text_size(px(12.))
                             .text_color(if pace.ahead { amber } else { content(0.6) })
                             .child(format!(
                                 "{verdict} · {}",
-                                tf("ritmo uniforme em {}%", &[&percent(pace.elapsed * 100., en)])
+                                tf(
+                                    "ritmo uniforme em {}%",
+                                    &[&percent(pace.elapsed * 100., en)]
+                                )
                             ))
                             .into_any_element(),
                     );
@@ -1749,21 +2217,32 @@ impl Shell {
                                 .gap(px(8.))
                                 .text_size(px(12.))
                                 .text_color(content(0.8))
-                                .child(tf("Hoje: {}% de {}% disponíveis", &[&percent(pace.today, en), &percent(pace.allowance, en)]))
+                                .child(tf(
+                                    "Hoje: {}% de {}% disponíveis",
+                                    &[&percent(pace.today, en), &percent(pace.allowance, en)],
+                                ))
                                 .when(pace.over, |d| {
                                     d.child(
-                                        div().text_color(amber).font_weight(FontWeight::MEDIUM).child(t("acima do orçamento de hoje")),
+                                        div()
+                                            .text_color(amber)
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .child(t("acima do orçamento de hoje")),
                                     )
                                 }),
                         )
                         .child(
-                            div().h(px(6.)).rounded_full().bg(content(0.08)).overflow_hidden().child(
-                                div()
-                                    .h_full()
-                                    .rounded_full()
-                                    .bg(if pace.over { amber } else { accent() })
-                                    .w(gpui::relative(pace.fill.min(1.) as f32 * grow)),
-                            ),
+                            div()
+                                .h(px(6.))
+                                .rounded_full()
+                                .bg(content(0.08))
+                                .overflow_hidden()
+                                .child(
+                                    div()
+                                        .h_full()
+                                        .rounded_full()
+                                        .bg(if pace.over { amber } else { accent() })
+                                        .w(gpui::relative(pace.fill.min(1.) as f32 * grow)),
+                                ),
                         );
                     if !page.readings.has_earlier(&key, &day) {
                         today_line = today_line.child(
@@ -1775,7 +2254,10 @@ impl Shell {
                     }
                     pace_lines.push(today_line.into_any_element());
                 }
-                let reset = w.resets_at.filter(|r| *r > now).map(|r| tf("renova em {}", &[&reset_left(r)]));
+                let reset = w
+                    .resets_at
+                    .filter(|r| *r > now)
+                    .map(|r| tf("renova em {}", &[&reset_left(r)]));
                 block = block.child(
                     div()
                         .flex()
@@ -1786,29 +2268,54 @@ impl Shell {
                                 .flex()
                                 .items_baseline()
                                 .gap(px(8.))
-                                .child(div().flex_1().text_size(px(12.)).text_color(content(0.7)).child(window_label(w)))
                                 .child(
                                     div()
-                                        .text_size(px(13.))
-                                        .text_color(content(0.95))
-                                        .child(left.map_or("—".to_owned(), |l| tf("{}% restante", &[&l]))),
+                                        .flex_1()
+                                        .text_size(px(12.))
+                                        .text_color(content(0.7))
+                                        .child(window_label(w)),
                                 )
-                                .children(reset.map(|r| div().text_size(px(11.)).text_color(content(0.45)).child(r))),
+                                .child(div().text_size(px(13.)).text_color(content(0.95)).child(
+                                    left.map_or("—".to_owned(), |l| tf("{}% restante", &[&l])),
+                                ))
+                                .children(reset.map(|r| {
+                                    div().text_size(px(11.)).text_color(content(0.45)).child(r)
+                                })),
                         )
                         .child(bar)
-                        .children(pace_lines.into_iter().map(|line| div().opacity(after).child(line))),
+                        .children(
+                            pace_lines
+                                .into_iter()
+                                .map(|line| div().opacity(after).child(line)),
+                        ),
                 );
             }
             if card.windows.is_empty() {
                 let note = card.note.clone().unwrap_or_else(|| {
-                    if card.loaded { t("Sem limites informados.").to_owned() } else { t("Lendo os limites…").to_owned() }
+                    if card.loaded {
+                        t("Sem limites informados.").to_owned()
+                    } else {
+                        t("Lendo os limites…").to_owned()
+                    }
                 });
-                block = block.child(div().text_size(px(12.)).text_color(content(0.5)).child(note));
+                block = block.child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(content(0.5))
+                        .child(note),
+                );
             }
             // The accounts popover hangs under the Add account button, fading in. It is deferred so
             // the scrolling column does not clip it, and a click outside closes it (usage-main).
-            if let Some(accounts) = self.usage_accounts.as_ref().filter(|p| first && p.provider == provider) {
-                let shown = accounts.shown.as_ref().map_or(1., |tween| tween.at(at).clamp(0., 1.));
+            if let Some(accounts) = self
+                .usage_accounts
+                .as_ref()
+                .filter(|p| first && p.provider == provider)
+            {
+                let shown = accounts
+                    .shown
+                    .as_ref()
+                    .map_or(1., |tween| tween.at(at).clamp(0., 1.));
                 if accounts.shown.as_ref().is_some_and(|tween| !tween.done(at)) {
                     *moving = true;
                 }
@@ -1845,15 +2352,28 @@ impl Shell {
 // ---------------------------------------------------------------- small views
 
 fn heading(text: &'static str) -> gpui::Div {
-    div().text_size(px(13.)).font_weight(FontWeight::MEDIUM).text_color(content(0.9)).child(text)
+    div()
+        .text_size(px(13.))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(content(0.9))
+        .child(text)
 }
 
 fn muted(text: &'static str) -> gpui::Div {
-    div().py(px(24.)).text_size(px(13.)).text_color(content(0.5)).child(text)
+    div()
+        .py(px(24.))
+        .text_size(px(13.))
+        .text_color(content(0.5))
+        .child(text)
 }
 
 fn value_text(text: String) -> gpui::Div {
-    div().text_size(px(14.)).font_weight(FontWeight::MEDIUM).whitespace_nowrap().text_color(content(0.95)).child(text)
+    div()
+        .text_size(px(14.))
+        .font_weight(FontWeight::MEDIUM)
+        .whitespace_nowrap()
+        .text_color(content(0.95))
+        .child(text)
 }
 
 fn notice(text: String, error: bool) -> gpui::Div {
@@ -1863,28 +2383,45 @@ fn notice(text: String, error: bool) -> gpui::Div {
         .rounded(px(crate::theme::RADIUS_MD))
         .bg(content(0.05))
         .text_size(px(12.))
-        .text_color(if error { rgb(0xe08a8a).into() } else { content(0.6) })
+        .text_color(if error {
+            rgb(0xe08a8a).into()
+        } else {
+            content(0.6)
+        })
         .child(text)
 }
 
 /// The chart's legend: always shown; a click hides or shows that provider, colours stay put.
 fn legend(page: &State, summary: &Summary, now: Instant, cx: &mut Context<Shell>) -> gpui::Div {
-    div().flex().flex_wrap().gap_x(px(14.)).gap_y(px(4.)).children(summary.providers.iter().map(|(prov, _)| {
-        let prov = *prov;
-        let shown = page.vis[prov.index()].at(now);
-        div()
-            .id(("usage-legend", prov.index()))
-            .flex()
-            .items_center()
-            .gap(px(6.))
-            .text_size(px(12.))
-            .text_color(content(0.35 + 0.35 * shown))
-            .cursor_pointer()
-            .active(|s| s.opacity(0.7))
-            .on_click(cx.listener(move |this, _, _, cx| this.usage_toggle_provider(prov.index(), cx)))
-            .child(div().size(px(9.)).rounded(px(crate::theme::RADIUS_SM)).bg(prov.color()).opacity(0.35 + 0.65 * shown))
-            .child(prov.name())
-    }))
+    div()
+        .flex()
+        .flex_wrap()
+        .gap_x(px(14.))
+        .gap_y(px(4.))
+        .children(summary.providers.iter().map(|(prov, _)| {
+            let prov = *prov;
+            let shown = page.vis[prov.index()].at(now);
+            div()
+                .id(("usage-legend", prov.index()))
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .text_size(px(12.))
+                .text_color(content(0.35 + 0.35 * shown))
+                .cursor_pointer()
+                .active(|s| s.opacity(0.7))
+                .on_click(
+                    cx.listener(move |this, _, _, cx| this.usage_toggle_provider(prov.index(), cx)),
+                )
+                .child(
+                    div()
+                        .size(px(9.))
+                        .rounded(px(crate::theme::RADIUS_SM))
+                        .bg(prov.color())
+                        .opacity(0.35 + 0.65 * shown),
+                )
+                .child(prov.name())
+        }))
 }
 
 /// A segmented control: one thumb slides between the options, the text colour follows it,
@@ -1903,15 +2440,25 @@ fn segmented<T: Copy + PartialEq + 'static>(
     disabled: bool,
     cx: &mut Context<Shell>,
 ) -> gpui::Div {
-    let here = options.iter().position(|(value, _)| *value == current).unwrap_or(0);
-    let tween = page.segs.get(id).filter(|tween| (tween.to - here as f32).abs() < 0.5);
+    let here = options
+        .iter()
+        .position(|(value, _)| *value == current)
+        .unwrap_or(0);
+    let tween = page
+        .segs
+        .get(id)
+        .filter(|tween| (tween.to - here as f32).abs() < 0.5);
     // Disabled, the thumb stays on the current option whatever a slide was doing.
     let tween = tween.filter(|_| !disabled);
     let place = tween.map_or(here as f32, |tween| tween.at(now));
     if tween.is_some_and(|tween| !tween.done(now)) {
         *moving = true;
     }
-    let chars = options.iter().map(|(_, label)| label.chars().count()).max().unwrap_or(1);
+    let chars = options
+        .iter()
+        .map(|(_, label)| label.chars().count())
+        .max()
+        .unwrap_or(1);
     let cell = (chars as f32 * 6.6 + 22.).max(48.);
     div()
         .relative()
@@ -1957,7 +2504,8 @@ fn segmented<T: Copy + PartialEq + 'static>(
                 .cursor_pointer()
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if ix != here {
-                        this.usage_page.slide(id, here, ix, Instant::now(), cx.reduce_motion());
+                        this.usage_page
+                            .slide(id, here, ix, Instant::now(), cx.reduce_motion());
                     }
                     on(this, value, cx)
                 }))
@@ -1988,17 +2536,33 @@ fn paint_area(
     let (ox, oy) = (bounds.origin.x.as_f32(), bounds.origin.y.as_f32());
     let (w, h) = (bounds.size.width.as_f32(), bounds.size.height.as_f32());
     let (plot_w, plot_h) = ((w - left - right).max(1.), (h - top - bottom).max(1.));
-    let x_of = |i: usize| ox + left + if n > 1 { plot_w * i as f32 / (n - 1) as f32 } else { plot_w / 2. };
+    let x_of = |i: usize| {
+        ox + left
+            + if n > 1 {
+                plot_w * i as f32 / (n - 1) as f32
+            } else {
+                plot_w / 2.
+            }
+    };
     let y_of = |v: f64| oy + top + plot_h * scale.depth(v).clamp(0., 1.);
     let base = oy + top + plot_h;
     // A recessive grid and its labels.
     for (v, label) in y_ticks {
         let y = y_of(*v).round();
         window.paint_quad(gpui::fill(
-            Bounds::new(gpui::point(px(ox + left), px(y)), gpui::size(px(plot_w), px(1.))),
+            Bounds::new(
+                gpui::point(px(ox + left), px(y)),
+                gpui::size(px(plot_w), px(1.)),
+            ),
             content(0.06),
         ));
-        axis.paint(label, gpui::point(px(ox + left - 8.), px(y)), Align::Right, window, cx);
+        axis.paint(
+            label,
+            gpui::point(px(ox + left - 8.), px(y)),
+            Align::Right,
+            window,
+            cx,
+        );
     }
     for (k, (i, label)) in x_ticks.iter().enumerate() {
         let align = match k {
@@ -2006,7 +2570,13 @@ fn paint_area(
             2 => Align::Right,
             _ => Align::Center,
         };
-        axis.paint(label, gpui::point(px(x_of(*i)), px(base + 12.)), align, window, cx);
+        axis.paint(
+            label,
+            gpui::point(px(x_of(*i)), px(base + 12.)),
+            align,
+            window,
+            cx,
+        );
     }
     // The area is revealed from the left edge of the plot by `grow`.
     let reveal = Bounds::new(
@@ -2015,29 +2585,44 @@ fn paint_area(
     );
     // Each band is inset by 1 px on both edges, so neighbours show a 2 px gap of the surface.
     window.with_content_mask(Some(gpui::ContentMask { bounds: reveal }), |window| {
-    for (k, (color, low, high)) in bands.iter().enumerate() {
-        let mut path = gpui::PathBuilder::fill();
-        let upper = |i: usize| (y_of(high[i]) + 1.).min(if k == 0 { base } else { y_of(low[i]) - 1. });
-        let lower = |i: usize| if k == 0 { base } else { (y_of(low[i]) - 1.).max(upper(i)) };
-        path.move_to(gpui::point(px(x_of(0)), px(upper(0))));
-        for i in 1..n {
-            path.line_to(gpui::point(px(x_of(i)), px(upper(i))));
+        for (k, (color, low, high)) in bands.iter().enumerate() {
+            let mut path = gpui::PathBuilder::fill();
+            let upper =
+                |i: usize| (y_of(high[i]) + 1.).min(if k == 0 { base } else { y_of(low[i]) - 1. });
+            let lower = |i: usize| {
+                if k == 0 {
+                    base
+                } else {
+                    (y_of(low[i]) - 1.).max(upper(i))
+                }
+            };
+            path.move_to(gpui::point(px(x_of(0)), px(upper(0))));
+            for i in 1..n {
+                path.line_to(gpui::point(px(x_of(i)), px(upper(i))));
+            }
+            for i in (0..n).rev() {
+                path.line_to(gpui::point(px(x_of(i)), px(lower(i))));
+            }
+            path.close();
+            if let Ok(path) = path.build() {
+                window.paint_path(path, faded(*color, 0.92));
+            }
         }
-        for i in (0..n).rev() {
-            path.line_to(gpui::point(px(x_of(i)), px(lower(i))));
-        }
-        path.close();
-        if let Ok(path) = path.build() {
-            window.paint_path(path, faded(*color, 0.92));
-        }
-    }
     });
     // The crosshair and its card, while the pointer is over the plot.
-    let plot = Bounds::new(gpui::point(px(ox + left), px(oy + top)), gpui::size(px(plot_w), px(plot_h)));
+    let plot = Bounds::new(
+        gpui::point(px(ox + left), px(oy + top)),
+        gpui::size(px(plot_w), px(plot_h)),
+    );
     if let Some((x, _)) = pointer(plot, window)
         && n > 0
     {
-        let i = if n > 1 { ((x / plot_w) * (n - 1) as f32).round() as usize } else { 0 }.min(n - 1);
+        let i = if n > 1 {
+            ((x / plot_w) * (n - 1) as f32).round() as usize
+        } else {
+            0
+        }
+        .min(n - 1);
         crosshair(gpui::point(px(0.), px(oy + top)), x_of(i), plot_h, window);
         if let Some((title, rows)) = tips.get(i) {
             let anchor = gpui::point(px(x_of(i)), px(oy + top + plot_h / 2.));
@@ -2059,7 +2644,11 @@ mod tests {
     }
 
     fn reading(used: f64, resets_at: i64) -> Reading {
-        Reading { used, resets_at, at: 0 }
+        Reading {
+            used,
+            resets_at,
+            at: 0,
+        }
     }
 
     const WEEK: i64 = 7 * DAY;
@@ -2171,7 +2760,13 @@ mod tests {
         let mut readings = Readings::default();
         assert!(readings.record("claude/default", "2026-11-05", reading(10., 1)));
         assert!(!readings.record("claude/default", "2026-11-05", reading(20., 1)));
-        assert_eq!(readings.baseline("claude/default", "2026-11-05").unwrap().used, 10.);
+        assert_eq!(
+            readings
+                .baseline("claude/default", "2026-11-05")
+                .unwrap()
+                .used,
+            10.
+        );
         assert!(readings.baseline("claude/default", "2026-11-06").is_none());
         assert!(readings.baseline("codex/default", "2026-11-05").is_none());
     }
@@ -2204,7 +2799,11 @@ mod tests {
         readings.record(
             "claude/default",
             "2026-11-05",
-            Reading { used: 41.5, resets_at: 1_700_000_000_000, at: 1_699_999_000_000 },
+            Reading {
+                used: 41.5,
+                resets_at: 1_700_000_000_000,
+                at: 1_699_999_000_000,
+            },
         );
         readings.record("codex/acc-2", "2026-11-05", reading(7., 5));
         let text = readings.to_json();
@@ -2228,7 +2827,12 @@ mod tests {
     }
 
     fn win(id: &str, used: Option<f64>, resets: Option<i64>, minutes: Option<i64>) -> Win {
-        Win { id: id.to_owned(), used, resets_at: resets, minutes }
+        Win {
+            id: id.to_owned(),
+            used,
+            resets_at: resets,
+            minutes,
+        }
     }
 
     #[test]
@@ -2241,7 +2845,12 @@ mod tests {
         ];
         assert_eq!(weekly(&list).unwrap().id, "seven_day");
         // Codex names its windows by duration alone.
-        assert_eq!(weekly(&[win("codex/secondary", Some(5.), Some(1), Some(10_080))]).unwrap().id, "codex/secondary");
+        assert_eq!(
+            weekly(&[win("codex/secondary", Some(5.), Some(1), Some(10_080))])
+                .unwrap()
+                .id,
+            "codex/secondary"
+        );
         // No weekly window, or one without a reading: no pace.
         assert!(weekly(&[win("five_hour", Some(5.), Some(1), Some(300))]).is_none());
         assert!(weekly(&[win("seven_day", None, Some(1), None)]).is_none());
@@ -2261,7 +2870,11 @@ mod tests {
     }
 
     fn bucket(at: i64, cost: [f64; 4]) -> Bucket {
-        Bucket { at, cost, tokens: cost.map(|c| c * 1000.) }
+        Bucket {
+            at,
+            cost,
+            tokens: cost.map(|c| c * 1000.),
+        }
     }
 
     #[test]
@@ -2273,7 +2886,10 @@ mod tests {
         ];
         let (layers, max) = stack(&buckets, Metric::Cost, [false; 4]);
         // OpenCode never used anything: no band.
-        assert_eq!(layers.iter().map(|l| l.prov).collect::<Vec<_>>(), vec![Prov::Claude, Prov::Codex, Prov::Other]);
+        assert_eq!(
+            layers.iter().map(|l| l.prov).collect::<Vec<_>>(),
+            vec![Prov::Claude, Prov::Codex, Prov::Other]
+        );
         assert_eq!(layers[0].bottom, vec![0., 0., 0.]);
         assert_eq!(layers[0].top, vec![1., 1., 4.]);
         assert_eq!(layers[1].bottom, vec![1., 1., 4.]);
@@ -2301,8 +2917,11 @@ mod tests {
         let (layers, max) = stack(&buckets, Metric::Tokens, [false; 4]);
         assert!(layers.is_empty());
         assert_eq!(max, 0.);
-        let (layers, max) =
-            stack(&[bucket(0, [1., 0., 0., 0.]), bucket(1, [2., 0., 0., 0.])], Metric::Tokens, [false; 4]);
+        let (layers, max) = stack(
+            &[bucket(0, [1., 0., 0., 0.]), bucket(1, [2., 0., 0., 0.])],
+            Metric::Tokens,
+            [false; 4],
+        );
         assert_eq!(layers[0].top, vec![1000., 3000.]);
         assert_eq!(max, 3000.);
     }
@@ -2338,7 +2957,10 @@ mod tests {
             entry(hour, "claude", "claude-sonnet-4-5", 1_000_000., 100_000.),
             entry(hour - HOUR, "codex", "gpt-x", 500., 500.),
             entry(now - 3 * DAY, "claude", "claude-sonnet-4-5", 9., 9.),
-            Entry { reported: Some(0.25), ..entry(hour, "opencode", "oc", 10., 10.) },
+            Entry {
+                reported: Some(0.25),
+                ..entry(hour, "opencode", "oc", 10., 10.)
+            },
             entry(hour, "cursor", "claude-haiku-4", 1_000_000., 0.),
         ];
         let s = summarize(&entries, 1, now, &HashMap::new());
@@ -2356,9 +2978,25 @@ mod tests {
     #[test]
     fn a_downloaded_price_beats_the_built_in_one_and_fast_costs_more() {
         let mut prices = HashMap::new();
-        let base = Rates { input: 1., cache_read: 0.1, cache_write: 1.25, output: 2. };
-        let fast = Rates { input: 2., cache_read: 0.2, cache_write: 2.5, output: 4. };
-        prices.insert("claude-sonnet-4-5".to_owned(), Price { rates: base, fast: Some(fast) });
+        let base = Rates {
+            input: 1.,
+            cache_read: 0.1,
+            cache_write: 1.25,
+            output: 2.,
+        };
+        let fast = Rates {
+            input: 2.,
+            cache_read: 0.2,
+            cache_write: 2.5,
+            output: 4.,
+        };
+        prices.insert(
+            "claude-sonnet-4-5".to_owned(),
+            Price {
+                rates: base,
+                fast: Some(fast),
+            },
+        );
         let mut e = entry(0, "claude", "claude-sonnet-4-5", 1_000_000., 0.);
         assert_eq!(entry_cost(&e, &prices), Some(1.));
         e.fast = true;
@@ -2377,11 +3015,21 @@ mod tests {
             cost,
             tokens,
         };
-        let mut rows = vec![row("a", None, 900.), row("b", Some(1.), 10.), row("c", Some(5.), 5.)];
+        let mut rows = vec![
+            row("a", None, 900.),
+            row("b", Some(1.), 10.),
+            row("c", Some(5.), 5.),
+        ];
         sort_models(&mut rows, Metric::Cost);
-        assert_eq!(rows.iter().map(|r| r.model.as_str()).collect::<String>(), "cba");
+        assert_eq!(
+            rows.iter().map(|r| r.model.as_str()).collect::<String>(),
+            "cba"
+        );
         sort_models(&mut rows, Metric::Tokens);
-        assert_eq!(rows.iter().map(|r| r.model.as_str()).collect::<String>(), "abc");
+        assert_eq!(
+            rows.iter().map(|r| r.model.as_str()).collect::<String>(),
+            "abc"
+        );
     }
 
     #[test]
@@ -2443,13 +3091,21 @@ mod tests {
         assert_eq!(value, 0.);
         assert!(running);
         // Halfway through the 900 ms it is somewhere between, and still counting.
-        let (value, running) =
-            counts.sample("cost-hero".to_owned(), 1_000., arrived + std::time::Duration::from_millis(450), COUNT);
+        let (value, running) = counts.sample(
+            "cost-hero".to_owned(),
+            1_000.,
+            arrived + std::time::Duration::from_millis(450),
+            COUNT,
+        );
         assert!(value > 0. && value < 1_000., "{value}");
         assert!(running);
         // Past the 900 ms it shows the target and stops drawing frames for it.
-        let (value, running) =
-            counts.sample("cost-hero".to_owned(), 1_000., arrived + std::time::Duration::from_millis(950), COUNT);
+        let (value, running) = counts.sample(
+            "cost-hero".to_owned(),
+            1_000.,
+            arrived + std::time::Duration::from_millis(950),
+            COUNT,
+        );
         assert_eq!(value, 1_000.);
         assert!(!running);
     }
@@ -2460,17 +3116,28 @@ mod tests {
         let mut counts = Counts::default();
         counts.sample("tokens-tile0".to_owned(), 500., arrived, COUNT);
         let later = arrived + std::time::Duration::from_secs(5);
-        assert_eq!(counts.sample("tokens-tile0".to_owned(), 500., later, COUNT).0, 500.);
+        assert_eq!(
+            counts
+                .sample("tokens-tile0".to_owned(), 500., later, COUNT)
+                .0,
+            500.
+        );
         // A tab or range change restarts it: 0 again at the next sample.
         counts.restart();
-        assert_eq!(counts.sample("tokens-tile0".to_owned(), 500., later, COUNT), (0., true));
+        assert_eq!(
+            counts.sample("tokens-tile0".to_owned(), 500., later, COUNT),
+            (0., true)
+        );
     }
 
     #[test]
     fn reduced_motion_shows_the_final_value_at_once() {
         let now = Instant::now();
         let mut counts = Counts::default();
-        assert_eq!(counts.sample("cost-hero".to_owned(), 42.5, now, 0.), (42.5, false));
+        assert_eq!(
+            counts.sample("cost-hero".to_owned(), 42.5, now, 0.),
+            (42.5, false)
+        );
     }
 
     #[test]
@@ -2480,14 +3147,29 @@ mod tests {
         // The first reading always starts the count.
         assert!(data_changed(None, &shown, &prices));
         // A refresh that brings the same entries and prices changes nothing on the page.
-        assert!(!data_changed(Some((&shown, &prices)), &shown.clone(), &prices));
+        assert!(!data_changed(
+            Some((&shown, &prices)),
+            &shown.clone(),
+            &prices
+        ));
         // New entries, or new prices for the same entries, start it again.
-        let more = vec![entry(1, "claude", "claude-sonnet-4-5", 10., 10.), entry(2, "codex", "gpt-x", 1., 1.)];
+        let more = vec![
+            entry(1, "claude", "claude-sonnet-4-5", 10., 10.),
+            entry(2, "codex", "gpt-x", 1., 1.),
+        ];
         assert!(data_changed(Some((&shown, &prices)), &more, &prices));
         let mut priced = prices.clone();
         priced.insert(
             "claude-sonnet-4-5".to_owned(),
-            Price { rates: Rates { input: 1., cache_read: 0.1, cache_write: 1.25, output: 2. }, fast: None },
+            Price {
+                rates: Rates {
+                    input: 1.,
+                    cache_read: 0.1,
+                    cache_write: 1.25,
+                    output: 2.,
+                },
+                fast: None,
+            },
         );
         assert!(data_changed(Some((&shown, &prices)), &shown, &priced));
     }

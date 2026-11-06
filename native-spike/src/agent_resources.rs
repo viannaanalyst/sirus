@@ -211,7 +211,10 @@ pub(crate) fn without_stopping(rows: Vec<Row>, stopping: &HashSet<i64>) -> Vec<R
             let before = row.processes.len();
             row.processes.retain(|p| !stopping.contains(&p.pid));
             let gone = before - row.processes.len();
-            row.process_count = row.process_count.saturating_sub(gone).max(row.processes.len());
+            row.process_count = row
+                .process_count
+                .saturating_sub(gone)
+                .max(row.processes.len());
             row
         })
         .collect()
@@ -361,7 +364,8 @@ impl Shell {
             loop {
                 let alive = this
                     .update(cx, |this, cx| {
-                        if this.resources.generation != generation || this.resources.open.is_none() {
+                        if this.resources.generation != generation || this.resources.open.is_none()
+                        {
                             return false;
                         }
                         this.read_resources(cx);
@@ -424,10 +428,18 @@ impl Shell {
     }
 
     /// Stop a conversation: confirmed in the popup, then the host stops its agent.
-    fn ask_stop_resource_session(&mut self, session_id: String, title: String, cx: &mut Context<Self>) {
+    fn ask_stop_resource_session(
+        &mut self,
+        session_id: String,
+        title: String,
+        cx: &mut Context<Self>,
+    ) {
         self.ask(
             t("Parar conversa?").to_owned(),
-            tf("\"{}\" para de trabalhar agora. Os processos dela são encerrados.", &[&title]),
+            tf(
+                "\"{}\" para de trabalhar agora. Os processos dela são encerrados.",
+                &[&title],
+            ),
             t("Parar"),
             move |this, cx| this.run_stop_session(session_id, cx),
             cx,
@@ -437,7 +449,9 @@ impl Shell {
     fn run_stop_session(&mut self, session_id: String, cx: &mut Context<Self>) {
         self.resources.stopping_sessions.insert(session_id.clone());
         self.resources.row_errors.remove(&session_id);
-        let rx = self.backend.request("stop_agent", super::delegated_tasks::stop_args(&session_id));
+        let rx = self
+            .backend
+            .request("stop_agent", super::delegated_tasks::stop_args(&session_id));
         cx.spawn(async move |this, cx| {
             let stopped = super::message_actions::settle(rx).await;
             let _ = this.update(cx, |this, cx| {
@@ -454,7 +468,12 @@ impl Shell {
     }
 
     /// Stop one tool process: confirmed in the popup; the row drops it at once.
-    fn ask_stop_resource_process(&mut self, session_id: String, process: Process, cx: &mut Context<Self>) {
+    fn ask_stop_resource_process(
+        &mut self,
+        session_id: String,
+        process: Process,
+        cx: &mut Context<Self>,
+    ) {
         self.ask(
             t("Parar processo?").to_owned(),
             tf("\"{}\" é encerrado. A conversa continua.", &[&process.name]),
@@ -468,7 +487,10 @@ impl Shell {
         self.resources.stopping_pids.insert(process.pid);
         self.resources.row_errors.remove(&session_id);
         let pid = process.pid;
-        let rx = self.backend.request("agent_resource_action", stop_process_args(&session_id, &process));
+        let rx = self.backend.request(
+            "agent_resource_action",
+            stop_process_args(&session_id, &process),
+        );
         cx.spawn(async move |this, cx| {
             let stopped = super::message_actions::settle(rx).await;
             let _ = this.update(cx, |this, cx| {
@@ -496,7 +518,11 @@ impl Shell {
         if running_key(&self.conversations).is_empty() {
             return None;
         }
-        let level = self.resources.snapshot.as_ref().map_or(Level::Normal, Snapshot::level);
+        let level = self
+            .resources
+            .snapshot
+            .as_ref()
+            .map_or(Level::Normal, Snapshot::level);
         let store = self.resources.chip.clone();
         Some(
             div()
@@ -513,12 +539,9 @@ impl Shell {
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(|this, _, _, cx| this.toggle_resources(cx)))
                 .child(
-                    gpui::canvas(
-                        move |bounds, _, _| store.set(Some(bounds)),
-                        |_, _, _, _| {},
-                    )
-                    .absolute()
-                    .size_full(),
+                    gpui::canvas(move |bounds, _, _| store.set(Some(bounds)), |_, _, _, _| {})
+                        .absolute()
+                        .size_full(),
                 )
                 .child(icon("zap", 12.).text_color(level.color().unwrap_or_else(|| content(0.6))))
                 .into_any_element(),
@@ -538,7 +561,10 @@ impl Shell {
         }
         let shown = open.at(now).clamp(0., 1.);
         let state = &self.resources;
-        let left = state.chip.get().map_or(8., |bounds| f32::from(bounds.left()));
+        let left = state
+            .chip
+            .get()
+            .map_or(8., |bounds| f32::from(bounds.left()));
         let meta: Vec<Meta> = self
             .conversations
             .iter()
@@ -567,11 +593,25 @@ impl Shell {
                             .text_color(tint.unwrap_or_else(|| content(0.6)))
                             .child(format!("CPU {}", format_cpu(snapshot.cpu)))
                             .child(div().text_color(content(0.35)).child("·"))
-                            .child(format!("{} {}", t("Memória"), format_memory(snapshot.memory))),
+                            .child(format!(
+                                "{} {}",
+                                t("Memória"),
+                                format_memory(snapshot.memory)
+                            )),
                     )
-                    .children(snapshot.machine.pressure.as_deref().and_then(pressure_label).map(|label| {
-                        div().text_size(px(11.)).text_color(content(0.5)).child(label)
-                    }))
+                    .children(
+                        snapshot
+                            .machine
+                            .pressure
+                            .as_deref()
+                            .and_then(pressure_label)
+                            .map(|label| {
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(content(0.5))
+                                    .child(label)
+                            }),
+                    )
                     .into_any_element()
             }
             None => div()
@@ -596,7 +636,12 @@ impl Shell {
                 .child(header),
         );
         if let Some(error) = &state.error {
-            body = body.child(div().text_size(px(11.5)).text_color(gpui::rgb(RED)).child(error.clone()));
+            body = body.child(
+                div()
+                    .text_size(px(11.5))
+                    .text_color(gpui::rgb(RED))
+                    .child(error.clone()),
+            );
         }
         if let Some(snapshot) = &state.snapshot {
             let machine = snapshot.machine.clone();
@@ -626,10 +671,29 @@ impl Shell {
                     .items_center()
                     .gap(px(7.))
                     .cursor_pointer()
-                    .on_click(cx.listener(move |this, _, _, cx| this.toggle_resource_row(toggle_id.clone(), cx)))
-                    .child(icon(if expanded { "chevron-down" } else { "chevron-right" }, 11.).text_color(content(0.45)))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.toggle_resource_row(toggle_id.clone(), cx)
+                    }))
+                    .child(
+                        icon(
+                            if expanded {
+                                "chevron-down"
+                            } else {
+                                "chevron-right"
+                            },
+                            11.,
+                        )
+                        .text_color(content(0.45)),
+                    )
                     .children(row.provider.map(|provider| provider_glyph(provider, 14.)))
-                    .child(div().min_w_0().truncate().text_size(px(12.5)).text_color(content(0.9)).child(title.clone()));
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(px(12.5))
+                            .text_color(content(0.9))
+                            .child(title.clone()),
+                    );
                 let figures = div()
                     .flex()
                     .items_center()
@@ -655,29 +719,30 @@ impl Shell {
                             }))
                     })
                     .child(if busy { t("Parando…") } else { t("Parar") });
-                let mut item = div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(4.))
-                    .py(px(4.))
-                    .child(
-                        track.row_named(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(px(8.))
-                                .px(px(6.))
-                                .py(px(4.))
-                                .rounded(px(crate::theme::RADIUS_MD))
-                                .child(toggle)
-                                .child(figures)
-                                .child(stop),
-                            &row.session_id,
-                            false,
-                        ),
-                    );
+                let mut item = div().flex().flex_col().gap(px(4.)).py(px(4.)).child(
+                    track.row_named(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .px(px(6.))
+                            .py(px(4.))
+                            .rounded(px(crate::theme::RADIUS_MD))
+                            .child(toggle)
+                            .child(figures)
+                            .child(stop),
+                        &row.session_id,
+                        false,
+                    ),
+                );
                 if let Some(problem) = state.row_errors.get(&row.session_id) {
-                    item = item.child(div().px(px(6.)).text_size(px(11.)).text_color(gpui::rgb(RED)).child(problem.clone()));
+                    item = item.child(
+                        div()
+                            .px(px(6.))
+                            .text_size(px(11.))
+                            .text_color(gpui::rgb(RED))
+                            .child(problem.clone()),
+                    );
                 }
                 if expanded {
                     for process in &row.processes {
@@ -695,7 +760,11 @@ impl Shell {
                                 d.cursor_pointer()
                                     .hover(|s| s.text_color(content(0.95)))
                                     .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.ask_stop_resource_process(session.clone(), owned.clone(), cx)
+                                        this.ask_stop_resource_process(
+                                            session.clone(),
+                                            owned.clone(),
+                                            cx,
+                                        )
                                     }))
                             })
                             .when(!stoppable, |d| d.opacity(0.))
@@ -715,8 +784,21 @@ impl Shell {
                                         .flex()
                                         .items_center()
                                         .gap(px(6.))
-                                        .child(div().min_w_0().truncate().text_size(px(11.5)).text_color(content(0.85)).child(process.name.clone()))
-                                        .child(div().flex_shrink_0().text_size(px(10.5)).text_color(content(0.45)).child(kind_label(&process.kind))),
+                                        .child(
+                                            div()
+                                                .min_w_0()
+                                                .truncate()
+                                                .text_size(px(11.5))
+                                                .text_color(content(0.85))
+                                                .child(process.name.clone()),
+                                        )
+                                        .child(
+                                            div()
+                                                .flex_shrink_0()
+                                                .text_size(px(10.5))
+                                                .text_color(content(0.45))
+                                                .child(kind_label(&process.kind)),
+                                        ),
                                 )
                                 .child(
                                     div()
@@ -767,7 +849,13 @@ impl Shell {
                 .shadow_lg()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(body)
-                .child(div().pt(px(6.)).text_size(px(10.5)).text_color(content(0.4)).child(footnote))
+                .child(
+                    div()
+                        .pt(px(6.))
+                        .text_size(px(10.5))
+                        .text_color(content(0.4))
+                        .child(footnote),
+                )
                 .into_any_element(),
         )
     }
@@ -778,11 +866,22 @@ mod tests {
     use super::*;
 
     fn machine(cores: f64, memory_total: Option<f64>, pressure: Option<&str>) -> Machine {
-        Machine { cores, memory_total, pressure: pressure.map(str::to_owned) }
+        Machine {
+            cores,
+            memory_total,
+            pressure: pressure.map(str::to_owned),
+        }
     }
 
     fn process(pid: i64, kind: &str) -> Process {
-        Process { pid, started: 100 + pid, name: format!("p{pid}"), kind: kind.into(), cpu: 1., memory: 1. }
+        Process {
+            pid,
+            started: 100 + pid,
+            name: format!("p{pid}"),
+            kind: kind.into(),
+            cpu: 1.,
+            memory: 1.,
+        }
     }
 
     fn snapshot_json() -> Value {
@@ -811,10 +910,19 @@ mod tests {
         assert_eq!(total_level(0., 4e9, &calm), Level::Elevated);
         assert_eq!(total_level(0., 8.5e9, &calm), Level::High);
         // The Mac's pressure counts whoever causes it.
-        assert_eq!(total_level(0., 0., &machine(8., Some(16e9), Some("warning"))), Level::Elevated);
-        assert_eq!(total_level(0., 0., &machine(8., Some(16e9), Some("critical"))), Level::High);
+        assert_eq!(
+            total_level(0., 0., &machine(8., Some(16e9), Some("warning"))),
+            Level::Elevated
+        );
+        assert_eq!(
+            total_level(0., 0., &machine(8., Some(16e9), Some("critical"))),
+            Level::High
+        );
         // No memory total: memory cannot raise the level.
-        assert_eq!(total_level(0., 1e12, &machine(8., None, None)), Level::Normal);
+        assert_eq!(
+            total_level(0., 1e12, &machine(8., None, None)),
+            Level::Normal
+        );
     }
 
     #[test]
@@ -836,16 +944,26 @@ mod tests {
         assert_eq!(snapshot.machine.memory_total, Some(17179869184.0));
         // 150 of 800 points is calm, but the warning pressure makes the total amber.
         assert_eq!(snapshot.level(), Level::Elevated);
-        assert!(Snapshot::of(&json!({ "cpuPercent": 1 })).is_none(), "needs the sessions");
+        assert!(
+            Snapshot::of(&json!({ "cpuPercent": 1 })).is_none(),
+            "needs the sessions"
+        );
     }
 
     #[test]
     fn rows_sort_busiest_first_then_by_memory_then_id() {
         let snapshot = Snapshot::of(&snapshot_json()).unwrap();
-        let meta = [Meta { session_id: "a".into(), title: "Alpha".into(), provider: "codex" }];
+        let meta = [Meta {
+            session_id: "a".into(),
+            title: "Alpha".into(),
+            provider: "codex",
+        }];
         let ordered = rows(&snapshot, &meta);
         assert_eq!(ordered[0].session_id, "b");
-        assert_eq!(ordered[0].title, "", "no title until a conversation matches");
+        assert_eq!(
+            ordered[0].title, "",
+            "no title until a conversation matches"
+        );
         assert_eq!(ordered[1].title, "Alpha");
         assert_eq!(ordered[1].provider, Some("codex"));
     }
@@ -859,8 +977,16 @@ mod tests {
                                 { "pid": 3, "started": 1, "name": "y", "kind": "tool", "cpuPercent": 1, "memoryBytes": 1 }] } ] })).unwrap();
         let shown = without_stopping(rows(&snapshot, &[]), &HashSet::from([2]));
         assert_eq!(shown[0].processes.len(), 1);
-        assert_eq!(shown[0].process_count, 3, "the count drops by the one that left");
-        assert_eq!(without_stopping(rows(&snapshot, &[]), &HashSet::new())[0].processes.len(), 2);
+        assert_eq!(
+            shown[0].process_count, 3,
+            "the count drops by the one that left"
+        );
+        assert_eq!(
+            without_stopping(rows(&snapshot, &[]), &HashSet::new())[0]
+                .processes
+                .len(),
+            2
+        );
     }
 
     #[test]
@@ -898,7 +1024,10 @@ mod tests {
 
     #[test]
     fn stop_arguments_have_the_host_shapes() {
-        assert_eq!(super::super::delegated_tasks::stop_args("s"), json!({ "sessionId": "s" }));
+        assert_eq!(
+            super::super::delegated_tasks::stop_args("s"),
+            json!({ "sessionId": "s" })
+        );
         assert_eq!(
             stop_process_args("s", &process(41, "tool")),
             json!({ "action": { "type": "stopProcess", "sessionId": "s", "pid": 41, "started": 141 } })
@@ -921,7 +1050,10 @@ mod tests {
         assert_eq!(kind_label("agent"), t("Agente"));
         assert_eq!(kind_label("package"), t("Pacotes"));
         assert_eq!(kind_label("whatever"), t("Ferramenta"));
-        assert_eq!(pressure_label("critical"), Some(t("Pressão de memória crítica")));
+        assert_eq!(
+            pressure_label("critical"),
+            Some(t("Pressão de memória crítica"))
+        );
         assert_eq!(pressure_label("unknown"), None);
         assert_eq!(title_or_untitled("  "), t("Conversa"));
     }

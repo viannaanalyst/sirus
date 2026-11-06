@@ -113,7 +113,15 @@ mod tests {
             json!({ "role": "agent", "content": "" }),
             json!({ "role": "agent", "content": "Olá." }),
         ];
-        let text = markdown("Plano", "codex", Some("gpt-5"), "2026-11-05T10:00:00Z", &messages, "You", "Agent");
+        let text = markdown(
+            "Plano",
+            "codex",
+            Some("gpt-5"),
+            "2026-11-05T10:00:00Z",
+            &messages,
+            "You",
+            "Agent",
+        );
         assert_eq!(
             text,
             "# Plano\n\ncodex · gpt-5 · 2026-11-05\n\n## You\n\nOi\n\n## Agent\n\nOlá.\n"
@@ -124,12 +132,21 @@ mod tests {
     fn a_model_less_conversation_has_no_model_part() {
         let text = markdown("T", "claude", None, "2026-01-02", &[], "Você", "Agente");
         assert_eq!(text, "# T\n\nclaude · 2026-01-02\n");
-        assert_eq!(markdown("T", "claude", Some(""), "2026-01-02", &[], "Você", "Agente"), text);
+        assert_eq!(
+            markdown("T", "claude", Some(""), "2026-01-02", &[], "Você", "Agente"),
+            text
+        );
     }
 
     #[test]
     fn the_argument_shapes_match_the_host() {
-        assert_eq!(transcript_args("s"), json!({ "action": { "type": "load", "sessionId": "s" } }));
-        assert_eq!(export_args("s", "# x\n"), json!({ "sessionId": "s", "markdown": "# x\n" }));
+        assert_eq!(
+            transcript_args("s"),
+            json!({ "action": { "type": "load", "sessionId": "s" } })
+        );
+        assert_eq!(
+            export_args("s", "# x\n"),
+            json!({ "sessionId": "s", "markdown": "# x\n" })
+        );
     }
 }

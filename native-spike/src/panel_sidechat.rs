@@ -306,7 +306,6 @@ impl SideChat {
         }
     }
 
-
     fn selection(&self) -> Range<usize> {
         self.cursor.min(self.anchor)..self.cursor.max(self.anchor)
     }

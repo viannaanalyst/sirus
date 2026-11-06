@@ -86,8 +86,12 @@ pub struct UsageHistory {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn usage_history(state: State<'_, Arc<AppState>>, days: i64) -> Result<UsageHistory> {
     state.ensure_running()?;
-    let sources = Sources::for_app(&state);
-    let days = days.clamp(1, MAX_DAYS);
+    read_days(&state, days.clamp(1, MAX_DAYS)).await
+}
+
+/// The history of the last `days` days (the caller keeps it within bounds).
+pub(crate) async fn read_days(state: &AppState, days: i64) -> Result<UsageHistory> {
+    let sources = Sources::for_app(state);
     tokio::task::spawn_blocking(move || {
         let now = now_ms();
         let mut cache = cache().lock();

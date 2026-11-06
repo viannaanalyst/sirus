@@ -120,7 +120,12 @@ thread_local! {
 
 /// The line of letters along the composer's top edge while the agent works: faint everywhere,
 /// lit and raised around the robot walking over it. `width` hands the line's width to the robot.
-pub fn ledge(color: u32, robot_x: f32, clock: f32, width: std::rc::Rc<std::cell::Cell<f32>>) -> AnyElement {
+pub fn ledge(
+    color: u32,
+    robot_x: f32,
+    clock: f32,
+    width: std::rc::Rc<std::cell::Cell<f32>>,
+) -> AnyElement {
     let tint = Hsla::from(Rgba {
         r: ((color >> 16) & 0xff) as f32 / 255.,
         g: ((color >> 8) & 0xff) as f32 / 255.,
@@ -174,7 +179,11 @@ pub fn walk(width: f32, clock: f32) -> (f32, f32) {
     let span = (width - 46.).max(1.);
     let period = span / 110. * 2.;
     let phase = (clock % period) / period;
-    let along = if phase < 0.5 { phase * 2. } else { 2. - phase * 2. };
+    let along = if phase < 0.5 {
+        phase * 2.
+    } else {
+        2. - phase * 2.
+    };
     (8. + span * along, (clock * 6.8).sin().abs() * 4.)
 }
 
@@ -201,7 +210,11 @@ pub fn field_with<V: 'static>(
     gaze: bool,
 ) -> AnyElement {
     let mouse = if still { None } else { state.mouse };
-    let waves = if still { Vec::new() } else { state.waves.clone() };
+    let waves = if still {
+        Vec::new()
+    } else {
+        state.waves.clone()
+    };
     let tint = Rgba {
         r: ((color >> 16) & 0xff) as f32 / 255.,
         g: ((color >> 8) & 0xff) as f32 / 255.,
@@ -291,7 +304,11 @@ pub fn field_with<V: 'static>(
                         ids[at],
                         px(FONT_SIZE),
                         Hsla {
-                            a: if gaze { (value * 0.9).min(0.8) } else { (value * 0.6).min(0.55) },
+                            a: if gaze {
+                                (value * 0.9).min(0.8)
+                            } else {
+                                (value * 0.6).min(0.55)
+                            },
                             ..shade
                         },
                     );

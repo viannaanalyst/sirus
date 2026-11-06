@@ -121,7 +121,9 @@ pub(crate) enum Undo {
     /// Every file is back as it was: the row says so instead of the button.
     Done,
     /// The button; disabled while the conversation works.
-    Offered { enabled: bool },
+    Offered {
+        enabled: bool,
+    },
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -238,8 +240,13 @@ pub(crate) fn name_tip(name: &'static str) -> impl Fn(&mut Window, &mut App) -> 
 /// One click's work, carried into the handlers.
 #[derive(Clone)]
 pub(crate) enum Act {
-    Copy { key: String, text: String },
-    Retry { session: String },
+    Copy {
+        key: String,
+        text: String,
+    },
+    Retry {
+        session: String,
+    },
     Undo {
         key: String,
         session: String,
@@ -249,7 +256,9 @@ pub(crate) enum Act {
 }
 
 /// Settles a request's reply: the value, or the error's text.
-pub(crate) async fn settle(rx: async_channel::Receiver<Result<Value, Value>>) -> Result<Value, String> {
+pub(crate) async fn settle(
+    rx: async_channel::Receiver<Result<Value, Value>>,
+) -> Result<Value, String> {
     match rx.recv().await {
         Ok(Ok(value)) => Ok(value),
         Ok(Err(error)) => Err(error["message"]
@@ -293,7 +302,10 @@ pub(crate) fn block_text(block: &Value) -> String {
         ),
         Some("otherSession") => tf(
             "\"{}\" tem mudanças não mantidas em {} nesta pasta. Mantenha ou desfaça nessa sessão primeiro.",
-            &[&block["title"].as_str().unwrap_or(""), &files_text(&files())],
+            &[
+                &block["title"].as_str().unwrap_or(""),
+                &files_text(&files()),
+            ],
         ),
         Some("changedAgain") if block["laterTurn"].as_bool() == Some(true) => tf(
             "{} mudou de novo em uma resposta posterior desta sessão. Desfaça essa resposta primeiro, ou reverta à mão pelo diff.",
@@ -627,9 +639,9 @@ impl Shell {
             return row.opacity(0.4).into_any_element();
         }
         let (session, reply) = (session.to_owned(), reply.to_owned());
-        let row = row.cursor_pointer().on_click(cx.listener(move |this, _, _, cx| {
-            this.run_more(item.row, &session, &reply, at, cx)
-        }));
+        let row = row.cursor_pointer().on_click(
+            cx.listener(move |this, _, _, cx| this.run_more(item.row, &session, &reply, at, cx)),
+        );
         crate::hover_track::list("turn-more-menu")
             .row(row, i, false)
             .into_any_element()
@@ -766,16 +778,17 @@ impl Shell {
         files: Vec<String>,
         cx: &mut Context<Self>,
     ) {
-        let listed: Vec<&str> = files.iter().take(LISTED_FILES).map(String::as_str).collect();
+        let listed: Vec<&str> = files
+            .iter()
+            .take(LISTED_FILES)
+            .map(String::as_str)
+            .collect();
         let mut text = tf("{} arquivos podem ser desfeitos.", &[&files.len()]);
         text.push(' ');
         text.push_str(&listed.join(", "));
         if files.len() > LISTED_FILES {
             text.push(' ');
-            text.push_str(&tf(
-                "e mais {} arquivos",
-                &[&(files.len() - LISTED_FILES)],
-            ));
+            text.push_str(&tf("e mais {} arquivos", &[&(files.len() - LISTED_FILES)]));
         }
         text.push_str(". ");
         text.push_str(t("Os arquivos voltam a como estavam antes desta resposta. Um arquivo mudado de novo depois, nos mesmos trechos, fica como está. Nada é commitado nem preparado."));
@@ -783,7 +796,9 @@ impl Shell {
             t("Desfazer as mudanças deste turno?").to_owned(),
             text,
             t("Desfazer"),
-            move |this: &mut Shell, cx: &mut Context<Shell>| this.run_undo(key, session, message, cx),
+            move |this: &mut Shell, cx: &mut Context<Shell>| {
+                this.run_undo(key, session, message, cx)
+            },
             cx,
         );
     }
@@ -929,7 +944,10 @@ mod tests {
 
     #[test]
     fn every_file_back_shows_done() {
-        let all = review(&[("a.rs", false, true, true), ("b.rs", false, true, true)], false);
+        let all = review(
+            &[("a.rs", false, true, true), ("b.rs", false, true, true)],
+            false,
+        );
         assert_eq!(
             visible(&facts(true, true, false, false, Some(&all))).undo,
             Undo::Done

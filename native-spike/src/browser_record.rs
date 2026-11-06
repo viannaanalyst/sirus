@@ -308,10 +308,8 @@ impl Writer {
             for (key, value) in pairs {
                 let key = NSString::from_str(key);
                 unsafe {
-                    dictionary.setObject_forKey(
-                        value,
-                        objc2::runtime::ProtocolObject::from_ref(&*key),
-                    )
+                    dictionary
+                        .setObject_forKey(value, objc2::runtime::ProtocolObject::from_ref(&*key))
                 };
             }
             dictionary
@@ -324,10 +322,9 @@ impl Writer {
             any(number(bitrate(width as u32, height as u32, opts.fps) as f64)),
         )]);
         let settings = strings(&[
-            (
-                "AVVideoCodecKey",
-                unsafe { Retained::cast_unchecked(NSString::from_str("avc1")) },
-            ),
+            ("AVVideoCodecKey", unsafe {
+                Retained::cast_unchecked(NSString::from_str("avc1"))
+            }),
             ("AVVideoWidthKey", any(number(width as f64))),
             ("AVVideoHeightKey", any(number(height as f64))),
             ("AVVideoCompressionPropertiesKey", unsafe {
@@ -377,12 +374,7 @@ impl Writer {
     }
 
     /// Draws `image` and the overlays into a pixel buffer and appends it at `at` ms.
-    fn append(
-        &mut self,
-        image: *const CGImage,
-        at: i64,
-        overlay: &Overlay,
-    ) -> Result<(), String> {
+    fn append(&mut self, image: *const CGImage, at: i64, overlay: &Overlay) -> Result<(), String> {
         unsafe {
             let ready: Bool = msg_send![&*self.input, isReadyForMoreMediaData];
             if !ready.as_bool() {
@@ -600,7 +592,11 @@ impl Recorder {
         self.last_ms = at;
         let writer = self.writer.as_mut().expect("writer was just created");
         let width = writer.width as f64;
-        let viewport = if self.viewport > 0. { self.viewport } else { width };
+        let viewport = if self.viewport > 0. {
+            self.viewport
+        } else {
+            width
+        };
         let now = now_ms();
         let overlay = Overlay {
             rings: if self.opts.clicks {
@@ -753,7 +749,10 @@ mod tests {
                 clicks: false
             }
         );
-        assert_eq!(Options::from_settings(&json!({ "browserRecordingFps": 15 })).fps, 30);
+        assert_eq!(
+            Options::from_settings(&json!({ "browserRecordingFps": 15 })).fps,
+            30
+        );
         assert_eq!(off.interval(), Duration::from_micros(16_666));
     }
 

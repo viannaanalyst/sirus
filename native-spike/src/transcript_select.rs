@@ -413,9 +413,13 @@ impl State {
         let reply = s.reply?;
         let (a, b) = ordered(s.anchor?, s.head?);
         // The first fragment of the selection that is laid out.
-        let (seq, (_, frag)) = (a.0..=b.0)
-            .find_map(|seq| s.frags.get(&(reply, seq)).map(|f| (seq, f)))?;
-        let from = if seq == a.0 { a.1.min(frag.text.len()) } else { 0 };
+        let (seq, (_, frag)) =
+            (a.0..=b.0).find_map(|seq| s.frags.get(&(reply, seq)).map(|f| (seq, f)))?;
+        let from = if seq == a.0 {
+            a.1.min(frag.text.len())
+        } else {
+            0
+        };
         let top = frag.layout.position_for_index(from)?;
         let right = (seq == b.0)
             .then(|| frag.layout.position_for_index(b.1.min(frag.text.len())))
@@ -537,7 +541,10 @@ pub(crate) fn wrap_links(
     } else {
         // The pointing hand comes from InteractiveText; the click itself is the root's (see `take_link`).
         let ranges = links.iter().map(|(range, _)| range.clone()).collect();
-        let id = format!("sel-link-{}-{}-{}-{seq}", reply.conversation, reply.turn, reply.user);
+        let id = format!(
+            "sel-link-{}-{}-{}-{seq}",
+            reply.conversation, reply.turn, reply.user
+        );
         InteractiveText::new(SharedString::from(id), styled)
             .on_click(ranges, |_, _, _| {})
             .into_any_element()
@@ -547,7 +554,9 @@ pub(crate) fn wrap_links(
         .cursor(CursorStyle::IBeam)
         .on_mouse_down(MouseButton::Left, move |event, window, _| {
             let (layout, text, state, links) = &press;
-            let byte = layout.index_for_position(event.position).unwrap_or_else(|i| i);
+            let byte = layout
+                .index_for_position(event.position)
+                .unwrap_or_else(|i| i);
             state.press(
                 reply,
                 seq,
@@ -792,7 +801,13 @@ impl Shell {
                 .cursor_pointer()
                 .hover(|s| s.bg(content(0.07)))
                 .child(icon(glyph, 14.).text_color(content(0.65)))
-                .child(div().flex_1().min_w_0().truncate().child(crate::i18n::t(label)))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .child(crate::i18n::t(label)),
+                )
         };
         let copy = text.clone();
         let ask = text;
@@ -801,7 +816,11 @@ impl Shell {
             .min(self.viewport_width - MENU_WIDTH - 8.)
             .max(8.);
         let above = f32::from(anchor.y) - HEIGHT - 8.;
-        let top = if above < 8. { f32::from(anchor.y) + 28. } else { above };
+        let top = if above < 8. {
+            f32::from(anchor.y) + 28.
+        } else {
+            above
+        };
         Some(
             div()
                 .id("transcript-selection-menu")
@@ -838,7 +857,12 @@ impl Shell {
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.select.clear();
                         this.open_pane(4, cx);
-                        let key = (4, this.conversations[this.active_conversation()].session_id.clone());
+                        let key = (
+                            4,
+                            this.conversations[this.active_conversation()]
+                                .session_id
+                                .clone(),
+                        );
                         if let Some(view) = this.pane_views.get(&key) {
                             crate::panel_sidechat::quote(view, &ask, window, cx);
                         }
@@ -931,7 +955,10 @@ mod tests {
         let forward = extract(&texts, (1, 4), (3, 2));
         assert_eq!(forward.as_deref(), Some("mundo\nitem um\nfn"));
         assert_eq!(extract(&texts, (3, 2), (1, 4)), forward);
-        assert_eq!(extract(&texts, (0, 0), (4, 100)).unwrap().lines().count(), 5);
+        assert_eq!(
+            extract(&texts, (0, 0), (4, 100)).unwrap().lines().count(),
+            5
+        );
         assert_eq!(extract(&texts, (2, 3), (2, 3)), None);
         assert_eq!(extract(&[], (0, 0), (1, 1)), None);
     }
@@ -944,7 +971,17 @@ mod tests {
         });
         assert_eq!(
             texts,
-            ["Título", "Olá mundo", "um", "dois", "let x = 1;", "a", "b", "c", "d"]
+            [
+                "Título",
+                "Olá mundo",
+                "um",
+                "dois",
+                "let x = 1;",
+                "a",
+                "b",
+                "c",
+                "d"
+            ]
         );
         let all = extract(&texts, (0, 0), (texts.len() - 1, 1)).unwrap();
         assert!(all.starts_with("Título\nOlá mundo\num\ndois\nlet x = 1;"));
@@ -980,8 +1017,14 @@ mod tests {
     fn dragging_backwards_by_word_keeps_the_first_word() {
         let anchor = ((0, 4), (0, 8));
         // Dragging to the left of the anchor word selects from the head to the anchor's end.
-        assert_eq!(extend(anchor, Gran::Word, 0, "um dois três", 0), ((0, 8), (0, 0)));
-        assert_eq!(extend(anchor, Gran::Word, 0, "um dois três", 10), ((0, 4), (0, 13)));
+        assert_eq!(
+            extend(anchor, Gran::Word, 0, "um dois três", 0),
+            ((0, 8), (0, 0))
+        );
+        assert_eq!(
+            extend(anchor, Gran::Word, 0, "um dois três", 10),
+            ((0, 4), (0, 13))
+        );
         // Into an earlier or later fragment.
         assert_eq!(extend(anchor, Gran::Char, 1, "x", 1), ((0, 4), (1, 1)));
     }
@@ -1054,7 +1097,10 @@ mod window_tests {
         .unwrap();
     }
 
-    fn open_probe(cx: &mut TestAppContext, source: &'static str) -> (State, Rc<RefCell<Vec<String>>>, gpui::AnyWindowHandle) {
+    fn open_probe(
+        cx: &mut TestAppContext,
+        source: &'static str,
+    ) -> (State, Rc<RefCell<Vec<String>>>, gpui::AnyWindowHandle) {
         let state = State::default();
         let opened = Rc::new(RefCell::new(Vec::new()));
         let window = cx.update(|cx| {
@@ -1072,7 +1118,10 @@ mod window_tests {
 
     #[gpui::test]
     fn release_after_a_drag_offers_the_menu(cx: &mut TestAppContext) {
-        let (state, _, window) = open_probe(cx, "Primeiro parágrafo com texto\n\nSegundo parágrafo com mais texto");
+        let (state, _, window) = open_probe(
+            cx,
+            "Primeiro parágrafo com texto\n\nSegundo parágrafo com mais texto",
+        );
         let mut vcx = VisualTestContext::from_window(window, cx);
         frame(&mut vcx, window);
         vcx.simulate_mouse_down(at(4., 8.), MouseButton::Left, Modifiers::default());

@@ -279,12 +279,9 @@ impl Shell {
                 .when(open, |d| d.bg(content(0.05)))
                 .hover(|s| s.bg(content(0.07)))
                 .child(
-                    canvas(
-                        move |bounds, _, _| store.set(Some(bounds)),
-                        |_, _, _, _| {},
-                    )
-                    .absolute()
-                    .size_full(),
+                    canvas(move |bounds, _, _| store.set(Some(bounds)), |_, _, _, _| {})
+                        .absolute()
+                        .size_full(),
                 )
                 .child(
                     canvas(
@@ -293,10 +290,8 @@ impl Shell {
                             let side = 16.;
                             let inner = Bounds::new(
                                 point(
-                                    bounds.left()
-                                        + (bounds.size.width - px(side)) / 2.,
-                                    bounds.top()
-                                        + (bounds.size.height - px(side)) / 2.,
+                                    bounds.left() + (bounds.size.width - px(side)) / 2.,
+                                    bounds.top() + (bounds.size.height - px(side)) / 2.,
                                 ),
                                 size(px(side), px(side)),
                             );
@@ -348,8 +343,7 @@ impl Shell {
         }
         let phase = open.at(now).clamp(0., 1.);
         let reading = ring(usage.used, window);
-        let can_compact =
-            compacts(conversation.provider) && conversation.native;
+        let can_compact = compacts(conversation.provider) && conversation.native;
         let wait = busy(&conversation.status);
         let strong = reading.level != Level::Normal;
         let right = self.viewport_width - f32::from(anchor.right());
@@ -386,26 +380,20 @@ impl Shell {
                                 .text_color(content(0.95))
                                 .child(tf("{}% usado", &[&reading.percent])),
                         )
-                        .child(
-                            div()
-                                .text_size(px(12.))
-                                .text_color(content(0.5))
-                                .child(tf(
-                                    "{} / {} tokens",
-                                    &[&format_tokens(usage.used), &format_tokens(window)],
-                                )),
-                        )
+                        .child(div().text_size(px(12.)).text_color(content(0.5)).child(tf(
+                            "{} / {} tokens",
+                            &[&format_tokens(usage.used), &format_tokens(window)],
+                        )))
                         .when(can_compact && wait, |d| {
                             d.child(
-                                div()
-                                    .text_size(px(12.))
-                                    .text_color(content(0.5))
-                                    .child(t(refusal(
+                                div().text_size(px(12.)).text_color(content(0.5)).child(t(
+                                    refusal(
                                         conversation.provider,
                                         &conversation.status,
                                         conversation.native,
                                     )
-                                    .unwrap_or_default())),
+                                    .unwrap_or_default(),
+                                )),
                             )
                         }),
                 )
@@ -462,8 +450,11 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> bool {
         let conversation = &self.conversations[ix];
-        if let Some(reason) = refusal(conversation.provider, &conversation.status, conversation.native)
-        {
+        if let Some(reason) = refusal(
+            conversation.provider,
+            &conversation.status,
+            conversation.native,
+        ) {
             self.problem = Some(t(reason).to_owned());
             cx.notify();
             return false;
@@ -606,7 +597,12 @@ impl Shell {
 mod tests {
     use super::*;
 
-    fn conversation(provider: &'static str, status: &str, used: u64, expires: Option<i64>) -> Conversation {
+    fn conversation(
+        provider: &'static str,
+        status: &str,
+        used: u64,
+        expires: Option<i64>,
+    ) -> Conversation {
         let mut conversation = Conversation::placeholder();
         conversation.provider = provider;
         conversation.status = status.into();
@@ -647,8 +643,14 @@ mod tests {
     fn compact_has_its_refusals_in_order() {
         assert!(refusal("opencode", "idle", true).is_some_and(|r| r.contains("Codex")));
         assert!(refusal("claude", "idle", false).is_some_and(|r| r.contains("não começou")));
-        assert_eq!(refusal("claude", "running", true), Some("Espere o turno atual terminar"));
-        assert_eq!(refusal("codex", "waiting", true), Some("Espere o turno atual terminar"));
+        assert_eq!(
+            refusal("claude", "running", true),
+            Some("Espere o turno atual terminar")
+        );
+        assert_eq!(
+            refusal("codex", "waiting", true),
+            Some("Espere o turno atual terminar")
+        );
         assert_eq!(refusal("claude", "completed", true), None);
         assert_eq!(refusal("codex", "failed", true), None);
         assert!(is_compact_command(" /compact ") && !is_compact_command("/compact now"));
@@ -658,12 +660,27 @@ mod tests {
     fn a_heavy_claude_conversation_past_its_cache_compacts_before_sending() {
         let now = 10_000_000;
         // Past the cache's own expiry.
-        assert!(compact_before_send(&conversation("claude", "completed", 650_000, Some(now - 1)), now));
-        assert!(!compact_before_send(&conversation("claude", "completed", 650_000, Some(now + 1)), now));
+        assert!(compact_before_send(
+            &conversation("claude", "completed", 650_000, Some(now - 1)),
+            now
+        ));
+        assert!(!compact_before_send(
+            &conversation("claude", "completed", 650_000, Some(now + 1)),
+            now
+        ));
         // Light, running, other providers and no thread never do.
-        assert!(!compact_before_send(&conversation("claude", "completed", 20_000, Some(now - 1)), now));
-        assert!(!compact_before_send(&conversation("claude", "running", 650_000, Some(now - 1)), now));
-        assert!(!compact_before_send(&conversation("codex", "completed", 650_000, Some(now - 1)), now));
+        assert!(!compact_before_send(
+            &conversation("claude", "completed", 20_000, Some(now - 1)),
+            now
+        ));
+        assert!(!compact_before_send(
+            &conversation("claude", "running", 650_000, Some(now - 1)),
+            now
+        ));
+        assert!(!compact_before_send(
+            &conversation("codex", "completed", 650_000, Some(now - 1)),
+            now
+        ));
         let mut fresh = conversation("claude", "completed", 650_000, Some(now - 1));
         fresh.native = false;
         assert!(!compact_before_send(&fresh, now));
@@ -673,7 +690,9 @@ mod tests {
             .unwrap()
             .to_rfc3339();
         assert!(compact_before_send(&idle, now));
-        idle.last_activity = chrono::DateTime::from_timestamp_millis(now - 1000).unwrap().to_rfc3339();
+        idle.last_activity = chrono::DateTime::from_timestamp_millis(now - 1000)
+            .unwrap()
+            .to_rfc3339();
         assert!(!compact_before_send(&idle, now));
     }
 
@@ -681,7 +700,10 @@ mod tests {
     fn a_reading_needs_used_and_ignores_a_zero_window() {
         let session = json!({"contextUsage": {"used": 5, "window": 0, "cacheExpiresAt": 9}});
         let reading = Reading::of(&session).unwrap();
-        assert_eq!((reading.used, reading.window, reading.cache_expires_at), (5, None, Some(9)));
+        assert_eq!(
+            (reading.used, reading.window, reading.cache_expires_at),
+            (5, None, Some(9))
+        );
         assert!(Reading::of(&json!({"contextUsage": null})).is_none());
     }
 }

@@ -55,7 +55,8 @@ pub fn check_branch_name(raw: &str, existing: &[String]) -> Result<String, NameP
 }
 
 fn valid_shape(name: &str) -> bool {
-    name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '-' | '_'))
+    name.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '-' | '_'))
         && !name.starts_with('-')
         && name != "@"
         && !name.contains("..")
@@ -73,7 +74,9 @@ pub fn problem_text(problem: NameProblem) -> Option<&'static str> {
     match problem {
         NameProblem::Empty => None,
         NameProblem::TooLong => Some(t("Nome longo demais (120 caracteres no máximo).")),
-        NameProblem::Invalid => Some(t("Nome inválido: use letras, números, /, ., - e _, sem espaços nem .. e sem começar com - ou terminar com / ou ponto.")),
+        NameProblem::Invalid => Some(t(
+            "Nome inválido: use letras, números, /, ., - e _, sem espaços nem .. e sem começar com - ou terminar com / ou ponto.",
+        )),
         NameProblem::Exists => Some(t("Já existe um branch com esse nome.")),
     }
 }
@@ -134,14 +137,22 @@ pub fn parse_incoming(value: &Value) -> Option<GitIncoming> {
 pub enum Shown {
     Hidden,
     /// Fast-forward possible: nothing local, something new.
-    Pull { count: u64 },
+    Pull {
+        count: u64,
+    },
     /// Both sides have commits: shown muted, no pull.
-    Diverged { ahead: u64, behind: u64 },
+    Diverged {
+        ahead: u64,
+        behind: u64,
+    },
 }
 
 pub fn shown(incoming: Option<&GitIncoming>) -> Shown {
     match incoming {
-        Some(g) if g.behind > 0 && g.ahead > 0 => Shown::Diverged { ahead: g.ahead, behind: g.behind },
+        Some(g) if g.behind > 0 && g.ahead > 0 => Shown::Diverged {
+            ahead: g.ahead,
+            behind: g.behind,
+        },
         Some(g) if g.behind > 0 => Shown::Pull { count: g.behind },
         _ => Shown::Hidden,
     }
@@ -158,7 +169,9 @@ pub enum Pulled {
 
 pub fn pull_answer(ok: bool, value: &Value) -> Pulled {
     if !ok {
-        let message = value["message"].as_str().map_or_else(|| t("O git falhou.").to_owned(), str::to_owned);
+        let message = value["message"]
+            .as_str()
+            .map_or_else(|| t("O git falhou.").to_owned(), str::to_owned);
         return Pulled::Failed(message);
     }
     match value["status"].as_str() {
@@ -173,7 +186,8 @@ pub fn pull_answer(ok: bool, value: &Value) -> Pulled {
                 .collect(),
         ),
         Some("diverged") => {
-            let (ahead, behind) = parse_incoming(&value["incoming"]).map_or((0, 0), |g| (g.ahead, g.behind));
+            let (ahead, behind) =
+                parse_incoming(&value["incoming"]).map_or((0, 0), |g| (g.ahead, g.behind));
             Pulled::Diverged { ahead, behind }
         }
         _ => Pulled::Failed(t("O git falhou.").to_owned()),
@@ -208,7 +222,13 @@ pub struct IncomingState {
 impl IncomingState {
     /// Called on each frame with the selected conversation. True when the host should be asked
     /// now: the conversation or folder changed, a turn settled, or the window came back.
-    pub fn observe(&mut self, session: &str, folder: &str, working: bool, window_active: bool) -> bool {
+    pub fn observe(
+        &mut self,
+        session: &str,
+        folder: &str,
+        working: bool,
+        window_active: bool,
+    ) -> bool {
         let moved = session != self.session || folder != self.folder;
         let settled = self.working && !working;
         let back = window_active && !self.window_active;
@@ -258,7 +278,9 @@ impl IncomingState {
 
     /// Starts a pull when the header offers one and no conversation is working in the folder.
     pub fn begin_pull(&mut self) -> bool {
-        let Some(value) = &self.value else { return false };
+        let Some(value) = &self.value else {
+            return false;
+        };
         if self.pulling || self.working || value.behind == 0 || value.ahead > 0 {
             return false;
         }
@@ -283,7 +305,9 @@ impl IncomingState {
                 self.feedback = feedback;
             }
             Pulled::Blocked(files) => self.feedback = Some(Feedback::Blocked(files)),
-            Pulled::Diverged { ahead, behind } => self.feedback = Some(Feedback::Diverged { ahead, behind }),
+            Pulled::Diverged { ahead, behind } => {
+                self.feedback = Some(Feedback::Diverged { ahead, behind })
+            }
             Pulled::Failed(message) => self.feedback = Some(Feedback::Failed(message)),
         }
         true
@@ -359,7 +383,10 @@ pub fn pill(
                 .text_size(px(10.5))
                 .child(count.to_string()),
         );
-        button = button.cursor_pointer().hover(|s| s.bg(content(0.07))).on_click(on_click);
+        button = button
+            .cursor_pointer()
+            .hover(|s| s.bg(content(0.07)))
+            .on_click(on_click);
     }
     Some(button.into_any_element())
 }
@@ -386,39 +413,72 @@ pub fn popover(
         }
         (_, Some(value)) => {
             let title = if value.behind == 1 {
-                tf_pair2("{} commit novo em {}", &value.behind.to_string(), &value.upstream)
+                tf_pair2(
+                    "{} commit novo em {}",
+                    &value.behind.to_string(),
+                    &value.upstream,
+                )
             } else {
-                tf_pair2("{} commits novos em {}", &value.behind.to_string(), &value.upstream)
+                tf_pair2(
+                    "{} commits novos em {}",
+                    &value.behind.to_string(),
+                    &value.upstream,
+                )
             };
-            body.push(div().px(px(8.)).pt(px(6.)).text_size(px(13.)).text_color(content(0.95)).child(title).into_any_element());
+            body.push(
+                div()
+                    .px(px(8.))
+                    .pt(px(6.))
+                    .text_size(px(13.))
+                    .text_color(content(0.95))
+                    .child(title)
+                    .into_any_element(),
+            );
             body.push(small(&tf_pair("Puxa para {}", &value.branch), content(0.5)));
             for commit in value.commits.iter().take(SHOWN_COMMITS) {
                 body.push(commit_row(commit));
             }
-            let more = value.behind.saturating_sub(SHOWN_COMMITS as u64).min(value.commits.len() as u64);
+            let more = value
+                .behind
+                .saturating_sub(SHOWN_COMMITS as u64)
+                .min(value.commits.len() as u64);
             if more > 0 {
                 body.push(small(&tf_pair("{} mais", &more.to_string()), content(0.45)));
             }
             match &state.feedback {
                 Some(Feedback::Blocked(files)) => {
-                    body.push(small(t("Arquivos que impedem o pull:"), rgb(0xe08a8a).into()));
+                    body.push(small(
+                        t("Arquivos que impedem o pull:"),
+                        rgb(0xe08a8a).into(),
+                    ));
                     for file in files.iter().take(SHOWN_FILES) {
                         body.push(small(file, content(0.6)));
                     }
                 }
                 Some(Feedback::Diverged { ahead, behind }) => body.push(note_row(
-                    &tf_pair2("Divergiu: {} local e {} do remoto. Faça merge ou rebase à mão.", &ahead.to_string(), &behind.to_string()),
+                    &tf_pair2(
+                        "Divergiu: {} local e {} do remoto. Faça merge ou rebase à mão.",
+                        &ahead.to_string(),
+                        &behind.to_string(),
+                    ),
                     true,
                 )),
                 Some(Feedback::Failed(message)) => body.push(note_row(message, true)),
                 _ => {}
             }
             if state.working && !state.pulling {
-                body.push(small(t("Uma conversa está trabalhando nesta pasta. Puxe quando ela terminar."), content(0.5)));
+                body.push(small(
+                    t("Uma conversa está trabalhando nesta pasta. Puxe quando ela terminar."),
+                    content(0.5),
+                ));
             }
             let enabled = !state.pulling && !state.working;
             let (fill, ink) = primary_action(enabled);
-            let label = if state.pulling { t("Puxando…") } else { t("Puxar agora") };
+            let label = if state.pulling {
+                t("Puxando…")
+            } else {
+                t("Puxar agora")
+            };
             let mut action = div()
                 .id("git-incoming-pull")
                 .mx(px(4.))
@@ -433,7 +493,10 @@ pub fn popover(
                 .text_size(px(12.5))
                 .child(label);
             if enabled {
-                action = action.cursor_pointer().hover(|s| s.opacity(0.9)).on_click(on_pull);
+                action = action
+                    .cursor_pointer()
+                    .hover(|s| s.opacity(0.9))
+                    .on_click(on_pull);
             }
             body.push(action.into_any_element());
         }
@@ -474,14 +537,25 @@ fn commit_row(commit: &Commit) -> AnyElement {
         .items_center()
         .gap(px(8.))
         .text_size(px(12.))
-        .child(div().flex_shrink_0().text_size(px(11.)).text_color(content(0.4)).child(short))
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_size(px(11.))
+                .text_color(content(0.4))
+                .child(short),
+        )
         .child(
             div()
                 .min_w_0()
                 .flex_1()
                 .flex()
                 .flex_col()
-                .child(div().truncate().text_color(content(0.9)).child(commit.subject.clone()))
+                .child(
+                    div()
+                        .truncate()
+                        .text_color(content(0.9))
+                        .child(commit.subject.clone()),
+                )
                 .child(
                     div()
                         .truncate()
@@ -504,7 +578,11 @@ fn small(text: &str, color: Hsla) -> AnyElement {
 }
 
 fn note_row(text: &str, failed: bool) -> AnyElement {
-    let color: Hsla = if failed { rgb(0xe08a8a).into() } else { content(0.8) };
+    let color: Hsla = if failed {
+        rgb(0xe08a8a).into()
+    } else {
+        content(0.8)
+    };
     div()
         .px(px(8.))
         .py(px(4.))
@@ -525,7 +603,13 @@ fn tf_pair2(template: &'static str, first: &str, second: &str) -> String {
 }
 
 /// The name field's frame (after the commit field), with the error line under it.
-pub fn branch_field(draft: &str, error: Option<&str>, can_create: bool, busy: bool, on_create: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> AnyElement {
+pub fn branch_field(
+    draft: &str,
+    error: Option<&str>,
+    can_create: bool,
+    busy: bool,
+    on_create: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> AnyElement {
     let mut field: Div = div()
         .h(px(24.))
         .px(px(6.))
@@ -537,12 +621,20 @@ pub fn branch_field(draft: &str, error: Option<&str>, can_create: bool, busy: bo
         .gap(px(1.))
         .text_size(px(12.));
     field = if draft.is_empty() {
-        field
-            .child(div().w(px(1.5)).h(px(13.)).bg(accent()))
-            .child(div().text_color(content(0.4)).child(t("Nome do novo branch")))
+        field.child(div().w(px(1.5)).h(px(13.)).bg(accent())).child(
+            div()
+                .text_color(content(0.4))
+                .child(t("Nome do novo branch")),
+        )
     } else {
         field
-            .child(div().min_w_0().truncate().text_color(content(0.95)).child(draft.to_owned()))
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(content(0.95))
+                    .child(draft.to_owned()),
+            )
             .child(div().w(px(1.5)).h(px(13.)).bg(accent()))
     };
     let (fill, ink) = primary_action(can_create && !busy);
@@ -559,9 +651,17 @@ pub fn branch_field(draft: &str, error: Option<&str>, can_create: bool, busy: bo
         .text_color(ink)
         .child(t("Criar"));
     if can_create && !busy {
-        create = create.cursor_pointer().hover(|s| s.opacity(0.88)).on_click(on_create);
+        create = create
+            .cursor_pointer()
+            .hover(|s| s.opacity(0.88))
+            .on_click(on_create);
     }
-    let mut column = div().flex().flex_col().gap(px(3.)).child(field).child(create);
+    let mut column = div()
+        .flex()
+        .flex_col()
+        .gap(px(3.))
+        .child(field)
+        .child(create);
     if let Some(error) = error {
         column = column.child(
             div()
@@ -586,7 +686,10 @@ mod tests {
     #[test]
     fn branch_names_follow_the_host_rules() {
         let ok = |name: &str| check_branch_name(name, &existing());
-        assert_eq!(ok("  feature/new-ui_2.0  "), Ok("feature/new-ui_2.0".into()));
+        assert_eq!(
+            ok("  feature/new-ui_2.0  "),
+            Ok("feature/new-ui_2.0".into())
+        );
         assert_eq!(ok(""), Err(NameProblem::Empty));
         assert_eq!(ok("   "), Err(NameProblem::Empty));
         assert_eq!(ok("main"), Err(NameProblem::Exists));
@@ -632,16 +735,38 @@ mod tests {
         assert_eq!(parsed.commits.len(), 2);
         assert_eq!(parsed.commits[1].time, 1_700_000_100);
         assert_eq!(parse_incoming(&Value::Null), None);
-        assert_eq!(parse_incoming(&json!({"branch": "", "upstream": "o/m", "ahead": 0, "behind": 1, "commits": []})), None);
-        assert_eq!(parse_incoming(&json!({"branch": "m", "upstream": "o/m", "ahead": -1, "behind": 1, "commits": []})), None);
+        assert_eq!(
+            parse_incoming(
+                &json!({"branch": "", "upstream": "o/m", "ahead": 0, "behind": 1, "commits": []})
+            ),
+            None
+        );
+        assert_eq!(
+            parse_incoming(
+                &json!({"branch": "m", "upstream": "o/m", "ahead": -1, "behind": 1, "commits": []})
+            ),
+            None
+        );
     }
 
     #[test]
     fn header_shows_pull_only_when_fast_forward_is_possible() {
-        let mut g = GitIncoming { branch: "m".into(), upstream: "o/m".into(), ahead: 0, behind: 3, commits: vec![] };
+        let mut g = GitIncoming {
+            branch: "m".into(),
+            upstream: "o/m".into(),
+            ahead: 0,
+            behind: 3,
+            commits: vec![],
+        };
         assert_eq!(shown(Some(&g)), Shown::Pull { count: 3 });
         g.ahead = 1;
-        assert_eq!(shown(Some(&g)), Shown::Diverged { ahead: 1, behind: 3 });
+        assert_eq!(
+            shown(Some(&g)),
+            Shown::Diverged {
+                ahead: 1,
+                behind: 3
+            }
+        );
         g.ahead = 0;
         g.behind = 0;
         assert_eq!(shown(Some(&g)), Shown::Hidden);
@@ -650,28 +775,67 @@ mod tests {
 
     #[test]
     fn pull_answers_map_to_feedback() {
-        assert_eq!(pull_answer(false, &json!({"message": "busy"})), Pulled::Failed("busy".into()));
-        assert_eq!(pull_answer(true, &json!({"status": "pulled", "incoming": null})), Pulled::Done(None));
         assert_eq!(
-            pull_answer(true, &json!({"status": "blocked", "files": ["a.rs", "", 3]})),
+            pull_answer(false, &json!({"message": "busy"})),
+            Pulled::Failed("busy".into())
+        );
+        assert_eq!(
+            pull_answer(true, &json!({"status": "pulled", "incoming": null})),
+            Pulled::Done(None)
+        );
+        assert_eq!(
+            pull_answer(
+                true,
+                &json!({"status": "blocked", "files": ["a.rs", "", 3]})
+            ),
             Pulled::Blocked(vec!["a.rs".into()])
         );
         let diverged = json!({"status": "diverged", "incoming": {"branch": "m", "upstream": "o/m", "ahead": 2, "behind": 1, "commits": []}});
-        assert_eq!(pull_answer(true, &diverged), Pulled::Diverged { ahead: 2, behind: 1 });
+        assert_eq!(
+            pull_answer(true, &diverged),
+            Pulled::Diverged {
+                ahead: 2,
+                behind: 1
+            }
+        );
     }
 
     #[test]
     fn refresh_is_asked_on_change_settle_and_return_only() {
         let mut state = IncomingState::default();
-        assert!(!state.observe("", "", false, true), "nothing selected, nothing to ask");
-        assert!(state.observe("s1", "/p", false, true), "a new conversation asks");
-        assert!(!state.observe("s1", "/p", false, true), "the same frame does not ask again");
-        assert!(!state.observe("s1", "/p", true, true), "a turn starting does not ask");
-        assert!(state.observe("s1", "/p", false, true), "a turn settling asks");
+        assert!(
+            !state.observe("", "", false, true),
+            "nothing selected, nothing to ask"
+        );
+        assert!(
+            state.observe("s1", "/p", false, true),
+            "a new conversation asks"
+        );
+        assert!(
+            !state.observe("s1", "/p", false, true),
+            "the same frame does not ask again"
+        );
+        assert!(
+            !state.observe("s1", "/p", true, true),
+            "a turn starting does not ask"
+        );
+        assert!(
+            state.observe("s1", "/p", false, true),
+            "a turn settling asks"
+        );
         assert!(!state.observe("s1", "/p", false, false));
-        assert!(state.observe("s1", "/p", false, true), "the window coming back asks");
-        assert!(state.observe("s2", "/p", false, true), "switching conversation asks");
-        assert!(state.observe("s2", "/other", false, true), "a new folder asks");
+        assert!(
+            state.observe("s1", "/p", false, true),
+            "the window coming back asks"
+        );
+        assert!(
+            state.observe("s2", "/p", false, true),
+            "switching conversation asks"
+        );
+        assert!(
+            state.observe("s2", "/other", false, true),
+            "a new folder asks"
+        );
     }
 
     #[test]
@@ -679,12 +843,25 @@ mod tests {
         let mut state = IncomingState::default();
         state.observe("s1", "/p", false, true);
         let generation = state.generation();
-        let value = json!({"branch": "m", "upstream": "o/m", "ahead": 0, "behind": 1, "commits": []});
-        assert!(state.answer(generation, true, &value), "first answer redraws");
-        assert!(!state.answer(generation, true, &value), "the same answer does not redraw");
-        assert!(!state.answer(generation.wrapping_add(1), true, &Value::Null), "an old conversation is dropped");
+        let value =
+            json!({"branch": "m", "upstream": "o/m", "ahead": 0, "behind": 1, "commits": []});
+        assert!(
+            state.answer(generation, true, &value),
+            "first answer redraws"
+        );
+        assert!(
+            !state.answer(generation, true, &value),
+            "the same answer does not redraw"
+        );
+        assert!(
+            !state.answer(generation.wrapping_add(1), true, &Value::Null),
+            "an old conversation is dropped"
+        );
         assert!(state.value.is_some());
-        assert!(state.answer(generation, false, &Value::Null), "a failed fetch hides the button");
+        assert!(
+            state.answer(generation, false, &Value::Null),
+            "a failed fetch hides the button"
+        );
         assert!(state.value.is_none());
     }
 
@@ -693,18 +870,29 @@ mod tests {
         let mut state = IncomingState::default();
         state.observe("s1", "/p", true, true);
         let generation = state.generation();
-        let behind = json!({"branch": "m", "upstream": "o/m", "ahead": 0, "behind": 1, "commits": []});
+        let behind =
+            json!({"branch": "m", "upstream": "o/m", "ahead": 0, "behind": 1, "commits": []});
         state.answer(generation, true, &behind);
-        assert!(!state.begin_pull(), "a working conversation blocks the pull");
+        assert!(
+            !state.begin_pull(),
+            "a working conversation blocks the pull"
+        );
         state.observe("s1", "/p", false, true);
         assert!(state.begin_pull());
         assert!(!state.begin_pull(), "one pull at a time");
         assert!(state.pulled(generation, Pulled::Done(None)));
         assert!(!state.pulling);
-        assert_eq!(state.feedback, Some(Feedback::Done { branch: "m".into(), upstream: "o/m".into() }));
+        assert_eq!(
+            state.feedback,
+            Some(Feedback::Done {
+                branch: "m".into(),
+                upstream: "o/m".into()
+            })
+        );
         assert!(state.value.is_none());
 
-        let diverged = json!({"branch": "m", "upstream": "o/m", "ahead": 1, "behind": 1, "commits": []});
+        let diverged =
+            json!({"branch": "m", "upstream": "o/m", "ahead": 1, "behind": 1, "commits": []});
         state.answer(generation, true, &diverged);
         assert!(!state.begin_pull(), "local commits block the fast-forward");
     }

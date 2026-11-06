@@ -152,7 +152,11 @@ pub(crate) fn agents_of(reply: &Value) -> Vec<Agent> {
         })
         .collect();
     // The ones most people came for lead; the host's order is alphabetical at best.
-    let lead = |id: &str| ["claude", "codex", "opencode"].iter().position(|known| *known == id);
+    let lead = |id: &str| {
+        ["claude", "codex", "opencode"]
+            .iter()
+            .position(|known| *known == id)
+    };
     agents.sort_by_key(|agent| (!agent.installed, lead(&agent.id).unwrap_or(usize::MAX)));
     agents.truncate(AGENTS_MAX);
     agents

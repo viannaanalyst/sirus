@@ -639,6 +639,9 @@ mod tests {
             "detect_agents",
             "save_settings",
             "paste_prompt_attachments",
+            "usage_summary",
+            "phone_look_get",
+            "phone_look_set",
         ] {
             assert!(HOST_COMMANDS.contains(&command), "{command}");
         }

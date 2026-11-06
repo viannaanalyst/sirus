@@ -151,7 +151,11 @@ pub fn custom_store(bytes: [u8; 16], mtm: MainThreadMarker) -> Retained<WKWebsit
 
 /// Deletes a custom profile's data from disk; every tab using it must be closed first. `done`
 /// gets the system's error text if it failed. False when nothing was started.
-pub fn remove_data(id: &str, done: impl Fn(Option<String>) + 'static, mtm: MainThreadMarker) -> bool {
+pub fn remove_data(
+    id: &str,
+    done: impl Fn(Option<String>) + 'static,
+    mtm: MainThreadMarker,
+) -> bool {
     let Some(Store::Custom(bytes)) = store_of(id) else {
         return false;
     };

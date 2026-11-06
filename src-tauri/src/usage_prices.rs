@@ -85,6 +85,11 @@ pub async fn usage_prices(
     models: Vec<String>,
 ) -> Result<UsagePrices> {
     state.ensure_running()?;
+    Ok(prices_for(&state, &models).await)
+}
+
+/// The table's prices for the models it knows, by the requested name.
+pub(crate) async fn prices_for(state: &AppState, models: &[String]) -> UsagePrices {
     let dir = state
         .data_path
         .parent()
@@ -99,10 +104,10 @@ pub async fn usage_prices(
             lookup(&table.rates, model).map(|price| (model.clone(), price))
         })
         .collect();
-    Ok(UsagePrices {
+    UsagePrices {
         prices,
         fetched_at: table.map(|table| table.fetched_at),
-    })
+    }
 }
 
 /// The copy in memory, else on disk; downloaded again when older than a day.

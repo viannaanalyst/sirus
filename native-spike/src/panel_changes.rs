@@ -205,20 +205,22 @@ impl PullRequestForm {
         let title = cx.new(|cx| TextField::new(t("Título do pull request"), cx));
         let body = cx.new(|cx| TextField::new(t("Descrição (opcional)"), cx));
         let events = vec![
-            cx.subscribe(&title, |this: &mut ChangesPanel, _, event: &TextFieldEvent, cx| {
-                match event {
+            cx.subscribe(
+                &title,
+                |this: &mut ChangesPanel, _, event: &TextFieldEvent, cx| match event {
                     TextFieldEvent::Submit => this.create_pull_request(cx),
                     TextFieldEvent::Changed => cx.notify(),
                     TextFieldEvent::Cancel => {}
-                }
-            }),
-            cx.subscribe(&body, |this: &mut ChangesPanel, _, event: &TextFieldEvent, cx| {
-                match event {
+                },
+            ),
+            cx.subscribe(
+                &body,
+                |this: &mut ChangesPanel, _, event: &TextFieldEvent, cx| match event {
                     TextFieldEvent::Submit => this.create_pull_request(cx),
                     TextFieldEvent::Changed => cx.notify(),
                     TextFieldEvent::Cancel => {}
-                }
-            }),
+                },
+            ),
         ];
         Self {
             open: false,
@@ -430,12 +432,16 @@ impl ChangesPanel {
         let token = snapshot.token.clone();
         let started_with = self.commit.read(cx).text().to_owned();
         let id = crate::panel_sidechat::uuid();
-        self.title_job = Some(TitleJob { id: id.clone(), cancelling: false });
+        self.title_job = Some(TitleJob {
+            id: id.clone(),
+            cancelling: false,
+        });
         self.title_note = None;
         self.error = None;
-        let rx = self
-            .backend
-            .request("commit_title_action", title_action(&self.session_id, &token, &id));
+        let rx = self.backend.request(
+            "commit_title_action",
+            title_action(&self.session_id, &token, &id),
+        );
         cx.spawn(async move |this, cx| {
             let reply = settle(rx).await;
             let _ = this.update(cx, |this, cx| {
@@ -444,13 +450,18 @@ impl ChangesPanel {
                 }
                 this.title_job = None;
                 match reply.map(|value| title_reply(&value)) {
-                    Ok(TitleReply::Title { title, provider, partial }) => {
+                    Ok(TitleReply::Title {
+                        title,
+                        provider,
+                        partial,
+                    }) => {
                         let now = this.commit.read(cx).text().to_owned();
                         let current = this.snapshot.as_ref().map(|s| s.token.as_str());
                         if keeps_typed(&started_with, &now, &token, current.unwrap_or("")) {
                             this.title_note = Some(t("Seu texto foi mantido.").into());
                         } else {
-                            this.commit.update(cx, |field, cx| field.set_text(&title, cx));
+                            this.commit
+                                .update(cx, |field, cx| field.set_text(&title, cx));
                             this.title_note = Some(attribution(&provider, partial));
                         }
                     }
@@ -478,9 +489,10 @@ impl ChangesPanel {
         }
         job.cancelling = true;
         // The pending generate returns Cancelled; this answer only matters when it fails.
-        let rx = self
-            .backend
-            .request("commit_title_action", cancel_title_action(&self.session_id, &job.id));
+        let rx = self.backend.request(
+            "commit_title_action",
+            cancel_title_action(&self.session_id, &job.id),
+        );
         cx.spawn(async move |this, cx| {
             if let Err(error) = settle(rx).await {
                 let _ = this.update(cx, |this, cx| {
@@ -495,13 +507,18 @@ impl ChangesPanel {
 
     /// Pushes the session's branch. Only reached from the confirmation.
     fn push_now(&mut self, cx: &mut Context<Self>) {
-        let blocked = self.snapshot.as_ref().is_none_or(|s| !can_push(s.repo, s.detached, &s.head));
+        let blocked = self
+            .snapshot
+            .as_ref()
+            .is_none_or(|s| !can_push(s.repo, s.detached, &s.head));
         if self.push.pushing || blocked {
             return;
         }
         self.push.pushing = true;
         self.push.result = None;
-        let rx = self.backend.request("git_push", json!({ "sessionId": self.session_id }));
+        let rx = self
+            .backend
+            .request("git_push", json!({ "sessionId": self.session_id }));
         cx.spawn(async move |this, cx| {
             let reply = settle(rx).await;
             let _ = this.update(cx, |this, cx| {
@@ -586,7 +603,11 @@ impl ChangesPanel {
                 div()
                     .min_w_0()
                     .text_size(px(12.))
-                    .text_color(if *failed { rgb(0xe08a8a).into() } else { content(0.6) })
+                    .text_color(if *failed {
+                        rgb(0xe08a8a).into()
+                    } else {
+                        content(0.6)
+                    })
                     .child(text.clone()),
             );
             if let Some(url) = url.clone().and_then(|url| crate::markdown::web_url(&url)) {
@@ -605,16 +626,16 @@ impl ChangesPanel {
         if !self.pr.open {
             return row
                 .child(
-                    div().flex().child(
-                        small("pr-create", t("Criar PR"), false, true).on_click(cx.listener(
-                            |this, _, _, cx| {
+                    div()
+                        .flex()
+                        .child(small("pr-create", t("Criar PR"), false, true).on_click(
+                            cx.listener(|this, _, _, cx| {
                                 this.pr.open = true;
                                 this.pr.result = None;
                                 this.pr.title.update(cx, |field, cx| field.focus(cx));
                                 cx.notify();
-                            },
+                            }),
                         )),
-                    ),
                 )
                 .into_any_element();
         }
@@ -651,12 +672,9 @@ impl ChangesPanel {
         row.child(self.pr.title.clone())
             .child(self.pr.body.clone())
             .child(toggle)
-            .child(
-                div()
-                    .text_size(px(11.))
-                    .text_color(content(0.4))
-                    .child(t("Envia este branch e abre o pull request para o branch padrão.")),
-            )
+            .child(div().text_size(px(11.)).text_color(content(0.4)).child(t(
+                "Envia este branch e abre o pull request para o branch padrão.",
+            )))
             .child(
                 div()
                     .flex()
@@ -675,7 +693,11 @@ impl ChangesPanel {
                     .child(
                         small(
                             "pr-submit",
-                            if self.pr.creating { t("Criando…") } else { t("Criar PR") },
+                            if self.pr.creating {
+                                t("Criando…")
+                            } else {
+                                t("Criar PR")
+                            },
                             true,
                             enabled,
                         )
@@ -1133,7 +1155,9 @@ impl ChangesPanel {
             let cancelling = self.title_job.as_ref().is_some_and(|job| job.cancelling);
             sparkle
                 .opacity(if cancelling { 0.4 } else { 1.0 })
-                .tooltip(crate::shell::message_actions::name_tip(t("Cancelar geração do título")))
+                .tooltip(crate::shell::message_actions::name_tip(t(
+                    "Cancelar geração do título",
+                )))
                 .when(!cancelling, |d| {
                     d.cursor_pointer()
                         .hover(|style| style.bg(content(0.08)))
@@ -1141,7 +1165,9 @@ impl ChangesPanel {
                 })
         } else if sparkle_on {
             sparkle
-                .tooltip(crate::shell::message_actions::name_tip(t("Gerar título do commit")))
+                .tooltip(crate::shell::message_actions::name_tip(t(
+                    "Gerar título do commit",
+                )))
                 .cursor_pointer()
                 .hover(|style| style.bg(content(0.08)))
                 .on_click(cx.listener(|this, _, _, cx| this.generate_title(cx)))
@@ -1155,9 +1181,11 @@ impl ChangesPanel {
             .gap(px(6.))
             .px(px(8.))
             .pb(px(8.))
-            .child(small("commit-push", t("Commit e Push"), both_on).when(both_on, |b| {
-                b.on_click(cx.listener(|this, _, _, cx| this.commit_with(true, cx)))
-            }))
+            .child(
+                small("commit-push", t("Commit e Push"), both_on).when(both_on, |b| {
+                    b.on_click(cx.listener(|this, _, _, cx| this.commit_with(true, cx)))
+                }),
+            )
             .child(
                 small("push-only", t("Push"), can_push && !self.push.pushing).when(
                     can_push && !self.push.pushing,
@@ -1203,16 +1231,23 @@ impl ChangesPanel {
                             .flex()
                             .justify_end()
                             .gap(px(6.))
-                            .child(small("push-cancel", t("Cancelar"), !pushing).when(!pushing, |b| {
-                                b.on_click(cx.listener(|this, _, _, cx| {
-                                    this.push.confirm = false;
-                                    cx.notify();
-                                }))
-                            }))
+                            .child(small("push-cancel", t("Cancelar"), !pushing).when(
+                                !pushing,
+                                |b| {
+                                    b.on_click(cx.listener(|this, _, _, cx| {
+                                        this.push.confirm = false;
+                                        cx.notify();
+                                    }))
+                                },
+                            ))
                             .child(
                                 small(
                                     "push-confirm",
-                                    if pushing { t("Enviando…") } else { t("Confirmar push") },
+                                    if pushing {
+                                        t("Enviando…")
+                                    } else {
+                                        t("Confirmar push")
+                                    },
                                     !pushing,
                                 )
                                 .when(!pushing, |b| {
@@ -1605,7 +1640,11 @@ fn cancel_title_action(session_id: &str, request_id: &str) -> Value {
 /// What `commit_title_action` answered.
 #[derive(Debug, PartialEq)]
 enum TitleReply {
-    Title { title: String, provider: String, partial: bool },
+    Title {
+        title: String,
+        provider: String,
+        partial: bool,
+    },
     Cancelled,
     Invalid,
 }
@@ -1643,9 +1682,17 @@ fn keeps_typed(started_with: &str, now: &str, token_then: &str, token_now: &str)
 }
 
 fn attribution(provider: &str, partial: bool) -> String {
-    let who = if provider == "codex" { "Codex" } else { "Claude" };
+    let who = if provider == "codex" {
+        "Codex"
+    } else {
+        "Claude"
+    };
     let text = tf("Título escrito por {}", &[&who]);
-    if partial { format!("{text} · {}", t("parcial")) } else { text }
+    if partial {
+        format!("{text} · {}", t("parcial"))
+    } else {
+        text
+    }
 }
 
 /// A push needs a repository, a commit and a branch (React's `pushBlocked`).
@@ -1974,9 +2021,16 @@ mod tests {
         let ok = json!({ "type": "title", "title": "Fix login", "provider": "claude", "partial": false });
         assert_eq!(
             title_reply(&ok),
-            TitleReply::Title { title: "Fix login".into(), provider: "claude".into(), partial: false }
+            TitleReply::Title {
+                title: "Fix login".into(),
+                provider: "claude".into(),
+                partial: false
+            }
         );
-        assert_eq!(title_reply(&json!({ "type": "cancelled" })), TitleReply::Cancelled);
+        assert_eq!(
+            title_reply(&json!({ "type": "cancelled" })),
+            TitleReply::Cancelled
+        );
         for bad in [
             json!({ "type": "title", "title": " padded", "provider": "claude", "partial": false }),
             json!({ "type": "title", "title": "two\nlines", "provider": "claude", "partial": false }),
@@ -2010,7 +2064,10 @@ mod tests {
     #[test]
     fn created_url_needs_the_created_reply() {
         let created = json!({ "type": "created", "url": "https://github.com/o/r/pull/3" });
-        assert_eq!(created_url(&created).as_deref(), Some("https://github.com/o/r/pull/3"));
+        assert_eq!(
+            created_url(&created).as_deref(),
+            Some("https://github.com/o/r/pull/3")
+        );
         assert_eq!(created_url(&json!({ "type": "done" })), None);
         assert_eq!(created_url(&json!({ "type": "created" })), None);
     }

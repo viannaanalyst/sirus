@@ -112,6 +112,9 @@ mod tests {
         assert_eq!(rail(Edge::Left, 50., frame), (40., GUTTER, RAIL, 400.));
         assert_eq!(rail(Edge::Right, 50., frame), (250., GUTTER, RAIL, 400.));
         assert_eq!(rail(Edge::Bottom, 50., frame), (50., 412., 200., RAIL));
-        assert_eq!(rail(Edge::BottomRight, 50., frame), (250., 412., RAIL, RAIL));
+        assert_eq!(
+            rail(Edge::BottomRight, 50., frame),
+            (250., 412., RAIL, RAIL)
+        );
     }
 }

@@ -66,7 +66,11 @@ pub(crate) fn shown(finished: bool, answered: bool, has_reply: bool) -> Shown {
 
 /// The providers a handoff can go to: the enabled ones but the session's own.
 pub(crate) fn handoff_targets(enabled: &[&'static str], current: &str) -> Vec<&'static str> {
-    enabled.iter().copied().filter(|id| *id != current).collect()
+    enabled
+        .iter()
+        .copied()
+        .filter(|id| *id != current)
+        .collect()
 }
 
 /// The providers a second opinion can go to: every enabled one, the session's own included,
@@ -167,8 +171,16 @@ pub(crate) fn opinion_prompt(
              ## Pedido do usuário\n{}\n\n\
              ## O que {from} respondeu\n{}\n\n\
              ## Arquivos alterados\n{listed}",
-            if request.is_empty() { "(sem pedido neste turno)".to_owned() } else { request },
-            if answer.is_empty() { "(sem resumo escrito — inspecione os arquivos)".to_owned() } else { answer },
+            if request.is_empty() {
+                "(sem pedido neste turno)".to_owned()
+            } else {
+                request
+            },
+            if answer.is_empty() {
+                "(sem resumo escrito — inspecione os arquivos)".to_owned()
+            } else {
+                answer
+            },
         )
     } else {
         format!(
@@ -177,8 +189,16 @@ pub(crate) fn opinion_prompt(
              ## User request\n{}\n\n\
              ## What {from} answered\n{}\n\n\
              ## Files changed\n{listed}",
-            if request.is_empty() { "(no request on this turn)".to_owned() } else { request },
-            if answer.is_empty() { "(no written summary — inspect the files)".to_owned() } else { answer },
+            if request.is_empty() {
+                "(no request on this turn)".to_owned()
+            } else {
+                request
+            },
+            if answer.is_empty() {
+                "(no written summary — inspect the files)".to_owned()
+            } else {
+                answer
+            },
         )
     }
 }
@@ -222,9 +242,10 @@ impl Shell {
 
     /// Creates the fork of a reply and opens it in a new tab (store: forkSession).
     pub(super) fn fork_turn(&mut self, session: &str, reply: &str, cx: &mut Context<Self>) {
-        let rx = self
-            .backend
-            .request("fork_session", json!({ "sessionId": session, "messageId": reply }));
+        let rx = self.backend.request(
+            "fork_session",
+            json!({ "sessionId": session, "messageId": reply }),
+        );
         self.adopt(rx, true, cx);
     }
 
@@ -253,7 +274,9 @@ impl Shell {
                         let id = session["id"].as_str().unwrap_or("").to_owned();
                         this.session_updated(&session, cx);
                         if open {
-                            if let Some(ix) = this.conversations.iter().position(|c| c.session_id == id) {
+                            if let Some(ix) =
+                                this.conversations.iter().position(|c| c.session_id == id)
+                            {
                                 this.open_beside(ix, super::split_panes::Edge::Right, cx);
                             }
                         }
@@ -285,7 +308,11 @@ impl Shell {
             cx.notify();
             return;
         }
-        let Some(ix) = self.conversations.iter().position(|c| c.session_id == session) else {
+        let Some(ix) = self
+            .conversations
+            .iter()
+            .position(|c| c.session_id == session)
+        else {
             return;
         };
         let provider = self.conversations[ix].provider;
@@ -336,7 +363,12 @@ impl Shell {
     }
 
     /// The model the popup chose: a handoff or a second opinion goes out and the popup closes.
-    fn pick_target(&mut self, provider: &'static str, model: Option<String>, cx: &mut Context<Self>) {
+    fn pick_target(
+        &mut self,
+        provider: &'static str,
+        model: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
         if self.handoffs.busy {
             return;
         }
@@ -384,7 +416,11 @@ impl Shell {
         model: Option<String>,
         cx: &mut Context<Self>,
     ) {
-        let Some(ix) = self.conversations.iter().position(|c| c.session_id == session) else {
+        let Some(ix) = self
+            .conversations
+            .iter()
+            .position(|c| c.session_id == session)
+        else {
             self.handoffs.busy = false;
             return;
         };
@@ -513,8 +549,12 @@ impl Shell {
         };
         let scope = self.handoffs.scope.filter(|scope| targets.contains(scope));
         let hint = match kind {
-            Kind::Handoff => t("Passa a conversa a outro provedor nesta pasta. A recapitulação vai com a primeira mensagem."),
-            Kind::Opinion => t("Envie este turno a outro agente para revisar o trabalho. Abre em outra aba e só aponta problemas."),
+            Kind::Handoff => t(
+                "Passa a conversa a outro provedor nesta pasta. A recapitulação vai com a primeira mensagem.",
+            ),
+            Kind::Opinion => t(
+                "Envie este turno a outro agente para revisar o trabalho. Abre em outra aba e só aponta problemas.",
+            ),
         };
         let providers: Vec<AnyElement> = targets
             .iter()
@@ -554,10 +594,7 @@ impl Shell {
         let mut loading = false;
         if let Some(scope) = scope {
             loading = !self.models.contains_key(scope);
-            let current = conv
-                .model
-                .as_deref()
-                .map(|model| (conv.provider, model));
+            let current = conv.model.as_deref().map(|model| (conv.provider, model));
             if let Some(list) = self.models.get(scope) {
                 for (i, model) in list.iter().enumerate() {
                     if !offers_model(kind, scope, &model.id, current) {
@@ -579,7 +616,9 @@ impl Shell {
                                     .text_color(content(0.92))
                                     .child(name),
                             )
-                            .when(picked, |d| d.child(icon("check", 13.).text_color(content(0.6))))
+                            .when(picked, |d| {
+                                d.child(icon("check", 13.).text_color(content(0.6)))
+                            })
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.pick_target(scope, Some(id.clone()), cx)
                             }))
@@ -611,9 +650,11 @@ impl Shell {
                                     .text_color(content(0.92))
                                     .child(t("Usar o padrão do provedor")),
                             )
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.pick_target(scope, None, cx)
-                            }))
+                            .on_click(
+                                cx.listener(move |this, _, _, cx| {
+                                    this.pick_target(scope, None, cx)
+                                }),
+                            )
                             .into_any_element(),
                     );
                 }
@@ -840,7 +881,11 @@ mod tests {
     fn a_live_turn_shows_no_action() {
         assert_eq!(
             shown(false, true, true),
-            Shown { fork: false, handoff: false, opinion: false }
+            Shown {
+                fork: false,
+                handoff: false,
+                opinion: false
+            }
         );
     }
 
@@ -848,7 +893,11 @@ mod tests {
     fn a_turn_without_a_reply_id_shows_no_action() {
         assert_eq!(
             shown(true, true, false),
-            Shown { fork: false, handoff: false, opinion: false }
+            Shown {
+                fork: false,
+                handoff: false,
+                opinion: false
+            }
         );
     }
 
@@ -856,7 +905,11 @@ mod tests {
     fn a_settled_answer_offers_all_three() {
         assert_eq!(
             shown(true, true, true),
-            Shown { fork: true, handoff: true, opinion: true }
+            Shown {
+                fork: true,
+                handoff: true,
+                opinion: true
+            }
         );
     }
 
@@ -864,7 +917,11 @@ mod tests {
     fn a_settled_turn_without_text_can_only_fork() {
         assert_eq!(
             shown(true, false, true),
-            Shown { fork: true, handoff: false, opinion: false }
+            Shown {
+                fork: true,
+                handoff: false,
+                opinion: false
+            }
         );
     }
 
@@ -907,7 +964,10 @@ mod tests {
             first_scope(Kind::Opinion, &ENABLED, "claude", None),
             Some("codex")
         );
-        assert_eq!(first_scope(Kind::Opinion, &["claude"], "claude", None), Some("claude"));
+        assert_eq!(
+            first_scope(Kind::Opinion, &["claude"], "claude", None),
+            Some("claude")
+        );
         assert_eq!(first_scope(Kind::Handoff, &[], "claude", None), None);
     }
 
@@ -921,7 +981,10 @@ mod tests {
 
     #[test]
     fn a_divider_shows_only_when_the_provider_changes() {
-        assert_eq!(switched(Some("claude"), Some("codex")), Some(("claude", "codex")));
+        assert_eq!(
+            switched(Some("claude"), Some("codex")),
+            Some(("claude", "codex"))
+        );
         assert_eq!(switched(Some("claude"), Some("claude")), None);
         assert_eq!(switched(None, Some("codex")), None);
         assert_eq!(switched(Some("claude"), None), None);

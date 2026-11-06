@@ -17,10 +17,7 @@ use crate::theme;
 use base64::Engine as _;
 use gpui::{AnyElement, App, AsyncApp, FutureExt as _, div, prelude::*, px};
 use serde_json::{Value, json};
-use std::{
-    cell::RefCell,
-    time::Duration,
-};
+use std::{cell::RefCell, time::Duration};
 
 thread_local! {
     static BACKEND: RefCell<Option<Backend>> = const { RefCell::new(None) };

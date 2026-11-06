@@ -181,6 +181,8 @@ const LOCAL_COMMANDS: &[&str] = &[
     "drop_prompt_attachments",
     "app_update_action",
     "notification_action",
+    "phone_look_get",
+    "phone_look_set",
     "register_browser_client",
     "share_push_identity",
     "start_dictation",
@@ -262,6 +264,7 @@ pub mod tests {
             "capture_prompt_window",
             "window_ready",
             "register_browser_client",
+            "phone_look_set",
         ] {
             assert!(runs_here(c), "{c}");
         }

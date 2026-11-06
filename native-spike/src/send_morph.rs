@@ -89,7 +89,11 @@ impl Morph {
         }
         let (from, goal, start) = self.width.unwrap_or((to, to, now));
         let grow = ease(start, MORPH, now);
-        let width = if now.saturating_duration_since(start) < MORPH { from + (goal - from) * grow } else { goal };
+        let width = if now.saturating_duration_since(start) < MORPH {
+            from + (goal - from) * grow
+        } else {
+            goal
+        };
         let roll = self.roll.and_then(|(face, dir, start)| {
             let p = ease(start, ROLL, now);
             (p < 1.).then_some((face, dir, p))
@@ -111,7 +115,6 @@ impl Morph {
 fn palette(enabled: bool) -> (Hsla, Hsla) {
     primary_action(enabled)
 }
-
 
 /// The flat surface: the accent, or its dim wash with nothing to do.
 fn surface(fill: Hsla) -> impl IntoElement {

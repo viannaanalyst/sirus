@@ -68,7 +68,9 @@ impl Queue {
     }
 
     pub fn push(&self, tab_id: &str, event: TabEvent) {
-        self.items.borrow_mut().push_back((tab_id.to_owned(), event));
+        self.items
+            .borrow_mut()
+            .push_back((tab_id.to_owned(), event));
         let _ = self.wake.try_send(());
     }
 

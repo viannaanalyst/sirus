@@ -776,7 +776,11 @@ impl Browser {
             && let Some(pip) = &self.pip
             && let Some(tab) = self.tabs.iter().find(|t| t.id == pip.tab_id)
         {
-            pip.set_title(if tab.title.is_empty() { &tab.url } else { &tab.title });
+            pip.set_title(if tab.title.is_empty() {
+                &tab.url
+            } else {
+                &tab.title
+            });
         }
         changed
     }
@@ -808,7 +812,10 @@ impl Browser {
         }
         if url != self.last_url || switched {
             // Private tabs leave no history behind.
-            if self.active_tab().is_some_and(|t| t.profile != browser_profiles::PRIVATE) {
+            if self
+                .active_tab()
+                .is_some_and(|t| t.profile != browser_profiles::PRIVATE)
+            {
                 browser_address::note_visit(&mut self.history, &url);
             }
             self.last_url = url;
@@ -907,7 +914,8 @@ impl Browser {
     /// The session browser's state, as `BrowserSessionState` serializes it.
     /// True while the active page is loading (read from the web view, not the last wake-up).
     pub fn page_loading(&self) -> bool {
-        self.active_tab().is_some_and(|t| unsafe { t.web.isLoading() })
+        self.active_tab()
+            .is_some_and(|t| unsafe { t.web.isLoading() })
     }
 
     /// The state with every tab's address, title and loading as they are now.
@@ -1144,7 +1152,10 @@ impl Browser {
                 None => self.navigate(cx),
             },
             "down" if !rows.is_empty() => {
-                self.suggest_row = Some(self.suggest_row.map_or(0, |row| (row + 1).min(rows.len() - 1)));
+                self.suggest_row = Some(
+                    self.suggest_row
+                        .map_or(0, |row| (row + 1).min(rows.len() - 1)),
+                );
             }
             "up" if !rows.is_empty() => {
                 self.suggest_row = match self.suggest_row {
@@ -1199,7 +1210,10 @@ impl Browser {
             _ => return,
         }
         // Editing the text brings the suggestions back, narrowed by it.
-        if matches!(keys.key.as_str(), "backspace" | "delete") || (keys.key == "v" && command) || (keys.key == "x" && command) {
+        if matches!(keys.key.as_str(), "backspace" | "delete")
+            || (keys.key == "v" && command)
+            || (keys.key == "x" && command)
+        {
             self.suggest_open = true;
             self.suggest_row = None;
         }
@@ -2224,17 +2238,23 @@ impl Browser {
                 .py(px(8.))
                 .flex()
                 .gap(px(6.))
-                .child(
-                    self.text_button("login-save", "Salvar login", true, cx, move |this, _, cx| {
+                .child(self.text_button(
+                    "login-save",
+                    "Salvar login",
+                    true,
+                    cx,
+                    move |this, _, cx| {
                         if !busy {
                             this.save_login(cx)
                         }
+                    },
+                ))
+                .child(
+                    self.text_button("login-cancel", "Cancelar", false, cx, |this, _, cx| {
+                        this.login_form = None;
+                        this.open_menu_fresh(Menu::Logins, cx);
                     }),
                 )
-                .child(self.text_button("login-cancel", "Cancelar", false, cx, |this, _, cx| {
-                    this.login_form = None;
-                    this.open_menu_fresh(Menu::Logins, cx);
-                }))
                 .into_any_element(),
         );
         rows
@@ -2490,14 +2510,24 @@ impl Browser {
                         .child(theme::icon("chevron-down", 10.).text_color(theme::content(0.5))),
                 )
                 .when_some(self.device_inputs.as_ref(), |d, inputs| {
-                    d.child(div().id("device-width").w(px(58.)).child(inputs.width.clone()))
-                        .child(
-                            div()
-                                .text_size(px(12.))
-                                .text_color(theme::content(0.5))
-                                .child("×"),
-                        )
-                        .child(div().id("device-height").w(px(58.)).child(inputs.height.clone()))
+                    d.child(
+                        div()
+                            .id("device-width")
+                            .w(px(58.))
+                            .child(inputs.width.clone()),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(theme::content(0.5))
+                            .child("×"),
+                    )
+                    .child(
+                        div()
+                            .id("device-height")
+                            .w(px(58.))
+                            .child(inputs.height.clone()),
+                    )
                 })
                 .child(self.button(
                     "device-rotate",
@@ -2534,7 +2564,11 @@ impl Browser {
 // ---- Picture in picture, recording, suggestions, device sizes, profiles and the login form ----
 
 /// Hands `f` the window's root view, the shell (the popup for confirmations, the settings).
-fn with_shell(window: &mut Window, cx: &mut App, f: impl FnOnce(&mut crate::shell::Shell, &mut Context<crate::shell::Shell>)) {
+fn with_shell(
+    window: &mut Window,
+    cx: &mut App,
+    f: impl FnOnce(&mut crate::shell::Shell, &mut Context<crate::shell::Shell>),
+) {
     if let Some(Some(shell)) = window.root::<crate::shell::Shell>() {
         shell.update(cx, f);
     }
@@ -2599,7 +2633,11 @@ impl Browser {
             (
                 t.id.clone(),
                 t.web.clone(),
-                if t.title.is_empty() { t.url.clone() } else { t.title.clone() },
+                if t.title.is_empty() {
+                    t.url.clone()
+                } else {
+                    t.title.clone()
+                },
             )
         }) else {
             return;
@@ -2672,8 +2710,7 @@ impl Browser {
             let begun = Instant::now();
             let mut last_events: Option<Instant> = None;
             loop {
-                if control.stop.get().is_some() || begun.elapsed() > browser_record::MAX_RECORDING
-                {
+                if control.stop.get().is_some() || begun.elapsed() > browser_record::MAX_RECORDING {
                     break;
                 }
                 // The tab closing ends the recording with what it has.
@@ -2726,7 +2763,10 @@ impl Browser {
                 match &result {
                     Ok(value) if value["saved"] == true => {
                         if reveal && let Some(path) = value["path"].as_str() {
-                            let _ = std::process::Command::new("open").arg("-R").arg(path).spawn();
+                            let _ = std::process::Command::new("open")
+                                .arg("-R")
+                                .arg(path)
+                                .spawn();
                         }
                         this.say(t("Gravação salva em Filmes › Sirus"), cx);
                     }
@@ -2778,9 +2818,10 @@ impl Browser {
     // ---- The blank page's local servers ----
 
     fn refresh_servers(&mut self, cx: &mut Context<Self>) {
-        let reply = self
-            .backend
-            .request("local_servers_list", json!({ "sessionId": self.session_id }));
+        let reply = self.backend.request(
+            "local_servers_list",
+            json!({ "sessionId": self.session_id }),
+        );
         cx.spawn(async move |this, cx| {
             if let Ok(Ok(list)) = reply.recv().await {
                 let _ = this.update(cx, |this, cx| {
@@ -2801,7 +2842,11 @@ impl Browser {
     /// page's own address counts as nothing typed.
     fn suggestion_rows(&self) -> Vec<Suggestion> {
         let active = self.active_tab().map(|t| t.url.clone()).unwrap_or_default();
-        let query = if self.text == active { "" } else { self.text.as_str() };
+        let query = if self.text == active {
+            ""
+        } else {
+            self.text.as_str()
+        };
         let tabs: Vec<_> = self
             .tabs
             .iter()
@@ -2839,20 +2884,23 @@ impl Browser {
         }
         let make = |placeholder: &'static str, cx: &mut Context<Self>| {
             let field = cx.new(|cx| TextField::new(placeholder, cx));
-            let sub = cx.subscribe(&field, |this, field, event: &TextFieldEvent, cx| match event {
-                TextFieldEvent::Changed => {
-                    let text = field.read(cx).text().to_owned();
-                    let digits = browser_device::digits(&text);
-                    if digits != text {
-                        field.update(cx, |f, cx| f.set_text(&digits, cx));
+            let sub = cx.subscribe(
+                &field,
+                |this, field, event: &TextFieldEvent, cx| match event {
+                    TextFieldEvent::Changed => {
+                        let text = field.read(cx).text().to_owned();
+                        let digits = browser_device::digits(&text);
+                        if digits != text {
+                            field.update(cx, |f, cx| f.set_text(&digits, cx));
+                        }
                     }
-                }
-                TextFieldEvent::Submit => this.commit_device_size(cx),
-                TextFieldEvent::Cancel => {
-                    this.device_inputs_stale = true;
-                    cx.notify();
-                }
-            });
+                    TextFieldEvent::Submit => this.commit_device_size(cx),
+                    TextFieldEvent::Cancel => {
+                        this.device_inputs_stale = true;
+                        cx.notify();
+                    }
+                },
+            );
             (field, sub)
         };
         let (width, a) = make("W", cx);
@@ -2909,7 +2957,11 @@ impl Browser {
         let dx = f64::from(position.x - drag.from.x) * zoom;
         let dy = f64::from(position.y - drag.from.y) * zoom;
         let (w, h) = browser_device::dragged(drag.edge, drag.start, dx, dy, drag.scale);
-        if self.device.as_ref().is_some_and(|d| (d.width, d.height) != (w, h)) {
+        if self
+            .device
+            .as_ref()
+            .is_some_and(|d| (d.width, d.height) != (w, h))
+        {
             self.set_device(Some(Device::from_size(w, h)));
             self.device_inputs_stale = true;
             cx.notify();
@@ -2998,7 +3050,10 @@ impl Browser {
         let name = form.name.read(cx).text().trim().to_owned();
         let mut list = profiles();
         if !browser_profiles::supported() {
-            return self.profile_error("Perfis personalizados precisam do macOS 14 ou mais recente.", cx);
+            return self.profile_error(
+                "Perfis personalizados precisam do macOS 14 ou mais recente.",
+                cx,
+            );
         }
         if list.len() >= browser_profiles::MAX_PROFILES {
             return self.profile_error("Mantenha no máximo 10 perfis personalizados.", cx);
@@ -3037,11 +3092,12 @@ impl Browser {
     }
 
     fn commit_rename(&mut self, cx: &mut Context<Self>) {
-        let Some((id, name)) = self
-            .profile_form
-            .as_ref()
-            .and_then(|f| Some((f.renaming.clone()?, f.rename.read(cx).text().trim().to_owned())))
-        else {
+        let Some((id, name)) = self.profile_form.as_ref().and_then(|f| {
+            Some((
+                f.renaming.clone()?,
+                f.rename.read(cx).text().trim().to_owned(),
+            ))
+        }) else {
             return;
         };
         let mut list = profiles();
@@ -3110,9 +3166,14 @@ impl Browser {
             cx,
         );
         password.update(cx, |f, _| f.set_masked(true));
-        let id = edit.as_ref().and_then(|l| l["id"].as_str()).map(str::to_owned);
+        let id = edit
+            .as_ref()
+            .and_then(|l| l["id"].as_str())
+            .map(str::to_owned);
         if let Some(login) = &edit {
-            site.update(cx, |f, cx| f.set_text(login["origin"].as_str().unwrap_or(""), cx));
+            site.update(cx, |f, cx| {
+                f.set_text(login["origin"].as_str().unwrap_or(""), cx)
+            });
             username.update(cx, |f, cx| {
                 f.set_text(login["username"].as_str().unwrap_or(""), cx)
             });
@@ -3824,49 +3885,49 @@ impl Render for Browser {
                         "globe"
                     };
                     crate::hover_track::list("address-suggestions").row(
-                    div()
-                        .id(("suggestion", i))
-                        .px(px(10.))
-                        .py(px(5.))
-                        .rounded(px(crate::theme::RADIUS_MD))
-                        .flex()
-                        .items_center()
-                        .gap(px(8.))
-                        .cursor_pointer()
-                        .when(selected, |d| d.bg(theme::content(0.08)))
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |this, _, _, cx| {
-                                cx.stop_propagation();
-                                this.pick_suggestion(&row, cx);
-                            }),
-                        )
-                        .child(theme::icon(icon, 12.).text_color(theme::content(0.5)))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .flex()
-                                .flex_col()
-                                .child(
-                                    div()
-                                        .truncate()
-                                        .text_size(px(12.5))
-                                        .text_color(theme::content(0.9))
-                                        .child(title),
-                                )
-                                .when_some(detail, |d, detail| {
-                                    d.child(
+                        div()
+                            .id(("suggestion", i))
+                            .px(px(10.))
+                            .py(px(5.))
+                            .rounded(px(crate::theme::RADIUS_MD))
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .cursor_pointer()
+                            .when(selected, |d| d.bg(theme::content(0.08)))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    this.pick_suggestion(&row, cx);
+                                }),
+                            )
+                            .child(theme::icon(icon, 12.).text_color(theme::content(0.5)))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .flex()
+                                    .flex_col()
+                                    .child(
                                         div()
                                             .truncate()
-                                            .text_size(px(11.))
-                                            .text_color(theme::content(0.45))
-                                            .child(detail),
+                                            .text_size(px(12.5))
+                                            .text_color(theme::content(0.9))
+                                            .child(title),
                                     )
-                                }),
-                        ),
-                    i,
-                    selected,
+                                    .when_some(detail, |d, detail| {
+                                        d.child(
+                                            div()
+                                                .truncate()
+                                                .text_size(px(11.))
+                                                .text_color(theme::content(0.45))
+                                                .child(detail),
+                                        )
+                                    }),
+                            ),
+                        i,
+                        selected,
                     )
                 }))
                 .with_animation(

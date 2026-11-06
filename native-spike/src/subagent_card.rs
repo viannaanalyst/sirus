@@ -240,9 +240,7 @@ impl Shell {
             .items_center()
             .gap(px(8.))
             .cursor_pointer()
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.toggle_fold(conversation, index, cx)
-            }))
+            .on_click(cx.listener(move |this, _, _, cx| this.toggle_fold(conversation, index, cx)))
             .child(theme_icon("users", 14.).text_color(content(0.7)))
             .child(
                 div()
@@ -350,9 +348,9 @@ impl Shell {
         let lead: AnyElement = match member.status {
             Status::Running => self.spin(now).into_any_element(),
             Status::Completed => theme_icon("check", 13.).text_color(add).into_any_element(),
-            Status::Failed | Status::Stopped => {
-                theme_icon("close", 13.).text_color(remove).into_any_element()
-            }
+            Status::Failed | Status::Stopped => theme_icon("close", 13.)
+                .text_color(remove)
+                .into_any_element(),
             Status::Unknown => div()
                 .size(px(13.))
                 .flex_shrink_0()
@@ -373,9 +371,9 @@ impl Shell {
         let actions = (controls && member.running()).then(|| {
             let (message_session, message_task) = (session.to_owned(), member.task.clone());
             let (stop_session, stop_task) = (session.to_owned(), member.task.clone());
-            let background = member.backgroundable().map(|source| {
-                (session.to_owned(), member.task.clone(), source.to_owned())
-            });
+            let background = member
+                .backgroundable()
+                .map(|source| (session.to_owned(), member.task.clone(), source.to_owned()));
             div()
                 .absolute()
                 // Clear of the elapsed time, which keeps ticking.
@@ -461,9 +459,7 @@ impl Shell {
             .gap(px(8.))
             .cursor_pointer()
             .hover(|s| s.bg(content(0.07)))
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.toggle_feed(&open_session, &key, cx)
-            }))
+            .on_click(cx.listener(move |this, _, _, cx| this.toggle_feed(&open_session, &key, cx)))
             .child(lead)
             .child(mark_tile(
                 &crate::tab_tile::TileSize {
@@ -624,13 +620,22 @@ impl Shell {
             .into_any_element()
     }
 
-    fn feed_view(&self, feed: &Feed, member: &Member, open: f32, cx: &mut Context<Self>) -> AnyElement {
+    fn feed_view(
+        &self,
+        feed: &Feed,
+        member: &Member,
+        open: f32,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let (add, remove) = diff_colors(self.look.diff);
         let start = feed.entries.len().saturating_sub(feed.shown);
         let hidden = start;
         let mut rows: Vec<AnyElement> = Vec::new();
         if feed.dropped > 0 {
-            rows.push(note(tf("{} entradas anteriores não são mais guardadas", &[&feed.dropped])));
+            rows.push(note(tf(
+                "{} entradas anteriores não são mais guardadas",
+                &[&feed.dropped],
+            )));
         }
         if hidden > 0 {
             let (session, key) = (feed.session.clone(), feed.key.clone());
@@ -647,7 +652,12 @@ impl Shell {
                     .cursor_pointer()
                     .hover(|s| s.text_color(content(0.9)))
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        if let Some(f) = this.subagents.feed.as_mut().filter(|f| f.session == session && f.key == key) {
+                        if let Some(f) = this
+                            .subagents
+                            .feed
+                            .as_mut()
+                            .filter(|f| f.session == session && f.key == key)
+                        {
                             f.shown += PAGE;
                         }
                         cx.notify();
@@ -715,7 +725,12 @@ impl Shell {
                 .flex_shrink_0()
                 .text_size(px(12.))
                 .text_color(content(0.6))
-                .child(div().text_size(px(11.)).text_color(content(0.4)).child(t("Tarefa")))
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(content(0.4))
+                        .child(t("Tarefa")),
+                )
                 .child(div().line_clamp(4).child(entry.text.clone()))
                 .into_any_element(),
             Kind::Text => div()
@@ -755,10 +770,12 @@ impl Shell {
                 };
                 let mark: AnyElement = match entry.state {
                     Status::Running => self.spin(Instant::now()).into_any_element(),
-                    Status::Failed | Status::Stopped => {
-                        theme_icon("close", 12.).text_color(remove).into_any_element()
+                    Status::Failed | Status::Stopped => theme_icon("close", 12.)
+                        .text_color(remove)
+                        .into_any_element(),
+                    Status::Completed => {
+                        theme_icon("check", 12.).text_color(add).into_any_element()
                     }
-                    Status::Completed => theme_icon("check", 12.).text_color(add).into_any_element(),
                     Status::Unknown => div().size(px(12.)).into_any_element(),
                 };
                 let has_output = !entry.output.trim().is_empty();
@@ -779,7 +796,12 @@ impl Shell {
                         d.cursor_pointer()
                             .hover(|s| s.bg(content(0.07)))
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                if let Some(f) = this.subagents.feed.as_mut().filter(|f| f.session == session && f.key == key) {
+                                if let Some(f) = this
+                                    .subagents
+                                    .feed
+                                    .as_mut()
+                                    .filter(|f| f.session == session && f.key == key)
+                                {
                                     if !f.opened.remove(&id) {
                                         f.opened.insert(id.clone());
                                     }
@@ -794,7 +816,13 @@ impl Shell {
                             .min_w_0()
                             .flex()
                             .gap(px(6.))
-                            .child(div().flex_shrink_0().max_w(px(160.)).truncate().child(entry.label.clone()))
+                            .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .max_w(px(160.))
+                                    .truncate()
+                                    .child(entry.label.clone()),
+                            )
                             .child(
                                 div()
                                     .min_w_0()
@@ -929,12 +957,19 @@ impl Shell {
 
     /// Moves this running foreground subagent to the background: the reply goes on without
     /// waiting for it. The row then reads as background through the next activity update.
-    fn background_subagent(&mut self, session: &str, task: &str, source: &str, cx: &mut Context<Self>) {
+    fn background_subagent(
+        &mut self,
+        session: &str,
+        task: &str,
+        source: &str,
+        cx: &mut Context<Self>,
+    ) {
         let call = self.backend.invoke(
             "background_subagent",
             background_args(session, task, source),
         );
-        self.waiting.insert(call, Waiting::Subagent(Call::Background));
+        self.waiting
+            .insert(call, Waiting::Subagent(Call::Background));
         cx.notify();
     }
 
@@ -976,7 +1011,13 @@ impl Shell {
         cx.notify();
     }
 
-    pub(super) fn subagent_reply(&mut self, call: Call, ok: bool, value: &Value, cx: &mut Context<Self>) {
+    pub(super) fn subagent_reply(
+        &mut self,
+        call: Call,
+        ok: bool,
+        value: &Value,
+        cx: &mut Context<Self>,
+    ) {
         match call {
             Call::Stop | Call::Background => {
                 if !ok {
@@ -1099,11 +1140,29 @@ mod tests {
     #[test]
     fn the_summary_reads_done_running_and_failed() {
         crate::i18n::set_locale("pt-BR");
-        let p = team::Progress { done: 2, total: 5, running: 3, failed: 0, background: 0 };
+        let p = team::Progress {
+            done: 2,
+            total: 5,
+            running: 3,
+            failed: 0,
+            background: 0,
+        };
         assert_eq!(summary(&p), "2 de 5 concluídos · 3 em execução");
-        let p = team::Progress { done: 5, total: 5, running: 0, failed: 1, background: 0 };
+        let p = team::Progress {
+            done: 5,
+            total: 5,
+            running: 0,
+            failed: 1,
+            background: 0,
+        };
         assert_eq!(summary(&p), "5 de 5 concluídos · 1 falhou");
-        let p = team::Progress { done: 4, total: 4, running: 0, failed: 2, background: 0 };
+        let p = team::Progress {
+            done: 4,
+            total: 4,
+            running: 0,
+            failed: 2,
+            background: 0,
+        };
         assert_eq!(summary(&p), "4 de 4 concluídos · 2 falharam");
     }
 

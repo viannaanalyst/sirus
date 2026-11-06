@@ -1,13 +1,13 @@
 //! Markdown renderer: pulldown-cmark events -> GPUI elements.
 //! Paragraphs and headings are one `StyledText` each (inline styles are
 //! highlight ranges), so they wrap naturally.
+use crate::reply_rich::{self as rich, MediaKind};
+use crate::reply_view::{self as view, Rich};
 use crate::theme::{accent, content};
 use gpui::{
     AnyElement, Div, FontStyle, FontWeight, HighlightStyle, SharedString, StrikethroughStyle,
     StyledText, div, prelude::*, px,
 };
-use crate::reply_rich::{self as rich, MediaKind};
-use crate::reply_view::{self as view, Rich};
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use std::iter::Peekable;
 use std::ops::Range;
@@ -28,7 +28,11 @@ enum Block {
     Table(Vec<Inline>, Vec<Vec<Inline>>),
     Rule,
     /// An image or video a reply links to on the Mac, shown inline (reply_view).
-    Media { url: String, alt: String, kind: MediaKind },
+    Media {
+        url: String,
+        alt: String,
+        kind: MediaKind,
+    },
     /// A link to an HTML file: offers "Abrir prévia".
     HtmlFile(String),
     /// A fenced ```mermaid block.
@@ -42,7 +46,11 @@ enum Block {
 /// A link target found inside a paragraph, shown after it.
 #[derive(Clone)]
 enum Extra {
-    Media { url: String, alt: String, kind: MediaKind },
+    Media {
+        url: String,
+        alt: String,
+        kind: MediaKind,
+    },
     HtmlFile(String),
 }
 
@@ -94,7 +102,10 @@ pub fn bare_urls(text: &str) -> Vec<Range<usize>> {
             break;
         };
         from = at + 1;
-        let starts_word = text[..at].chars().next_back().is_some_and(char::is_alphanumeric);
+        let starts_word = text[..at]
+            .chars()
+            .next_back()
+            .is_some_and(char::is_alphanumeric);
         if starts_word {
             continue;
         }
@@ -104,11 +115,15 @@ pub fn bare_urls(text: &str) -> Vec<Range<usize>> {
         let mut end = run;
         loop {
             let candidate = &text[at..end];
-            let Some(last) = candidate.chars().next_back() else { break };
-            let unbalanced_close = last == ')'
-                && candidate.matches(')').count() > candidate.matches('(').count();
-            if matches!(last, '.' | ',' | ';' | ':' | '!' | '?' | '\'' | '"' | '*' | '_' | '~')
-                || unbalanced_close
+            let Some(last) = candidate.chars().next_back() else {
+                break;
+            };
+            let unbalanced_close =
+                last == ')' && candidate.matches(')').count() > candidate.matches('(').count();
+            if matches!(
+                last,
+                '.' | ',' | ';' | ':' | '!' | '?' | '\'' | '"' | '*' | '_' | '~'
+            ) || unbalanced_close
             {
                 end -= last.len_utf8();
             } else {
@@ -195,10 +210,10 @@ fn demote_last(blocks: &mut [Block]) {
 }
 
 fn draw(blocks: Vec<Block>, rich: Option<&Rich>) -> AnyElement {
-    stack(blocks, 10., rich)
+    stack(blocks, 16., rich)
         .text_size(px(14.))
-        .line_height(px(23.))
-        .text_color(content(0.88))
+        .line_height(px(24.))
+        .text_color(content(1.))
         .into_any_element()
 }
 
@@ -271,7 +286,11 @@ fn inline<'a, I: Iterator<Item = Event<'a>>>(it: &mut Peekable<I>) -> Inline {
                                 inl.text.truncate(start);
                                 inl.spans.retain(|(r, _)| r.end <= start);
                                 inl.maths.retain(|m| m.range.end <= start);
-                                inl.extras.push(Extra::Media { url, alt: label, kind });
+                                inl.extras.push(Extra::Media {
+                                    url,
+                                    alt: label,
+                                    kind,
+                                });
                                 continue;
                             }
                         }
@@ -281,7 +300,11 @@ fn inline<'a, I: Iterator<Item = Event<'a>>>(it: &mut Peekable<I>) -> Inline {
                                 inl.links.push((start..inl.text.len(), web));
                             }
                             if let Some(kind) = rich::local_media_kind(&url) {
-                                inl.extras.push(Extra::Media { url, alt: label, kind });
+                                inl.extras.push(Extra::Media {
+                                    url,
+                                    alt: label,
+                                    kind,
+                                });
                             } else if rich::is_html_file(&url) {
                                 inl.extras.push(Extra::HtmlFile(url));
                             }
@@ -304,7 +327,11 @@ fn math_source(inl: &mut Inline, tex: &str, display: bool) {
     inl.text.push_str(&format!("{fence}{tex}{fence}"));
     let range = start..inl.text.len();
     inl.spans.push((range.clone(), CODE));
-    inl.maths.push(Maths { range, tex: tex.trim().to_owned(), display });
+    inl.maths.push(Maths {
+        range,
+        tex: tex.trim().to_owned(),
+        display,
+    });
 }
 
 /// A paragraph, then what it links to: block formulas split it, media and pages follow it.
@@ -591,22 +618,25 @@ fn block(b: Block, rich: Option<&Rich>) -> AnyElement {
         Block::Para(p) => text(p),
         Block::Heading(level, p) => {
             let size: f32 = match level {
-                HeadingLevel::H1 => 18.,
-                HeadingLevel::H2 => 16.,
-                _ => 14.5,
+                HeadingLevel::H1 => 22.,
+                HeadingLevel::H2 => 18.,
+                _ => 16.,
             };
             div()
-                .mt(px(6.))
+                // With the stack's 16 between blocks, 24 above a heading.
+                .mt(px(8.))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_size(px(size))
-                .line_height(px(size * 1.3))
+                .line_height(px(if size >= 22. { 30. } else { 27. }))
                 .text_color(content(1.))
                 .child(text(p))
                 .into_any_element()
         }
         Block::Code(code) => code_block(&code),
         Block::Media { url, alt, kind } => view::media(&url, &alt, kind, rich),
-        Block::HtmlFile(url) => view::html_file(&url, rich).unwrap_or_else(|| div().into_any_element()),
+        Block::HtmlFile(url) => {
+            view::html_file(&url, rich).unwrap_or_else(|| div().into_any_element())
+        }
         Block::Diagram(source) => view::diagram(&source, code_block(&source), rich),
         Block::Html(source) => view::html_block(&source, code_block(&source), rich),
         Block::Math(tex) => {
@@ -618,7 +648,7 @@ fn block(b: Block, rich: Option<&Rich>) -> AnyElement {
             .border_color(content(0.15))
             .pl(px(12.))
             .text_color(content(0.6))
-            .child(stack(inner, 10., rich))
+            .child(stack(inner, 16., rich))
             .into_any_element(),
         Block::List(start, items) => {
             let rows = items.into_iter().enumerate().map(|(i, item)| {
@@ -630,7 +660,13 @@ fn block(b: Block, rich: Option<&Rich>) -> AnyElement {
                 div()
                     .flex()
                     .flex_row()
-                    .child(div().min_w(px(18.)).flex_shrink_0().whitespace_nowrap().child(marker))
+                    .child(
+                        div()
+                            .min_w(px(18.))
+                            .flex_shrink_0()
+                            .whitespace_nowrap()
+                            .child(marker),
+                    )
                     .child(div().flex_1().min_w_0().child(stack(item, 4., rich)))
             });
             div()
@@ -675,22 +711,21 @@ fn block(b: Block, rich: Option<&Rich>) -> AnyElement {
     }
 }
 
-
 fn code_block(code: &str) -> AnyElement {
     div()
-            .rounded(px(crate::theme::RADIUS_MD))
-            .bg(content(0.05))
-            .border_1()
-            .border_color(content(0.08))
-            .p(px(10.))
-            .font_family("Menlo")
-            .text_size(px(12.5))
-            .line_height(px(19.))
-            .child({
-                let code = SharedString::from(code.trim_end_matches('\n').to_string());
-                crate::shell::transcript_select::wrap(StyledText::new(code.clone()), code)
-            })
-            .into_any_element()
+        .rounded(px(crate::theme::RADIUS_MD))
+        .bg(content(0.05))
+        .border_1()
+        .border_color(content(0.08))
+        .p(px(10.))
+        .font_family("Menlo")
+        .text_size(px(12.5))
+        .line_height(px(19.))
+        .child({
+            let code = SharedString::from(code.trim_end_matches('\n').to_string());
+            crate::shell::transcript_select::wrap(StyledText::new(code.clone()), code)
+        })
+        .into_any_element()
 }
 
 #[cfg(test)]
@@ -707,8 +742,14 @@ mod tests {
             .iter()
             .map(|b| match b {
                 Block::Para(_) => "para",
-                Block::Media { kind: MediaKind::Image, .. } => "image",
-                Block::Media { kind: MediaKind::Video, .. } => "video",
+                Block::Media {
+                    kind: MediaKind::Image,
+                    ..
+                } => "image",
+                Block::Media {
+                    kind: MediaKind::Video,
+                    ..
+                } => "video",
                 Block::HtmlFile(_) => "html-file",
                 Block::Diagram(_) => "diagram",
                 Block::Html(_) => "html",
@@ -723,7 +764,9 @@ mod tests {
     fn a_linked_image_leaves_the_text_and_becomes_a_block() {
         let found = blocks_of("![the shot](/tmp/shot.png)");
         assert_eq!(kinds(&found), ["image"]);
-        let Block::Media { url, alt, .. } = &found[0] else { panic!() };
+        let Block::Media { url, alt, .. } = &found[0] else {
+            panic!()
+        };
         assert_eq!((url.as_str(), alt.as_str()), ("/tmp/shot.png", "the shot"));
         // Remote images are not fetched: their alt text stays.
         assert_eq!(kinds(&blocks_of("![x](https://a.com/x.png)")), ["para"]);
@@ -735,12 +778,17 @@ mod tests {
         assert_eq!(kinds(&found), ["para", "video", "html-file"]);
         let Block::Para(p) = &found[0] else { panic!() };
         assert_eq!(p.text, "See the clip and page.");
-        assert_eq!(kinds(&blocks_of("[docs](https://a.com/index.html)")), ["para"]);
+        assert_eq!(
+            kinds(&blocks_of("[docs](https://a.com/index.html)")),
+            ["para"]
+        );
     }
 
     #[test]
     fn fences_are_told_apart_by_language() {
-        let found = blocks_of("```mermaid\ngraph TD\n```\n\n```html\n<p>x</p>\n```\n\n```rust\nfn a() {}\n```\n\n```math\nx^2\n```");
+        let found = blocks_of(
+            "```mermaid\ngraph TD\n```\n\n```html\n<p>x</p>\n```\n\n```rust\nfn a() {}\n```\n\n```math\nx^2\n```",
+        );
         assert_eq!(kinds(&found), ["diagram", "html", "code", "math"]);
     }
 
@@ -767,7 +815,11 @@ mod tests {
         let tail = p.slice(2..p.text.len());
         assert_eq!(tail.text, "bold $x$ z");
         assert_eq!(tail.maths[0].range, 5..8);
-        assert!(tail.spans.iter().any(|(r, f)| *r == (0..4) && f & BOLD != 0));
+        assert!(
+            tail.spans
+                .iter()
+                .any(|(r, f)| *r == (0..4) && f & BOLD != 0)
+        );
     }
 
     #[test]
@@ -777,14 +829,22 @@ mod tests {
         assert_eq!(kinds(&found), ["code"]);
         let mut found = blocks_of("- item\n\n  ```html\n  <p>\n");
         demote_last(&mut found);
-        let Block::List(_, items) = &found[0] else { panic!() };
+        let Block::List(_, items) = &found[0] else {
+            panic!()
+        };
         assert_eq!(kinds(&items[0]), ["para", "code"]);
     }
     #[test]
     fn only_http_and_https_open_directly() {
-        assert_eq!(web_url("https://example.com/a?b=1").as_deref(), Some("https://example.com/a?b=1"));
+        assert_eq!(
+            web_url("https://example.com/a?b=1").as_deref(),
+            Some("https://example.com/a?b=1")
+        );
         assert_eq!(web_url(" http://x.org ").as_deref(), Some("http://x.org"));
-        assert_eq!(web_url("HTTPS://Example.com").as_deref(), Some("HTTPS://Example.com"));
+        assert_eq!(
+            web_url("HTTPS://Example.com").as_deref(),
+            Some("HTTPS://Example.com")
+        );
         for url in [
             "mailto:a@b.c",
             "file:///tmp/x.html",

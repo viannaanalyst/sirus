@@ -276,7 +276,10 @@ pub fn page<V: 'static>(
 /// The settings a page changes, for its Restaurar padrões. Pages that list things the person added
 /// have nothing to go back to.
 fn restorable_keys(page: &str, shown: &Page) -> Vec<&'static str> {
-    if matches!(page, "Provedores" | "Agent skills" | "Conectores" | "Conexões" | "Git") {
+    if matches!(
+        page,
+        "Provedores" | "Agent skills" | "Conectores" | "Conexões" | "Git"
+    ) {
         return Vec::new();
     }
     let mut keys = Vec::new();
@@ -287,7 +290,9 @@ fn restorable_keys(page: &str, shown: &Page) -> Vec<&'static str> {
         for row in &group.rows {
             for ctl in &row.controls {
                 let acts: Vec<&Act> = match ctl {
-                    Ctl::Switch { change: Some(act), .. } => vec![act],
+                    Ctl::Switch {
+                        change: Some(act), ..
+                    } => vec![act],
                     Ctl::Pick(options) => options.iter().map(|o| &o.change).collect(),
                     _ => Vec::new(),
                 };
@@ -336,9 +341,9 @@ pub fn restore_look_button<V: 'static>(run: Run<V>, cx: &mut Context<V>) -> AnyE
         .text_color(content(0.85))
         .cursor_pointer()
         .hover(|style| style.bg(content(0.08)))
-        .on_click(cx.listener(move |this, _, _, cx| {
-            run(this, "native_restore_look", json!({}), cx)
-        }))
+        .on_click(
+            cx.listener(move |this, _, _, cx| run(this, "native_restore_look", json!({}), cx)),
+        )
         .child(t("Restaurar padrões"))
         .into_any_element()
 }
@@ -410,9 +415,7 @@ fn build(page: &str, s: &Value, d: &HashMap<&'static str, Value>) -> Page {
         ),
         "Notificações" => page_of(
             t("Notificações"),
-            t(
-                "Escolha como o Sirus avisa quando o trabalho termina ou precisa da sua atenção.",
-            ),
+            t("Escolha como o Sirus avisa quando o trabalho termina ou precisa da sua atenção."),
             notifications(s),
         ),
         "Atalhos" => page_of(
@@ -425,21 +428,23 @@ fn build(page: &str, s: &Value, d: &HashMap<&'static str, Value>) -> Page {
         "Terminal" => page_of("Terminal", "", terminal(s, d)),
         "Avançado" => page_of(t("Avançado"), "", advanced(s, d)),
         "Provedores" => Page {
-            actions: vec![Ctl::Button {
-                label: t("Detectar novamente"),
-                act: Act::Run {
-                    cmd: "detect_agents",
-                    args: json!({}),
+            actions: vec![
+                Ctl::Button {
+                    label: t("Detectar novamente"),
+                    act: Act::Run {
+                        cmd: "detect_agents",
+                        args: json!({}),
+                    },
+                    enabled: true,
+                    danger: false,
                 },
-                enabled: true,
-                danger: false,
-            },
-            Ctl::Button {
-                label: t("Verificar CLIs"),
-                act: act_run("cli_diagnostics", json!({})),
-                enabled: true,
-                danger: false,
-            }],
+                Ctl::Button {
+                    label: t("Verificar CLIs"),
+                    act: act_run("cli_diagnostics", json!({})),
+                    enabled: true,
+                    danger: false,
+                },
+            ],
             ..page_of(
                 t("Provedores"),
                 t("Integrações que disponibilizam modelos para sessões."),
@@ -505,7 +510,10 @@ fn build(page: &str, s: &Value, d: &HashMap<&'static str, Value>) -> Page {
             t(
                 "Use o Sirus pelo celular ou por outro computador. O trabalho continua rodando neste Mac; o outro aparelho só controla, pela sua rede privada da Tailscale.",
             ),
-            computers_groups(d).into_iter().chain(connections(d)).collect(),
+            computers_groups(d)
+                .into_iter()
+                .chain(connections(d))
+                .collect(),
         ),
         other => page_of(other, "", soon()),
     }
@@ -1028,8 +1036,10 @@ fn shortcut_allowed(id: &str, combo: &str) -> bool {
             .chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || ",.;/\\[]`'".contains(c));
     simple
-        && (!["q", "w", "h", "m", "c", "v", "x", "a", "z", "r", "l", "t", "=", "-"]
-            .contains(&key)
+        && (![
+            "q", "w", "h", "m", "c", "v", "x", "a", "z", "r", "l", "t", "=", "-",
+        ]
+        .contains(&key)
             || combo == "meta+shift+t")
 }
 
@@ -1059,10 +1069,9 @@ pub fn recorded_shortcut(
     if let Some((_, label)) = UNLISTED.iter().find(|(known, _)| *known == combo) {
         return Err(tf("Já usado por {}", &[&t(label)]));
     }
-    if let Some((_, label, _, _)) = KEYBINDINGS
-        .iter()
-        .find(|(known, _, _, fallback)| *known != id && effective_combo(settings, known, fallback) == combo)
-    {
+    if let Some((_, label, _, _)) = KEYBINDINGS.iter().find(|(known, _, _, fallback)| {
+        *known != id && effective_combo(settings, known, fallback) == combo
+    }) {
         return Err(tf("Já usado por {}", &[&t(label)]));
     }
     let mut map = settings["customShortcuts"].clone();
@@ -1093,7 +1102,10 @@ pub enum ShortcutRoute {
 }
 
 pub fn shortcut_route(settings: &Value, keys: &gpui::Keystroke) -> ShortcutRoute {
-    let Some(custom) = settings["customShortcuts"].as_object().filter(|m| !m.is_empty()) else {
+    let Some(custom) = settings["customShortcuts"]
+        .as_object()
+        .filter(|m| !m.is_empty())
+    else {
         return ShortcutRoute::Pass;
     };
     let pressed = combo_of(keys);
@@ -1552,7 +1564,9 @@ fn terminal_placement_row() -> Row {
     let now = current();
     row(
         t("Posição do terminal"),
-        t("Embaixo, no painel lateral ou como abas na barra de título. ⌘J abre um terminal e ⇧⌘J divide à direita."),
+        t(
+            "Embaixo, no painel lateral ou como abas na barra de título. ⌘J abre um terminal e ⇧⌘J divide à direita.",
+        ),
         vec![Ctl::Pick(
             Placement::ALL
                 .iter()
@@ -2575,14 +2589,12 @@ fn diagnostics_rows(d: &HashMap<&'static str, Value>) -> Vec<Row> {
             row(
                 entry.name.clone(),
                 about,
-                vec![
-                    Ctl::Button {
-                        label: t("Copiar"),
-                        act: act_run("native_copy", json!({ "text": copy })),
-                        enabled: true,
-                        danger: false,
-                    },
-                ],
+                vec![Ctl::Button {
+                    label: t("Copiar"),
+                    act: act_run("native_copy", json!({ "text": copy })),
+                    enabled: true,
+                    danger: false,
+                }],
             )
         })
         .collect();
@@ -2639,17 +2651,21 @@ fn providers(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
                 ],
             )
         } else {
-            let mut item = row(name, "", vec![
-                Ctl::Path {
-                    key: key_of(format!("providerPath:{id}")),
-                    text: s["providerPaths"][id]
-                        .as_str()
-                        .unwrap_or_default()
-                        .to_string(),
-                    detected: String::new(),
-                },
-                Ctl::Read(t("Não instalado").to_string()),
-            ]);
+            let mut item = row(
+                name,
+                "",
+                vec![
+                    Ctl::Path {
+                        key: key_of(format!("providerPath:{id}")),
+                        text: s["providerPaths"][id]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_string(),
+                        detected: String::new(),
+                    },
+                    Ctl::Read(t("Não instalado").to_string()),
+                ],
+            );
             item.faded = true;
             item
         };
@@ -3143,7 +3159,11 @@ fn computers_groups(d: &HashMap<&'static str, Value>) -> Vec<Group> {
     )];
     for computer in c["list"].as_array().into_iter().flatten() {
         let id = computer["id"].as_str().unwrap_or("");
-        let status = if id == active { c["status"].as_str().unwrap_or("") } else { "" };
+        let status = if id == active {
+            c["status"].as_str().unwrap_or("")
+        } else {
+            ""
+        };
         let about = [computer["address"].as_str().unwrap_or(""), status]
             .iter()
             .filter(|part| !part.is_empty())
@@ -3154,7 +3174,11 @@ fn computers_groups(d: &HashMap<&'static str, Value>) -> Vec<Group> {
             computer["name"].as_str().unwrap_or(id).to_string(),
             about,
             vec![
-                if id == active { Ctl::Read(t("Em uso").to_string()) } else { use_button(id) },
+                if id == active {
+                    Ctl::Read(t("Em uso").to_string())
+                } else {
+                    use_button(id)
+                },
                 Ctl::Button {
                     label: t("Remover"),
                     act: act_run("native_computer_remove", json!({"id": id})),
@@ -3167,10 +3191,14 @@ fn computers_groups(d: &HashMap<&'static str, Value>) -> Vec<Group> {
     let busy = yes(&c["busy"]);
     let field = |key: &'static str, width: f32| Ctl::Field {
         key,
-        text: c[if key == crate::shell::computer_ui::ADDRESS { "address" } else { "code" }]
-            .as_str()
-            .unwrap_or("")
-            .to_string(),
+        text: c[if key == crate::shell::computer_ui::ADDRESS {
+            "address"
+        } else {
+            "code"
+        }]
+        .as_str()
+        .unwrap_or("")
+        .to_string(),
         width,
         button: None,
     };
@@ -3698,15 +3726,10 @@ pub fn appearance_groups<V: 'static>(
         )],
     );
 
-    [
-        effects,
-        background,
-        sidebar,
-        application,
-    ]
-    .into_iter()
-    .map(|item| group_view(item, &mut ui, cx))
-    .collect()
+    [effects, background, sidebar, application]
+        .into_iter()
+        .map(|item| group_view(item, &mut ui, cx))
+        .collect()
 }
 
 #[cfg(test)]
@@ -3715,7 +3738,13 @@ mod provider_path_tests {
 
     #[test]
     fn an_email_is_not_a_provider_path() {
-        for good in ["", "claude", "cursor-agent", "/Users/me/.local/bin/claude", "./bin/x"] {
+        for good in [
+            "",
+            "claude",
+            "cursor-agent",
+            "/Users/me/.local/bin/claude",
+            "./bin/x",
+        ] {
             assert!(provider_path_like(good), "{good}");
         }
         for bad in ["me@gmail.com", "my claude"] {
@@ -3732,7 +3761,8 @@ mod provider_path_tests {
 
     #[test]
     fn repair_removes_only_what_cannot_be_a_path() {
-        let mut settings = json!({ "providerPaths": { "claude": "me@gmail.com", "codex": "/bin/codex" } });
+        let mut settings =
+            json!({ "providerPaths": { "claude": "me@gmail.com", "codex": "/bin/codex" } });
         assert!(repair_provider_paths(&mut settings));
         assert_eq!(settings["providerPaths"], json!({ "codex": "/bin/codex" }));
         assert!(!repair_provider_paths(&mut settings), "already clean");
@@ -3761,7 +3791,10 @@ mod shortcut_tests {
     fn a_taken_or_reserved_combo_is_refused() {
         let settings = json!({});
         assert!(recorded_shortcut(&settings, "palette", &keys("cmd-n")).is_err());
-        assert!(recorded_shortcut(&settings, "palette", &keys("cmd-j")).is_err(), "opens the terminal");
+        assert!(
+            recorded_shortcut(&settings, "palette", &keys("cmd-j")).is_err(),
+            "opens the terminal"
+        );
         assert!(recorded_shortcut(&settings, "palette", &keys("cmd-q")).is_err());
         assert!(recorded_shortcut(&settings, "palette", &keys("j")).is_err());
     }
@@ -3776,8 +3809,14 @@ mod shortcut_tests {
             }
             _ => panic!("should route to the palette"),
         }
-        assert!(matches!(shortcut_route(&settings, &keys("cmd-k")), ShortcutRoute::Unbound));
-        assert!(matches!(shortcut_route(&settings, &keys("cmd-p")), ShortcutRoute::Pass));
+        assert!(matches!(
+            shortcut_route(&settings, &keys("cmd-k")),
+            ShortcutRoute::Unbound
+        ));
+        assert!(matches!(
+            shortcut_route(&settings, &keys("cmd-p")),
+            ShortcutRoute::Pass
+        ));
     }
 
     #[test]

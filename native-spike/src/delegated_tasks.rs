@@ -133,8 +133,7 @@ impl Shell {
                     .hover(|s| s.bg(content(0.07)))
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.backend
-                            .invoke("stop_agent", stop_args(&stop_id));
+                        this.backend.invoke("stop_agent", stop_args(&stop_id));
                         cx.notify();
                     }))
                     .child(icon("square-fill", 10.).text_color(content(0.6)))
@@ -206,9 +205,23 @@ mod tests {
     #[test]
     fn the_line_names_provider_model_and_state() {
         let with_model = subtitle("Codex", Some("gpt-5"), "running");
-        assert_eq!(with_model, format!("{} · gpt-5 · {}", tf("Delegada para {}", &[&"Codex"]), t("Trabalhando")));
+        assert_eq!(
+            with_model,
+            format!(
+                "{} · gpt-5 · {}",
+                tf("Delegada para {}", &[&"Codex"]),
+                t("Trabalhando")
+            )
+        );
         let without = subtitle("Codex", Some(""), "idle");
-        assert_eq!(without, format!("{} · {}", tf("Delegada para {}", &[&"Codex"]), t("Concluída")));
+        assert_eq!(
+            without,
+            format!(
+                "{} · {}",
+                tf("Delegada para {}", &[&"Codex"]),
+                t("Concluída")
+            )
+        );
         assert_eq!(subtitle("Codex", None, "idle"), without);
     }
 

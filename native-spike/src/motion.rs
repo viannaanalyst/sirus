@@ -123,7 +123,12 @@ pub struct Count {
 impl Count {
     /// Shows `value` with no motion; the first target counts up from it.
     pub fn at_rest(value: f64, now: Instant) -> Self {
-        Self { from: value, to: value, start: now, duration: 0. }
+        Self {
+            from: value,
+            to: value,
+            start: now,
+            duration: 0.,
+        }
     }
     pub fn value(&self, now: Instant) -> f64 {
         let t = progress(self.start, now, 0., self.duration, Curve::Expo) as f64;
@@ -137,7 +142,12 @@ impl Count {
     /// the same target keeps the count running.
     pub fn sample(&mut self, target: f64, now: Instant, duration: f32) -> f64 {
         if (target - self.to).abs() > 1e-9 {
-            *self = Self { from: self.value(now), to: target, start: now, duration };
+            *self = Self {
+                from: self.value(now),
+                to: target,
+                start: now,
+                duration,
+            };
         }
         self.value(now)
     }

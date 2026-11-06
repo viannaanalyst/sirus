@@ -6,8 +6,8 @@ use crate::i18n::t;
 use crate::reply_rich::{self as rich, Act, Asset, MediaKind, Want};
 use crate::theme::{self, accent, content};
 use gpui::{
-    AnyElement, App, ClickEvent, ElementId, ObjectFit, SharedString, StyledImage, Window, div,
-    img, prelude::*, px,
+    AnyElement, App, ClickEvent, ElementId, ObjectFit, SharedString, StyledImage, Window, div, img,
+    prelude::*, px,
 };
 use std::path::Path;
 use std::rc::Rc;
@@ -61,19 +61,29 @@ fn caption(text: String) -> AnyElement {
 
 /// The link the reply wrote, when its media cannot be shown.
 fn link_text(label: &str) -> AnyElement {
-    div().text_color(accent()).child(label.to_owned()).into_any_element()
+    div()
+        .text_color(accent())
+        .child(label.to_owned())
+        .into_any_element()
 }
 
 /// An image or video the reply links to. `alt` is the caption the reply gave it.
 pub fn media(url: &str, alt: &str, kind: MediaKind, rich: Option<&Rich>) -> AnyElement {
     let path = rich::media_path(url);
     let name = file_name(&path);
-    let label = if alt.trim().is_empty() { name.clone() } else { alt.trim().to_owned() };
+    let label = if alt.trim().is_empty() {
+        name.clone()
+    } else {
+        alt.trim().to_owned()
+    };
     let Some(ctx) = rich else {
         return link_text(&label);
     };
     let want = match kind {
-        MediaKind::Image => Want::Image { session: ctx.session.clone(), path },
+        MediaKind::Image => Want::Image {
+            session: ctx.session.clone(),
+            path,
+        },
         MediaKind::Video => Want::Video {
             session: ctx.session.clone(),
             path,
@@ -97,7 +107,10 @@ pub fn media(url: &str, alt: &str, kind: MediaKind, rich: Option<&Rich>) -> AnyE
         Asset::Picture { image, size } => {
             let (w, h) = rich::fit(size, IMAGE_MAX);
             let act = ctx.act.clone();
-            let open = Act::Image { name: name.clone(), want };
+            let open = Act::Image {
+                name: name.clone(),
+                want,
+            };
             column(
                 slot((w, h))
                     .id(element_id(&key, ""))
@@ -109,7 +122,10 @@ pub fn media(url: &str, alt: &str, kind: MediaKind, rich: Option<&Rich>) -> AnyE
         }
         Asset::Video { path, poster } => {
             let act = ctx.act.clone();
-            let open = Act::Video { name: name.clone(), path };
+            let open = Act::Video {
+                name: name.clone(),
+                path,
+            };
             let (w, h) = poster
                 .as_ref()
                 .map_or(IMAGE_SLOT, |(_, size)| rich::fit(*size, IMAGE_MAX));
@@ -147,7 +163,13 @@ pub fn media(url: &str, alt: &str, kind: MediaKind, rich: Option<&Rich>) -> AnyE
 }
 
 /// A control that opens something in the viewer.
-fn chip(id: ElementId, label: String, hint: Option<String>, act: Rc<dyn Fn(&Act, &mut Window, &mut App)>, open: Act) -> AnyElement {
+fn chip(
+    id: ElementId,
+    label: String,
+    hint: Option<String>,
+    act: Rc<dyn Fn(&Act, &mut Window, &mut App)>,
+    open: Act,
+) -> AnyElement {
     let mut row = div()
         .id(id)
         .h(px(26.))
@@ -181,7 +203,10 @@ pub fn html_file(url: &str, rich: Option<&Rich>) -> Option<AnyElement> {
         t("Abrir prévia").to_owned(),
         Some(file_name(&link)),
         ctx.act.clone(),
-        Act::HtmlFile { session: ctx.session.clone(), link },
+        Act::HtmlFile {
+            session: ctx.session.clone(),
+            link,
+        },
     ))
 }
 
@@ -193,7 +218,11 @@ pub fn html_block(source: &str, code: AnyElement, rich: Option<&Rich>) -> AnyEle
     if rich::preview_page(source).is_none() {
         return code;
     }
-    let key = Want::Diagram { source: source.to_owned(), light: false }.key();
+    let key = Want::Diagram {
+        source: source.to_owned(),
+        light: false,
+    }
+    .key();
     div()
         .flex()
         .flex_col()
@@ -203,7 +232,9 @@ pub fn html_block(source: &str, code: AnyElement, rich: Option<&Rich>) -> AnyEle
             t("Abrir prévia").to_owned(),
             Some("HTML".to_owned()),
             ctx.act.clone(),
-            Act::Html { source: source.to_owned() },
+            Act::Html {
+                source: source.to_owned(),
+            },
         ))
         .child(code)
         .into_any_element()
@@ -240,7 +271,10 @@ pub fn diagram(source: &str, code: AnyElement, rich: Option<&Rich>) -> AnyElemen
     if source.len() > crate::reply_render::MAX_SOURCE || rich.is_some_and(|ctx| ctx.streaming) {
         return code;
     }
-    let want = Want::Diagram { source: source.to_owned(), light: theme::is_light() };
+    let want = Want::Diagram {
+        source: source.to_owned(),
+        light: theme::is_light(),
+    };
     drawn_block(want, code, rich, false)
 }
 
@@ -249,18 +283,29 @@ pub fn math_block(tex: &str, code: AnyElement, rich: Option<&Rich>) -> AnyElemen
     if tex.len() > 4000 {
         return code;
     }
-    let want = Want::Math { tex: tex.to_owned(), display: true, light: theme::is_light() };
+    let want = Want::Math {
+        tex: tex.to_owned(),
+        display: true,
+        light: theme::is_light(),
+    };
     drawn_block(want, code, rich, true)
 }
 
 /// An inline formula's drawing: `Some(Some(..))` ready, `Some(None)` failed (keep the source),
 /// `None` still being drawn.
-pub fn inline_math(tex: &str, rich: Option<&Rich>) -> Option<Option<(std::sync::Arc<gpui::Image>, (f32, f32))>> {
+pub fn inline_math(
+    tex: &str,
+    rich: Option<&Rich>,
+) -> Option<Option<(std::sync::Arc<gpui::Image>, (f32, f32))>> {
     rich?;
     if tex.len() > 1000 {
         return Some(None);
     }
-    let want = Want::Math { tex: tex.to_owned(), display: false, light: theme::is_light() };
+    let want = Want::Math {
+        tex: tex.to_owned(),
+        display: false,
+        light: theme::is_light(),
+    };
     match rich::asset(&want) {
         Asset::Picture { image, size } => Some(Some((image, size))),
         Asset::Pending => None,

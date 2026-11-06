@@ -4,7 +4,9 @@
 //! page width, slide geometry) and lets the web engine give text selection, copy and layout. Every
 //! piece of document text is escaped and the page carries a Content-Security-Policy, so a file
 //! cannot run code or reach the network. Pure and tested; no UI types.
-use crate::attachment_ooxml::{self as ox, Rel, Zip, attr, child, children, escape, find, flag, val};
+use crate::attachment_ooxml::{
+    self as ox, Rel, Zip, attr, child, children, escape, find, flag, val,
+};
 use roxmltree::Node;
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -29,7 +31,8 @@ pub struct Deck {
     pub slides: usize,
 }
 
-const DARK_LIGHT: &str = "body{background:#e8e8ec}@media (prefers-color-scheme:dark){body{background:#26262b}}";
+const DARK_LIGHT: &str =
+    "body{background:#e8e8ec}@media (prefers-color-scheme:dark){body{background:#26262b}}";
 
 /// Locks a page down: no scripts (unless `nonce`), no network, images only from the document.
 fn policy(nonce: Option<&str>) -> String {
@@ -98,14 +101,18 @@ impl RunProps {
             underline: child(node, "u").map(|u| attr(u, "val") != Some("none")),
             strike: flag(node, "strike"),
             caps: flag(node, "caps"),
-            size: val(node, "sz").and_then(|v| v.parse::<f32>().ok()).map(|v| v / 2.),
+            size: val(node, "sz")
+                .and_then(|v| v.parse::<f32>().ok())
+                .map(|v| v / 2.),
             color: val(node, "color")
                 .filter(|c| *c != "auto" && is_hex(c))
                 .map(|c| format!("#{c}")),
             font: child(node, "rFonts")
                 .and_then(|f| attr(f, "ascii").or(attr(f, "hAnsi")))
                 .map(str::to_owned),
-            highlight: val(node, "highlight").and_then(highlight_color).map(str::to_owned),
+            highlight: val(node, "highlight")
+                .and_then(highlight_color)
+                .map(str::to_owned),
             vert: val(node, "vertAlign").map(str::to_owned),
         }
     }
@@ -115,7 +122,9 @@ impl RunProps {
         macro_rules! take {
             ($($f:ident),*) => {$( if other.$f.is_some() { self.$f = other.$f.clone(); } )*};
         }
-        take!(bold, italic, underline, strike, caps, size, color, font, highlight, vert);
+        take!(
+            bold, italic, underline, strike, caps, size, color, font, highlight, vert
+        );
     }
 
     fn css(&self) -> String {
@@ -345,13 +354,20 @@ impl Styles {
     fn para(&self, id: &str) -> (ParaProps, RunProps, Option<u8>) {
         let mut para = self.base_para.clone();
         let mut run = self.base_run.clone();
-        let wanted = if id.is_empty() { &self.default_para } else { id };
+        let wanted = if id.is_empty() {
+            &self.default_para
+        } else {
+            id
+        };
         let mut level = None;
         for style in self.chain(wanted) {
             para.over(&style.para);
             run.over(&style.run);
             let name = style.name.to_ascii_lowercase();
-            if let Some(n) = name.strip_prefix("heading ").and_then(|n| n.trim().parse::<u8>().ok()) {
+            if let Some(n) = name
+                .strip_prefix("heading ")
+                .and_then(|n| n.trim().parse::<u8>().ok())
+            {
                 level = Some(n.clamp(1, 6));
             } else if name == "title" {
                 level = Some(1);
@@ -475,7 +491,9 @@ fn label(level: &Level, counters: &[u32]) -> String {
         // Symbol fonts put bullets in the private use area, which a web view cannot show.
         let first = level.text.chars().next();
         return match first {
-            Some(c) if c.is_alphanumeric() || ('\u{2022}'..='\u{25ff}').contains(&c) => c.to_string(),
+            Some(c) if c.is_alphanumeric() || ('\u{2022}'..='\u{25ff}').contains(&c) => {
+                c.to_string()
+            }
             _ => "\u{2022}".to_owned(),
         };
     }
@@ -578,9 +596,18 @@ impl Word<'_> {
             let id = format!("h{}", self.headings.len());
             let title = text.trim().to_owned();
             if !title.is_empty() {
-                self.headings.push(Heading { level: l, text: title.chars().take(200).collect(), id: id.clone() });
+                self.headings.push(Heading {
+                    level: l,
+                    text: title.chars().take(200).collect(),
+                    id: id.clone(),
+                });
             }
-            let _ = write!(self.out, "<h{l} id=\"{id}\" style=\"{}{}\">{marker}{inner}</h{l}>", para.css(), run_base.css());
+            let _ = write!(
+                self.out,
+                "<h{l} id=\"{id}\" style=\"{}{}\">{marker}{inner}</h{l}>",
+                para.css(),
+                run_base.css()
+            );
         } else if inner.is_empty() && marker.is_empty() {
             let _ = write!(self.out, "<p style=\"{}\">&nbsp;</p>", para.css());
         } else {
@@ -598,7 +625,11 @@ impl Word<'_> {
                         .and_then(|id| self.rels.get(id))
                         .filter(|r| r.external)
                         .map(|r| r.target.clone())
-                        .filter(|t| t.starts_with("https://") || t.starts_with("http://") || t.starts_with("mailto:"));
+                        .filter(|t| {
+                            t.starts_with("https://")
+                                || t.starts_with("http://")
+                                || t.starts_with("mailto:")
+                        });
                     let mut inner = String::new();
                     self.inline(item, base, &mut inner, text);
                     match target {
@@ -608,7 +639,9 @@ impl Word<'_> {
                         None => html.push_str(&inner),
                     }
                 }
-                "ins" | "smartTag" | "fldSimple" | "customXml" => self.inline(item, base, html, text),
+                "ins" | "smartTag" | "fldSimple" | "customXml" => {
+                    self.inline(item, base, html, text)
+                }
                 "sdt" => {
                     if let Some(content) = child(item, "sdtContent") {
                         self.inline(content, base, html, text);
@@ -677,12 +710,19 @@ impl Word<'_> {
                 attr(e, "cy")?.parse::<f32>().ok()? / EMU_PER_PX,
             ))
         });
-        let alt = find(node, "docPr").and_then(|d| attr(d, "descr")).unwrap_or("");
+        let alt = find(node, "docPr")
+            .and_then(|d| attr(d, "descr"))
+            .unwrap_or("");
         self.picture(id, size, alt)
     }
 
     fn picture(&mut self, rel: &str, size: Option<(f32, f32)>, alt: &str) -> String {
-        let Some(part) = self.rels.get(rel).filter(|r| !r.external).map(|r| r.target.clone()) else {
+        let Some(part) = self
+            .rels
+            .get(rel)
+            .filter(|r| !r.external)
+            .map(|r| r.target.clone())
+        else {
             return String::new();
         };
         // A few dozen pictures at most: a document of thousands would be a zip bomb of pictures.
@@ -694,10 +734,15 @@ impl Word<'_> {
         };
         self.images += 1;
         let style = match size {
-            Some((w, h)) => format!("width:{w:.0}px;height:auto;aspect-ratio:{w:.0}/{h:.0};max-width:100%"),
+            Some((w, h)) => {
+                format!("width:{w:.0}px;height:auto;aspect-ratio:{w:.0}/{h:.0};max-width:100%")
+            }
             None => "max-width:100%".to_owned(),
         };
-        format!("<img src=\"{url}\" alt=\"{}\" style=\"{style}\">", escape(alt))
+        format!(
+            "<img src=\"{url}\" alt=\"{}\" style=\"{style}\">",
+            escape(alt)
+        )
     }
 
     fn table(&mut self, node: Node) {
@@ -706,12 +751,19 @@ impl Word<'_> {
             .and_then(|p| val(p, "tblStyle"))
             .is_some_and(|s| s.contains("Grid"))
             || props.and_then(|p| child(p, "tblBorders")).is_some_and(|b| {
-                b.children().filter(Node::is_element).any(|e| !matches!(attr(e, "val"), Some("nil" | "none")))
+                b.children()
+                    .filter(Node::is_element)
+                    .any(|e| !matches!(attr(e, "val"), Some("nil" | "none")))
             });
         let widths: Vec<f32> = child(node, "tblGrid")
             .map(|g| {
                 children(g, "gridCol")
-                    .map(|c| attr(c, "w").and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.) / 15.)
+                    .map(|c| {
+                        attr(c, "w")
+                            .and_then(|v| v.parse::<f32>().ok())
+                            .unwrap_or(0.)
+                            / 15.
+                    })
                     .collect()
             })
             .unwrap_or_default();
@@ -727,19 +779,40 @@ impl Word<'_> {
             let mut cells = Vec::new();
             for tc in children(tr, "tc") {
                 let pr = child(tc, "tcPr");
-                let span = pr.and_then(|p| val(p, "gridSpan")).and_then(|v| v.parse().ok()).unwrap_or(1usize).max(1);
+                let span = pr
+                    .and_then(|p| val(p, "gridSpan"))
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(1usize)
+                    .max(1);
                 let merge = match pr.and_then(|p| child(p, "vMerge")) {
                     None => 0,
                     Some(m) if attr(m, "val") == Some("restart") => 1,
                     Some(_) => 2,
                 };
-                cells.push(Cell { node: tc, col, span, merge });
+                cells.push(Cell {
+                    node: tc,
+                    col,
+                    span,
+                    merge,
+                });
                 col += span;
             }
             rows.push(cells);
         }
-        let border = if grid { "border:1px solid #8a8a8a;" } else { "" };
-        let _ = write!(self.out, "<table style=\"border-collapse:collapse;margin:8px 0;{}\">", if widths.iter().sum::<f32>() > 0. { "table-layout:fixed;" } else { "" });
+        let border = if grid {
+            "border:1px solid #8a8a8a;"
+        } else {
+            ""
+        };
+        let _ = write!(
+            self.out,
+            "<table style=\"border-collapse:collapse;margin:8px 0;{}\">",
+            if widths.iter().sum::<f32>() > 0. {
+                "table-layout:fixed;"
+            } else {
+                ""
+            }
+        );
         if !widths.is_empty() {
             self.out.push_str("<colgroup>");
             for w in &widths {
@@ -802,8 +875,14 @@ pub fn docx_to_html(bytes: &[u8]) -> Result<WordPage, String> {
     let mut word = Word {
         zip: &zip,
         rels: ox::rels(&zip, "word/document.xml"),
-        styles: zip.read_text("word/styles.xml").map(|s| Styles::read(&s)).unwrap_or_default(),
-        numbering: zip.read_text("word/numbering.xml").map(|s| Numbering::read(&s)).unwrap_or_default(),
+        styles: zip
+            .read_text("word/styles.xml")
+            .map(|s| Styles::read(&s))
+            .unwrap_or_default(),
+        numbering: zip
+            .read_text("word/numbering.xml")
+            .map(|s| Numbering::read(&s))
+            .unwrap_or_default(),
         counters: HashMap::new(),
         headings: Vec::new(),
         images: 0,
@@ -811,7 +890,11 @@ pub fn docx_to_html(bytes: &[u8]) -> Result<WordPage, String> {
     };
     // The page: width and margins of the last section.
     let section = child(body, "sectPr");
-    let page = section.and_then(|s| child(s, "pgSz")).and_then(|s| attr(s, "w")).and_then(|v| v.parse::<f32>().ok()).map_or(794., |v| v / 15.);
+    let page = section
+        .and_then(|s| child(s, "pgSz"))
+        .and_then(|s| attr(s, "w"))
+        .and_then(|v| v.parse::<f32>().ok())
+        .map_or(794., |v| v / 15.);
     let margin = |key: &str, default: f32| {
         section
             .and_then(|s| child(s, "pgMar"))
@@ -819,7 +902,12 @@ pub fn docx_to_html(bytes: &[u8]) -> Result<WordPage, String> {
             .and_then(|v| v.parse::<f32>().ok())
             .map_or(default, |v| v / 15.)
     };
-    let (top, right, bottom, left) = (margin("top", 96.), margin("right", 96.), margin("bottom", 96.), margin("left", 96.));
+    let (top, right, bottom, left) = (
+        margin("top", 96.),
+        margin("right", 96.),
+        margin("bottom", 96.),
+        margin("left", 96.),
+    );
     word.blocks(body);
     let css = format!(
         "{DARK_LIGHT}html,body{{margin:0}}body{{padding:20px 12px;font:11pt/1.25 -apple-system,'Helvetica Neue',sans-serif;color:#242424}}\
@@ -835,7 +923,10 @@ pub fn docx_to_html(bytes: &[u8]) -> Result<WordPage, String> {
         policy(None),
         word.out
     );
-    Ok(WordPage { html, headings: word.headings })
+    Ok(WordPage {
+        html,
+        headings: word.headings,
+    })
 }
 
 // ==== PowerPoint ===========================================================================
@@ -854,7 +945,11 @@ fn hsl(rgb: (f32, f32, f32)) -> (f32, f32, f32) {
         return (0., 0., l);
     }
     let d = max - min;
-    let s = if l > 0.5 { d / (2. - max - min) } else { d / (max + min) };
+    let s = if l > 0.5 {
+        d / (2. - max - min)
+    } else {
+        d / (max + min)
+    };
     let h = if (max - r).abs() < 1e-6 {
         (g - b) / d + if g < b { 6. } else { 0. }
     } else if (max - g).abs() < 1e-6 {
@@ -904,17 +999,23 @@ impl Theme {
             }
         }
         let rels = ox::rels(zip, master);
-        let theme_part = rels.values().find(|r| r.kind == "theme").map(|r| r.target.clone());
+        let theme_part = rels
+            .values()
+            .find(|r| r.kind == "theme")
+            .map(|r| r.target.clone());
         if let Some(text) = theme_part.and_then(|p| zip.read_text(&p))
             && let Ok(doc) = ox::parse(&text)
             && let Some(scheme) = find(doc.root_element(), "clrScheme")
         {
             for c in scheme.children().filter(Node::is_element) {
-                let value = c.children().find(|n| n.is_element()).and_then(|n| {
-                    attr(n, "val").filter(|v| is_hex(v)).or(attr(n, "lastClr"))
-                });
+                let value = c
+                    .children()
+                    .find(|n| n.is_element())
+                    .and_then(|n| attr(n, "val").filter(|v| is_hex(v)).or(attr(n, "lastClr")));
                 if let Some(v) = value {
-                    theme.colors.insert(c.tag_name().name().to_owned(), format!("#{v}"));
+                    theme
+                        .colors
+                        .insert(c.tag_name().name().to_owned(), format!("#{v}"));
                 }
             }
         }
@@ -924,7 +1025,9 @@ impl Theme {
     /// A color element (`solidFill`'s child, `srgbClr`, `schemeClr`...) as a CSS color.
     fn color(&self, node: Node) -> Option<String> {
         let base = match node.tag_name().name() {
-            "srgbClr" => attr(node, "val").filter(|v| is_hex(v)).map(|v| format!("#{v}"))?,
+            "srgbClr" => attr(node, "val")
+                .filter(|v| is_hex(v))
+                .map(|v| format!("#{v}"))?,
             "sysClr" => format!("#{}", attr(node, "lastClr").unwrap_or("000000")),
             "prstClr" => match attr(node, "val")? {
                 "white" => "#ffffff".to_owned(),
@@ -938,29 +1041,53 @@ impl Theme {
             "schemeClr" => {
                 let name = attr(node, "val")?;
                 let mapped = self.map.get(name).map_or(name, String::as_str);
-                self.colors.get(mapped).or_else(|| self.colors.get(name)).cloned()?
+                self.colors
+                    .get(mapped)
+                    .or_else(|| self.colors.get(name))
+                    .cloned()?
             }
             _ => return None,
         };
         let hex = base.trim_start_matches('#');
-        let channel = |i: usize| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok().map(f32::from);
+        let channel = |i: usize| {
+            u8::from_str_radix(hex.get(i..i + 2)?, 16)
+                .ok()
+                .map(f32::from)
+        };
         let mut rgb = (channel(0)?, channel(2)?, channel(4)?);
         let mut alpha = 1.;
         for m in node.children().filter(Node::is_element) {
-            let v = attr(m, "val").and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.) / 100_000.;
+            let v = attr(m, "val")
+                .and_then(|v| v.parse::<f32>().ok())
+                .unwrap_or(0.)
+                / 100_000.;
             match m.tag_name().name() {
                 "lumMod" | "lumOff" => {
                     let (h, s, l) = hsl(rgb);
-                    let l = if m.tag_name().name() == "lumMod" { l * v } else { l + v };
+                    let l = if m.tag_name().name() == "lumMod" {
+                        l * v
+                    } else {
+                        l + v
+                    };
                     rgb = from_hsl(h, s, l.clamp(0., 1.));
                 }
-                "tint" => rgb = (rgb.0 + (255. - rgb.0) * (1. - v), rgb.1 + (255. - rgb.1) * (1. - v), rgb.2 + (255. - rgb.2) * (1. - v)),
+                "tint" => {
+                    rgb = (
+                        rgb.0 + (255. - rgb.0) * (1. - v),
+                        rgb.1 + (255. - rgb.1) * (1. - v),
+                        rgb.2 + (255. - rgb.2) * (1. - v),
+                    )
+                }
                 "shade" => rgb = (rgb.0 * v, rgb.1 * v, rgb.2 * v),
                 "alpha" => alpha = v,
                 _ => {}
             }
         }
-        let (r, g, b) = (rgb.0.round().clamp(0., 255.) as u8, rgb.1.round().clamp(0., 255.) as u8, rgb.2.round().clamp(0., 255.) as u8);
+        let (r, g, b) = (
+            rgb.0.round().clamp(0., 255.) as u8,
+            rgb.1.round().clamp(0., 255.) as u8,
+            rgb.2.round().clamp(0., 255.) as u8,
+        );
         Some(if alpha < 0.999 {
             format!("rgba({r},{g},{b},{alpha:.2})")
         } else {
@@ -971,7 +1098,10 @@ impl Theme {
     /// The color a fill node (`solidFill`, `gradFill`...) paints with, if any.
     fn fill(&self, props: Node) -> Option<String> {
         if let Some(solid) = child(props, "solidFill") {
-            return solid.children().find(Node::is_element).and_then(|c| self.color(c));
+            return solid
+                .children()
+                .find(Node::is_element)
+                .and_then(|c| self.color(c));
         }
         child(props, "gradFill")
             .and_then(|g| find(g, "gs"))
@@ -1006,20 +1136,32 @@ struct Tx {
 }
 
 impl Tx {
-    const ID: Tx = Tx { ox: 0., oy: 0., sx: 1., sy: 1. };
+    const ID: Tx = Tx {
+        ox: 0.,
+        oy: 0.,
+        sx: 1.,
+        sy: 1.,
+    };
 }
 
 fn xfrm_of(node: Node) -> Option<Xf> {
     let xf = find(node, "xfrm")?;
     let off = child(xf, "off")?;
     let ext = child(xf, "ext")?;
-    let n = |node: Node, k: &str| attr(node, k).and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.);
+    let n = |node: Node, k: &str| {
+        attr(node, k)
+            .and_then(|v| v.parse::<f32>().ok())
+            .unwrap_or(0.)
+    };
     Some(Xf {
         x: n(off, "x"),
         y: n(off, "y"),
         w: n(ext, "cx"),
         h: n(ext, "cy"),
-        rot: attr(xf, "rot").and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.) / 60_000.,
+        rot: attr(xf, "rot")
+            .and_then(|v| v.parse::<f32>().ok())
+            .unwrap_or(0.)
+            / 60_000.,
         flip_h: attr(xf, "flipH") == Some("1"),
         flip_v: attr(xf, "flipV") == Some("1"),
     })
@@ -1031,14 +1173,22 @@ fn px(emu: f32) -> f32 {
 
 /// The placeholder in `tree` that matches `(type, idx)`.
 fn placeholder<'a>(tree: Node<'a, 'a>, kind: &str, idx: &str) -> Option<Node<'a, 'a>> {
-    let same = |a: &str, b: &str| a == b || (a == "ctrTitle" && b == "title") || (a == "title" && b == "ctrTitle");
-    let shapes = || tree.descendants().filter(|n| n.is_element() && n.tag_name().name() == "sp");
+    let same = |a: &str, b: &str| {
+        a == b || (a == "ctrTitle" && b == "title") || (a == "title" && b == "ctrTitle")
+    };
+    let shapes = || {
+        tree.descendants()
+            .filter(|n| n.is_element() && n.tag_name().name() == "sp")
+    };
     let ph = |sp: Node<'a, 'a>| find(sp, "ph");
     shapes()
         .find(|sp| ph(*sp).is_some_and(|p| !idx.is_empty() && attr(p, "idx") == Some(idx)))
         .or_else(|| {
             shapes().find(|sp| {
-                ph(*sp).is_some_and(|p| same(attr(p, "type").unwrap_or("body"), kind) && (idx.is_empty() || attr(p, "idx").is_none() || kind != "body"))
+                ph(*sp).is_some_and(|p| {
+                    same(attr(p, "type").unwrap_or("body"), kind)
+                        && (idx.is_empty() || attr(p, "idx").is_none() || kind != "body")
+                })
             })
         })
 }
@@ -1071,28 +1221,53 @@ struct Deck2<'a> {
 
 fn lvl_props(theme: &Theme, node: Node) -> LvlProps {
     let mut p = LvlProps {
-        left: attr(node, "marL").and_then(|v| v.parse::<f32>().ok()).map(px),
-        indent: attr(node, "indent").and_then(|v| v.parse::<f32>().ok()).map(px),
+        left: attr(node, "marL")
+            .and_then(|v| v.parse::<f32>().ok())
+            .map(px),
+        indent: attr(node, "indent")
+            .and_then(|v| v.parse::<f32>().ok())
+            .map(px),
         align: attr(node, "algn").map(str::to_owned),
         ..LvlProps::default()
     };
     if child(node, "buNone").is_some() {
         p.no_bullet = true;
     }
-    p.bullet = child(node, "buChar").and_then(|b| attr(b, "char")).map(str::to_owned);
-    p.autonum = child(node, "buAutoNum").and_then(|b| attr(b, "type")).map(str::to_owned);
-    if let Some(sp) = child(node, "spcBef").and_then(|s| child(s, "spcPts")).and_then(|s| attr(s, "val")).and_then(|v| v.parse::<f32>().ok()) {
+    p.bullet = child(node, "buChar")
+        .and_then(|b| attr(b, "char"))
+        .map(str::to_owned);
+    p.autonum = child(node, "buAutoNum")
+        .and_then(|b| attr(b, "type"))
+        .map(str::to_owned);
+    if let Some(sp) = child(node, "spcBef")
+        .and_then(|s| child(s, "spcPts"))
+        .and_then(|s| attr(s, "val"))
+        .and_then(|v| v.parse::<f32>().ok())
+    {
         p.before = Some(sp / 100. * 4. / 3.);
     }
-    if let Some(pct) = child(node, "lnSpc").and_then(|s| child(s, "spcPct")).and_then(|s| attr(s, "val")).and_then(|v| v.parse::<f32>().ok()) {
+    if let Some(pct) = child(node, "lnSpc")
+        .and_then(|s| child(s, "spcPct"))
+        .and_then(|s| attr(s, "val"))
+        .and_then(|v| v.parse::<f32>().ok())
+    {
         p.line = Some(pct / 100_000.);
     }
-    if let Some(d) = child(node, "defRPr").or(if node.tag_name().name() == "rPr" { Some(node) } else { None }) {
-        p.size = attr(d, "sz").and_then(|v| v.parse::<f32>().ok()).map(|v| v / 100.);
+    if let Some(d) = child(node, "defRPr").or(if node.tag_name().name() == "rPr" {
+        Some(node)
+    } else {
+        None
+    }) {
+        p.size = attr(d, "sz")
+            .and_then(|v| v.parse::<f32>().ok())
+            .map(|v| v / 100.);
         p.bold = attr(d, "b").map(|v| v == "1");
         p.italic = attr(d, "i").map(|v| v == "1");
         p.color = theme.fill(d);
-        p.font = child(d, "latin").and_then(|l| attr(l, "typeface")).filter(|f| !f.starts_with('+')).map(str::to_owned);
+        p.font = child(d, "latin")
+            .and_then(|l| attr(l, "typeface"))
+            .filter(|f| !f.starts_with('+'))
+            .map(str::to_owned);
     }
     p
 }
@@ -1102,7 +1277,9 @@ impl LvlProps {
         macro_rules! fill {
             ($($f:ident),*) => {$( if self.$f.is_none() { self.$f = other.$f.clone(); } )*};
         }
-        fill!(size, bold, italic, color, font, left, indent, align, bullet, autonum, before, line);
+        fill!(
+            size, bold, italic, color, font, left, indent, align, bullet, autonum, before, line
+        );
         if !self.no_bullet && other.no_bullet && self.bullet.is_none() && self.autonum.is_none() {
             self.no_bullet = true;
         }
@@ -1114,11 +1291,18 @@ impl<'a> Deck2<'a> {
     fn levels(&self, shape: Node<'a, 'a>, kind: &str, idx: &str, lvl: usize) -> LvlProps {
         let name = format!("lvl{lvl}pPr");
         let mut acc = LvlProps::default();
-        let own = |sp: Node<'a, 'a>| find(sp, "lstStyle").and_then(|l| child(l, &name)).map(|n| lvl_props(&self.theme, n));
+        let own = |sp: Node<'a, 'a>| {
+            find(sp, "lstStyle")
+                .and_then(|l| child(l, &name))
+                .map(|n| lvl_props(&self.theme, n))
+        };
         if let Some(p) = own(shape) {
             acc.fill_from(&p);
         }
-        for tree in [self.sources.layout, self.sources.master].into_iter().flatten() {
+        for tree in [self.sources.layout, self.sources.master]
+            .into_iter()
+            .flatten()
+        {
             if let Some(sp) = placeholder(tree, kind, idx)
                 && let Some(p) = own(sp)
             {
@@ -1138,7 +1322,14 @@ impl<'a> Deck2<'a> {
         acc
     }
 
-    fn text(&mut self, body: Node<'a, 'a>, shape: Node<'a, 'a>, kind: &str, idx: &str, in_cell: bool) -> String {
+    fn text(
+        &mut self,
+        body: Node<'a, 'a>,
+        shape: Node<'a, 'a>,
+        kind: &str,
+        idx: &str,
+        in_cell: bool,
+    ) -> String {
         let scale = find(body, "normAutofit")
             .and_then(|n| attr(n, "fontScale"))
             .and_then(|v| v.parse::<f32>().ok())
@@ -1147,7 +1338,11 @@ impl<'a> Deck2<'a> {
         let mut counters: Vec<u32> = Vec::new();
         for p in children(body, "p") {
             let ppr = child(p, "pPr");
-            let lvl = ppr.and_then(|n| attr(n, "lvl")).and_then(|v| v.parse::<usize>().ok()).unwrap_or(0) + 1;
+            let lvl = ppr
+                .and_then(|n| attr(n, "lvl"))
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(0)
+                + 1;
             let mut props = ppr.map(|n| lvl_props(&self.theme, n)).unwrap_or_default();
             props.size = None;
             props.bold = None;
@@ -1159,7 +1354,8 @@ impl<'a> Deck2<'a> {
                 props.size = own.size;
             }
             props.fill_from(&self.levels(shape, kind, idx, lvl.min(9)));
-            let bulleted = !props.no_bullet && !in_cell && (props.bullet.is_some() || props.autonum.is_some());
+            let bulleted =
+                !props.no_bullet && !in_cell && (props.bullet.is_some() || props.autonum.is_some());
             if props.autonum.is_some() && bulleted {
                 counters.resize(lvl.max(counters.len()), 0);
                 counters[lvl - 1] += 1;
@@ -1175,7 +1371,11 @@ impl<'a> Deck2<'a> {
                 left += 20.;
                 indent = -20.;
             }
-            let _ = write!(css, "margin:0;padding-left:{:.1}px;text-indent:{indent:.1}px;", left.max(0.));
+            let _ = write!(
+                css,
+                "margin:0;padding-left:{:.1}px;text-indent:{indent:.1}px;",
+                left.max(0.)
+            );
             if let Some(color) = &props.color {
                 let _ = write!(css, "color:{color};");
             }
@@ -1214,21 +1414,41 @@ impl<'a> Deck2<'a> {
                             let u = attr(r, "u").is_some_and(|u| u != "none");
                             let s = attr(r, "strike").is_some_and(|s| s != "noStrike");
                             if u || s {
-                                let _ = write!(style, "text-decoration:{}{}{};", if u { "underline" } else { "" }, if u && s { " " } else { "" }, if s { "line-through" } else { "" });
+                                let _ = write!(
+                                    style,
+                                    "text-decoration:{}{}{};",
+                                    if u { "underline" } else { "" },
+                                    if u && s { " " } else { "" },
+                                    if s { "line-through" } else { "" }
+                                );
                             }
                             match attr(r, "baseline").and_then(|b| b.parse::<i32>().ok()) {
-                                Some(b) if b > 0 => style.push_str("vertical-align:super;font-size:70%;"),
-                                Some(b) if b < 0 => style.push_str("vertical-align:sub;font-size:70%;"),
+                                Some(b) if b > 0 => {
+                                    style.push_str("vertical-align:super;font-size:70%;")
+                                }
+                                Some(b) if b < 0 => {
+                                    style.push_str("vertical-align:sub;font-size:70%;")
+                                }
                                 _ => {}
                             }
                         }
                         if let Some(c) = own.color.or(props.color.clone()) {
                             let _ = write!(style, "color:{c};");
                         } else if !in_cell {
-                            let fallback = self.theme.colors.get(self.theme.map.get("tx1").map_or("dk1", String::as_str)).cloned().unwrap_or_else(|| "#000000".into());
+                            let fallback = self
+                                .theme
+                                .colors
+                                .get(self.theme.map.get("tx1").map_or("dk1", String::as_str))
+                                .cloned()
+                                .unwrap_or_else(|| "#000000".into());
                             let _ = write!(style, "color:{fallback};");
                         }
-                        if let Some(f) = own.font.or(props.font.clone()).as_deref().and_then(safe_font) {
+                        if let Some(f) = own
+                            .font
+                            .or(props.font.clone())
+                            .as_deref()
+                            .and_then(safe_font)
+                        {
                             let _ = write!(style, "font-family:{f};");
                         }
                         let _ = write!(runs, "<span style=\"{style}\">{}</span>", escape(text));
@@ -1244,18 +1464,36 @@ impl<'a> Deck2<'a> {
                         match kind.as_str() {
                             k if k.starts_with("alphaLc") => format!("{}.", letters(n, false)),
                             k if k.starts_with("alphaUc") => format!("{}.", letters(n, true)),
-                            k if k.starts_with("romanLc") => format!("{}.", roman(n).to_lowercase()),
+                            k if k.starts_with("romanLc") => {
+                                format!("{}.", roman(n).to_lowercase())
+                            }
                             k if k.starts_with("romanUc") => format!("{}.", roman(n)),
                             _ => format!("{n}."),
                         }
                     }
-                    (Some(c), None) if c.chars().all(|c| c.is_alphanumeric() || ('\u{2010}'..='\u{27bf}').contains(&c) || c == '-') => c.clone(),
+                    (Some(c), None)
+                        if c.chars().all(|c| {
+                            c.is_alphanumeric()
+                                || ('\u{2010}'..='\u{27bf}').contains(&c)
+                                || c == '-'
+                        }) =>
+                    {
+                        c.clone()
+                    }
                     _ => "\u{2022}".to_owned(),
                 };
                 let hang = -indent;
-                let _ = write!(out, "<p style=\"{css}\"><span class=\"b\" style=\"width:{hang:.0}px\">{}</span>{runs}</p>", escape(&mark));
+                let _ = write!(
+                    out,
+                    "<p style=\"{css}\"><span class=\"b\" style=\"width:{hang:.0}px\">{}</span>{runs}</p>",
+                    escape(&mark)
+                );
             } else if runs.is_empty() {
-                let _ = write!(out, "<p style=\"{css}font-size:{:.1}px\">&nbsp;</p>", default_size * 4. / 3.);
+                let _ = write!(
+                    out,
+                    "<p style=\"{css}font-size:{:.1}px\">&nbsp;</p>",
+                    default_size * 4. / 3.
+                );
             } else {
                 let _ = write!(out, "<p style=\"{css}\">{runs}</p>");
             }
@@ -1285,7 +1523,10 @@ impl<'a> Deck2<'a> {
                         let n = |c: Node, k: &str| attr(c, k).and_then(|v| v.parse::<f32>().ok());
                         let (off, ext) = (child(xf, "off")?, child(xf, "ext")?);
                         let (choff, chext) = (child(xf, "chOff")?, child(xf, "chExt")?);
-                        let (sx, sy) = (n(ext, "cx")? / n(chext, "cx")?.max(1.), n(ext, "cy")? / n(chext, "cy")?.max(1.));
+                        let (sx, sy) = (
+                            n(ext, "cx")? / n(chext, "cx")?.max(1.),
+                            n(ext, "cy")? / n(chext, "cy")?.max(1.),
+                        );
                         Some(Tx {
                             ox: tx.ox + (n(off, "x")? - n(choff, "x")? * sx) * tx.sx,
                             oy: tx.oy + (n(off, "y")? - n(choff, "y")? * sy) * tx.sy,
@@ -1314,7 +1555,12 @@ impl<'a> Deck2<'a> {
             let _ = write!(t, "rotate({:.2}deg) ", xf.rot);
         }
         if xf.flip_h || xf.flip_v {
-            let _ = write!(t, "scale({},{})", if xf.flip_h { -1 } else { 1 }, if xf.flip_v { -1 } else { 1 });
+            let _ = write!(
+                t,
+                "scale({},{})",
+                if xf.flip_h { -1 } else { 1 },
+                if xf.flip_v { -1 } else { 1 }
+            );
         }
         if !t.is_empty() {
             let _ = write!(s, "transform:{t};");
@@ -1324,14 +1570,23 @@ impl<'a> Deck2<'a> {
 
     fn shape(&mut self, node: Node<'a, 'a>, tx: Tx) {
         let ph = find(node, "ph");
-        let (kind, idx) = ph.map_or(("other", ""), |p| (attr(p, "type").unwrap_or("body"), attr(p, "idx").unwrap_or("")));
+        let (kind, idx) = ph.map_or(("other", ""), |p| {
+            (
+                attr(p, "type").unwrap_or("body"),
+                attr(p, "idx").unwrap_or(""),
+            )
+        });
         let sp_pr = child(node, "spPr");
         let mut xf = sp_pr.and_then(xfrm_of);
         if xf.is_none() && ph.is_some() {
             xf = [self.sources.layout, self.sources.master]
                 .into_iter()
                 .flatten()
-                .find_map(|tree| placeholder(tree, kind, idx).and_then(|sp| child(sp, "spPr")).and_then(xfrm_of));
+                .find_map(|tree| {
+                    placeholder(tree, kind, idx)
+                        .and_then(|sp| child(sp, "spPr"))
+                        .and_then(xfrm_of)
+                });
         }
         let Some(xf) = xf else {
             return;
@@ -1340,8 +1595,13 @@ impl<'a> Deck2<'a> {
             let w = px(xf.w * tx.sx);
             let h = px(xf.h * tx.sy);
             let ln = sp_pr.and_then(|p| child(p, "ln"));
-            let color = ln.and_then(|l| self.theme.fill(l)).unwrap_or_else(|| "#888888".into());
-            let width = ln.and_then(|l| attr(l, "w")).and_then(|v| v.parse::<f32>().ok()).map_or(1., |v| (px(v)).max(1.));
+            let color = ln
+                .and_then(|l| self.theme.fill(l))
+                .unwrap_or_else(|| "#888888".into());
+            let width = ln
+                .and_then(|l| attr(l, "w"))
+                .and_then(|v| v.parse::<f32>().ok())
+                .map_or(1., |v| (px(v)).max(1.));
             let (y1, y2) = if xf.flip_v { (h, 0.) } else { (0., h) };
             let (x1, x2) = if xf.flip_h { (w, 0.) } else { (0., w) };
             let _ = write!(
@@ -1359,7 +1619,10 @@ impl<'a> Deck2<'a> {
             if let Some(fill) = self.theme.fill(props) {
                 let _ = write!(style, "background:{fill};");
             }
-            if let Some(blip) = child(props, "blipFill").and_then(|b| child(b, "blip")).and_then(|b| attr(b, "embed")).map(str::to_owned)
+            if let Some(blip) = child(props, "blipFill")
+                .and_then(|b| child(b, "blip"))
+                .and_then(|b| attr(b, "embed"))
+                .map(str::to_owned)
                 && let Some(url) = self.picture(&blip)
             {
                 let _ = write!(style, "background:url({url}) center/cover;");
@@ -1368,8 +1631,13 @@ impl<'a> Deck2<'a> {
                 && child(ln, "noFill").is_none()
                 && let Some(color) = self.theme.fill(ln)
             {
-                let w = attr(ln, "w").and_then(|v| v.parse::<f32>().ok()).map_or(1., |v| px(v).max(1.));
-                let _ = write!(style, "box-sizing:border-box;border:{w:.1}px solid {color};");
+                let w = attr(ln, "w")
+                    .and_then(|v| v.parse::<f32>().ok())
+                    .map_or(1., |v| px(v).max(1.));
+                let _ = write!(
+                    style,
+                    "box-sizing:border-box;border:{w:.1}px solid {color};"
+                );
             }
             match child(props, "prstGeom").and_then(|g| attr(g, "prst")) {
                 Some("ellipse") => style.push_str("border-radius:50%;"),
@@ -1378,7 +1646,9 @@ impl<'a> Deck2<'a> {
                     let _ = write!(style, "border-radius:{r:.1}px;");
                 }
                 Some("triangle") => style.push_str("clip-path:polygon(50% 0,0 100%,100% 100%);"),
-                Some("diamond") => style.push_str("clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%);"),
+                Some("diamond") => {
+                    style.push_str("clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%);")
+                }
                 _ => {}
             }
         }
@@ -1392,19 +1662,34 @@ impl<'a> Deck2<'a> {
                     Some("b") => "flex-end",
                     _ => "flex-start",
                 };
-                let inset = |k: &str, d: f32| attr(pr, k).and_then(|v| v.parse::<f32>().ok()).map_or(px(d), px);
+                let inset = |k: &str, d: f32| {
+                    attr(pr, k)
+                        .and_then(|v| v.parse::<f32>().ok())
+                        .map_or(px(d), px)
+                };
                 pad = (inset("tIns", 45_720.), inset("lIns", 91_440.));
             }
             inner = self.text(body, node, kind, idx, false);
         }
-        let ph_anchor = if anchor == "flex-start" && child(node, "txBody").and_then(|b| child(b, "bodyPr")).and_then(|p| attr(p, "anchor")).is_none() {
-            [self.sources.layout, self.sources.master].into_iter().flatten().find_map(|t| {
-                placeholder(t, kind, idx).and_then(|sp| find(sp, "bodyPr")).and_then(|p| attr(p, "anchor")).map(|a| match a {
-                    "ctr" => "center",
-                    "b" => "flex-end",
-                    _ => "flex-start",
+        let ph_anchor = if anchor == "flex-start"
+            && child(node, "txBody")
+                .and_then(|b| child(b, "bodyPr"))
+                .and_then(|p| attr(p, "anchor"))
+                .is_none()
+        {
+            [self.sources.layout, self.sources.master]
+                .into_iter()
+                .flatten()
+                .find_map(|t| {
+                    placeholder(t, kind, idx)
+                        .and_then(|sp| find(sp, "bodyPr"))
+                        .and_then(|p| attr(p, "anchor"))
+                        .map(|a| match a {
+                            "ctr" => "center",
+                            "b" => "flex-end",
+                            _ => "flex-start",
+                        })
                 })
-            })
         } else {
             None
         };
@@ -1421,16 +1706,27 @@ impl<'a> Deck2<'a> {
         let Some(xf) = child(node, "spPr").and_then(xfrm_of) else {
             return;
         };
-        let Some(blip) = find(node, "blip").and_then(|b| attr(b, "embed")).map(str::to_owned) else {
+        let Some(blip) = find(node, "blip")
+            .and_then(|b| attr(b, "embed"))
+            .map(str::to_owned)
+        else {
             return;
         };
         let Some(url) = self.picture(&blip) else {
             return;
         };
         let crop = child(node, "blipFill").and_then(|b| child(b, "srcRect"));
-        let c = |k: &str| crop.and_then(|n| attr(n, k)).and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.) / 1000.;
+        let c = |k: &str| {
+            crop.and_then(|n| attr(n, k))
+                .and_then(|v| v.parse::<f32>().ok())
+                .unwrap_or(0.)
+                / 1000.
+        };
         let (l, t, r, b) = (c("l"), c("t"), c("r"), c("b"));
-        let (iw, ih) = (100. / (100. - l - r).max(1.) * 100., 100. / (100. - t - b).max(1.) * 100.);
+        let (iw, ih) = (
+            100. / (100. - l - r).max(1.) * 100.,
+            100. / (100. - t - b).max(1.) * 100.,
+        );
         let _ = write!(
             self.out,
             "<div class=\"sh\" style=\"{}overflow:hidden\"><img src=\"{url}\" style=\"position:absolute;left:{:.2}%;top:{:.2}%;width:{iw:.2}%;height:{ih:.2}%\"></div>",
@@ -1454,18 +1750,37 @@ impl<'a> Deck2<'a> {
             return;
         };
         let cols: Vec<f32> = child(table, "tblGrid")
-            .map(|g| children(g, "gridCol").map(|c| px(attr(c, "w").and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.))).collect())
+            .map(|g| {
+                children(g, "gridCol")
+                    .map(|c| {
+                        px(attr(c, "w")
+                            .and_then(|v| v.parse::<f32>().ok())
+                            .unwrap_or(0.))
+                    })
+                    .collect()
+            })
             .unwrap_or_default();
         let first_row = child(table, "tblPr").is_some_and(|p| attr(p, "firstRow") == Some("1"));
         let banded = child(table, "tblPr").is_some_and(|p| attr(p, "bandRow") == Some("1"));
-        let accent = self.theme.colors.get("accent1").cloned().unwrap_or_else(|| "#4472c4".into());
-        let _ = write!(self.out, "<div class=\"sh\" style=\"{}\"><table style=\"border-collapse:collapse;width:100%\"><colgroup>", Self::place(&xf, tx));
+        let accent = self
+            .theme
+            .colors
+            .get("accent1")
+            .cloned()
+            .unwrap_or_else(|| "#4472c4".into());
+        let _ = write!(
+            self.out,
+            "<div class=\"sh\" style=\"{}\"><table style=\"border-collapse:collapse;width:100%\"><colgroup>",
+            Self::place(&xf, tx)
+        );
         for w in &cols {
             let _ = write!(self.out, "<col style=\"width:{w:.1}px\">");
         }
         self.out.push_str("</colgroup>");
         for (ri, tr) in children(table, "tr").enumerate() {
-            let h = px(attr(tr, "h").and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.));
+            let h = px(attr(tr, "h")
+                .and_then(|v| v.parse::<f32>().ok())
+                .unwrap_or(0.));
             let _ = write!(self.out, "<tr style=\"height:{h:.1}px\">");
             for tc in children(tr, "tc") {
                 if attr(tc, "hMerge") == Some("1") || attr(tc, "vMerge") == Some("1") {
@@ -1473,13 +1788,19 @@ impl<'a> Deck2<'a> {
                 }
                 let pr = child(tc, "tcPr");
                 let header = first_row && ri == 0;
-                let mut cell = String::from("border:1px solid rgba(255,255,255,.7);padding:4px 8px;vertical-align:middle;");
+                let mut cell = String::from(
+                    "border:1px solid rgba(255,255,255,.7);padding:4px 8px;vertical-align:middle;",
+                );
                 let own_fill = pr.and_then(|p| self.theme.fill(p));
                 let fill = own_fill.clone().or_else(|| {
                     if header {
                         Some(accent.clone())
                     } else if banded {
-                        Some(if ri % 2 == 1 { "rgba(68,114,196,.22)".to_owned() } else { "rgba(68,114,196,.1)".to_owned() })
+                        Some(if ri % 2 == 1 {
+                            "rgba(68,114,196,.22)".to_owned()
+                        } else {
+                            "rgba(68,114,196,.1)".to_owned()
+                        })
                     } else {
                         None
                     }
@@ -1492,8 +1813,15 @@ impl<'a> Deck2<'a> {
                 }
                 let span = attr(tc, "gridSpan").unwrap_or("1");
                 let rowspan = attr(tc, "rowSpan").unwrap_or("1");
-                let text = child(tc, "txBody").map(|b| self.text(b, node, "other", "", true)).unwrap_or_default();
-                let _ = write!(self.out, "<td colspan=\"{}\" rowspan=\"{}\" style=\"{cell}\">{text}</td>", escape(span), escape(rowspan));
+                let text = child(tc, "txBody")
+                    .map(|b| self.text(b, node, "other", "", true))
+                    .unwrap_or_default();
+                let _ = write!(
+                    self.out,
+                    "<td colspan=\"{}\" rowspan=\"{}\" style=\"{cell}\">{text}</td>",
+                    escape(span),
+                    escape(rowspan)
+                );
             }
             self.out.push_str("</tr>");
         }
@@ -1525,11 +1853,17 @@ window.sirusShow=show;show(0);
 /// page's script reports the slide shown to the app and takes `sirusShow(i)` from it.
 pub fn pptx_to_html(bytes: &[u8]) -> Result<Deck, String> {
     let zip = Zip::open(bytes)?;
-    let text = zip.read_text("ppt/presentation.xml").ok_or("no presentation")?;
+    let text = zip
+        .read_text("ppt/presentation.xml")
+        .ok_or("no presentation")?;
     let doc = ox::parse(&text)?;
     let root = doc.root_element();
     let size = find(root, "sldSz").ok_or("no slide size")?;
-    let n = |k: &str| attr(size, k).and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.);
+    let n = |k: &str| {
+        attr(size, k)
+            .and_then(|v| v.parse::<f32>().ok())
+            .unwrap_or(0.)
+    };
     let (width, height) = (px(n("cx")), px(n("cy")));
     if width < 10. || height < 10. {
         return Err("bad slide size".to_owned());
@@ -1538,7 +1872,11 @@ pub fn pptx_to_html(bytes: &[u8]) -> Result<Deck, String> {
     let order: Vec<String> = find(root, "sldIdLst")
         .map(|l| {
             children(l, "sldId")
-                .filter_map(|s| ox::rel_id(s).and_then(|id| deck_rels.get(id)).map(|r| r.target.clone()))
+                .filter_map(|s| {
+                    ox::rel_id(s)
+                        .and_then(|id| deck_rels.get(id))
+                        .map(|r| r.target.clone())
+                })
                 .collect()
         })
         .unwrap_or_default();
@@ -1555,19 +1893,44 @@ pub fn pptx_to_html(bytes: &[u8]) -> Result<Deck, String> {
             continue;
         };
         let rels = ox::rels(&zip, part);
-        let layout_part = rels.values().find(|r| r.kind == "slideLayout").map(|r| r.target.clone());
+        let layout_part = rels
+            .values()
+            .find(|r| r.kind == "slideLayout")
+            .map(|r| r.target.clone());
         let layout_text = layout_part.as_deref().and_then(|p| zip.read_text(p));
         let layout_doc = layout_text.as_deref().and_then(|t| ox::parse(t).ok());
-        let master_part = layout_part.as_deref().and_then(|p| ox::rels(&zip, p).into_values().find(|r| r.kind == "slideMaster").map(|r| r.target));
+        let master_part = layout_part.as_deref().and_then(|p| {
+            ox::rels(&zip, p)
+                .into_values()
+                .find(|r| r.kind == "slideMaster")
+                .map(|r| r.target)
+        });
         let master_text = master_part.as_deref().and_then(|p| zip.read_text(p));
         let master_doc = master_text.as_deref().and_then(|t| ox::parse(t).ok());
-        let theme = master_part.as_deref().map(|m| Theme::read(&zip, m)).unwrap_or_default();
+        let theme = master_part
+            .as_deref()
+            .map(|m| Theme::read(&zip, m))
+            .unwrap_or_default();
         let slide_root = doc.root_element();
         // Background: the slide's own, then its layout's, then the master's.
-        let bg = [Some(slide_root), layout_doc.as_ref().map(|d| d.root_element()), master_doc.as_ref().map(|d| d.root_element())]
-            .into_iter()
-            .flatten()
-            .find_map(|r| find(r, "bg").and_then(|b| child(b, "bgPr").or_else(|| child(b, "bgRef"))).and_then(|p| theme.fill(p).or_else(|| p.children().find(Node::is_element).and_then(|c| theme.color(c)))));
+        let bg = [
+            Some(slide_root),
+            layout_doc.as_ref().map(|d| d.root_element()),
+            master_doc.as_ref().map(|d| d.root_element()),
+        ]
+        .into_iter()
+        .flatten()
+        .find_map(|r| {
+            find(r, "bg")
+                .and_then(|b| child(b, "bgPr").or_else(|| child(b, "bgRef")))
+                .and_then(|p| {
+                    theme.fill(p).or_else(|| {
+                        p.children()
+                            .find(Node::is_element)
+                            .and_then(|c| theme.color(c))
+                    })
+                })
+        });
         let mut deck = Deck2 {
             zip: &zip,
             theme,
@@ -1625,7 +1988,10 @@ pub fn pptx_to_html(bytes: &[u8]) -> Result<Deck, String> {
          <script nonce=\"{nonce}\">{DECK_SCRIPT}</script></body></html>",
         policy(Some(nonce))
     );
-    Ok(Deck { html, slides: shown })
+    Ok(Deck {
+        html,
+        slides: shown,
+    })
 }
 
 /// The speaker notes of a notes page: the paragraphs of its body placeholder.
@@ -1634,12 +2000,22 @@ fn notes_of(xml: &str) -> String {
         return String::new();
     };
     let mut lines = Vec::new();
-    for sp in doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == "sp") {
+    for sp in doc
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().name() == "sp")
+    {
         if find(sp, "ph").and_then(|p| attr(p, "type")) != Some("body") {
             continue;
         }
-        for p in sp.descendants().filter(|n| n.is_element() && n.tag_name().name() == "p") {
-            let line: String = p.descendants().filter(|n| n.is_element() && n.tag_name().name() == "t").filter_map(|t| t.text()).collect();
+        for p in sp
+            .descendants()
+            .filter(|n| n.is_element() && n.tag_name().name() == "p")
+        {
+            let line: String = p
+                .descendants()
+                .filter(|n| n.is_element() && n.tag_name().name() == "t")
+                .filter_map(|t| t.text())
+                .collect();
             lines.push(line);
         }
     }
@@ -1673,7 +2049,10 @@ mod tests {
         let page = docx_to_html(&bytes).unwrap();
         assert_eq!(page.headings.len(), 1);
         assert_eq!(page.headings[0].text, "Intro & <b>scope");
-        assert!(page.html.contains("Intro &amp; &lt;b&gt;scope"), "text is escaped");
+        assert!(
+            page.html.contains("Intro &amp; &lt;b&gt;scope"),
+            "text is escaped"
+        );
         assert!(page.html.contains("font-weight:700;color:#C00000"));
         assert!(page.html.contains("<img src=\"data:image/png;base64,"));
         assert!(page.html.contains("width:100px"), "extent EMU becomes px");
@@ -1683,7 +2062,9 @@ mod tests {
 
     #[test]
     fn a_document_cannot_smuggle_links_or_markup() {
-        let bytes = docx("<w:p><w:hyperlink r:id=\"rId6\"><w:r><w:t>x</w:t></w:r></w:hyperlink><w:r><w:t>&lt;script&gt;alert(1)&lt;/script&gt;</w:t></w:r></w:p>");
+        let bytes = docx(
+            "<w:p><w:hyperlink r:id=\"rId6\"><w:r><w:t>x</w:t></w:r></w:hyperlink><w:r><w:t>&lt;script&gt;alert(1)&lt;/script&gt;</w:t></w:r></w:p>",
+        );
         let page = docx_to_html(&bytes).unwrap();
         assert!(!page.html.contains("javascript:"));
         assert!(!page.html.contains("<script>"));
@@ -1691,11 +2072,16 @@ mod tests {
 
     #[test]
     fn lists_count_and_tables_merge() {
-        let numbering = format!("<w:numbering {W}><w:abstractNum w:abstractNumId=\"0\"><w:lvl w:ilvl=\"0\"><w:numFmt w:val=\"decimal\"/><w:lvlText w:val=\"%1.\"/></w:lvl></w:abstractNum><w:num w:numId=\"1\"><w:abstractNumId w:val=\"0\"/></w:num></w:numbering>");
+        let numbering = format!(
+            "<w:numbering {W}><w:abstractNum w:abstractNumId=\"0\"><w:lvl w:ilvl=\"0\"><w:numFmt w:val=\"decimal\"/><w:lvlText w:val=\"%1.\"/></w:lvl></w:abstractNum><w:num w:numId=\"1\"><w:abstractNumId w:val=\"0\"/></w:num></w:numbering>"
+        );
         let item = "<w:p><w:pPr><w:numPr><w:ilvl w:val=\"0\"/><w:numId w:val=\"1\"/></w:numPr></w:pPr><w:r><w:t>i</w:t></w:r></w:p>";
         let table = "<w:tbl><w:tr><w:tc><w:tcPr><w:vMerge w:val=\"restart\"/></w:tcPr><w:p/></w:tc><w:tc><w:tcPr><w:gridSpan w:val=\"2\"/></w:tcPr><w:p/></w:tc></w:tr><w:tr><w:tc><w:tcPr><w:vMerge/></w:tcPr><w:p/></w:tc><w:tc><w:p/></w:tc><w:tc><w:p/></w:tc></w:tr></w:tbl>";
         let document = format!("<w:document {W}><w:body>{item}{item}{table}</w:body></w:document>");
-        let bytes = zip_store(&[("word/document.xml", document.as_bytes()), ("word/numbering.xml", numbering.as_bytes())]);
+        let bytes = zip_store(&[
+            ("word/document.xml", document.as_bytes()),
+            ("word/numbering.xml", numbering.as_bytes()),
+        ]);
         let html = docx_to_html(&bytes).unwrap().html;
         assert!(html.contains(">1.</span>") && html.contains(">2.</span>"));
         assert!(html.contains("rowspan=\"2\"") && html.contains("colspan=\"2\""));
@@ -1716,9 +2102,17 @@ mod tests {
         theme.map.insert("tx1".into(), "dk1".into());
         let doc = ox::parse("<a:schemeClr xmlns:a='u' val='tx1'/>").unwrap();
         assert_eq!(theme.color(doc.root_element()).as_deref(), Some("#000000"));
-        let doc = ox::parse("<a:schemeClr xmlns:a='u' val='accent1'><a:alpha val='50000'/></a:schemeClr>").unwrap();
-        assert_eq!(theme.color(doc.root_element()).as_deref(), Some("rgba(68,114,196,0.50)"));
-        let doc = ox::parse("<a:srgbClr xmlns:a='u' val='808080'><a:lumMod val='50000'/></a:srgbClr>").unwrap();
+        let doc = ox::parse(
+            "<a:schemeClr xmlns:a='u' val='accent1'><a:alpha val='50000'/></a:schemeClr>",
+        )
+        .unwrap();
+        assert_eq!(
+            theme.color(doc.root_element()).as_deref(),
+            Some("rgba(68,114,196,0.50)")
+        );
+        let doc =
+            ox::parse("<a:srgbClr xmlns:a='u' val='808080'><a:lumMod val='50000'/></a:srgbClr>")
+                .unwrap();
         assert_eq!(theme.color(doc.root_element()).as_deref(), Some("#404040"));
     }
 
@@ -1726,13 +2120,34 @@ mod tests {
     fn a_deck_gives_its_slides_in_order_with_inherited_places() {
         let ns = "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\"";
         let rel = |items: &[(&str, &str, &str)]| {
-            let body: String = items.iter().map(|(i, t, g)| format!("<Relationship Id=\"{i}\" Type=\"http://x/{t}\" Target=\"{g}\"/>")).collect();
-            format!("<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">{body}</Relationships>")
+            let body: String = items
+                .iter()
+                .map(|(i, t, g)| {
+                    format!("<Relationship Id=\"{i}\" Type=\"http://x/{t}\" Target=\"{g}\"/>")
+                })
+                .collect();
+            format!(
+                "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">{body}</Relationships>"
+            )
         };
-        let presentation = format!("<p:presentation {ns}><p:sldIdLst><p:sldId id=\"256\" r:id=\"rId2\"/><p:sldId id=\"257\" r:id=\"rId1\"/></p:sldIdLst><p:sldSz cx=\"9144000\" cy=\"5143500\"/></p:presentation>");
-        let slide = |text: &str| format!("<p:sld {ns}><p:cSld><p:spTree><p:sp><p:nvSpPr><p:nvPr><p:ph type=\"title\"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:p><a:r><a:t>{text}</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>");
-        let layout = format!("<p:sldLayout {ns}><p:cSld><p:spTree><p:sp><p:nvSpPr><p:nvPr><p:ph type=\"title\"/></p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x=\"952500\" y=\"952500\"/><a:ext cx=\"1905000\" cy=\"952500\"/></a:xfrm></p:spPr></p:sp></p:spTree></p:cSld></p:sldLayout>");
-        let (r1, r2) = (rel(&[("rId1", "slide", "slides/slide1.xml"), ("rId2", "slide", "slides/slide2.xml")]), rel(&[("rId1", "slideLayout", "../slideLayouts/l.xml")]));
+        let presentation = format!(
+            "<p:presentation {ns}><p:sldIdLst><p:sldId id=\"256\" r:id=\"rId2\"/><p:sldId id=\"257\" r:id=\"rId1\"/></p:sldIdLst><p:sldSz cx=\"9144000\" cy=\"5143500\"/></p:presentation>"
+        );
+        let slide = |text: &str| {
+            format!(
+                "<p:sld {ns}><p:cSld><p:spTree><p:sp><p:nvSpPr><p:nvPr><p:ph type=\"title\"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:p><a:r><a:t>{text}</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>"
+            )
+        };
+        let layout = format!(
+            "<p:sldLayout {ns}><p:cSld><p:spTree><p:sp><p:nvSpPr><p:nvPr><p:ph type=\"title\"/></p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x=\"952500\" y=\"952500\"/><a:ext cx=\"1905000\" cy=\"952500\"/></a:xfrm></p:spPr></p:sp></p:spTree></p:cSld></p:sldLayout>"
+        );
+        let (r1, r2) = (
+            rel(&[
+                ("rId1", "slide", "slides/slide1.xml"),
+                ("rId2", "slide", "slides/slide2.xml"),
+            ]),
+            rel(&[("rId1", "slideLayout", "../slideLayouts/l.xml")]),
+        );
         let (s1, s2) = (slide("First"), slide("Second"));
         let bytes = zip_store(&[
             ("ppt/presentation.xml", presentation.as_bytes()),
@@ -1748,14 +2163,19 @@ mod tests {
         // The order is the deck's (rId2 first), not the file names'.
         assert!(deck.html.find("Second").unwrap() < deck.html.find("First").unwrap());
         // The title has no place of its own: the layout's (100px, 100px, 200px, 100px) is used.
-        assert!(deck.html.contains("left:100.0px;top:100.0px;width:200.0px;height:100.0px"));
+        assert!(
+            deck.html
+                .contains("left:100.0px;top:100.0px;width:200.0px;height:100.0px")
+        );
         assert!(deck.html.contains("script-src 'nonce-"));
         assert!(pptx_to_html(b"nope").is_err());
     }
 
     #[test]
     fn web_pages_lose_scripts_and_network() {
-        let page = html_attachment("<p>hi</p><SCRIPT>alert(1)</SCRIPT><img src=\"https://x/y.png\"><script>no end");
+        let page = html_attachment(
+            "<p>hi</p><SCRIPT>alert(1)</SCRIPT><img src=\"https://x/y.png\"><script>no end",
+        );
         assert!(page.starts_with("<!doctype html><html><head><meta charset=\"utf-8\"><meta http-equiv=\"Content-Security-Policy\""));
         assert!(!page.to_lowercase().contains("<script"));
         assert!(page.contains("<p>hi</p>"));

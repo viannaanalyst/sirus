@@ -3,8 +3,8 @@
 
 use super::*;
 use crate::panel_terminal::{TerminalGroup, confirm_close, needs_confirm, running_names};
-use crate::terminal_place::{self, Action, Placement};
 use crate::pull_requests_page::{PullRequestsPage, PullsEvent};
+use crate::terminal_place::{self, Action, Placement};
 use gpui::{AnyView, App, Entity, Subscription};
 
 const CHIP_WIDTH: f32 = 124.;
@@ -108,7 +108,12 @@ impl Shell {
     }
 
     /// ⌘J and ⇧⌘J (Split Terminal Right).
-    pub(super) fn term_shortcut(&mut self, split: bool, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn term_shortcut(
+        &mut self,
+        split: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.this_mac_only(cx) {
             return;
         }
@@ -172,7 +177,9 @@ impl Shell {
         if self.this_mac_only(cx) {
             return;
         }
-        let cwd = self.conversations[self.active_conversation()].worktree.clone();
+        let cwd = self.conversations[self.active_conversation()]
+            .worktree
+            .clone();
         let view = cx.new(|cx| TerminalGroup::new(cwd, cx));
         let id = self.term.next_id;
         self.term.next_id += 1;
@@ -290,7 +297,11 @@ impl Shell {
 
     /// The Pull requests tab, drawn like a session tab: a neutral tile with the pull request
     /// glyph, the title and a close that shows on hover.
-    pub(super) fn pulls_tab_view(&self, now: Instant, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(super) fn pulls_tab_view(
+        &self,
+        now: Instant,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         let tab = self.term.pulls_tab.as_ref()?;
         let active = self.term.pulls_active && !tab.closing;
         let width = tab.w.at(now);
@@ -385,7 +396,11 @@ impl Shell {
         if self.term.placement != Placement::TitleBar {
             return None;
         }
-        let tab = self.term.tabs.iter().find(|t| Some(t.id) == self.term.active)?;
+        let tab = self
+            .term
+            .tabs
+            .iter()
+            .find(|t| Some(t.id) == self.term.active)?;
         Some(
             div()
                 .flex_1()

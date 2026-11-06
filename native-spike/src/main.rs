@@ -8,7 +8,6 @@ mod attachment_ooxml;
 mod attachment_pdf;
 mod attachment_web;
 mod backend;
-mod chat_background;
 mod browser_address;
 mod browser_bridge;
 mod browser_crop;
@@ -19,6 +18,7 @@ mod browser_pip;
 mod browser_profiles;
 mod browser_record;
 mod browser_tab;
+mod chat_background;
 mod cli_diagnostics;
 mod computer_move;
 mod computers;
@@ -28,17 +28,18 @@ mod effort_energy;
 mod file_editor;
 mod file_icons;
 mod folder_icon_data;
+mod fonts;
 mod git_sync;
 mod hover_track;
-mod workspace_follow;
 mod i18n;
 mod local_git;
 mod markdown;
 mod marks;
 mod mascots;
 mod motion;
-mod send_morph;
 mod native_actions;
+mod native_notify;
+mod new_tab_field;
 mod panel_browser;
 mod panel_changes;
 mod panel_files;
@@ -50,30 +51,29 @@ mod project_avatar;
 mod project_files;
 mod project_scripts;
 mod project_scripts_view;
-mod pull_requests_page;
 mod provider_masks;
+mod pull_requests_page;
+mod remote_tls;
 mod reply_render;
 mod reply_rich;
-mod remote_tls;
 mod reply_view;
+mod send_morph;
 mod settings_connectors;
+mod settings_pages;
 mod settings_pair;
+mod shell;
 mod sidebar_items;
 mod simulator;
-mod settings_pages;
-mod shell;
+mod step_lines;
 mod subagent_team;
 mod syntax;
-mod fonts;
-mod step_lines;
-mod native_notify;
-mod new_tab_field;
 mod tab_label;
 mod tab_tile;
-mod tool_images;
 mod terminal_place;
 mod theme;
+mod tool_images;
 mod visuals;
+mod workspace_follow;
 
 use gpui::{
     App, AssetSource, Bounds, Result, SharedString, TitlebarOptions, WindowBounds, WindowOptions,
@@ -222,10 +222,11 @@ fn main() {
         }
     });
     app.run(move |cx: &mut App| {
-            cx.on_window_closed(|cx, _| cx.quit()).detach();
-            cx.on_app_quit(|_| async { backend::stop_host() }).detach();
-            let bounds = Bounds::centered(None, size(px(1320.), px(860.)), cx);
-            let window = cx.open_window(
+        cx.on_window_closed(|cx, _| cx.quit()).detach();
+        cx.on_app_quit(|_| async { backend::stop_host() }).detach();
+        let bounds = Bounds::centered(None, size(px(1320.), px(860.)), cx);
+        let window = cx
+            .open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
                     window_min_size: Some(size(px(820.), px(520.))),
@@ -257,15 +258,15 @@ fn main() {
                 },
             )
             .expect("open window");
-            cx.spawn(async move |cx| {
-                while let Ok(url) = link_events.recv().await {
-                    let _ = window.update(cx, |shell, window, cx| {
-                        window.activate_window();
-                        shell.prompt_link_received(url, cx);
-                    });
-                }
-            })
-            .detach();
-            cx.activate(true);
-        });
+        cx.spawn(async move |cx| {
+            while let Ok(url) = link_events.recv().await {
+                let _ = window.update(cx, |shell, window, cx| {
+                    window.activate_window();
+                    shell.prompt_link_received(url, cx);
+                });
+            }
+        })
+        .detach();
+        cx.activate(true);
+    });
 }

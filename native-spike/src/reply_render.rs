@@ -15,7 +15,9 @@ use objc2::rc::Retained;
 use objc2::{AllocAnyThread, MainThreadMarker, msg_send};
 use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSImage};
 use objc2_foundation::{NSDictionary, NSError, NSNumber, NSPoint, NSRect, NSSize, NSString, NSURL};
-use objc2_web_kit::{WKSnapshotConfiguration, WKWebView, WKWebViewConfiguration, WKWebsiteDataStore};
+use objc2_web_kit::{
+    WKSnapshotConfiguration, WKWebView, WKWebViewConfiguration, WKWebsiteDataStore,
+};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -40,7 +42,9 @@ pub fn pick_chunk<'a>(names: &'a [String], prefix: &str, ext: &str) -> Option<&'
 
 fn js_string(text: &str) -> String {
     // `</` could end the script early; JSON allows the escaped slash.
-    serde_json::to_string(text).unwrap_or_else(|_| "\"\"".into()).replace("</", "<\\/")
+    serde_json::to_string(text)
+        .unwrap_or_else(|_| "\"\"".into())
+        .replace("</", "<\\/")
 }
 
 fn policy(base: &str) -> String {
@@ -137,7 +141,9 @@ fn cache_write(dir: &Path, key: &str, png: &[u8], size: (f32, f32)) {
 
 /// Keeps the `keep` newest drawings; older ones go.
 fn prune(dir: &Path, keep: usize) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     let mut files: Vec<_> = entries
         .flatten()
         .filter(|e| e.path().extension().is_some_and(|x| x == "png"))
@@ -203,9 +209,14 @@ async fn snapshot(web: &Retained<WKWebView>, width: f64) -> Result<Vec<u8>, Stri
                     .unwrap_or_else(|| "snapshot".into())),
                 Some(image) => image
                     .TIFFRepresentation()
-                    .and_then(|data| NSBitmapImageRep::initWithData(NSBitmapImageRep::alloc(), &data))
+                    .and_then(|data| {
+                        NSBitmapImageRep::initWithData(NSBitmapImageRep::alloc(), &data)
+                    })
                     .and_then(|rep| {
-                        rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new())
+                        rep.representationUsingType_properties(
+                            NSBitmapImageFileType::PNG,
+                            &NSDictionary::new(),
+                        )
                     })
                     .map(|png| png.to_vec())
                     .ok_or_else(|| "encode".to_owned()),
@@ -224,7 +235,11 @@ async fn snapshot(web: &Retained<WKWebView>, width: f64) -> Result<Vec<u8>, Stri
 }
 
 /// Draws `want` (a diagram or a formula): the PNG and its size in points.
-pub async fn draw(want: &Want, ink: &str, cx: &mut AsyncApp) -> Result<(Vec<u8>, (f32, f32)), String> {
+pub async fn draw(
+    want: &Want,
+    ink: &str,
+    cx: &mut AsyncApp,
+) -> Result<(Vec<u8>, (f32, f32)), String> {
     let key = want.key();
     let dir = cache_dir();
     if let Some(hit) = cache_read(&dir, &key) {
@@ -255,7 +270,9 @@ pub async fn draw(want: &Want, ink: &str, cx: &mut AsyncApp) -> Result<(Vec<u8>,
     let (w, h) = size.ok_or("timeout")?;
     web.setFrameSize(NSSize::new(w, h));
     // The view re-lays out at its new size before it is painted.
-    cx.background_executor().timer(Duration::from_millis(90)).await;
+    cx.background_executor()
+        .timer(Duration::from_millis(90))
+        .await;
     let png = snapshot(&web, w).await?;
     unsafe { web.loadHTMLString_baseURL(&NSString::from_str("<html></html>"), None) };
     let size = (w as f32, h as f32);
@@ -271,15 +288,25 @@ mod tests {
     use super::*;
 
     fn names() -> Vec<String> {
-        ["index-a.js", "mermaid-B.js", "mermaid.core-zbbo.js", "katex--I9w.js", "katex-DEc.css", "katex-DEc2.js"]
-            .map(String::from)
-            .to_vec()
+        [
+            "index-a.js",
+            "mermaid-B.js",
+            "mermaid.core-zbbo.js",
+            "katex--I9w.js",
+            "katex-DEc.css",
+            "katex-DEc2.js",
+        ]
+        .map(String::from)
+        .to_vec()
     }
 
     #[test]
     fn bundled_chunks_are_found_by_prefix() {
         let names = names();
-        assert_eq!(pick_chunk(&names, "mermaid.core-", "js"), Some("mermaid.core-zbbo.js"));
+        assert_eq!(
+            pick_chunk(&names, "mermaid.core-", "js"),
+            Some("mermaid.core-zbbo.js")
+        );
         assert_eq!(pick_chunk(&names, "katex-", "css"), Some("katex-DEc.css"));
         assert_eq!(pick_chunk(&names, "katex-", "js"), Some("katex--I9w.js"));
         assert_eq!(pick_chunk(&names, "nope-", "js"), None);
@@ -287,29 +314,51 @@ mod tests {
 
     #[test]
     fn pages_embed_the_source_safely_and_lock_the_page_down() {
-        let want = Want::Diagram { source: "graph TD\nA[\"</script><b>\"]".into(), light: false };
+        let want = Want::Diagram {
+            source: "graph TD\nA[\"</script><b>\"]".into(),
+            light: false,
+        };
         let html = page(&want, &names(), "http://127.0.0.1:7811", "white").unwrap();
         assert!(!html.contains("</script><b>"));
         assert!(html.contains("securityLevel:'strict'") && html.contains("theme:'dark'"));
         assert!(html.contains("default-src 'none'") && !html.contains("connect-src"));
         assert!(html.contains("http://127.0.0.1:7811/assets/mermaid.core-zbbo.js"));
-        let math = Want::Math { tex: "x^2".into(), display: true, light: true };
+        let math = Want::Math {
+            tex: "x^2".into(),
+            display: true,
+            light: true,
+        };
         let html = page(&math, &names(), "http://127.0.0.1:7811", "black").unwrap();
         assert!(html.contains("trust:false") && html.contains("displayMode:true"));
         assert!(html.contains("katex-DEc.css"));
         assert!(page(&math, &[], "http://127.0.0.1:7811", "black").is_none());
-        let image = Want::Image { session: "s".into(), path: "p".into() };
+        let image = Want::Image {
+            session: "s".into(),
+            path: "p".into(),
+        };
         assert!(page(&image, &names(), "b", "c").is_none());
     }
 
     #[test]
     fn answers_are_taken_only_for_their_own_key() {
-        assert_eq!(parse_answer("k1", "k1:{\"w\":10.2,\"h\":20}"), Some(Ok((11., 20.))));
+        assert_eq!(
+            parse_answer("k1", "k1:{\"w\":10.2,\"h\":20}"),
+            Some(Ok((11., 20.)))
+        );
         assert_eq!(parse_answer("k1", "k0:{\"w\":10,\"h\":20}"), None);
         assert_eq!(parse_answer("k1", ""), None);
-        assert_eq!(parse_answer("k1", "k1:{\"error\":\"bad\"}"), Some(Err("bad".into())));
-        assert!(matches!(parse_answer("k1", "k1:{\"w\":0,\"h\":20}"), Some(Err(_))));
-        assert!(matches!(parse_answer("k1", "k1:{\"w\":9000,\"h\":20}"), Some(Err(_))));
+        assert_eq!(
+            parse_answer("k1", "k1:{\"error\":\"bad\"}"),
+            Some(Err("bad".into()))
+        );
+        assert!(matches!(
+            parse_answer("k1", "k1:{\"w\":0,\"h\":20}"),
+            Some(Err(_))
+        ));
+        assert!(matches!(
+            parse_answer("k1", "k1:{\"w\":9000,\"h\":20}"),
+            Some(Err(_))
+        ));
     }
 
     #[test]

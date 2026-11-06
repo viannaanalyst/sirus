@@ -127,6 +127,7 @@ mod turn_review;
 mod turn_undo;
 mod usage_history;
 mod usage_prices;
+mod usage_summary;
 mod visuals;
 mod vscode_theme;
 mod window_attachment;
@@ -398,6 +399,9 @@ pub fn run() {
             provider_usage::consume_codex_reset,
             usage_history::usage_history,
             usage_prices::usage_prices,
+            usage_summary::usage_summary,
+            usage_summary::phone_look_get,
+            usage_summary::phone_look_set,
             provider_updates::provider_updates,
             provider_updates::update_providers,
             dictation::dictation_status,

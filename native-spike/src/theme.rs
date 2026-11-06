@@ -234,6 +234,18 @@ pub fn palette(look: &Look, system_dark: bool) -> Palette {
     }
 }
 
+/// The accent a look resolves to (a custom colour included) as `#rrggbb`, which the phone wears.
+pub fn accent_hex(look: &Look) -> String {
+    let color = palette(look, true).accent.to_rgb();
+    let byte = |v: f32| (v.clamp(0., 1.) * 255.).round() as u8;
+    format!(
+        "#{:02x}{:02x}{:02x}",
+        byte(color.r),
+        byte(color.g),
+        byte(color.b)
+    )
+}
+
 pub fn mix(from: Palette, to: Palette, t: f32) -> Palette {
     let one = |a: Hsla, b: Hsla| -> Hsla {
         let (a, b) = (a.to_rgb(), b.to_rgb());
@@ -515,6 +527,40 @@ mod look_tests {
                 .is_none()
         );
         assert!(look_from_json(&serde_json::json!({})) == Look::default());
+    }
+
+    #[test]
+    fn the_phone_accent_is_the_resolved_colour() {
+        // Lilás is the first accent of the list, whatever the preset.
+        let lilac = Look {
+            accent: Some(0),
+            custom: None,
+            ..Look::default()
+        };
+        assert_eq!(accent_hex(&lilac), "#bdb4f2");
+        // A preset's own accent when none is picked (Tinta: 0x7aa7ff).
+        let tinta = Look {
+            preset: PRESETS.len() - 1,
+            accent: None,
+            custom: None,
+            ..Look::default()
+        };
+        assert_eq!(accent_hex(&tinta), "#7aa7ff");
+        // A custom colour wins over the picked one and is not a swatch of the list.
+        let custom = Look {
+            accent: Some(0),
+            custom: Some((120., 0.5)),
+            ..Look::default()
+        };
+        let hex = accent_hex(&custom);
+        assert_ne!(hex, "#bdb4f2");
+        assert_eq!(hex.len(), 7);
+        assert!(hex.starts_with('#') && hex[1..].bytes().all(|b| b.is_ascii_hexdigit()));
+        // Light or dark, the accent is the same.
+        assert_eq!(
+            palette(&custom, true).accent,
+            palette(&custom, false).accent
+        );
     }
 
     #[test]

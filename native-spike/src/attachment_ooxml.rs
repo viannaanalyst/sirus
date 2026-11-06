@@ -335,7 +335,8 @@ pub mod tests {
 
     #[test]
     fn xml_lookups_ignore_prefixes() {
-        let doc = parse("<w:p xmlns:w='u'><w:pPr><w:jc w:val='center'/><w:b/></w:pPr></w:p>").unwrap();
+        let doc =
+            parse("<w:p xmlns:w='u'><w:pPr><w:jc w:val='center'/><w:b/></w:pPr></w:p>").unwrap();
         let props = child(doc.root_element(), "pPr").unwrap();
         assert_eq!(val(props, "jc"), Some("center"));
         assert_eq!(flag(props, "b"), Some(true));
@@ -344,6 +345,9 @@ pub mod tests {
 
     #[test]
     fn markup_is_escaped() {
-        assert_eq!(escape("<a href=\"x\">&'"), "&lt;a href=&quot;x&quot;&gt;&amp;&#39;");
+        assert_eq!(
+            escape("<a href=\"x\">&'"),
+            "&lt;a href=&quot;x&quot;&gt;&amp;&#39;"
+        );
     }
 }

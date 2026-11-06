@@ -120,7 +120,10 @@ mod tests {
     #[test]
     fn unknown_or_missing_placement_is_the_side_panel() {
         assert_eq!(from_json(&json!({})), Placement::Side);
-        assert_eq!(from_json(&json!({"placement": "floating"})), Placement::Side);
+        assert_eq!(
+            from_json(&json!({"placement": "floating"})),
+            Placement::Side
+        );
         assert_eq!(from_json(&json!({"placement": 3})), Placement::Side);
     }
 

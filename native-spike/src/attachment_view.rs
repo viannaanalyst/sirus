@@ -8,12 +8,10 @@ use crate::attachment_html as html;
 use crate::attachment_pdf;
 use crate::attachment_web as web;
 use crate::file_icons::file_icon;
-use crate::reply_rich::{self, Act, Asset, Want};
 use crate::panel_files::source_line;
+use crate::reply_rich::{self, Act, Asset, Want};
 use crate::syntax::LineSpans;
-use gpui::{
-    ObjectFit, ScrollHandle, StyledImage, UniformListScrollHandle, img, uniform_list,
-};
+use gpui::{ObjectFit, ScrollHandle, StyledImage, UniformListScrollHandle, img, uniform_list};
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::rc::Rc;
@@ -397,7 +395,12 @@ fn decode_image(url: &str) -> Option<Arc<gpui::Image>> {
 fn ink_css() -> String {
     let rgb = content(1.).to_rgb();
     let channel = |v: f32| (v.clamp(0., 1.) * 255.).round() as u8;
-    format!("rgb({},{},{})", channel(rgb.r), channel(rgb.g), channel(rgb.b))
+    format!(
+        "rgb({},{},{})",
+        channel(rgb.r),
+        channel(rgb.g),
+        channel(rgb.b)
+    )
 }
 
 /// Gets one of a reply's pictures or videos from the host, which decides whether the path may be
@@ -439,7 +442,9 @@ fn decode_sized(url: &str) -> Option<Asset> {
     use base64::Engine as _;
     let (head, data) = url.strip_prefix("data:")?.split_once(";base64,")?;
     let format = doc::image_format("", head)?;
-    let bytes = base64::engine::general_purpose::STANDARD.decode(data).ok()?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data)
+        .ok()?;
     let (w, h) = reply_rich::image_size(&bytes).unwrap_or((320, 180));
     Some(Asset::Picture {
         image: Arc::new(gpui::Image::from_bytes(format, bytes)),
@@ -468,7 +473,10 @@ fn poster_of(file: &std::path::Path) -> Option<(Arc<gpui::Image>, (f32, f32))> {
     let _ = std::fs::remove_dir_all(&dir);
     let png = png?;
     let (w, h) = reply_rich::image_size(&png)?;
-    Some((Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Png, png)), (w as f32, h as f32)))
+    Some((
+        Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Png, png)),
+        (w as f32, h as f32),
+    ))
 }
 
 // ---- The window's side -------------------------------------------------------------------
@@ -831,7 +839,12 @@ impl Shell {
 
     /// What the native view reported (see `attachment_web::Event`).
     fn overlay_event(&mut self, generation: u64, event: web::Event, cx: &mut Context<Self>) {
-        let Some(open) = self.viewer.open.as_mut().filter(|o| o.generation == generation) else {
+        let Some(open) = self
+            .viewer
+            .open
+            .as_mut()
+            .filter(|o| o.generation == generation)
+        else {
             return;
         };
         match event {
@@ -863,13 +876,16 @@ impl Shell {
         let slot = open.overlay.clone();
         let generation = open.generation;
         let view = cx.entity().downgrade();
-        let (html, pdf, video): (Option<String>, Option<Arc<Vec<u8>>>, Option<std::path::PathBuf>) =
-            match &open.content {
-                Content::Web(web) if web.video.is_some() => (None, None, web.video.clone()),
-                Content::Web(web) => (Some(web.html.clone()), None, None),
-                Content::Pdf(pdf) => (None, Some(pdf.bytes.clone()), None),
-                _ => (None, None, None),
-            };
+        let (html, pdf, video): (
+            Option<String>,
+            Option<Arc<Vec<u8>>>,
+            Option<std::path::PathBuf>,
+        ) = match &open.content {
+            Content::Web(web) if web.video.is_some() => (None, None, web.video.clone()),
+            Content::Web(web) => (Some(web.html.clone()), None, None),
+            Content::Pdf(pdf) => (None, Some(pdf.bytes.clone()), None),
+            _ => (None, None, None),
+        };
         gpui::canvas(
             |bounds, _, _| bounds,
             move |_, bounds, window, cx| {
@@ -975,23 +991,43 @@ impl Shell {
             Act::Image { name, want } => {
                 if let Some(Asset::Picture { image, .. }) = reply_rich::peek(&want) {
                     let info = named(&name);
-                    self.open_attachment_with(info, String::new(), true, Vec::new(), Some((Content::Image(image), None)), cx);
+                    self.open_attachment_with(
+                        info,
+                        String::new(),
+                        true,
+                        Vec::new(),
+                        Some((Content::Image(image), None)),
+                        cx,
+                    );
                 }
             }
             Act::Video { name, path } => {
-                let video = Content::Web(Arc::new(WebDoc { video: Some(path), ..Default::default() }));
-                self.open_attachment_with(named(&name), String::new(), true, Vec::new(), Some((video, None)), cx);
+                let video = Content::Web(Arc::new(WebDoc {
+                    video: Some(path),
+                    ..Default::default()
+                }));
+                self.open_attachment_with(
+                    named(&name),
+                    String::new(),
+                    true,
+                    Vec::new(),
+                    Some((video, None)),
+                    cx,
+                );
             }
             Act::Html { source } => self.open_preview(source, cx),
             Act::HtmlFile { session, link } => {
                 let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
-                let path = reply_rich::resolve_link(std::path::Path::new(""), home.as_deref(), &link);
+                let path =
+                    reply_rich::resolve_link(std::path::Path::new(""), home.as_deref(), &link);
                 let rx = self.backend.request(
                     "read_text_file",
                     json!({ "sessionId": session, "path": path.to_string_lossy() }),
                 );
                 cx.spawn(async move |this, cx| {
-                    let Ok(Ok(reply)) = rx.recv().await else { return };
+                    let Ok(Ok(reply)) = rx.recv().await else {
+                        return;
+                    };
                     if reply["binary"].as_bool().unwrap_or(false) {
                         return;
                     }
@@ -1020,8 +1056,18 @@ impl Shell {
             thumb: None,
         };
         let text = text_body(&info.name, &source);
-        let content = Content::Web(Arc::new(WebDoc { html: page, ..Default::default() }));
-        self.open_attachment_with(info, String::new(), true, Vec::new(), Some((content, Some(text))), cx);
+        let content = Content::Web(Arc::new(WebDoc {
+            html: page,
+            ..Default::default()
+        }));
+        self.open_attachment_with(
+            info,
+            String::new(),
+            true,
+            Vec::new(),
+            Some((content, Some(text))),
+            cx,
+        );
     }
 
     /// Loads, a few at a time, the small pictures the bubbles and the gallery's strip show for
@@ -1195,7 +1241,12 @@ impl Shell {
     }
 
     /// An image pasted from the clipboard.
-    pub(super) fn attach_pasted_image(&mut self, bytes: Vec<u8>, kind: gpui::ImageFormat, cx: &mut Context<Self>) {
+    pub(super) fn attach_pasted_image(
+        &mut self,
+        bytes: Vec<u8>,
+        kind: gpui::ImageFormat,
+        cx: &mut Context<Self>,
+    ) {
         let existing = self
             .attachments
             .get(&self.active_conversation())
@@ -1209,7 +1260,10 @@ impl Shell {
                     gpui::ImageFormat::Jpeg => ("imagem.jpg", bytes),
                     gpui::ImageFormat::Webp => ("imagem.webp", bytes),
                     gpui::ImageFormat::Gif => ("imagem.gif", bytes),
-                    _ => ("imagem.png", to_png(&bytes).ok_or_else(|| t("Não foi possível anexar.").to_owned())?),
+                    _ => (
+                        "imagem.png",
+                        to_png(&bytes).ok_or_else(|| t("Não foi possível anexar.").to_owned())?,
+                    ),
                 };
                 check_limits(&[bytes.len() as u64], existing).map_err(str::to_owned)?;
                 Ok(vec![json!({ "name": name, "data": base64(&bytes) })])
@@ -1276,7 +1330,8 @@ impl Shell {
         let width = (self.viewport_width - 80.).clamp(320., if picture { 1500. } else { 1100. });
         let height = (self.viewport_height - 80.).clamp(240., if picture { 1000. } else { 860. });
         let _ = height;
-        let native = !open.closing && open.t.done(now) && self.confirm.is_none() && !open.show_source;
+        let native =
+            !open.closing && open.t.done(now) && self.confirm.is_none() && !open.show_source;
         if !native && let Some(overlay) = open.overlay.borrow().as_ref() {
             overlay.hide();
         }
@@ -1476,7 +1531,10 @@ impl Shell {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .bg(gpui::Hsla { a: 0.62, ..gpui::black() })
+                        .bg(gpui::Hsla {
+                            a: 0.62,
+                            ..gpui::black()
+                        })
                         .border_1()
                         .border_color(content(0.16))
                         .opacity(if enabled { 1. } else { 0.3 })
@@ -1736,12 +1794,11 @@ impl Shell {
             .flex()
             .flex_col()
             .child(toolbar)
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .child(self.native_body(open, self.viewer.native_visible, cx)),
-            )
+            .child(div().flex_1().min_h_0().child(self.native_body(
+                open,
+                self.viewer.native_visible,
+                cx,
+            )))
             .into_any_element()
     }
 
@@ -1794,11 +1851,7 @@ impl Shell {
                     .on_click(zoom(0))
                     .child(format!("{percent}%")),
             )
-            .child(
-                tool("zoom-in")
-                    .on_click(zoom(1))
-                    .child(icon("plus", 13.)),
-            )
+            .child(tool("zoom-in").on_click(zoom(1)).child(icon("plus", 13.)))
     }
 
     /// A converted Word page or a presentation in the web view, under its bar: Word's outline and
@@ -1850,7 +1903,11 @@ impl Shell {
                         )
                         .child(
                             tool("slide-next")
-                                .opacity(if open.slide + 1 < web.slides { 1. } else { 0.35 })
+                                .opacity(if open.slide + 1 < web.slides {
+                                    1.
+                                } else {
+                                    0.35
+                                })
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.slide_step(1);
                                     cx.notify();
@@ -1882,7 +1939,14 @@ impl Shell {
                             cx.notify();
                         }))
                         .child(t("Estrutura"))
-                        .child(icon(if open.outline { "chevron-up" } else { "chevron-down" }, 12.))
+                        .child(icon(
+                            if open.outline {
+                                "chevron-up"
+                            } else {
+                                "chevron-down"
+                            },
+                            12.,
+                        ))
                 });
                 column = column.child(
                     bar.child(div().flex().items_center().children(outline))
@@ -1931,12 +1995,11 @@ impl Shell {
             }
         }
         column
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .child(self.native_body(open, self.viewer.native_visible, cx)),
-            )
+            .child(div().flex_1().min_h_0().child(self.native_body(
+                open,
+                self.viewer.native_visible,
+                cx,
+            )))
             .into_any_element()
     }
 
@@ -2263,9 +2326,13 @@ fn text_view(text: TextBody) -> AnyElement {
         .min_h_0()
         .overflow_y_scroll()
         .py(px(8.))
-        .children(text.lines.iter().take(SHOWN).enumerate().map(|(i, line)| {
-            source_line(i, line, text.spans.as_ref().and_then(|s| s.get(i)))
-        }))
+        .children(
+            text.lines
+                .iter()
+                .take(SHOWN)
+                .enumerate()
+                .map(|(i, line)| source_line(i, line, text.spans.as_ref().and_then(|s| s.get(i)))),
+        )
         .into_any_element()
 }
 

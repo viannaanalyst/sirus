@@ -135,9 +135,9 @@ pub fn parse_version(raw: &str) -> Option<(u64, u64, u64, Vec<String>)> {
         None => Vec::new(),
         Some(pre) => {
             let parts: Vec<String> = pre.split('.').map(str::to_owned).collect();
-            let fine = parts
-                .iter()
-                .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'));
+            let fine = parts.iter().all(|p| {
+                !p.is_empty() && p.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+            });
             if !fine {
                 return None;
             }
@@ -186,7 +186,8 @@ pub fn is_newer(offered: &str, current: &str) -> bool {
 /// The offer in a feed (`sirus-latest.json`: version, notes, pub_date, platforms), or why it is
 /// unusable. Whether it is newer than this app is `is_newer`'s question.
 pub fn parse_feed(text: &str) -> Result<Offer, String> {
-    let feed: Value = serde_json::from_str(text).map_err(|_| "The update feed is not valid JSON.".to_owned())?;
+    let feed: Value =
+        serde_json::from_str(text).map_err(|_| "The update feed is not valid JSON.".to_owned())?;
     let version = feed["version"].as_str().unwrap_or_default().trim();
     let version = version.strip_prefix('v').unwrap_or(version);
     if parse_version(version).is_none() {
@@ -201,8 +202,19 @@ pub fn parse_feed(text: &str) -> Result<Offer, String> {
     if signature.is_empty() {
         return Err("The update feed has no signature for this Mac.".into());
     }
-    let notes: String = feed["notes"].as_str().unwrap_or_default().trim().chars().take(MAX_NOTES).collect();
-    Ok(Offer { version: version.to_owned(), notes, url: url.to_owned(), signature: signature.to_owned() })
+    let notes: String = feed["notes"]
+        .as_str()
+        .unwrap_or_default()
+        .trim()
+        .chars()
+        .take(MAX_NOTES)
+        .collect();
+    Ok(Offer {
+        version: version.to_owned(),
+        notes,
+        url: url.to_owned(),
+        signature: signature.to_owned(),
+    })
 }
 
 // ---- The signature ---------------------------------------------------------------------------
@@ -217,8 +229,10 @@ fn minisign_text(encoded: &str) -> Result<String, String> {
 /// Checks `data` against a Tauri-style signature (base64 of a minisign signature file) and public
 /// key (base64 of a minisign public key file). Any failure rejects the update.
 pub fn verify(data: &[u8], signature: &str, public_key: &str) -> Result<(), String> {
-    let key = PublicKey::decode(&minisign_text(public_key)?).map_err(|e| format!("public key: {e}"))?;
-    let signature = Signature::decode(&minisign_text(signature)?).map_err(|e| format!("signature: {e}"))?;
+    let key =
+        PublicKey::decode(&minisign_text(public_key)?).map_err(|e| format!("public key: {e}"))?;
+    let signature =
+        Signature::decode(&minisign_text(signature)?).map_err(|e| format!("signature: {e}"))?;
     key.verify(data, &signature, false)
         .map_err(|e| format!("The update's signature does not match: {e}"))
 }
@@ -227,7 +241,16 @@ pub fn verify(data: &[u8], signature: &str, public_key: &str) -> Result<(), Stri
 
 fn curl(url: &str, to: Option<&Path>) -> Result<Vec<u8>, String> {
     let mut command = Command::new("curl");
-    command.args(["--fail", "--silent", "--show-error", "--location", "--proto", "=https", "--max-time", "600"]);
+    command.args([
+        "--fail",
+        "--silent",
+        "--show-error",
+        "--location",
+        "--proto",
+        "=https",
+        "--max-time",
+        "600",
+    ]);
     if let Some(path) = to {
         command.arg("--output").arg(path);
     }
@@ -321,7 +344,9 @@ pub fn install(progress: impl Fn()) -> Status {
     });
     progress();
     let result = running_bundle()
-        .ok_or_else(|| "This copy does not run from an app bundle, so it cannot update itself.".to_owned())
+        .ok_or_else(|| {
+            "This copy does not run from an app bundle, so it cannot update itself.".to_owned()
+        })
         .and_then(|running| install_bundle(&offer, &running));
     match result {
         Ok(target) => set(|i| {
@@ -338,8 +363,12 @@ fn install_bundle(offer: &Offer, running: &Path) -> Result<PathBuf, String> {
     // Beside the app: the swap is then a rename on one volume.
     let staging = folder.join(format!(".Sirus-update-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&staging);
-    std::fs::create_dir(&staging)
-        .map_err(|e| format!("{} is not writable ({e}); move Sirus to a folder you can write to.", folder.display()))?;
+    std::fs::create_dir(&staging).map_err(|e| {
+        format!(
+            "{} is not writable ({e}); move Sirus to a folder you can write to.",
+            folder.display()
+        )
+    })?;
     let outcome = swap_in(offer, running, &target, &staging);
     let _ = std::fs::remove_dir_all(&staging);
     outcome.map(|()| target)
@@ -385,7 +414,10 @@ fn swap_in(offer: &Offer, running: &Path, target: &Path, staging: &Path) -> Resu
 
 /// A bundle that is the Sirus app: its executable and host are there and the id is ours.
 fn check_bundle(bundle: &Path) -> Result<(), String> {
-    for part in ["Contents/MacOS/sirus-native-spike", "Contents/MacOS/sirus-host"] {
+    for part in [
+        "Contents/MacOS/sirus-native-spike",
+        "Contents/MacOS/sirus-host",
+    ] {
         if !bundle.join(part).is_file() {
             return Err("The update does not hold the Sirus app.".into());
         }
@@ -430,8 +462,12 @@ mod tests {
 
     #[test]
     fn public_key_is_the_one_in_tauri_conf() {
-        let conf: Value = serde_json::from_str(include_str!("../../src-tauri/tauri.conf.json")).unwrap();
-        assert_eq!(conf["plugins"]["updater"]["pubkey"].as_str(), Some(PUBLIC_KEY));
+        let conf: Value =
+            serde_json::from_str(include_str!("../../src-tauri/tauri.conf.json")).unwrap();
+        assert_eq!(
+            conf["plugins"]["updater"]["pubkey"].as_str(),
+            Some(PUBLIC_KEY)
+        );
         assert!(PublicKey::decode(&minisign_text(PUBLIC_KEY).unwrap()).is_ok());
     }
 
@@ -442,7 +478,10 @@ mod tests {
         assert_eq!(compare_versions("1.0.0", "0.99.99"), Some(Greater));
         assert_eq!(compare_versions("v0.0.1", "0.0.1"), Some(Equal));
         assert_eq!(compare_versions("1.0.0", "1.0.0-beta.1"), Some(Greater));
-        assert_eq!(compare_versions("1.0.0-beta.2", "1.0.0-beta.10"), Some(Less));
+        assert_eq!(
+            compare_versions("1.0.0-beta.2", "1.0.0-beta.10"),
+            Some(Less)
+        );
         assert_eq!(compare_versions("1.0.0-alpha", "1.0.0-beta"), Some(Less));
         assert_eq!(compare_versions("1.0.0-1", "1.0.0-alpha"), Some(Less));
         assert_eq!(compare_versions("1.0.0-beta", "1.0.0-beta.1"), Some(Less));
@@ -486,7 +525,10 @@ mod tests {
             "version": "0.0.2", "notes": "x".repeat(MAX_NOTES + 50),
             "platforms": { "darwin-aarch64": { "url": "https://x/a", "signature": "s" } }
         });
-        assert_eq!(parse_feed(&long.to_string()).unwrap().notes.chars().count(), MAX_NOTES);
+        assert_eq!(
+            parse_feed(&long.to_string()).unwrap().notes.chars().count(),
+            MAX_NOTES
+        );
     }
 
     #[test]
@@ -511,7 +553,11 @@ mod tests {
     fn automatic_checks_wait_for_the_interval() {
         let start = Instant::now();
         assert!(due(None, start, CHECK_INTERVAL));
-        assert!(!due(Some(start), start + Duration::from_secs(60), CHECK_INTERVAL));
+        assert!(!due(
+            Some(start),
+            start + Duration::from_secs(60),
+            CHECK_INTERVAL
+        ));
         assert!(due(Some(start), start + CHECK_INTERVAL, CHECK_INTERVAL));
     }
 
@@ -521,6 +567,9 @@ mod tests {
             target_for(Path::new("/Applications/Sirus Native.app")),
             Path::new("/Applications/Sirus.app")
         );
-        assert_eq!(target_for(Path::new("/Applications/Sirus.app")), Path::new("/Applications/Sirus.app"));
+        assert_eq!(
+            target_for(Path::new("/Applications/Sirus.app")),
+            Path::new("/Applications/Sirus.app")
+        );
     }
 }

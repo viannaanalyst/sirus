@@ -314,7 +314,10 @@ impl Buffer {
         };
         let kind = class(pick);
         let mut end = start + pick.len_utf8();
-        while let Some(c) = self.before(start).filter(|c| *c != '\n' && class(*c) == kind) {
+        while let Some(c) = self
+            .before(start)
+            .filter(|c| *c != '\n' && class(*c) == kind)
+        {
             start -= c.len_utf8();
         }
         while let Some(c) = self.after(end).filter(|c| *c != '\n' && class(*c) == kind) {
@@ -1631,9 +1634,17 @@ mod tests {
     #[test]
     fn word_jumps_never_stop_inside_a_character() {
         let b = buffer("é😀");
-        assert_eq!(b.word_right(1), 2, "a byte inside é is floored to its start, then the word is é");
+        assert_eq!(
+            b.word_right(1),
+            2,
+            "a byte inside é is floored to its start, then the word is é"
+        );
         // Byte 3 is inside the emoji, so it floors to 2, which is the start of the emoji.
-        assert_eq!(b.word_left(3), 0, "from the emoji's start, back over the é before it");
+        assert_eq!(
+            b.word_left(3),
+            0,
+            "from the emoji's start, back over the é before it"
+        );
         assert_eq!(b.word_right(99), b.text().len());
         assert_eq!(b.word_left(99), 2, "past the end starts from the end");
     }
@@ -1658,7 +1669,11 @@ mod tests {
         b.move_to(5, false);
         b.move_to(9, true);
         b.delete_word_backward();
-        assert_eq!(b.text(), "keep  word", "the selected 'this' goes, the spaces around stay");
+        assert_eq!(
+            b.text(),
+            "keep  word",
+            "the selected 'this' goes, the spaces around stay"
+        );
         assert!(b.undo());
         assert_eq!(b.text(), "keep this word");
         assert_eq!(b.selection(), 5..9);
@@ -1678,11 +1693,23 @@ mod tests {
     #[test]
     fn a_double_click_selects_the_word_under_it() {
         let b = buffer("alpha beta_2 gamma");
-        assert_eq!(b.word_at(7), 6..12, "inside beta_2, underscore and digits too");
+        assert_eq!(
+            b.word_at(7),
+            6..12,
+            "inside beta_2, underscore and digits too"
+        );
         assert_eq!(b.word_at(6), 6..12, "at its first byte");
-        assert_eq!(b.word_at(12), 6..12, "at its end, the word before wins over the space");
+        assert_eq!(
+            b.word_at(12),
+            6..12,
+            "at its end, the word before wins over the space"
+        );
         assert_eq!(b.word_at(0), 0..5);
-        assert_eq!(b.word_at(13), 13..18, "the next word starts at its first byte");
+        assert_eq!(
+            b.word_at(13),
+            13..18,
+            "the next word starts at its first byte"
+        );
     }
 
     #[test]
@@ -1706,7 +1733,11 @@ mod tests {
         b.select_word_at(9);
         assert_eq!(b.selected_text(), "café");
         b.select_word_at(4);
-        assert_eq!(b.selected_text(), "naïve", "ï is two bytes, the boundary holds");
+        assert_eq!(
+            b.selected_text(),
+            "naïve",
+            "ï is two bytes, the boundary holds"
+        );
     }
 
     #[test]
@@ -1716,7 +1747,11 @@ mod tests {
         assert_eq!(b.selected_text(), "two\n");
         assert_eq!(b.selection(), 4..8);
         b.select_line_at(9);
-        assert_eq!(b.selected_text(), "three", "the last line has no newline to take");
+        assert_eq!(
+            b.selected_text(),
+            "three",
+            "the last line has no newline to take"
+        );
     }
 
     #[test]

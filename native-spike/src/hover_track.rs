@@ -71,7 +71,12 @@ impl Pill {
     }
 
     fn target(&self) -> Rect {
-        Rect { x: self.x.to, y: self.y.to, w: self.w.to, h: self.h.to }
+        Rect {
+            x: self.x.to,
+            y: self.y.to,
+            w: self.w.to,
+            h: self.h.to,
+        }
     }
 
     /// The row under the mouse now (its index, bounds and whether it is selected), or none.
@@ -96,7 +101,8 @@ impl Pill {
         }
         self.row = Some(row);
         self.shown.set(1., now, FADE, CURVE);
-        self.covered.set(if selected { 1. } else { 0. }, now, FADE, CURVE);
+        self.covered
+            .set(if selected { 1. } else { 0. }, now, FADE, CURVE);
     }
 
     /// A scroll hides the pill until the mouse moves again.
@@ -128,16 +134,28 @@ impl Pill {
         let alpha = self.shown.at(now) * (1. - self.covered.at(now));
         (alpha > 0.002).then(|| {
             (
-                Rect { x: self.x.at(now), y: self.y.at(now), w: self.w.at(now), h: self.h.at(now) },
+                Rect {
+                    x: self.x.at(now),
+                    y: self.y.at(now),
+                    w: self.w.at(now),
+                    h: self.h.at(now),
+                },
                 alpha,
             )
         })
     }
 
     pub fn animating(&self, now: Instant) -> bool {
-        ![&self.x, &self.y, &self.w, &self.h, &self.shown, &self.covered]
-            .iter()
-            .all(|t| t.done(now))
+        ![
+            &self.x,
+            &self.y,
+            &self.w,
+            &self.h,
+            &self.shown,
+            &self.covered,
+        ]
+        .iter()
+        .all(|t| t.done(now))
     }
 }
 
@@ -155,16 +173,19 @@ struct Inner {
 
 impl Inner {
     fn hovered(&self, window: &Window) -> Option<(usize, Rect, bool)> {
-        self.rows.iter().find(|r| r.hitbox.is_hovered(window)).map(|r| {
-            let b = r.bounds;
-            let rect = Rect {
-                x: b.origin.x.into(),
-                y: b.origin.y.into(),
-                w: b.size.width.into(),
-                h: b.size.height.into(),
-            };
-            (r.ix, rect, r.selected)
-        })
+        self.rows
+            .iter()
+            .find(|r| r.hitbox.is_hovered(window))
+            .map(|r| {
+                let b = r.bounds;
+                let rect = Rect {
+                    x: b.origin.x.into(),
+                    y: b.origin.y.into(),
+                    w: b.size.width.into(),
+                    h: b.size.height.into(),
+                };
+                (r.ix, rect, r.selected)
+            })
     }
 }
 
@@ -265,7 +286,12 @@ impl HoverTrack {
             canvas(
                 move |bounds, window, _| {
                     let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
-                    track.borrow_mut().rows.push(RowInfo { ix, hitbox, bounds, selected });
+                    track.borrow_mut().rows.push(RowInfo {
+                        ix,
+                        hitbox,
+                        bounds,
+                        selected,
+                    });
                 },
                 |_, _, _, _| {},
             )
@@ -285,7 +311,12 @@ mod tests {
     use std::time::Duration;
 
     fn rect(y: f32) -> Rect {
-        Rect { x: 0., y, w: 100., h: 28. }
+        Rect {
+            x: 0.,
+            y,
+            w: 100.,
+            h: 28.,
+        }
     }
     fn later(t: Instant, ms: u64) -> Instant {
         t + Duration::from_millis(ms)

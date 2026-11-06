@@ -79,7 +79,10 @@ impl Pip {
             .unwrap_or((80., 80.));
         let panel = NSPanel::initWithContentRect_styleMask_backing_defer(
             mtm.alloc::<NSPanel>(),
-            NSRect::new(NSPoint::new(origin.0, origin.1), NSSize::new(SIZE.0, SIZE.1)),
+            NSRect::new(
+                NSPoint::new(origin.0, origin.1),
+                NSSize::new(SIZE.0, SIZE.1),
+            ),
             NSWindowStyleMask::Titled
                 | NSWindowStyleMask::Closable
                 | NSWindowStyleMask::Resizable

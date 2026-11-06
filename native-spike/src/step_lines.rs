@@ -98,14 +98,24 @@ mod tests {
 
     #[test]
     fn a_tool_call_reads_as_a_verb_with_its_target() {
-        let open = line("Tool call", "computer_launch", Some("computer_launch"), Some("Calculator"));
+        let open = line(
+            "Tool call",
+            "computer_launch",
+            Some("computer_launch"),
+            Some("Calculator"),
+        );
         assert_eq!((open.icon, open.verb), ("app-window", t("Abriu")));
         assert_eq!(open.target.as_deref(), Some("Calculator"));
     }
 
     #[test]
     fn loading_a_tool_schema_hides_its_internal_name() {
-        let load = line("Tool call", "select:mcp__sirus_computer__computer_launch", None, None);
+        let load = line(
+            "Tool call",
+            "select:mcp__sirus_computer__computer_launch",
+            None,
+            None,
+        );
         assert_eq!((load.verb, load.target), (t("Carregou ferramentas"), None));
     }
 
@@ -118,10 +128,15 @@ mod tests {
     #[test]
     fn a_read_shows_the_file_name_and_an_unknown_tool_its_own_name() {
         assert_eq!(
-            line("Read / search", "/a/b/SKILL.md", None, None).target.as_deref(),
+            line("Read / search", "/a/b/SKILL.md", None, None)
+                .target
+                .as_deref(),
             Some("SKILL.md")
         );
         let other = line("Tool call", "sirus_show_visual", None, None);
-        assert_eq!((other.verb, other.target.as_deref()), (t("Usou"), Some("sirus_show_visual")));
+        assert_eq!(
+            (other.verb, other.target.as_deref()),
+            (t("Usou"), Some("sirus_show_visual"))
+        );
     }
 }

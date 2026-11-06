@@ -71,7 +71,13 @@ impl Link {
     fn drop_pending(&self) {
         self.outgoing.lock().unwrap().clear();
         self.always.lock().unwrap().clear();
-        let waiters: Vec<Waiter> = self.waiters.lock().unwrap().drain().map(|(_, w)| w).collect();
+        let waiters: Vec<Waiter> = self
+            .waiters
+            .lock()
+            .unwrap()
+            .drain()
+            .map(|(_, w)| w)
+            .collect();
         for waiter in waiters {
             let _ = waiter.try_send(Err(lost()));
         }
@@ -312,10 +318,19 @@ impl Backend {
             }
         }
         let mut events: Vec<String> = LISTEN.iter().map(|e| (*e).to_owned()).collect();
-        events.extend(self.listeners.lock().unwrap().iter().map(|(e, _)| e.clone()));
+        events.extend(
+            self.listeners
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(e, _)| e.clone()),
+        );
         events.sort();
         events.dedup();
-        for event in events.iter().filter(|e| !crate::computers::event_is_local(e)) {
+        for event in events
+            .iter()
+            .filter(|e| !crate::computers::event_is_local(e))
+        {
             socket
                 .send(Message::text(
                     json!({ "type": "listen", "event": event }).to_string(),
@@ -323,9 +338,7 @@ impl Backend {
                 .map_err(|_| Failure::Lost)?;
         }
         socket
-            .send(Message::text(
-                Self::frame(STATE, "load_state", json!({})),
-            ))
+            .send(Message::text(Self::frame(STATE, "load_state", json!({}))))
             .map_err(|_| Failure::Lost)?;
         socket
             .get_ref()
@@ -377,8 +390,7 @@ impl Backend {
             match socket.read() {
                 Ok(Message::Text(text)) => {
                     heard = Instant::now();
-                    let message: Value =
-                        serde_json::from_str(text.as_str()).unwrap_or(Value::Null);
+                    let message: Value = serde_json::from_str(text.as_str()).unwrap_or(Value::Null);
                     if !self.deliver(link, from_remote, message) {
                         return Ok(());
                     }
@@ -475,6 +487,9 @@ const LISTEN: &[&str] = &[
     "login-vault-state",
     "computer-state",
     "remote-changed",
+    // Cards for other conversations, and the sound and banner the host asks the window for.
+    "notification-activity",
+    "notification-native",
 ];
 
 pub fn start() -> (Backend, async_channel::Receiver<Incoming>) {
@@ -790,16 +805,14 @@ impl Backend {
         loop {
             match socket.read().map_err(|e| e.to_string())? {
                 Message::Text(text) => {
-                    let message: Value =
-                        serde_json::from_str(text.as_str()).unwrap_or(Value::Null);
+                    let message: Value = serde_json::from_str(text.as_str()).unwrap_or(Value::Null);
                     match message["type"].as_str() {
                         Some("ready") => break,
                         Some("unauthorized") => {
                             token = pair(&dir)?;
-                            let (again, _) = tungstenite::connect(format!(
-                                "ws://127.0.0.1:{PORT}/api/socket"
-                            ))
-                            .map_err(|e| e.to_string())?;
+                            let (again, _) =
+                                tungstenite::connect(format!("ws://127.0.0.1:{PORT}/api/socket"))
+                                    .map_err(|e| e.to_string())?;
                             socket = again;
                             hello(&mut socket, &token).map_err(|e| e.to_string())?;
                         }
@@ -895,7 +908,9 @@ mod tests {
         assert_eq!(backend.local.outgoing.lock().unwrap().len(), 3);
         assert!(backend.remote_link().outgoing.lock().unwrap().is_empty());
         match replies.try_recv() {
-            Ok(Incoming::Reply { id: got, ok: false, .. }) => assert_eq!(got, id),
+            Ok(Incoming::Reply {
+                id: got, ok: false, ..
+            }) => assert_eq!(got, id),
             _ => panic!("expected a failed reply"),
         }
         let waiting = backend.request("load_state", json!({}));
@@ -923,7 +938,8 @@ mod tests {
     #[test]
     fn the_state_of_a_computer_that_is_not_active_is_dropped() {
         let (backend, replies) = backend();
-        let ready = json!({ "type": "result", "id": STATE, "ok": true, "value": { "projects": [] } });
+        let ready =
+            json!({ "type": "result", "id": STATE, "ok": true, "value": { "projects": [] } });
         // Active is this Mac: a remote state is dropped, a local one is delivered.
         assert!(backend.deliver(&backend.remote_link(), true, ready.clone()));
         assert!(replies.try_recv().is_err());
@@ -936,6 +952,9 @@ mod tests {
         backend.local.always.lock().unwrap().insert(77);
         let own = json!({ "type": "result", "id": 77, "ok": true, "value": null });
         assert!(backend.deliver(&backend.local, false, own));
-        assert!(matches!(replies.try_recv(), Ok(Incoming::Reply { id: 77, .. })));
+        assert!(matches!(
+            replies.try_recv(),
+            Ok(Incoming::Reply { id: 77, .. })
+        ));
     }
 }

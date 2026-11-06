@@ -30,8 +30,9 @@ define_class!(
             _notification: &UNNotification,
             handler: &block2::DynBlock<dyn Fn(UNNotificationPresentationOptions)>,
         ) {
-            handler.call((UNNotificationPresentationOptions::Banner
-                | UNNotificationPresentationOptions::List,));
+            handler
+                .call((UNNotificationPresentationOptions::Banner
+                    | UNNotificationPresentationOptions::List,));
         }
     }
 );
@@ -78,8 +79,7 @@ fn prepare() -> Retained<UNUserNotificationCenter> {
     if !READY.with(Cell::get) {
         READY.with(|ready| ready.set(true));
         if let Some(main) = MainThreadMarker::new() {
-            let delegate: Retained<Delegate> =
-                unsafe { msg_send![Delegate::alloc(main), init] };
+            let delegate: Retained<Delegate> = unsafe { msg_send![Delegate::alloc(main), init] };
             center.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
             DELEGATE.with(|slot| *slot.borrow_mut() = Some(delegate));
         }

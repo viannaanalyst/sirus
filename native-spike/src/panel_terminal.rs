@@ -137,7 +137,12 @@ impl TerminalPanel {
             });
         });
     }
-    fn close_now(&mut self, targets: &[Entity<Terminal>], window: &mut Window, cx: &mut Context<Self>) {
+    fn close_now(
+        &mut self,
+        targets: &[Entity<Terminal>],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let active = self.terminals.get(self.active).cloned();
         // Dropping the last handle to a terminal shuts its shell down.
         self.terminals.retain(|t| !targets.contains(t));

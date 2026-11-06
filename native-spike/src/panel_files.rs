@@ -8,17 +8,17 @@
 //! list comes from `git ls-files` (or a bounded walk) on a background thread, and typing is
 //! debounced and ranked off the UI thread (project_files.rs). Source view colors come from
 //! tree-sitter, parsed once per file in the background (syntax.rs).
-use crate::file_icons::{file_icon, folder_icon};
 use crate::file_editor::{Editor, EditorEvent, MAX_EDITABLE_BYTES};
+use crate::file_icons::{file_icon, folder_icon};
 use crate::i18n::{t, tf};
 use crate::markdown;
 use crate::motion::{Curve, DISCLOSE, eased};
 use crate::panels::PanelContext;
-use crate::tool_images;
 use crate::project_files::{self, Hit};
 use crate::syntax::{self, Group, LineSpans};
 use crate::tab_tile::{Face, TAB_TILE, TAB_TILE_GAP, mark_tile, tab_tile_inset};
 use crate::theme::{self, accent, content, is_light};
+use crate::tool_images;
 use gpui::{
     Animation, AnimationExt, AnyElement, AnyView, App, Background, Context, ElementInputHandler,
     Entity, EntityInputHandler, EventEmitter, FocusHandle, FontWeight, HighlightStyle, Hsla,
@@ -782,7 +782,11 @@ impl FilesPanel {
                         for tab in gone {
                             this.close_path(&tab, cx);
                         }
-                        if this.selected.as_ref().is_some_and(|(sel, _)| is_under(&path, sel)) {
+                        if this
+                            .selected
+                            .as_ref()
+                            .is_some_and(|(sel, _)| is_under(&path, sel))
+                        {
                             this.selected = None;
                         }
                         this.open.retain(|dir| !is_under(&path, dir));
@@ -1440,7 +1444,10 @@ fn root_name(root: &str) -> String {
 
 /// True when `entry` is `path` itself or inside it (a trashed folder takes its files along).
 fn is_under(path: &str, entry: &str) -> bool {
-    entry == path || entry.strip_prefix(path).is_some_and(|rest| rest.starts_with('/'))
+    entry == path
+        || entry
+            .strip_prefix(path)
+            .is_some_and(|rest| rest.starts_with('/'))
 }
 
 /// The confirmation's title and its help, as React's explorer.trash* texts.

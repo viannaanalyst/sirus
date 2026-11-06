@@ -75,23 +75,41 @@ pub struct Rect {
     pub h: f32,
 }
 
-pub const WHOLE: Rect = Rect { x: 0., y: 0., w: 1., h: 1. };
+pub const WHOLE: Rect = Rect {
+    x: 0.,
+    y: 0.,
+    w: 1.,
+    h: 1.,
+};
 
 impl Rect {
     /// The box shrunk to nothing against one of its edges.
     fn collapsed(self, edge: Edge) -> Rect {
         match edge {
             Edge::Left => Rect { w: 0., ..self },
-            Edge::Right => Rect { x: self.x + self.w, w: 0., ..self },
+            Edge::Right => Rect {
+                x: self.x + self.w,
+                w: 0.,
+                ..self
+            },
             Edge::Top => Rect { h: 0., ..self },
-            Edge::Bottom => Rect { y: self.y + self.h, h: 0., ..self },
+            Edge::Bottom => Rect {
+                y: self.y + self.h,
+                h: 0.,
+                ..self
+            },
             Edge::Center => self,
         }
     }
 
     fn lerp(self, to: Rect, t: f32) -> Rect {
         let mix = |a: f32, b: f32| a + (b - a) * t;
-        Rect { x: mix(self.x, to.x), y: mix(self.y, to.y), w: mix(self.w, to.w), h: mix(self.h, to.h) }
+        Rect {
+            x: mix(self.x, to.x),
+            y: mix(self.y, to.y),
+            w: mix(self.w, to.w),
+            h: mix(self.h, to.h),
+        }
     }
 
     fn contains(self, x: f32, y: f32) -> bool {
@@ -101,10 +119,24 @@ impl Rect {
     /// The part of the box a drop on `edge` would take.
     pub fn half(self, edge: Edge) -> Rect {
         match edge {
-            Edge::Left => Rect { w: self.w / 2., ..self },
-            Edge::Right => Rect { x: self.x + self.w / 2., w: self.w / 2., ..self },
-            Edge::Top => Rect { h: self.h / 2., ..self },
-            Edge::Bottom => Rect { y: self.y + self.h / 2., h: self.h / 2., ..self },
+            Edge::Left => Rect {
+                w: self.w / 2.,
+                ..self
+            },
+            Edge::Right => Rect {
+                x: self.x + self.w / 2.,
+                w: self.w / 2.,
+                ..self
+            },
+            Edge::Top => Rect {
+                h: self.h / 2.,
+                ..self
+            },
+            Edge::Bottom => Rect {
+                y: self.y + self.h / 2.,
+                h: self.h / 2.,
+                ..self
+            },
             Edge::Center => self,
         }
     }
@@ -112,8 +144,17 @@ impl Rect {
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum Node {
-    Leaf { id: u32, session: String },
-    Split { id: u32, row: bool, ratio: f32, a: Box<Node>, b: Box<Node> },
+    Leaf {
+        id: u32,
+        session: String,
+    },
+    Split {
+        id: u32,
+        row: bool,
+        ratio: f32,
+        a: Box<Node>,
+        b: Box<Node>,
+    },
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -145,9 +186,21 @@ fn collect<'a>(node: &'a Node, out: &mut Vec<(u32, &'a str)>) {
 fn remove_node(node: &Node, leaf: u32) -> Option<Node> {
     match node {
         Node::Leaf { id, .. } => (*id != leaf).then(|| node.clone()),
-        Node::Split { id, row, ratio, a, b } => match (remove_node(a, leaf), remove_node(b, leaf)) {
+        Node::Split {
+            id,
+            row,
+            ratio,
+            a,
+            b,
+        } => match (remove_node(a, leaf), remove_node(b, leaf)) {
             (None, other) | (other, None) => other,
-            (Some(a), Some(b)) => Some(Node::Split { id: *id, row: *row, ratio: *ratio, a: Box::new(a), b: Box::new(b) }),
+            (Some(a), Some(b)) => Some(Node::Split {
+                id: *id,
+                row: *row,
+                ratio: *ratio,
+                a: Box::new(a),
+                b: Box::new(b),
+            }),
         },
     }
 }
@@ -155,7 +208,11 @@ fn remove_node(node: &Node, leaf: u32) -> Option<Node> {
 fn insert_node(node: &Node, target: Target, edge: Edge, leaf: &Node, split_id: u32) -> Node {
     let wrap = |node: &Node| {
         let first = matches!(edge, Edge::Left | Edge::Top);
-        let (a, b) = if first { (leaf.clone(), node.clone()) } else { (node.clone(), leaf.clone()) };
+        let (a, b) = if first {
+            (leaf.clone(), node.clone())
+        } else {
+            (node.clone(), leaf.clone())
+        };
         Node::Split {
             id: split_id,
             row: matches!(edge, Edge::Left | Edge::Right),
@@ -170,7 +227,13 @@ fn insert_node(node: &Node, target: Target, edge: Edge, leaf: &Node, split_id: u
     match node {
         Node::Leaf { id, .. } if target == Target::Pane(*id) => wrap(node),
         Node::Leaf { .. } => node.clone(),
-        Node::Split { id, row, ratio, a, b } => Node::Split {
+        Node::Split {
+            id,
+            row,
+            ratio,
+            a,
+            b,
+        } => Node::Split {
             id: *id,
             row: *row,
             ratio: *ratio,
@@ -182,8 +245,17 @@ fn insert_node(node: &Node, target: Target, edge: Edge, leaf: &Node, split_id: u
 
 fn map_sessions(node: &Node, map: &dyn Fn(u32, &str) -> String) -> Node {
     match node {
-        Node::Leaf { id, session } => Node::Leaf { id: *id, session: map(*id, session) },
-        Node::Split { id, row, ratio, a, b } => Node::Split {
+        Node::Leaf { id, session } => Node::Leaf {
+            id: *id,
+            session: map(*id, session),
+        },
+        Node::Split {
+            id,
+            row,
+            ratio,
+            a,
+            b,
+        } => Node::Split {
             id: *id,
             row: *row,
             ratio: *ratio,
@@ -194,7 +266,9 @@ fn map_sessions(node: &Node, map: &dyn Fn(u32, &str) -> String) -> Node {
 }
 
 fn sibling_of<'a>(node: &'a Node, leaf: u32) -> Option<&'a Node> {
-    let Node::Split { a, b, .. } = node else { return None };
+    let Node::Split { a, b, .. } = node else {
+        return None;
+    };
     if matches!(**a, Node::Leaf { id, .. } if id == leaf) {
         return Some(b);
     }
@@ -205,7 +279,9 @@ fn sibling_of<'a>(node: &'a Node, leaf: u32) -> Option<&'a Node> {
 }
 
 fn hug_of(node: &Node, leaf: u32) -> Option<Edge> {
-    let Node::Split { row, a, b, .. } = node else { return None };
+    let Node::Split { row, a, b, .. } = node else {
+        return None;
+    };
     if matches!(**a, Node::Leaf { id, .. } if id == leaf) {
         return Some(if *row { Edge::Left } else { Edge::Top });
     }
@@ -225,15 +301,40 @@ fn first_leaf(node: &Node) -> u32 {
 fn lay_out(node: &Node, rect: Rect, panes: &mut Vec<(u32, Rect)>, dividers: &mut Vec<Divider>) {
     match node {
         Node::Leaf { id, .. } => panes.push((*id, rect)),
-        Node::Split { id, row, ratio, a, b } => {
+        Node::Split {
+            id,
+            row,
+            ratio,
+            a,
+            b,
+        } => {
             let (first, second) = if *row {
                 let w = rect.w * ratio;
-                (Rect { w, ..rect }, Rect { x: rect.x + w, w: rect.w - w, ..rect })
+                (
+                    Rect { w, ..rect },
+                    Rect {
+                        x: rect.x + w,
+                        w: rect.w - w,
+                        ..rect
+                    },
+                )
             } else {
                 let h = rect.h * ratio;
-                (Rect { h, ..rect }, Rect { y: rect.y + h, h: rect.h - h, ..rect })
+                (
+                    Rect { h, ..rect },
+                    Rect {
+                        y: rect.y + h,
+                        h: rect.h - h,
+                        ..rect
+                    },
+                )
             };
-            dividers.push(Divider { id: *id, row: *row, ratio: *ratio, rect });
+            dividers.push(Divider {
+                id: *id,
+                row: *row,
+                ratio: *ratio,
+                rect,
+            });
             lay_out(a, first, panes, dividers);
             lay_out(b, second, panes, dividers);
         }
@@ -243,7 +344,13 @@ fn lay_out(node: &Node, rect: Rect, panes: &mut Vec<(u32, Rect)>, dividers: &mut
 fn resize_node(node: &Node, branch: u32, ratio: f32) -> Node {
     match node {
         Node::Leaf { .. } => node.clone(),
-        Node::Split { id, row, ratio: held, a, b } => Node::Split {
+        Node::Split {
+            id,
+            row,
+            ratio: held,
+            a,
+            b,
+        } => Node::Split {
             id: *id,
             row: *row,
             ratio: if *id == branch { ratio } else { *held },
@@ -255,7 +362,14 @@ fn resize_node(node: &Node, branch: u32, ratio: f32) -> Node {
 
 impl Layout {
     pub fn single(session: &str) -> Layout {
-        Layout { root: Node::Leaf { id: 1, session: session.to_owned() }, active: 1, next: 2 }
+        Layout {
+            root: Node::Leaf {
+                id: 1,
+                session: session.to_owned(),
+            },
+            active: 1,
+            next: 2,
+        }
     }
 
     pub fn leaves(&self) -> Vec<(u32, &str)> {
@@ -273,7 +387,10 @@ impl Layout {
     }
 
     pub fn session_of(&self, leaf: u32) -> Option<&str> {
-        self.leaves().into_iter().find(|(id, _)| *id == leaf).map(|(_, s)| s)
+        self.leaves()
+            .into_iter()
+            .find(|(id, _)| *id == leaf)
+            .map(|(_, s)| s)
     }
 
     pub fn active_session(&self) -> &str {
@@ -282,7 +399,10 @@ impl Layout {
 
     /// The pane already showing this session.
     pub fn showing(&self, session: &str) -> Option<u32> {
-        self.leaves().into_iter().find(|(_, s)| *s == session).map(|(id, _)| id)
+        self.leaves()
+            .into_iter()
+            .find(|(_, s)| *s == session)
+            .map(|(id, _)| id)
     }
 
     /// Whether dropping `session` at `target` changes anything, and whether the pane limit refuses it.
@@ -298,12 +418,24 @@ impl Layout {
             }
         }
         if edge == Edge::Center {
-            return if target == Target::Root { DropState::Nothing } else { DropState::Ok };
+            return if target == Target::Root {
+                DropState::Nothing
+            } else {
+                DropState::Ok
+            };
         }
         if from.is_some() {
-            return if leaves.len() < 2 { DropState::Nothing } else { DropState::Ok };
+            return if leaves.len() < 2 {
+                DropState::Nothing
+            } else {
+                DropState::Ok
+            };
         }
-        if leaves.len() >= MAX_PANES { DropState::Full } else { DropState::Ok }
+        if leaves.len() >= MAX_PANES {
+            DropState::Full
+        } else {
+            DropState::Ok
+        }
     }
 
     /// Drops a conversation on a pane edge (a new pane) or its center (replaces it; a conversation
@@ -314,7 +446,9 @@ impl Layout {
         }
         let from = self.showing(session);
         if edge == Edge::Center {
-            let Target::Pane(into) = target else { return None };
+            let Target::Pane(into) = target else {
+                return None;
+            };
             let replaced = self.session_of(into)?.to_owned();
             let session = session.to_owned();
             let root = map_sessions(&self.root, &|id, held| {
@@ -326,7 +460,11 @@ impl Layout {
                     held.to_owned()
                 }
             });
-            return Some(Layout { root, active: into, next: self.next });
+            return Some(Layout {
+                root,
+                active: into,
+                next: self.next,
+            });
         }
         let mut next = self.next;
         let leaf_id = from.unwrap_or_else(|| {
@@ -337,10 +475,17 @@ impl Layout {
             Some(id) => remove_node(&self.root, id)?,
             None => self.root.clone(),
         };
-        let leaf = Node::Leaf { id: leaf_id, session: session.to_owned() };
+        let leaf = Node::Leaf {
+            id: leaf_id,
+            session: session.to_owned(),
+        };
         let split_id = next;
         next += 1;
-        Some(Layout { root: insert_node(&base, target, edge, &leaf, split_id), active: leaf_id, next })
+        Some(Layout {
+            root: insert_node(&base, target, edge, &leaf, split_id),
+            active: leaf_id,
+            next,
+        })
     }
 
     /// Sirus' `openInSplit`: beside the active pane, or beside the other pane when the session is
@@ -348,7 +493,10 @@ impl Layout {
     pub fn opened_beside(&self, session: &str, edge: Edge) -> Option<Layout> {
         let from = self.showing(session);
         let target = if from == Some(self.active) {
-            self.leaves().into_iter().map(|(id, _)| id).find(|id| Some(*id) != from)?
+            self.leaves()
+                .into_iter()
+                .map(|(id, _)| id)
+                .find(|id| Some(*id) != from)?
         } else {
             self.active
         };
@@ -362,8 +510,16 @@ impl Layout {
         }
         let sibling = sibling_of(&self.root, leaf).map(first_leaf);
         let root = remove_node(&self.root, leaf)?;
-        let active = if self.active == leaf { sibling.unwrap_or_else(|| first_leaf(&root)) } else { self.active };
-        Some(Layout { root, active, next: self.next })
+        let active = if self.active == leaf {
+            sibling.unwrap_or_else(|| first_leaf(&root))
+        } else {
+            self.active
+        };
+        Some(Layout {
+            root,
+            active,
+            next: self.next,
+        })
     }
 
     /// Closes the panes whose session `live` refuses (the last one stays).
@@ -387,7 +543,10 @@ impl Layout {
         if (held - ratio).abs() < 1e-6 {
             return None;
         }
-        Some(Layout { root: resize_node(&self.root, branch, ratio), ..self.clone() })
+        Some(Layout {
+            root: resize_node(&self.root, branch, ratio),
+            ..self.clone()
+        })
     }
 
     /// Keeps the layout in step with the selected tab: a session already shown activates its pane,
@@ -401,7 +560,13 @@ impl Layout {
             return true;
         }
         let active = self.active;
-        self.root = map_sessions(&self.root, &|id, held| if id == active { session.to_owned() } else { held.to_owned() });
+        self.root = map_sessions(&self.root, &|id, held| {
+            if id == active {
+                session.to_owned()
+            } else {
+                held.to_owned()
+            }
+        });
         true
     }
 
@@ -420,7 +585,13 @@ impl Layout {
         fn node(n: &Node) -> Value {
             match n {
                 Node::Leaf { id, session } => json!({ "leaf": id, "session": session }),
-                Node::Split { id, row, ratio, a, b } => json!({
+                Node::Split {
+                    id,
+                    row,
+                    ratio,
+                    a,
+                    b,
+                } => json!({
                     "split": id,
                     "dir": if *row { "row" } else { "column" },
                     "ratio": ratio,
@@ -476,12 +647,15 @@ impl Layout {
         let (mut ids, mut leaves) = (Vec::new(), 0);
         let root = node(&value["root"], 0, &mut ids, &mut leaves)?;
         let active = u32::try_from(value["active"].as_u64()?).ok()?;
-        let next = u32::try_from(value["next"].as_u64()?).ok()?.max(ids.iter().max()? + 1);
+        let next = u32::try_from(value["next"].as_u64()?)
+            .ok()?
+            .max(ids.iter().max()? + 1);
         let layout = Layout { root, active, next };
         let mut sessions: Vec<&str> = layout.leaves().into_iter().map(|(_, s)| s).collect();
         sessions.sort_unstable();
         sessions.dedup();
-        (leaves <= MAX_PANES && sessions.len() == leaves && layout.session_of(active).is_some()).then_some(layout)
+        (leaves <= MAX_PANES && sessions.len() == leaves && layout.session_of(active).is_some())
+            .then_some(layout)
     }
 }
 
@@ -490,14 +664,27 @@ pub fn edge_at(nx: f32, ny: f32) -> Edge {
     if (nx - 0.5).abs().max((ny - 0.5).abs()) < 0.2 {
         return Edge::Center;
     }
-    [(Edge::Left, nx), (Edge::Right, 1. - nx), (Edge::Top, ny), (Edge::Bottom, 1. - ny)]
-        .into_iter()
-        .fold((Edge::Left, f32::MAX), |best, item| if item.1 < best.1 { item } else { best })
-        .0
+    [
+        (Edge::Left, nx),
+        (Edge::Right, 1. - nx),
+        (Edge::Top, ny),
+        (Edge::Bottom, 1. - ny),
+    ]
+    .into_iter()
+    .fold((Edge::Left, f32::MAX), |best, item| {
+        if item.1 < best.1 { item } else { best }
+    })
+    .0
 }
 
 /// What a point of the area (in fractions, with the area's size in pixels) would drop onto.
-pub fn target_at(panes: &[(u32, Rect)], nx: f32, ny: f32, width: f32, height: f32) -> Option<(Target, Edge)> {
+pub fn target_at(
+    panes: &[(u32, Rect)],
+    nx: f32,
+    ny: f32,
+    width: f32,
+    height: f32,
+) -> Option<(Target, Edge)> {
     if panes.len() > 1 {
         let edge = if nx * width < AREA_EDGE {
             Some(Edge::Left)
@@ -515,7 +702,10 @@ pub fn target_at(panes: &[(u32, Rect)], nx: f32, ny: f32, width: f32, height: f3
         }
     }
     let (id, rect) = panes.iter().find(|(_, r)| r.contains(nx, ny))?;
-    Some((Target::Pane(*id), edge_at((nx - rect.x) / rect.w, (ny - rect.y) / rect.h)))
+    Some((
+        Target::Pane(*id),
+        edge_at((nx - rect.x) / rect.w, (ny - rect.y) / rect.h),
+    ))
 }
 
 fn file() -> PathBuf {
@@ -616,6 +806,20 @@ impl State {
     pub fn building(&self) -> Option<usize> {
         self.building.get()
     }
+
+    /// The conversations in the panes now, none without a split.
+    pub fn sessions(&self) -> Vec<String> {
+        self.layout
+            .as_ref()
+            .map(|layout| {
+                layout
+                    .leaves()
+                    .into_iter()
+                    .map(|(_, s)| s.to_owned())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
 }
 
 /// One pane as drawn this frame.
@@ -634,14 +838,23 @@ fn geometry(layout: &Layout, anim: Option<&Anim>, e: f32) -> Vec<PaneBox> {
     for (id, to) in rects {
         let session = layout.session_of(id).unwrap_or("").to_owned();
         let (from, slide) = match anim {
-            Some(a) => match (a.from.iter().find(|(f, _)| *f == id), a.enter.iter().find(|(f, _)| *f == id)) {
+            Some(a) => match (
+                a.from.iter().find(|(f, _)| *f == id),
+                a.enter.iter().find(|(f, _)| *f == id),
+            ) {
                 (Some((_, rect)), _) => (*rect, None),
                 (None, Some((_, edge))) => (to.collapsed(*edge), Some((edge.opposite(), to))),
                 (None, None) => (to, None),
             },
             None => (to, None),
         };
-        boxes.push(PaneBox { id, session, rect: from.lerp(to, e), slide, ghost: false });
+        boxes.push(PaneBox {
+            id,
+            session,
+            rect: from.lerp(to, e),
+            slide,
+            ghost: false,
+        });
     }
     if let Some(a) = anim {
         for (n, ghost) in a.leave.iter().enumerate() {
@@ -659,11 +872,14 @@ fn geometry(layout: &Layout, anim: Option<&Anim>, e: f32) -> Vec<PaneBox> {
 
 impl Shell {
     fn session_index(&self, session: &str) -> Option<usize> {
-        self.conversations.iter().position(|c| !session.is_empty() && c.session_id == session)
+        self.conversations
+            .iter()
+            .position(|c| !session.is_empty() && c.session_id == session)
     }
 
     fn session_alive(&self, session: &str) -> bool {
-        self.session_index(session).is_some_and(|ix| self.project_of(ix).is_some())
+        self.session_index(session)
+            .is_some_and(|ix| self.project_of(ix).is_some())
     }
 
     fn split_save(&self) {
@@ -694,8 +910,14 @@ impl Shell {
 
     /// Where every pane is this frame, sliding ones included.
     fn split_current(&self, now: Instant) -> Vec<(u32, Rect)> {
-        let Some(layout) = &self.split.layout else { return vec![] };
-        let e = self.split.anim.as_ref().map_or(1., |a| eased(a.progress(now), Curve::Expo));
+        let Some(layout) = &self.split.layout else {
+            return vec![];
+        };
+        let e = self
+            .split
+            .anim
+            .as_ref()
+            .map_or(1., |a| eased(a.progress(now), Curve::Expo));
         geometry(layout, self.split.anim.as_ref(), e)
             .into_iter()
             .filter(|p| !p.ghost)
@@ -705,7 +927,9 @@ impl Shell {
 
     /// Gives the conversation a tab of its project, so closing its pane leaves it open.
     fn ensure_tab(&mut self, ix: usize) {
-        let Some(project) = self.project_of(ix) else { return };
+        let Some(project) = self.project_of(ix) else {
+            return;
+        };
         let has = |tabs: &Vec<Tab>| tabs.iter().any(|t| t.conversation == ix && !t.closing);
         let present = if Some(project) == self.current_project {
             has(&self.tabs)
@@ -729,15 +953,30 @@ impl Shell {
         if Some(project) == self.current_project {
             self.tabs.push(tab);
         } else {
-            self.parked.entry(project).or_insert((Vec::new(), id)).0.push(tab);
+            self.parked
+                .entry(project)
+                .or_insert((Vec::new(), id))
+                .0
+                .push(tab);
         }
     }
 
     /// Starts a change of layout: remembers where the panes were so they glide to where they go.
-    fn split_commit(&mut self, base: &Layout, new: Layout, enter: Option<(u32, Edge)>, leave: Vec<Ghost>, cx: &mut Context<Self>) {
+    fn split_commit(
+        &mut self,
+        base: &Layout,
+        new: Layout,
+        enter: Option<(u32, Edge)>,
+        leave: Vec<Ghost>,
+        cx: &mut Context<Self>,
+    ) {
         let now = Instant::now();
         let from_framed = self.split_framed(now);
-        let from = if self.split.layout.is_some() { self.split_current(now) } else { base.rects().0 };
+        let from = if self.split.layout.is_some() {
+            self.split_current(now)
+        } else {
+            base.rects().0
+        };
         let single = new.count() < 2;
         self.split.layout = Some(new);
         self.split.hover = None;
@@ -760,14 +999,25 @@ impl Shell {
     }
 
     /// Opens a conversation in a pane at the edge of a target pane (or of the whole area).
-    pub(super) fn split_drop_at(&mut self, session: &str, target: Target, edge: Edge, cx: &mut Context<Self>) {
-        let Some(ix) = self.session_index(session) else { return };
+    pub(super) fn split_drop_at(
+        &mut self,
+        session: &str,
+        target: Target,
+        edge: Edge,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(ix) = self.session_index(session) else {
+            return;
+        };
         let Some(base) = self.split_base() else {
             self.open(ix, cx);
             return;
         };
-        let Some(new) = base.dropped(session, target, edge) else { return };
-        let enter = (edge != Edge::Center && base.showing(session).is_none()).then(|| (new.active, edge));
+        let Some(new) = base.dropped(session, target, edge) else {
+            return;
+        };
+        let enter =
+            (edge != Edge::Center && base.showing(session).is_none()).then(|| (new.active, edge));
         self.ensure_tab(ix);
         self.split_commit(&base, new, enter, Vec::new(), cx);
         self.open(ix, cx);
@@ -777,7 +1027,9 @@ impl Shell {
     /// possible, otherwise as a plain tab.
     pub(super) fn open_beside(&mut self, ix: usize, edge: Edge, cx: &mut Context<Self>) {
         let session = self.conversations[ix].session_id.clone();
-        let planned = self.split_base().and_then(|base| base.opened_beside(&session, edge).map(|new| (base, new)));
+        let planned = self
+            .split_base()
+            .and_then(|base| base.opened_beside(&session, edge).map(|new| (base, new)));
         let Some((base, new)) = planned else {
             self.open(ix, cx);
             return;
@@ -790,15 +1042,27 @@ impl Shell {
 
     /// Closes a pane; its conversation stays open as a tab.
     pub(super) fn split_close(&mut self, leaf: u32, cx: &mut Context<Self>) {
-        let Some(layout) = self.split.layout.clone() else { return };
-        let Some(new) = layout.removed(leaf) else { return };
+        let Some(layout) = self.split.layout.clone() else {
+            return;
+        };
+        let Some(new) = layout.removed(leaf) else {
+            return;
+        };
         let session = layout.session_of(leaf).unwrap_or("").to_owned();
         if let Some(ix) = self.session_index(&session) {
             self.ensure_tab(ix);
         }
         let now = Instant::now();
-        let rect = self.split_current(now).into_iter().find(|(id, _)| *id == leaf).map_or(WHOLE, |(_, r)| r);
-        let ghost = Ghost { session, rect, hug: layout.hug_edge(leaf) };
+        let rect = self
+            .split_current(now)
+            .into_iter()
+            .find(|(id, _)| *id == leaf)
+            .map_or(WHOLE, |(_, r)| r);
+        let ghost = Ghost {
+            session,
+            rect,
+            hug: layout.hug_edge(leaf),
+        };
         let active = new.active;
         let moved = active != layout.active;
         let target = new.session_of(active).and_then(|s| self.session_index(s));
@@ -812,11 +1076,15 @@ impl Shell {
 
     /// A press inside a pane makes it the active one before the press is handled.
     pub(super) fn split_activate(&mut self, leaf: u32, cx: &mut Context<Self>) {
-        let Some(layout) = self.split.layout.as_mut() else { return };
+        let Some(layout) = self.split.layout.as_mut() else {
+            return;
+        };
         if layout.active == leaf {
             return;
         }
-        let Some(session) = layout.session_of(leaf).map(str::to_owned) else { return };
+        let Some(session) = layout.session_of(leaf).map(str::to_owned) else {
+            return;
+        };
         layout.active = leaf;
         self.split_save();
         if let Some(ix) = self.session_index(&session) {
@@ -849,7 +1117,11 @@ impl Shell {
             self.split_save();
             return;
         }
-        let sessions: Vec<String> = layout.leaves().into_iter().map(|(_, s)| s.to_owned()).collect();
+        let sessions: Vec<String> = layout
+            .leaves()
+            .into_iter()
+            .map(|(_, s)| s.to_owned())
+            .collect();
         let active = layout.active_session().to_owned();
         for session in &sessions {
             if let Some(ix) = self.session_index(session) {
@@ -871,7 +1143,12 @@ impl Shell {
                 self.split.anim = None;
             }
         }
-        if self.split.anim.as_ref().is_some_and(|a| a.progress(now) >= 1.) {
+        if self
+            .split
+            .anim
+            .as_ref()
+            .is_some_and(|a| a.progress(now) >= 1.)
+        {
             self.split.anim = None;
         }
         if self.split.anim.is_none() && self.split.layout.as_ref().is_some_and(|l| l.count() < 2) {
@@ -881,7 +1158,12 @@ impl Shell {
     }
 
     /// What `session` dragged to `position` would land on, within the area's `bounds`.
-    fn split_aim(&mut self, session: &str, position: Point<Pixels>, bounds: Bounds<Pixels>) -> bool {
+    fn split_aim(
+        &mut self,
+        session: &str,
+        position: Point<Pixels>,
+        bounds: Bounds<Pixels>,
+    ) -> bool {
         let before = self.split.hover;
         self.split.hover = None;
         if bounds.contains(&position) {
@@ -909,7 +1191,8 @@ impl Shell {
     pub(super) fn split_move(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) -> bool {
         let left = event.pressed_button == Some(MouseButton::Left);
         if let Some(branch) = self.split.resizing {
-            let (Some(area), Some(layout)) = (self.split.area.get(), self.split.layout.as_ref()) else {
+            let (Some(area), Some(layout)) = (self.split.area.get(), self.split.layout.as_ref())
+            else {
                 self.split.resizing = None;
                 return false;
             };
@@ -977,7 +1260,12 @@ impl Shell {
     }
 
     /// The conversation area: the one transcript, or the panes, with the drop zone over them.
-    pub(super) fn split_view(&mut self, now: Instant, moving: &mut bool, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn split_view(
+        &mut self,
+        now: Instant,
+        moving: &mut bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         self.split_housekeeping(now);
         let dragging = cx.has_active_drag() || self.drag.as_ref().is_some_and(|d| d.active);
         let hover = self.split.hover.filter(|_| dragging);
@@ -993,12 +1281,14 @@ impl Shell {
             .h_full()
             .flex()
             .child(probe)
-            .on_drag_move(cx.listener(|this, event: &gpui::DragMoveEvent<ConvDrag>, _, cx| {
-                let session = event.drag(cx).session.clone();
-                if this.split_aim(&session, event.event.position, event.bounds) {
-                    cx.notify();
-                }
-            }))
+            .on_drag_move(
+                cx.listener(|this, event: &gpui::DragMoveEvent<ConvDrag>, _, cx| {
+                    let session = event.drag(cx).session.clone();
+                    if this.split_aim(&session, event.event.position, event.bounds) {
+                        cx.notify();
+                    }
+                }),
+            )
             .on_drop(cx.listener(|this, drag: &ConvDrag, _, cx| {
                 if let Some((target, edge, DropState::Ok)) = this.split.hover.take() {
                     this.split_drop_at(&drag.session.clone(), target, edge, cx);
@@ -1010,13 +1300,21 @@ impl Shell {
             let overlay = self.drop_overlay(hover, &[(1, WHOLE)], true);
             return area.child(body).children(overlay).into_any_element();
         };
-        let anim_e = self.split.anim.as_ref().map(|a| eased(a.progress(now), Curve::Expo));
+        let anim_e = self
+            .split
+            .anim
+            .as_ref()
+            .map(|a| eased(a.progress(now), Curve::Expo));
         if anim_e.is_some() {
             *moving = true;
         }
         let framed = self.split_framed(now);
         let boxes = geometry(&layout, self.split.anim.as_ref(), anim_e.unwrap_or(1.));
-        let rects: Vec<(u32, Rect)> = boxes.iter().filter(|b| !b.ghost).map(|b| (b.id, b.rect)).collect();
+        let rects: Vec<(u32, Rect)> = boxes
+            .iter()
+            .filter(|b| !b.ghost)
+            .map(|b| (b.id, b.rect))
+            .collect();
         let mut ordered: Vec<PaneBox> = boxes;
         // The active pane is built and drawn last: its composer owns the caret and the menus' anchor.
         ordered.sort_by_key(|b| (!b.ghost && b.id == layout.active(), b.ghost));
@@ -1024,7 +1322,9 @@ impl Shell {
             if pane.rect.w < 0.002 || pane.rect.h < 0.002 {
                 continue;
             }
-            let Some(ix) = self.session_index(&pane.session) else { continue };
+            let Some(ix) = self.session_index(&pane.session) else {
+                continue;
+            };
             self.ensure_loaded(ix);
             let active = !pane.ghost && pane.id == layout.active();
             let body = self.pane_body(ix, active, now, moving, cx);
@@ -1040,9 +1340,20 @@ impl Shell {
     }
 
     /// One pane's transcript and composer, built for its own conversation.
-    fn pane_body(&mut self, ix: usize, active: bool, now: Instant, moving: &mut bool, cx: &mut Context<Self>) -> AnyElement {
+    fn pane_body(
+        &mut self,
+        ix: usize,
+        active: bool,
+        now: Instant,
+        moving: &mut bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         self.split.building.set(Some(ix));
-        let mut jump = self.split.jumps.remove(&ix).unwrap_or_else(|| Tween::still(0., now));
+        let mut jump = self
+            .split
+            .jumps
+            .remove(&ix)
+            .unwrap_or_else(|| Tween::still(0., now));
         std::mem::swap(&mut self.jump, &mut jump);
         // The find bar belongs to the active pane.
         let find = (!active).then(|| std::mem::take(&mut self.find));
@@ -1056,11 +1367,23 @@ impl Shell {
         body
     }
 
-    fn pane_element(&self, pane: &PaneBox, ix: usize, active: bool, framed: f32, body: AnyElement, cx: &mut Context<Self>) -> AnyElement {
+    fn pane_element(
+        &self,
+        pane: &PaneBox,
+        ix: usize,
+        active: bool,
+        framed: f32,
+        body: AnyElement,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let conversation = &self.conversations[ix];
         let id = pane.id;
         let r = pane.rect;
-        let frame_color = if active { accent_wash(0.5 * framed) } else { content(0.08 * framed) };
+        let frame_color = if active {
+            accent_wash(0.5 * framed)
+        } else {
+            content(0.08 * framed)
+        };
         let title = conversation.title.clone();
         let session = conversation.session_id.clone();
         let header = div()
@@ -1076,7 +1399,13 @@ impl Shell {
             .border_b_1()
             .border_color(content(0.08))
             .cursor_pointer()
-            .on_drag(ConvDrag { session, title: title.clone() }, |drag, _, _, cx| cx.new(|_| DragChip(drag.title.clone())))
+            .on_drag(
+                ConvDrag {
+                    session,
+                    title: title.clone(),
+                },
+                |drag, _, _, cx| cx.new(|_| DragChip(drag.title.clone())),
+            )
             .child(provider_glyph(conversation.provider, 14.))
             .child(
                 div()
@@ -1105,7 +1434,10 @@ impl Shell {
                     .justify_center()
                     .cursor_pointer()
                     .hover(|s| s.bg(content(0.07)))
-                    .on_mouse_down(MouseButton::Left, cx.listener(|_, _, _, cx| cx.stop_propagation()))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|_, _, _, cx| cx.stop_propagation()),
+                    )
                     .on_click(cx.listener(move |this, _, _, cx| {
                         cx.stop_propagation();
                         this.split_close(id, cx);
@@ -1123,7 +1455,15 @@ impl Shell {
             .border_color(frame_color)
             .bg(pane_fill())
             .child(header)
-            .child(div().relative().flex_1().min_h_0().w_full().flex().child(body));
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .flex()
+                    .child(body),
+            );
         let mut inner = div().absolute().p(px(GAP * framed)).child(frame);
         inner = match pane.slide {
             Some((align, full)) => {
@@ -1131,11 +1471,19 @@ impl Shell {
                 match align {
                     Edge::Left | Edge::Right => {
                         let inner = inner.top_0().h_full().w(gpui::relative(full.w / w));
-                        if align == Edge::Left { inner.left_0() } else { inner.right_0() }
+                        if align == Edge::Left {
+                            inner.left_0()
+                        } else {
+                            inner.right_0()
+                        }
                     }
                     _ => {
                         let inner = inner.left_0().w_full().h(gpui::relative(full.h / h));
-                        if align == Edge::Top { inner.top_0() } else { inner.bottom_0() }
+                        if align == Edge::Top {
+                            inner.top_0()
+                        } else {
+                            inner.bottom_0()
+                        }
                     }
                 }
             }
@@ -1151,7 +1499,9 @@ impl Shell {
             .overflow_hidden()
             .child(inner);
         if !pane.ghost {
-            wrapper = wrapper.capture_any_mouse_down(cx.listener(move |this, _, _, cx| this.split_activate(id, cx)));
+            wrapper = wrapper.capture_any_mouse_down(
+                cx.listener(move |this, _, _, cx| this.split_activate(id, cx)),
+            );
         }
         wrapper.into_any_element()
     }
@@ -1159,7 +1509,10 @@ impl Shell {
     fn divider_handle(&self, divider: Divider, cx: &mut Context<Self>) -> AnyElement {
         let id = divider.id;
         let r = divider.rect;
-        let handle = div().id(("pane-divider", id)).absolute().hover(|s| s.bg(accent_wash(0.25)));
+        let handle = div()
+            .id(("pane-divider", id))
+            .absolute()
+            .hover(|s| s.bg(accent_wash(0.25)));
         let handle = if divider.row {
             handle
                 .left(gpui::relative(r.x + r.w * divider.ratio))
@@ -1190,11 +1543,20 @@ impl Shell {
     }
 
     /// The zone where the dragged conversation would land, lit with the accent wash and hairline.
-    fn drop_overlay(&self, hover: Option<(Target, Edge, DropState)>, panes: &[(u32, Rect)], single: bool) -> Option<AnyElement> {
+    fn drop_overlay(
+        &self,
+        hover: Option<(Target, Edge, DropState)>,
+        panes: &[(u32, Rect)],
+        single: bool,
+    ) -> Option<AnyElement> {
         let (target, edge, state) = hover?;
         let base = match target {
             Target::Root => WHOLE,
-            Target::Pane(id) => panes.iter().find(|(p, _)| *p == id).map(|(_, r)| *r).or(single.then_some(WHOLE))?,
+            Target::Pane(id) => panes
+                .iter()
+                .find(|(p, _)| *p == id)
+                .map(|(_, r)| *r)
+                .or(single.then_some(WHOLE))?,
         };
         let r = base.half(edge);
         let full = state == DropState::Full;
@@ -1223,7 +1585,11 @@ impl Shell {
                         .rounded(px(crate::theme::RADIUS_LG))
                         .border_1()
                         .border_color(if full { content(0.3) } else { accent_wash(0.7) })
-                        .bg(if full { content(0.06) } else { accent_wash(0.16) })
+                        .bg(if full {
+                            content(0.06)
+                        } else {
+                            accent_wash(0.16)
+                        })
                         .flex()
                         .items_center()
                         .justify_center()
@@ -1250,7 +1616,9 @@ mod tests {
     use super::*;
 
     fn two() -> Layout {
-        Layout::single("a").dropped("b", Target::Pane(1), Edge::Right).unwrap()
+        Layout::single("a")
+            .dropped("b", Target::Pane(1), Edge::Right)
+            .unwrap()
     }
 
     fn sessions(layout: &Layout) -> Vec<&str> {
@@ -1265,8 +1633,13 @@ mod tests {
             (Edge::Top, false, true),
             (Edge::Bottom, false, false),
         ] {
-            let layout = Layout::single("a").dropped("b", Target::Pane(1), edge).unwrap();
-            assert_eq!(sessions(&layout), if new_first { ["b", "a"] } else { ["a", "b"] });
+            let layout = Layout::single("a")
+                .dropped("b", Target::Pane(1), edge)
+                .unwrap();
+            assert_eq!(
+                sessions(&layout),
+                if new_first { ["b", "a"] } else { ["a", "b"] }
+            );
             let (_, dividers) = layout.rects();
             assert_eq!((dividers[0].row, dividers[0].ratio), (row, 0.5));
             assert_eq!(layout.active_session(), "b", "the dropped pane is active");
@@ -1278,8 +1651,20 @@ mod tests {
         let layout = two().dropped("c", Target::Root, Edge::Bottom).unwrap();
         let (panes, dividers) = layout.rects();
         assert_eq!(sessions(&layout), ["a", "b", "c"]);
-        let c = panes.iter().find(|(id, _)| layout.session_of(*id) == Some("c")).unwrap().1;
-        assert_eq!(c, Rect { x: 0., y: 0.5, w: 1., h: 0.5 });
+        let c = panes
+            .iter()
+            .find(|(id, _)| layout.session_of(*id) == Some("c"))
+            .unwrap()
+            .1;
+        assert_eq!(
+            c,
+            Rect {
+                x: 0.,
+                y: 0.5,
+                w: 1.,
+                h: 0.5
+            }
+        );
         assert_eq!(dividers.len(), 2);
     }
 
@@ -1287,23 +1672,46 @@ mod tests {
     fn the_pane_limit_refuses_a_fifth_conversation() {
         let mut layout = Layout::single("a");
         for session in ["b", "c", "d"] {
-            layout = layout.dropped(session, Target::Pane(layout.active()), Edge::Right).unwrap();
+            layout = layout
+                .dropped(session, Target::Pane(layout.active()), Edge::Right)
+                .unwrap();
         }
         assert_eq!(layout.count(), MAX_PANES);
-        assert_eq!(layout.drop_state("e", Target::Root, Edge::Left), DropState::Full);
+        assert_eq!(
+            layout.drop_state("e", Target::Root, Edge::Left),
+            DropState::Full
+        );
         assert!(layout.dropped("e", Target::Root, Edge::Left).is_none());
         // Replacing a pane and moving an open one still work at the limit.
-        assert_eq!(layout.drop_state("e", Target::Pane(1), Edge::Center), DropState::Ok);
-        assert_eq!(layout.drop_state("a", Target::Pane(layout.active()), Edge::Left), DropState::Ok);
+        assert_eq!(
+            layout.drop_state("e", Target::Pane(1), Edge::Center),
+            DropState::Ok
+        );
+        assert_eq!(
+            layout.drop_state("a", Target::Pane(layout.active()), Edge::Left),
+            DropState::Ok
+        );
     }
 
     #[test]
     fn dropping_a_conversation_on_its_own_pane_changes_nothing() {
         let layout = two();
-        assert_eq!(layout.drop_state("a", Target::Pane(1), Edge::Left), DropState::Nothing);
-        assert_eq!(Layout::single("a").drop_state("a", Target::Pane(1), Edge::Right), DropState::Nothing);
-        assert_eq!(layout.drop_state("c", Target::Pane(99), Edge::Left), DropState::Nothing);
-        assert_eq!(layout.drop_state("c", Target::Root, Edge::Center), DropState::Nothing);
+        assert_eq!(
+            layout.drop_state("a", Target::Pane(1), Edge::Left),
+            DropState::Nothing
+        );
+        assert_eq!(
+            Layout::single("a").drop_state("a", Target::Pane(1), Edge::Right),
+            DropState::Nothing
+        );
+        assert_eq!(
+            layout.drop_state("c", Target::Pane(99), Edge::Left),
+            DropState::Nothing
+        );
+        assert_eq!(
+            layout.drop_state("c", Target::Root, Edge::Center),
+            DropState::Nothing
+        );
     }
 
     #[test]
@@ -1349,7 +1757,15 @@ mod tests {
         assert_eq!(before.iter().find(|(id, _)| *id == c).unwrap().1.h, 0.5);
         let after = layout.removed(c).unwrap();
         let a = after.showing("a").unwrap();
-        assert_eq!(after.rects().0.iter().find(|(id, _)| *id == a).unwrap().1, Rect { x: 0., y: 0., w: 0.5, h: 1. });
+        assert_eq!(
+            after.rects().0.iter().find(|(id, _)| *id == a).unwrap().1,
+            Rect {
+                x: 0.,
+                y: 0.,
+                w: 0.5,
+                h: 1.
+            }
+        );
         assert_eq!(after.active_session(), "a", "the sibling takes over");
     }
 
@@ -1358,7 +1774,9 @@ mod tests {
         let layout = two();
         assert_eq!(layout.hug_edge(1), Edge::Left);
         assert_eq!(layout.hug_edge(layout.showing("b").unwrap()), Edge::Right);
-        let column = Layout::single("a").dropped("b", Target::Pane(1), Edge::Top).unwrap();
+        let column = Layout::single("a")
+            .dropped("b", Target::Pane(1), Edge::Top)
+            .unwrap();
         assert_eq!(column.hug_edge(column.showing("b").unwrap()), Edge::Top);
         assert_eq!(column.hug_edge(1), Edge::Bottom);
     }
@@ -1368,8 +1786,14 @@ mod tests {
         let layout = two();
         let branch = layout.rects().1[0].id;
         assert_eq!(layout.resized(branch, 0.7).unwrap().rects().1[0].ratio, 0.7);
-        assert_eq!(layout.resized(branch, 0.01).unwrap().rects().1[0].ratio, MIN_RATIO);
-        assert_eq!(layout.resized(branch, 5.).unwrap().rects().1[0].ratio, 1. - MIN_RATIO);
+        assert_eq!(
+            layout.resized(branch, 0.01).unwrap().rects().1[0].ratio,
+            MIN_RATIO
+        );
+        assert_eq!(
+            layout.resized(branch, 5.).unwrap().rects().1[0].ratio,
+            1. - MIN_RATIO
+        );
         assert!(layout.resized(branch, 0.5).is_none(), "no change");
         assert!(layout.resized(999, 0.3).is_none());
     }
@@ -1378,8 +1802,24 @@ mod tests {
     fn ratios_split_the_rects() {
         let layout = two().resized(two().rects().1[0].id, 0.25).unwrap();
         let (panes, dividers) = layout.rects();
-        assert_eq!(panes[0].1, Rect { x: 0., y: 0., w: 0.25, h: 1. });
-        assert_eq!(panes[1].1, Rect { x: 0.25, y: 0., w: 0.75, h: 1. });
+        assert_eq!(
+            panes[0].1,
+            Rect {
+                x: 0.,
+                y: 0.,
+                w: 0.25,
+                h: 1.
+            }
+        );
+        assert_eq!(
+            panes[1].1,
+            Rect {
+                x: 0.25,
+                y: 0.,
+                w: 0.75,
+                h: 1.
+            }
+        );
         assert_eq!(dividers[0].rect, WHOLE);
     }
 
@@ -1403,7 +1843,11 @@ mod tests {
         let moved = three.opened_beside("c", Edge::Right).unwrap();
         assert_eq!(moved.active_session(), "c");
         assert_eq!(moved.count(), 3);
-        assert!(Layout::single("a").opened_beside("a", Edge::Right).is_none());
+        assert!(
+            Layout::single("a")
+                .opened_beside("a", Edge::Right)
+                .is_none()
+        );
     }
 
     #[test]
@@ -1428,23 +1872,72 @@ mod tests {
     fn the_area_border_splits_the_whole_area_once_there_are_several_panes() {
         let layout = two();
         let (panes, _) = layout.rects();
-        assert_eq!(target_at(&panes, 0.01, 0.5, 1000., 600.), Some((Target::Root, Edge::Left)));
-        assert_eq!(target_at(&panes, 0.5, 0.99, 1000., 600.), Some((Target::Root, Edge::Bottom)));
+        assert_eq!(
+            target_at(&panes, 0.01, 0.5, 1000., 600.),
+            Some((Target::Root, Edge::Left))
+        );
+        assert_eq!(
+            target_at(&panes, 0.5, 0.99, 1000., 600.),
+            Some((Target::Root, Edge::Bottom))
+        );
         let (target, edge) = target_at(&panes, 0.1, 0.5, 1000., 600.).unwrap();
         assert_eq!((target, edge), (Target::Pane(1), Edge::Left));
         let single = Layout::single("a").rects().0;
-        assert_eq!(target_at(&single, 0.01, 0.5, 1000., 600.), Some((Target::Pane(1), Edge::Left)));
-        assert_eq!(target_at(&single, 0.5, 0.5, 1000., 600.), Some((Target::Pane(1), Edge::Center)));
+        assert_eq!(
+            target_at(&single, 0.01, 0.5, 1000., 600.),
+            Some((Target::Pane(1), Edge::Left))
+        );
+        assert_eq!(
+            target_at(&single, 0.5, 0.5, 1000., 600.),
+            Some((Target::Pane(1), Edge::Center))
+        );
     }
 
     #[test]
     fn rects_slide_from_the_edge_and_back() {
-        let to = Rect { x: 0.5, y: 0., w: 0.5, h: 1. };
-        assert_eq!(to.collapsed(Edge::Right), Rect { x: 1., y: 0., w: 0., h: 1. });
-        assert_eq!(to.collapsed(Edge::Left), Rect { x: 0.5, y: 0., w: 0., h: 1. });
+        let to = Rect {
+            x: 0.5,
+            y: 0.,
+            w: 0.5,
+            h: 1.,
+        };
+        assert_eq!(
+            to.collapsed(Edge::Right),
+            Rect {
+                x: 1.,
+                y: 0.,
+                w: 0.,
+                h: 1.
+            }
+        );
+        assert_eq!(
+            to.collapsed(Edge::Left),
+            Rect {
+                x: 0.5,
+                y: 0.,
+                w: 0.,
+                h: 1.
+            }
+        );
         assert_eq!(to.collapsed(Edge::Right).lerp(to, 1.), to);
-        assert_eq!(to.collapsed(Edge::Right).lerp(to, 0.5), Rect { x: 0.75, y: 0., w: 0.25, h: 1. });
-        assert_eq!(to.half(Edge::Left), Rect { x: 0.5, y: 0., w: 0.25, h: 1. });
+        assert_eq!(
+            to.collapsed(Edge::Right).lerp(to, 0.5),
+            Rect {
+                x: 0.75,
+                y: 0.,
+                w: 0.25,
+                h: 1.
+            }
+        );
+        assert_eq!(
+            to.half(Edge::Left),
+            Rect {
+                x: 0.5,
+                y: 0.,
+                w: 0.25,
+                h: 1.
+            }
+        );
     }
 
     #[test]
@@ -1476,7 +1969,10 @@ mod tests {
         assert!(Layout::from_json(&reused).is_none());
         let mut ratio = good;
         ratio["root"]["ratio"] = json!(0.0);
-        assert_eq!(Layout::from_json(&ratio).unwrap().rects().1[0].ratio, MIN_RATIO);
+        assert_eq!(
+            Layout::from_json(&ratio).unwrap().rects().1[0].ratio,
+            MIN_RATIO
+        );
         assert!(Layout::from_json(&json!({})).is_none());
     }
 

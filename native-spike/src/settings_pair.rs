@@ -131,7 +131,8 @@ fn parse(value: &Value) -> Option<Pairing> {
         .as_str()
         .and_then(|text| DateTime::parse_from_rfc3339(text).ok())
         .map(|at| at.with_timezone(&Utc))?;
-    let qr = qrcode::QrCode::with_error_correction_level(link.as_bytes(), qrcode::EcLevel::M).ok()?;
+    let qr =
+        qrcode::QrCode::with_error_correction_level(link.as_bytes(), qrcode::EcLevel::M).ok()?;
     let width = qr.width();
     let modules = qr
         .to_colors()
@@ -231,9 +232,8 @@ fn watch<V: 'static>(
             cx.background_executor().timer(Duration::from_secs(1)).await;
             tick += 1;
             let poll = tick % POLL_EVERY == 0;
-            let reply = poll.then(|| {
-                backend.request("remote_action", json!({"action": {"type": "status"}}))
-            });
+            let reply = poll
+                .then(|| backend.request("remote_action", json!({"action": {"type": "status"}})));
             let alive = this.update(cx, |_, cx| {
                 let open = state().as_ref().is_some_and(|d| d.generation == generation);
                 if open {
@@ -256,11 +256,15 @@ fn watch<V: 'static>(
                 if dialog.joined.is_some() || dialog.pairing.is_none() {
                     return;
                 }
-                let found = status["devices"].as_array().into_iter().flatten().find(|d| {
-                    d["id"]
-                        .as_str()
-                        .is_some_and(|id| !dialog.known.iter().any(|known| known == id))
-                });
+                let found = status["devices"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .find(|d| {
+                        d["id"]
+                            .as_str()
+                            .is_some_and(|id| !dialog.known.iter().any(|known| known == id))
+                    });
                 if let Some(device) = found {
                     let id = device["id"].as_str().unwrap_or_default().to_string();
                     let name = device["name"].as_str().unwrap_or_default().to_string();
@@ -269,7 +273,12 @@ fn watch<V: 'static>(
                     dialog.joined = Some((id, name));
                     drop(now);
                     // The page's list shows it too.
-                    run(this, "remote_action", json!({"action": {"type": "status"}}), cx);
+                    run(
+                        this,
+                        "remote_action",
+                        json!({"action": {"type": "status"}}),
+                        cx,
+                    );
                     cx.notify();
                 }
             });
@@ -368,7 +377,9 @@ pub fn command<V: 'static>(
             }
             cx.notify();
             cx.spawn(async move |this, cx| {
-                cx.background_executor().timer(Duration::from_millis(1600)).await;
+                cx.background_executor()
+                    .timer(Duration::from_millis(1600))
+                    .await;
                 let _ = this.update(cx, |_, cx| cx.notify());
             })
             .detach();
@@ -399,12 +410,7 @@ pub fn command<V: 'static>(
 }
 
 /// Escape closes the popup; Enter finishes naming. True when the key was used.
-pub fn key<V: 'static>(
-    view: &mut V,
-    key: &str,
-    run: Run<V>,
-    cx: &mut Context<V>,
-) -> bool {
+pub fn key<V: 'static>(view: &mut V, key: &str, run: Run<V>, cx: &mut Context<V>) -> bool {
     let (open, joined) = {
         let now = state();
         match now.as_ref() {
@@ -466,12 +472,20 @@ fn qr(pairing: &Pairing, side: f32) -> AnyElement {
                         continue;
                     }
                     let (fx, fy) = (x as f32, y as f32);
-                    if fx >= start && fx < start + span as f32 && fy >= start && fy < start + span as f32
+                    if fx >= start
+                        && fx < start + span as f32
+                        && fy >= start
+                        && fy < start + span as f32
                     {
                         continue;
                     }
                     window.paint_quad(gpui::quad(
-                        at(fx + 0.5 - DOT_RADIUS, fy + 0.5 - DOT_RADIUS, DOT_RADIUS * 2., DOT_RADIUS * 2.),
+                        at(
+                            fx + 0.5 - DOT_RADIUS,
+                            fy + 0.5 - DOT_RADIUS,
+                            DOT_RADIUS * 2.,
+                            DOT_RADIUS * 2.,
+                        ),
                         Corners::all(px(DOT_RADIUS * unit)),
                         ink,
                         Edges::all(px(0.)),
@@ -624,7 +638,9 @@ fn hero(view: &str, way: Way, code: &str, address: &str) -> AnyElement {
                         .gap(px(5.))
                         .border_b_1()
                         .border_color(content(0.08))
-                        .children((0..3).map(|_| div().size(px(7.)).rounded_full().bg(content(0.2))))
+                        .children(
+                            (0..3).map(|_| div().size(px(7.)).rounded_full().bg(content(0.2))),
+                        )
                         .child(
                             div()
                                 .ml(px(8.))
@@ -688,9 +704,17 @@ fn hero(view: &str, way: Way, code: &str, address: &str) -> AnyElement {
                         .justify_center()
                         .child(
                             svg()
-                                .path(if view == "expired" { "refresh" } else { "check" })
+                                .path(if view == "expired" {
+                                    "refresh"
+                                } else {
+                                    "check"
+                                })
                                 .size(px(14.))
-                                .text_color(if view == "expired" { content(0.8) } else { on_accent() }),
+                                .text_color(if view == "expired" {
+                                    content(0.8)
+                                } else {
+                                    on_accent()
+                                }),
                         ),
                 )
                 .child(tile("laptop")),
@@ -732,9 +756,7 @@ fn button<V: 'static>(
         .text_size(px(13.))
         .font_weight(FontWeight::MEDIUM)
         .when(primary, |d| d.bg(accent()).text_color(on_accent()))
-        .when(!primary, |d| {
-            d.bg(content(0.07)).text_color(content(0.88))
-        })
+        .when(!primary, |d| d.bg(content(0.07)).text_color(content(0.88)))
         .when_some(icon, |d, path| {
             d.child(svg().path(path).size(px(14.)).text_color(if primary {
                 on_accent()
@@ -802,7 +824,9 @@ pub fn overlay<V: 'static>(
         ),
         "expired" => (
             t("Este código expirou").to_string(),
-            t("Por segurança cada código vale 5 minutos e serve uma vez. Gere outro para continuar."),
+            t(
+                "Por segurança cada código vale 5 minutos e serve uma vez. Gere outro para continuar.",
+            ),
         ),
         _ => (
             t("Conectar um aparelho").to_string(),
@@ -824,31 +848,36 @@ pub fn overlay<V: 'static>(
     let mut body = div().flex().flex_col().gap(px(14.)).px(px(20.)).pb(px(20.));
     match view {
         "live" => {
-            let segment = |id: &'static str, label: &'static str, icon: &'static str, value: Way| {
-                let on = way == value;
-                div()
-                    .id(id)
-                    .h(px(28.))
-                    .px(px(12.))
-                    .rounded(px(crate::theme::RADIUS_MD))
-                    .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .text_size(px(12.5))
-                    .text_color(content(if on { 0.95 } else { 0.55 }))
-                    .when(on, |d| d.bg(content(0.1)))
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        run(
-                            this,
-                            "native_pair_way",
-                            json!({"way": if value == Way::App { "app" } else { "browser" }}),
-                            cx,
-                        );
-                    }))
-                    .child(svg().path(icon).size(px(13.)).text_color(content(if on { 0.9 } else { 0.5 })))
-                    .child(label)
-            };
+            let segment =
+                |id: &'static str, label: &'static str, icon: &'static str, value: Way| {
+                    let on = way == value;
+                    div()
+                        .id(id)
+                        .h(px(28.))
+                        .px(px(12.))
+                        .rounded(px(crate::theme::RADIUS_MD))
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .text_size(px(12.5))
+                        .text_color(content(if on { 0.95 } else { 0.55 }))
+                        .when(on, |d| d.bg(content(0.1)))
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            run(
+                                this,
+                                "native_pair_way",
+                                json!({"way": if value == Way::App { "app" } else { "browser" }}),
+                                cx,
+                            );
+                        }))
+                        .child(svg().path(icon).size(px(13.)).text_color(content(if on {
+                            0.9
+                        } else {
+                            0.5
+                        })))
+                        .child(label)
+                };
             body = body.child(
                 div()
                     .self_center()
@@ -857,8 +886,18 @@ pub fn overlay<V: 'static>(
                     .bg(content(0.05))
                     .flex()
                     .gap(px(2.))
-                    .child(segment("pair-way-app", t("App do iPhone"), "smartphone", Way::App))
-                    .child(segment("pair-way-browser", t("Navegador"), "globe", Way::Browser)),
+                    .child(segment(
+                        "pair-way-app",
+                        t("App do iPhone"),
+                        "smartphone",
+                        Way::App,
+                    ))
+                    .child(segment(
+                        "pair-way-browser",
+                        t("Navegador"),
+                        "globe",
+                        Way::Browser,
+                    )),
             );
             let card = div()
                 .rounded(px(crate::theme::RADIUS_LG))
@@ -1014,9 +1053,7 @@ pub fn overlay<V: 'static>(
                 );
             }
             let status = match left {
-                Some(seconds) => {
-                    tf("Vale por {} · uso único", &[&countdown(seconds)])
-                }
+                Some(seconds) => tf("Vale por {} · uso único", &[&countdown(seconds)]),
                 None if dialog.busy => t("Gerando um código…").to_string(),
                 None => String::new(),
             };
@@ -1038,7 +1075,11 @@ pub fn overlay<V: 'static>(
                             .when(way == Way::App && pairing.is_some(), |d| {
                                 d.child(button(
                                     "pair-copy-link",
-                                    Some(if copied { t("Copiado") } else { t("Copiar link") }),
+                                    Some(if copied {
+                                        t("Copiado")
+                                    } else {
+                                        t("Copiar link")
+                                    }),
                                     Some(if copied { "check" } else { "copy" }),
                                     false,
                                     true,
@@ -1106,25 +1147,29 @@ pub fn overlay<V: 'static>(
                         ),
                 )
                 .child(
-                    div().flex().flex_wrap().gap(px(6.)).children(SUGGESTIONS.iter().map(|name| {
-                        let label = t(name);
-                        div()
-                            .id(*name)
-                            .h(px(26.))
-                            .px(px(10.))
-                            .rounded_full()
-                            .bg(content(0.07))
-                            .flex()
-                            .items_center()
-                            .text_size(px(12.))
-                            .text_color(content(0.75))
-                            .cursor_pointer()
-                            .hover(|s| s.bg(content(0.12)))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                run(this, "native_pair_suggest", json!({"name": label}), cx);
-                            }))
-                            .child(label)
-                    })),
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap(px(6.))
+                        .children(SUGGESTIONS.iter().map(|name| {
+                            let label = t(name);
+                            div()
+                                .id(*name)
+                                .h(px(26.))
+                                .px(px(10.))
+                                .rounded_full()
+                                .bg(content(0.07))
+                                .flex()
+                                .items_center()
+                                .text_size(px(12.))
+                                .text_color(content(0.75))
+                                .cursor_pointer()
+                                .hover(|s| s.bg(content(0.12)))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    run(this, "native_pair_suggest", json!({"name": label}), cx);
+                                }))
+                                .child(label)
+                        })),
                 )
                 .child(
                     div()
@@ -1148,7 +1193,8 @@ pub fn overlay<V: 'static>(
                             Some(t("Concluir")),
                             None,
                             true,
-                            !dialog.name.is_empty() || typing.as_ref().is_some_and(|t| !t.trim().is_empty()),
+                            !dialog.name.is_empty()
+                                || typing.as_ref().is_some_and(|t| !t.trim().is_empty()),
                             "native_pair_done",
                             json!({}),
                             typing.clone(),
@@ -1228,7 +1274,8 @@ pub fn overlay<V: 'static>(
         .child(body)
         .with_animation(
             format!("pair-card-{generation}-{closing}"),
-            Animation::new(Duration::from_secs_f32(DIALOG_TIME)).with_easing(|t| eased(t, Curve::Expo)),
+            Animation::new(Duration::from_secs_f32(DIALOG_TIME))
+                .with_easing(|t| eased(t, Curve::Expo)),
             move |el, t| {
                 let p = if closing { 1. - t } else { t };
                 el.opacity(p).top(px((1. - p) * 6.))
@@ -1306,6 +1353,8 @@ mod tests {
         assert!(pairing.link.starts_with("sirus://pair"));
         assert!(seconds_left(&pairing).is_none());
         // No address and no link: nothing to show.
-        assert!(parse(&json!({"code": "1", "urls": [], "expiresAt": "2030-01-01T00:00:00Z"})).is_none());
+        assert!(
+            parse(&json!({"code": "1", "urls": [], "expiresAt": "2030-01-01T00:00:00Z"})).is_none()
+        );
     }
 }

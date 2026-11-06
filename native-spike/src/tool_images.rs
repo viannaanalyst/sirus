@@ -14,7 +14,10 @@ pub fn is_image_path(path: &str) -> bool {
     let name = path.rsplit('/').next().unwrap_or(path);
     match name.rsplit_once('.') {
         Some((stem, extension)) => {
-            !stem.is_empty() && EXTENSIONS.iter().any(|known| known.eq_ignore_ascii_case(extension))
+            !stem.is_empty()
+                && EXTENSIONS
+                    .iter()
+                    .any(|known| known.eq_ignore_ascii_case(extension))
         }
         None => false,
     }
@@ -71,7 +74,10 @@ mod tests {
         assert!(is_image_path("~/Desktop/a.webp"));
         assert!(!is_image_path("/tmp/notes.txt"));
         assert!(!is_image_path("/tmp/png"));
-        assert!(!is_image_path("/tmp/.png"), "a dot file named .png has no stem");
+        assert!(
+            !is_image_path("/tmp/.png"),
+            "a dot file named .png has no stem"
+        );
         assert!(!is_image_path("/tmp/dir.png/readme"));
     }
 
@@ -85,7 +91,10 @@ mod tests {
             step_image("edit", " /tmp/logo.jpg ").as_deref(),
             Some("/tmp/logo.jpg")
         );
-        assert_eq!(step_image("read", "~/Pictures/a.gif").as_deref(), Some("~/Pictures/a.gif"));
+        assert_eq!(
+            step_image("read", "~/Pictures/a.gif").as_deref(),
+            Some("~/Pictures/a.gif")
+        );
     }
 
     #[test]

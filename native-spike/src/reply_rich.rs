@@ -85,7 +85,11 @@ pub fn resolve_link(cwd: &Path, home: Option<&Path>, link: &str) -> PathBuf {
         (Some(rest), Some(home)) => home.join(rest),
         _ => PathBuf::from(link),
     };
-    if path.is_absolute() { path } else { cwd.join(path) }
+    if path.is_absolute() {
+        path
+    } else {
+        cwd.join(path)
+    }
 }
 
 /// Whether `path` stays inside `root` once `.` and `..` are folded (the host also resolves
@@ -121,8 +125,18 @@ pub fn video_file(cwd: &str, link: &str) -> Option<PathBuf> {
 
 /// Width and height of a PNG, JPEG, GIF or WebP, read from its header.
 pub fn image_size(bytes: &[u8]) -> Option<(u32, u32)> {
-    let be16 = |at: usize| Some(u32::from(u16::from_be_bytes([*bytes.get(at)?, *bytes.get(at + 1)?])));
-    let le16 = |at: usize| Some(u32::from(u16::from_le_bytes([*bytes.get(at)?, *bytes.get(at + 1)?])));
+    let be16 = |at: usize| {
+        Some(u32::from(u16::from_be_bytes([
+            *bytes.get(at)?,
+            *bytes.get(at + 1)?,
+        ])))
+    };
+    let le16 = |at: usize| {
+        Some(u32::from(u16::from_le_bytes([
+            *bytes.get(at)?,
+            *bytes.get(at + 1)?,
+        ])))
+    };
     let size = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
         let be32 = |at: usize| {
             Some(u32::from_be_bytes([
@@ -213,10 +227,24 @@ pub fn ends_in_open_fence(text: &str) -> bool {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Want {
-    Image { session: String, path: String },
-    Video { session: String, path: String, cwd: String },
-    Diagram { source: String, light: bool },
-    Math { tex: String, display: bool, light: bool },
+    Image {
+        session: String,
+        path: String,
+    },
+    Video {
+        session: String,
+        path: String,
+        cwd: String,
+    },
+    Diagram {
+        source: String,
+        light: bool,
+    },
+    Math {
+        tex: String,
+        display: bool,
+        light: bool,
+    },
 }
 
 fn hash_of(parts: &[&str]) -> String {
@@ -236,7 +264,11 @@ impl Want {
             Want::Diagram { source, light } => {
                 format!("mmd-{}", hash_of(&[source, if *light { "l" } else { "d" }]))
             }
-            Want::Math { tex, display, light } => format!(
+            Want::Math {
+                tex,
+                display,
+                light,
+            } => format!(
                 "tex-{}",
                 hash_of(&[
                     tex,
@@ -257,9 +289,15 @@ impl Want {
 pub enum Asset {
     Pending,
     /// A picture and its size in points.
-    Picture { image: Arc<Image>, size: (f32, f32) },
+    Picture {
+        image: Arc<Image>,
+        size: (f32, f32),
+    },
     /// A video the host authorized: where it plays from, and a still when one could be made.
-    Video { path: PathBuf, poster: Option<(Arc<Image>, (f32, f32))> },
+    Video {
+        path: PathBuf,
+        poster: Option<(Arc<Image>, (f32, f32))>,
+    },
     Failed,
 }
 
@@ -299,7 +337,11 @@ pub fn take_wanted(host: usize, drawn: usize) -> Vec<(String, Want)> {
         let (mut host, mut drawn) = (host, drawn);
         let mut taken = Vec::new();
         wanted.retain(|entry| {
-            let room = if entry.1.is_drawn() { &mut drawn } else { &mut host };
+            let room = if entry.1.is_drawn() {
+                &mut drawn
+            } else {
+                &mut host
+            };
             if *room == 0 {
                 return true;
             }
@@ -369,9 +411,15 @@ mod tests {
     #[test]
     fn local_links_follow_sirus_codes_rules() {
         assert_eq!(local_media_kind("/tmp/a.png"), Some(MediaKind::Image));
-        assert_eq!(local_media_kind("shots/a.JPEG?x=1#y"), Some(MediaKind::Image));
+        assert_eq!(
+            local_media_kind("shots/a.JPEG?x=1#y"),
+            Some(MediaKind::Image)
+        );
         assert_eq!(local_media_kind("~/clip.mov"), Some(MediaKind::Video));
-        assert_eq!(local_media_kind("file:///tmp/a.webp"), Some(MediaKind::Image));
+        assert_eq!(
+            local_media_kind("file:///tmp/a.webp"),
+            Some(MediaKind::Image)
+        );
         assert_eq!(local_media_kind("https://x.com/a.png"), None);
         assert_eq!(local_media_kind("data:image/png;base64,AAAA.png"), None);
         assert_eq!(local_media_kind("/tmp/a.svg"), None);
@@ -388,12 +436,27 @@ mod tests {
     fn links_resolve_like_the_host_and_videos_stay_in_the_workspace() {
         let cwd = Path::new("/work/app");
         let home = Path::new("/Users/me");
-        assert_eq!(resolve_link(cwd, Some(home), "~/a.png"), PathBuf::from("/Users/me/a.png"));
-        assert_eq!(resolve_link(cwd, Some(home), "file:///tmp/a.png"), PathBuf::from("/tmp/a.png"));
-        assert_eq!(resolve_link(cwd, Some(home), "x/a.mp4"), PathBuf::from("/work/app/x/a.mp4"));
+        assert_eq!(
+            resolve_link(cwd, Some(home), "~/a.png"),
+            PathBuf::from("/Users/me/a.png")
+        );
+        assert_eq!(
+            resolve_link(cwd, Some(home), "file:///tmp/a.png"),
+            PathBuf::from("/tmp/a.png")
+        );
+        assert_eq!(
+            resolve_link(cwd, Some(home), "x/a.mp4"),
+            PathBuf::from("/work/app/x/a.mp4")
+        );
         assert!(lexically_within(cwd, Path::new("/work/app/x/../y/a.mp4")));
-        assert!(!lexically_within(cwd, Path::new("/work/app/../other/a.mp4")));
-        assert_eq!(video_file("/work/app", "out/a.mp4"), Some(PathBuf::from("/work/app/out/a.mp4")));
+        assert!(!lexically_within(
+            cwd,
+            Path::new("/work/app/../other/a.mp4")
+        ));
+        assert_eq!(
+            video_file("/work/app", "out/a.mp4"),
+            Some(PathBuf::from("/work/app/out/a.mp4"))
+        );
         assert_eq!(video_file("/work/app", "/tmp/a.mp4"), None);
         assert_eq!(video_file("/work/app", "../a.mp4"), None);
         assert_eq!(video_file("", "a.mp4"), None);
@@ -405,7 +468,9 @@ mod tests {
         png.extend_from_slice(&[0, 0, 1, 0, 0, 0, 0, 200]);
         assert_eq!(image_size(&png), Some((256, 200)));
         assert_eq!(image_size(b"GIF89a\x40\x01\xf0\0"), Some((320, 240)));
-        let jpeg = [0xFF, 0xD8, 0xFF, 0xE0, 0, 4, 0, 0, 0xFF, 0xC0, 0, 11, 8, 0, 100, 0, 200, 3];
+        let jpeg = [
+            0xFF, 0xD8, 0xFF, 0xE0, 0, 4, 0, 0, 0xFF, 0xC0, 0, 11, 8, 0, 100, 0, 200, 3,
+        ];
         assert_eq!(image_size(&jpeg), Some((200, 100)));
         assert_eq!(image_size(b"<svg>"), None);
         assert_eq!(fit((800., 400.), (400., 400.)), (400., 200.));
@@ -416,7 +481,9 @@ mod tests {
     fn a_fence_is_open_until_its_closing_line() {
         assert!(ends_in_open_fence("text\n```mermaid\ngraph TD"));
         assert!(!ends_in_open_fence("```mermaid\ngraph TD\n```\n"));
-        assert!(ends_in_open_fence("```mermaid\ngraph TD\n```\n\n~~~html\n<p>"));
+        assert!(ends_in_open_fence(
+            "```mermaid\ngraph TD\n```\n\n~~~html\n<p>"
+        ));
         assert!(!ends_in_open_fence("````md\n```\ninner\n```\n````"));
         assert!(ends_in_open_fence("````md\n```\ninner\n```\n"));
         assert!(!ends_in_open_fence("no fences here"));
@@ -424,25 +491,50 @@ mod tests {
 
     #[test]
     fn keys_are_stable_and_tell_requests_apart() {
-        let a = Want::Diagram { source: "graph TD".into(), light: false };
-        let b = Want::Diagram { source: "graph TD".into(), light: true };
+        let a = Want::Diagram {
+            source: "graph TD".into(),
+            light: false,
+        };
+        let b = Want::Diagram {
+            source: "graph TD".into(),
+            light: true,
+        };
         assert_eq!(a.key(), a.clone().key());
         assert_ne!(a.key(), b.key());
-        let m = |display| Want::Math { tex: "x^2".into(), display, light: false };
+        let m = |display| Want::Math {
+            tex: "x^2".into(),
+            display,
+            light: false,
+        };
         assert_ne!(m(true).key(), m(false).key());
         assert!(a.key().starts_with("mmd-") && m(true).key().starts_with("tex-"));
         assert_ne!(
-            Want::Image { session: "s".into(), path: "a.png".into() }.key(),
-            Want::Image { session: "t".into(), path: "a.png".into() }.key()
+            Want::Image {
+                session: "s".into(),
+                path: "a.png".into()
+            }
+            .key(),
+            Want::Image {
+                session: "t".into(),
+                path: "a.png".into()
+            }
+            .key()
         );
     }
 
     #[test]
     fn the_store_queues_a_request_once() {
-        let want = Want::Math { tex: "store-test".into(), display: false, light: true };
+        let want = Want::Math {
+            tex: "store-test".into(),
+            display: false,
+            light: true,
+        };
         assert!(matches!(asset(&want), Asset::Pending));
         assert!(matches!(asset(&want), Asset::Pending));
-        let queued: Vec<_> = take_wanted(10, 10).into_iter().filter(|(_, w)| *w == want).collect();
+        let queued: Vec<_> = take_wanted(10, 10)
+            .into_iter()
+            .filter(|(_, w)| *w == want)
+            .collect();
         assert_eq!(queued.len(), 1);
         finish(&want.key(), Asset::Failed);
         assert!(matches!(asset(&want), Asset::Failed));

@@ -130,13 +130,19 @@ impl Overlay {
             let config = WKWebViewConfiguration::new(mtm);
             // Nothing the page does is kept: no cookies, caches or storage.
             config.setWebsiteDataStore(&WKWebsiteDataStore::nonPersistentDataStore(mtm));
-            let partial = mtm.alloc::<Bridge>().set_ivars(BridgeIvars { events: tx.clone() });
+            let partial = mtm
+                .alloc::<Bridge>()
+                .set_ivars(BridgeIvars { events: tx.clone() });
             let bridge: Retained<Bridge> = msg_send![super(partial), init];
             config.userContentController().addScriptMessageHandler_name(
                 ProtocolObject::from_ref(&*bridge),
                 &NSString::from_str("sirus"),
             );
-            let web = WKWebView::initWithFrame_configuration(mtm.alloc::<WKWebView>(), frame_rect(), &config);
+            let web = WKWebView::initWithFrame_configuration(
+                mtm.alloc::<WKWebView>(),
+                frame_rect(),
+                &config,
+            );
             web.setNavigationDelegate(Some(ProtocolObject::from_ref(&*bridge)));
             web.setAllowsMagnification(true);
             web.setHidden(true);
@@ -168,7 +174,11 @@ impl Overlay {
         unsafe {
             let config = WKWebViewConfiguration::new(mtm);
             config.setWebsiteDataStore(&WKWebsiteDataStore::nonPersistentDataStore(mtm));
-            let web = WKWebView::initWithFrame_configuration(mtm.alloc::<WKWebView>(), frame_rect(), &config);
+            let web = WKWebView::initWithFrame_configuration(
+                mtm.alloc::<WKWebView>(),
+                frame_rect(),
+                &config,
+            );
             web.setHidden(true);
             let url = NSURL::fileURLWithPath(&NSString::from_str(file));
             let root = NSURL::fileURLWithPath(&NSString::from_str(folder));
@@ -229,7 +239,8 @@ impl Overlay {
                         let _ = sender.try_send(event);
                     }
                 });
-                let center: Retained<AnyObject> = msg_send![AnyClass::get(c"NSNotificationCenter")?, defaultCenter];
+                let center: Retained<AnyObject> =
+                    msg_send![AnyClass::get(c"NSNotificationCenter")?, defaultCenter];
                 let token: Retained<AnyObject> = msg_send![
                     &*center,
                     addObserverForName: &*NSString::from_str(name),
@@ -283,7 +294,8 @@ impl Overlay {
         if !on_top {
             parent.addSubview_positioned_relativeTo(&self.view, NSWindowOrderingMode::Above, None);
         }
-        self.view.setFrame(NSRect::new(NSPoint::new(x, y), NSSize::new(w, h)));
+        self.view
+            .setFrame(NSRect::new(NSPoint::new(x, y), NSSize::new(w, h)));
         self.set_hidden(false);
     }
 
@@ -302,9 +314,7 @@ impl Overlay {
     pub fn eval(&self, script: &str) {
         if self.kind == Kind::Web {
             let web: &WKWebView = unsafe { &*(Retained::as_ptr(&self.view) as *const WKWebView) };
-            unsafe {
-                web.evaluateJavaScript_completionHandler(&NSString::from_str(script), None)
-            };
+            unsafe { web.evaluateJavaScript_completionHandler(&NSString::from_str(script), None) };
         }
     }
 
@@ -331,7 +341,8 @@ impl Overlay {
                     _ => (self.zoom.get() - 0.1).max(0.4),
                 };
                 self.zoom.set(next);
-                let web: &WKWebView = unsafe { &*(Retained::as_ptr(&self.view) as *const WKWebView) };
+                let web: &WKWebView =
+                    unsafe { &*(Retained::as_ptr(&self.view) as *const WKWebView) };
                 unsafe { web.setPageZoom(next) };
             }
         }
@@ -343,7 +354,11 @@ impl Overlay {
             Kind::Pdf => unsafe {
                 let scale: f64 = msg_send![&*self.view, scaleFactor];
                 let fit: f64 = msg_send![&*self.view, scaleFactorForSizeToFit];
-                if fit > 0. { (scale / fit * 100.).round() as u32 } else { 100 }
+                if fit > 0. {
+                    (scale / fit * 100.).round() as u32
+                } else {
+                    100
+                }
             },
             Kind::Web => (self.zoom.get() * 100.).round() as u32,
         }
@@ -398,7 +413,10 @@ impl Drop for Overlay {
 }
 
 /// Watches keys and the ⌘ wheel while the view has the focus: GPUI's view does not get them then.
-unsafe fn install_monitor(view: &Retained<NSView>, tx: Sender<Event>) -> Option<Retained<AnyObject>> {
+unsafe fn install_monitor(
+    view: &Retained<NSView>,
+    tx: Sender<Event>,
+) -> Option<Retained<AnyObject>> {
     let target = Retained::as_ptr(view) as usize;
     let block = RcBlock::new(move |event: *mut AnyObject| -> *mut AnyObject {
         // SAFETY: the monitor is removed (Drop) before the view is released.
@@ -418,7 +436,8 @@ unsafe fn install_monitor(view: &Retained<NSView>, tx: Sender<Event>) -> Option<
         let in_focus = || unsafe {
             let responder: Option<Retained<AnyObject>> = msg_send![&*window, firstResponder];
             responder.is_some_and(|r| {
-                let is_view: bool = msg_send![&*r, isKindOfClass: AnyClass::get(c"NSView").unwrap()];
+                let is_view: bool =
+                    msg_send![&*r, isKindOfClass: AnyClass::get(c"NSView").unwrap()];
                 is_view && msg_send![&*r, isDescendantOf: view]
             })
         };
@@ -445,8 +464,14 @@ unsafe fn install_monitor(view: &Retained<NSView>, tx: Sender<Event>) -> Option<
                     Some("-") => consume(Some(Event::Zoom(-1))),
                     Some("0") => consume(Some(Event::Zoom(0))),
                     Some(key @ ("c" | "a")) => {
-                        let app = NSApplication::sharedApplication(unsafe { MainThreadMarker::new_unchecked() });
-                        let action = if key == "c" { sel!(copy:) } else { sel!(selectAll:) };
+                        let app = NSApplication::sharedApplication(unsafe {
+                            MainThreadMarker::new_unchecked()
+                        });
+                        let action = if key == "c" {
+                            sel!(copy:)
+                        } else {
+                            sel!(selectAll:)
+                        };
                         let _: bool = unsafe {
                             msg_send![&*app, sendAction: action, to: std::ptr::null::<AnyObject>(), from: std::ptr::null::<AnyObject>()]
                         };

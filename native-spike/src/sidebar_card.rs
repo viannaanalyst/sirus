@@ -32,12 +32,9 @@ impl Place {
     /// An invisible child that records the row's bounds on paint.
     pub(crate) fn probe(&self) -> impl IntoElement {
         let cell = self.0.clone();
-        canvas(
-            |_, _, _| {},
-            move |bounds, _, _, _| cell.set(Some(bounds)),
-        )
-        .absolute()
-        .size_full()
+        canvas(|_, _, _| {}, move |bounds, _, _, _| cell.set(Some(bounds)))
+            .absolute()
+            .size_full()
     }
 
     pub(crate) fn get(&self) -> Option<Bounds<Pixels>> {
@@ -218,7 +215,9 @@ impl Shell {
         let (viewport_width, viewport_height) = (self.viewport_width, self.viewport_height);
         let right = f32::from(open.row.right());
         let card_left = (right + GAP).min(viewport_width - WIDTH - 8.).max(8.);
-        let top = f32::from(open.row.top()).min(viewport_height - HEIGHT - 8.).max(8.);
+        let top = f32::from(open.row.top())
+            .min(viewport_height - HEIGHT - 8.)
+            .max(8.);
         let turn = conversation.turns.last();
         let model = conversation
             .model

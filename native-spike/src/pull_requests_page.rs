@@ -11,7 +11,6 @@ use crate::motion::{Curve, Tween};
 use crate::panel_changes::{age, diff_line, note};
 use crate::panel_files::{TextField, TextFieldEvent};
 use crate::theme::{RADIUS_MD, RADIUS_SM, accent, content, diff_colors, icon, on_accent};
-use std::time::Instant;
 use gpui::{
     AnyElement, App, Context, Div, ElementId, Entity, EventEmitter, FontWeight, Render,
     SharedString, Stateful, Subscription, Window, div, prelude::*, px, rgb, uniform_list,
@@ -19,6 +18,7 @@ use gpui::{
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::time::Instant;
 
 // ---------------------------------------------------------------------------------------------
 // Data
@@ -1290,7 +1290,12 @@ impl PullRequestsPage {
             .into_any_element()
     }
 
-    fn list_column(&mut self, now: Instant, moving: &mut bool, cx: &mut Context<Self>) -> AnyElement {
+    fn list_column(
+        &mut self,
+        now: Instant,
+        moving: &mut bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let inbox = self.inbox().cloned();
         let items = match &inbox {
             Some(inbox) => self.visible(inbox, cx),
@@ -1318,7 +1323,10 @@ impl PullRequestsPage {
             }
             let query = self.query.read(cx).text().to_owned();
             if repositories.is_empty() {
-                body.push(note(t("Este projeto não tem um repositório no GitHub."), false));
+                body.push(note(
+                    t("Este projeto não tem um repositório no GitHub."),
+                    false,
+                ));
             } else if foreign_reference(inbox, self.project.as_deref(), &query).is_some() {
                 body.push(note(
                     t("Este link é de outro repositório. Abra-o no projeto dele."),

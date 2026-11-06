@@ -60,7 +60,10 @@ impl Member {
         let id = item["id"].as_str().unwrap_or("");
         let steps = item["steps"].as_array();
         let tools = match item["workflow"]["agents"].as_array() {
-            Some(agents) => agents.iter().map(|a| a["toolCalls"].as_u64().unwrap_or(0) as usize).sum(),
+            Some(agents) => agents
+                .iter()
+                .map(|a| a["toolCalls"].as_u64().unwrap_or(0) as usize)
+                .sum(),
             None => steps.map_or(0, Vec::len) + item["hiddenSteps"].as_u64().unwrap_or(0) as usize,
         };
         let step = steps
@@ -189,7 +192,10 @@ pub struct Progress {
 }
 
 pub fn progress(members: &[Member]) -> Progress {
-    let mut out = Progress { total: members.len(), ..Progress::default() };
+    let mut out = Progress {
+        total: members.len(),
+        ..Progress::default()
+    };
     for member in members {
         match member.status {
             Status::Running => {
@@ -212,7 +218,9 @@ fn plain_line(line: &str) -> String {
     let line = line.trim_start_matches('#');
     let line = line.trim_start();
     let line = match line.chars().next() {
-        Some('-' | '*' | '>') if line[1..].starts_with(char::is_whitespace) => line[1..].trim_start(),
+        Some('-' | '*' | '>') if line[1..].starts_with(char::is_whitespace) => {
+            line[1..].trim_start()
+        }
         _ => line,
     };
     let mut out = String::with_capacity(line.len());
@@ -296,7 +304,10 @@ mod tests {
     #[test]
     fn back_to_back_launches_are_one_phase() {
         let mut p = Phaser::default();
-        assert_eq!([p.member(Some(10)), p.member(Some(10)), p.member(None)], [1, 1, 1]);
+        assert_eq!(
+            [p.member(Some(10)), p.member(Some(10)), p.member(None)],
+            [1, 1, 1]
+        );
     }
 
     #[test]
@@ -313,7 +324,10 @@ mod tests {
 
     #[test]
     fn runs_of_a_phase_are_ranges() {
-        let members: Vec<Member> = [1, 1, 2, 3, 3].iter().map(|n| member(*n, Status::Running)).collect();
+        let members: Vec<Member> = [1, 1, 2, 3, 3]
+            .iter()
+            .map(|n| member(*n, Status::Running))
+            .collect();
         assert_eq!(phases(&members), vec![0..2, 2..3, 3..5]);
         assert!(phases(&[]).is_empty());
     }
@@ -332,7 +346,13 @@ mod tests {
         ];
         assert_eq!(
             progress(&members),
-            Progress { done: 4, total: 6, running: 2, failed: 1, background: 1 }
+            Progress {
+                done: 4,
+                total: 6,
+                running: 2,
+                failed: 1,
+                background: 1
+            }
         );
     }
 
@@ -374,25 +394,39 @@ mod tests {
             ]
         });
         let m = Member::from_item(&item, 2);
-        assert_eq!((m.task.as_str(), m.key.as_str(), m.label.as_str()), ("t1", "toolu_9", "Review"));
-        assert_eq!((m.tools, m.step.as_str(), m.phase), (5, "Running cargo test", 2));
+        assert_eq!(
+            (m.task.as_str(), m.key.as_str(), m.label.as_str()),
+            ("t1", "toolu_9", "Review")
+        );
+        assert_eq!(
+            (m.tools, m.step.as_str(), m.phase),
+            (5, "Running cargo test", 2)
+        );
         assert!(m.running() && m.background);
         // Without steps it has no current step; the key falls back to the row id.
         let bare = Member::from_item(&json!({ "id": "agent:t2", "state": "completed" }), 1);
         assert_eq!(bare.backgroundable(), None);
-        assert_eq!((bare.step.as_str(), bare.key.as_str(), bare.tools), ("", "agent:t2", 0));
+        assert_eq!(
+            (bare.step.as_str(), bare.key.as_str(), bare.tools),
+            ("", "agent:t2", 0)
+        );
     }
 
     #[test]
     fn only_a_running_foreground_subagent_with_a_source_can_go_to_the_background() {
         let item = |extra: Value| {
             let mut base = json!({ "id": "agent:a", "source": "toolu_1", "state": "running" });
-            base.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            base.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
             Member::from_item(&base, 1)
         };
         assert_eq!(item(json!({})).backgroundable(), Some("toolu_1"));
         assert_eq!(item(json!({ "background": true })).backgroundable(), None);
-        assert_eq!(item(json!({ "workflow": { "agents": [] } })).backgroundable(), None);
+        assert_eq!(
+            item(json!({ "workflow": { "agents": [] } })).backgroundable(),
+            None
+        );
         assert_eq!(item(json!({ "state": "completed" })).backgroundable(), None);
         assert_eq!(item(json!({ "source": "" })).backgroundable(), None);
     }
@@ -405,8 +439,14 @@ mod tests {
 
     #[test]
     fn the_headline_is_the_plan_title_else_the_prompt() {
-        assert_eq!(headline("do it", "Intro\n## The **plan**\nmore"), "The plan");
-        assert_eq!(headline("- [fix](http://x) the _build_\nsecond", ""), "fix the build");
+        assert_eq!(
+            headline("do it", "Intro\n## The **plan**\nmore"),
+            "The plan"
+        );
+        assert_eq!(
+            headline("- [fix](http://x) the _build_\nsecond", ""),
+            "fix the build"
+        );
         assert_eq!(headline("\n\n  ", ""), "");
         // A heading deeper than three levels is not a plan title.
         assert_eq!(headline("ask", "#### deep"), "ask");

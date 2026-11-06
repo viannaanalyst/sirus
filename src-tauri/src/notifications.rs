@@ -127,6 +127,10 @@ pub struct Notice {
     /// has none and opens the Pull requests page.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pull: Option<String>,
+    /// What the in-app card shows under the title: the command or question awaiting an
+    /// answer, the start of the final answer or the error.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 #[derive(Default)]
@@ -365,6 +369,7 @@ pub fn announce(app: &AppHandle, state: &Arc<AppState>, title: String, body: Str
     };
     let notice = Notice {
         pull: None,
+        detail: None,
         created_at: chrono::Utc::now().timestamp_millis(),
         id: uuid::Uuid::new_v4().to_string(),
         session_id: String::new(),
@@ -432,6 +437,7 @@ pub fn remind(app: &AppHandle, state: &Arc<AppState>, session_id: &str) {
         let portuguese = data.settings.locale == "pt-BR";
         let notice = Notice {
             pull: None,
+            detail: None,
             created_at: chrono::Utc::now().timestamp_millis(),
             id: key,
             session_id: id.clone(),
@@ -555,6 +561,7 @@ pub fn publish(app: &AppHandle, state: &Arc<AppState>, snapshot: &Session) {
             }
             let notice = Notice {
                 pull: None,
+                detail: details.get(&key).cloned().flatten(),
                 created_at: chrono::Utc::now().timestamp_millis(),
                 id: key,
                 session_id: id.clone(),
@@ -711,6 +718,7 @@ fn announce_pulls(
                 title,
                 body,
                 pull: Some(alert.key.clone()),
+                detail: None,
             }
         })
         .collect();
@@ -724,6 +732,7 @@ fn announce_pulls(
             title,
             body,
             pull: None,
+            detail: None,
         });
     }
     for notice in notices {
@@ -885,6 +894,7 @@ pub async fn notification_action(
             let portuguese = settings.locale == "pt-BR";
             let notice = Notice {
                 pull: None,
+                detail: None,
                 created_at: chrono::Utc::now().timestamp_millis(),
                 id: uuid::Uuid::new_v4().to_string(),
                 session_id: String::new(),
@@ -1081,6 +1091,7 @@ mod tests {
         data.sessions.push(session);
         let notice = Notice {
             pull: None,
+            detail: None,
             id,
             kind,
             session_id: "session".into(),
@@ -1130,6 +1141,7 @@ mod tests {
         data.sessions.push(session);
         let notice = Notice {
             pull: None,
+            detail: None,
             id,
             kind: Kind::Reminder,
             session_id: "session".into(),
@@ -1256,6 +1268,7 @@ mod tests {
             title: "t".into(),
             body: "b".into(),
             pull: Some("owner/repo#1".into()),
+            detail: None,
         };
         assert!(current_notice(&data, &notice, false));
         assert!(!current_notice(&data, &notice, true));

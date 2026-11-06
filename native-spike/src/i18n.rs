@@ -112,10 +112,15 @@ const ENTRIES: &[(&str, &str)] = &[
         "\"{}\" tem mudanças não mantidas em {} nesta pasta. Mantenha ou desfaça nessa sessão primeiro.",
         "\"{}\" has unkept changes to {} in this folder. Keep or undo them in that session first.",
     ),
-    ("\"{}\" é encerrado. A conversa continua.", "\"{}\" is ended. The conversation goes on."),
+    (
+        "\"{}\" é encerrado. A conversa continua.",
+        "\"{}\" is ended. The conversation goes on.",
+    ),
     ("%d/%m/%Y", "%m/%d/%Y"),
     ("%d/%m/%Y %H:%M", "%m/%d/%Y %H:%M"),
     ("(vazio)", "(empty)"),
+    ("+{} aviso", "+{} notice"),
+    ("+{} avisos", "+{} notices"),
     ("1 agente", "1 agent"),
     ("1 anexo", "1 attachment"),
     ("1 arquivo", "1 file"),
@@ -147,7 +152,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "A cada 5 minutos, avança o checkout do projeto quando ele está no branch padrão do origin, sem mudanças locais e sem conversa rodando nele. Nunca faz merge, rebase nem mexe numa árvore com mudanças.",
         "Every 5 minutes, fast-forwards the project checkout when it is on origin's default branch with no local changes and no conversation running in it. It never merges, rebases or touches a tree with changes.",
     ),
-    ("A conexão com o computador caiu.", "The connection to the computer dropped."),
+    (
+        "A conexão com o computador caiu.",
+        "The connection to the computer dropped.",
+    ),
     (
         "A conexão com o motor caiu: {}",
         "The connection to the engine dropped: {}",
@@ -178,7 +186,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "A lista está incompleta: há mais arquivos do que o limite.",
         "The list is incomplete: there are more files than the limit.",
     ),
-    ("A mesclagem não está disponível agora.", "Merging is not available right now."),
+    (
+        "A mesclagem não está disponível agora.",
+        "Merging is not available right now.",
+    ),
     (
         "A mesclagem usa \"{}\" e entra em {}. Isso muda o repositório no GitHub.",
         "The merge uses \"{}\" and lands in {}. This changes the repository on GitHub.",
@@ -236,7 +247,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Abrir Simulador", "Open Simulator"),
     ("Abrir Terminal", "Open Terminal"),
     ("Abrir Uso", "Open Usage"),
-    ("Abrir a prévia quando responder", "Open the preview when it answers"),
+    (
+        "Abrir a prévia quando responder",
+        "Open the preview when it answers",
+    ),
     ("Abrir ao lado", "Open to the side"),
     ("Abrir como rascunho", "Open as draft"),
     (
@@ -293,7 +307,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "Adicione pastas com SKILL.md aqui. Skills invocadas funcionam entre provedores; a cópia do próprio provedor tem prioridade.",
         "Add folders with SKILL.md here. Invoked skills work across providers; the provider's own copy takes priority.",
     ),
-    ("Adicione um projeto para abrir links de prompt.", "Add a project to open prompt links."),
+    (
+        "Adicione um projeto para abrir links de prompt.",
+        "Add a project to open prompt links.",
+    ),
     (
         "Adicione uma pasta com SKILL.md no diretório acima ou na pasta de skills de um provedor e atualize.",
         "Add a folder with SKILL.md to the directory above or to a provider's skills folder, then refresh.",
@@ -368,8 +385,14 @@ const ENTRIES: &[(&str, &str)] = &[
         "Arquivo binário: não dá para mostrar o conteúdo aqui.",
         "Binary file: its content cannot be shown here.",
     ),
-    ("Arquivo binário: prévia textual indisponível.", "Binary file: no textual preview available."),
-    ("Arquivo grande demais para editar: somente leitura.", "File too large to edit: read-only."),
+    (
+        "Arquivo binário: prévia textual indisponível.",
+        "Binary file: no textual preview available.",
+    ),
+    (
+        "Arquivo grande demais para editar: somente leitura.",
+        "File too large to edit: read-only.",
+    ),
     ("Arquivo vazio.", "Empty file."),
     ("Arquivos", "Files"),
     ("Arquivos ({})", "Files ({})"),
@@ -379,8 +402,14 @@ const ENTRIES: &[(&str, &str)] = &[
         "Arraste para escolher a sua cor.",
         "Drag to pick your color.",
     ),
-    ("As opções desta página voltam ao padrão do app.", "This page's options go back to the app's defaults."),
-    ("As regras do repositório impedem a mesclagem.", "The repository rules block the merge."),
+    (
+        "As opções desta página voltam ao padrão do app.",
+        "This page's options go back to the app's defaults.",
+    ),
+    (
+        "As regras do repositório impedem a mesclagem.",
+        "The repository rules block the merge.",
+    ),
     ("Atalho", "Shortcut"),
     ("Atalho global de captura", "Global snap shortcut"),
     ("Atalhos", "Keybindings"),
@@ -473,7 +502,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Buscar modelos...", "Search models..."),
     ("Buscar nesta conversa", "Find in conversation"),
     ("Buscar ou criar worktree…", "Search or create worktree…"),
-    ("Buscar por título, repositório, autor ou #", "Search by title, repository, author or #"),
+    (
+        "Buscar por título, repositório, autor ou #",
+        "Search by title, repository, author or #",
+    ),
     ("Buscar projetos…", "Search projects…"),
     ("Buscar skills", "Search skills"),
     (
@@ -496,7 +528,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Cada script tem até 8 KiB.", "Each script is up to 8 KiB."),
     ("Caminho", "Path"),
-    ("Caminho do executável. Vazio usa o detectado.", "Executable path. Empty uses the detected one."),
+    (
+        "Caminho do executável. Vazio usa o detectado.",
+        "Executable path. Empty uses the detected one.",
+    ),
     ("Cancelar", "Cancel"),
     ("Cancelar geração do título", "Cancel title generation"),
     ("Captura", "Screenshot"),
@@ -705,7 +740,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "Deixe o Codex, o Claude Code e o OpenCode verem e usarem apps do Mac que você aprovar, em segundo plano.",
         "Let Codex, Claude Code and OpenCode see and use Mac apps you approve, in the background.",
     ),
-    ("Deixe vazio para manter a senha salva", "Leave empty to keep the saved password"),
+    (
+        "Deixe vazio para manter a senha salva",
+        "Leave empty to keep the saved password",
+    ),
     (
         "Deixe vazio para manter o token salvo.",
         "Leave empty to keep the saved token.",
@@ -729,7 +767,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Descrição (opcional)", "Description (optional)"),
     ("Desfazer", "Undo"),
     ("Desfazer alterações", "Undo changes"),
-    ("Desfazer as mudanças deste turno?", "Undo this turn's changes?"),
+    (
+        "Desfazer as mudanças deste turno?",
+        "Undo this turn's changes?",
+    ),
     ("Designs e materiais da marca", "Designs and brand assets"),
     (
         "Designs, componentes e variáveis",
@@ -759,12 +800,18 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Diretório automático", "Automatic directory"),
     ("Diretório de trabalho", "Working directory behavior"),
     ("Diretório personalizado", "Custom directory"),
-    ("Disponível só neste Mac: esta janela está em outro computador.", "Only available on this Mac: this window is on another computer."),
+    (
+        "Disponível só neste Mac: esta janela está em outro computador.",
+        "Only available on this Mac: this window is on another computer.",
+    ),
     (
         "Distingue duas contas do mesmo serviço, como “Conta Gabriel” e “Conta Moreira”. Os agentes não veem o rótulo.",
         "Tells two accounts of the same service apart, like “Work” and “Personal”. Agents do not see the label.",
     ),
-    ("Divergiu: {} local e {} do remoto. Faça merge ou rebase à mão.", "Diverged: {} local and {} remote commits. Merge or rebase by hand."),
+    (
+        "Divergiu: {} local e {} do remoto. Faça merge ou rebase à mão.",
+        "Diverged: {} local and {} remote commits. Merge or rebase by hand.",
+    ),
     ("Do tema", "From theme"),
     (
         "Documentação atualizada de bibliotecas",
@@ -781,7 +828,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Efeito de luz nos botões", "Cursor-reactive button effects"),
     ("Efeito do fundo", "Background effect"),
     ("Efeitos e movimento", "Effects and motion"),
-    ("Ele cita um provedor que o Sirus não tem.", "It names a provider Sirus does not have."),
+    (
+        "Ele cita um provedor que o Sirus não tem.",
+        "It names a provider Sirus does not have.",
+    ),
     (
         "Ele deixa de poder ser mesclado até ficar pronto de novo.",
         "It cannot be merged until it is ready again.",
@@ -796,8 +846,14 @@ const ENTRIES: &[(&str, &str)] = &[
         "Ele sai da lista de abertos. Dá para reabrir depois.",
         "It leaves the open list. You can reopen it later.",
     ),
-    ("Ele tem um parâmetro que o Sirus não conhece.", "It has a parameter Sirus does not know."),
-    ("Ele volta para a lista de abertos.", "It goes back to the open list."),
+    (
+        "Ele tem um parâmetro que o Sirus não conhece.",
+        "It has a parameter Sirus does not know.",
+    ),
+    (
+        "Ele volta para a lista de abertos.",
+        "It goes back to the open list.",
+    ),
     (
         "Em Supabase → Project Settings → General. Deixe vazio para o agente ver todos os projetos da conta.",
         "In Supabase → Project Settings → General. Leave empty to let the agent see every project of the account.",
@@ -814,8 +870,14 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Em uso", "In use"),
     ("Embaixo", "Bottom"),
-    ("Embaixo, no painel lateral ou como abas na barra de título. ⌘J abre um terminal e ⇧⌘J divide à direita.", "At the bottom, in the side panel or as tabs in the title bar. ⌘J opens a terminal and ⇧⌘J splits to the right."),
-    ("Encontramos estes no seu Mac. Um já basta para começar.", "We found these on your Mac. One is enough to get started."),
+    (
+        "Embaixo, no painel lateral ou como abas na barra de título. ⌘J abre um terminal e ⇧⌘J divide à direita.",
+        "At the bottom, in the side panel or as tabs in the title bar. ⌘J opens a terminal and ⇧⌘J splits to the right.",
+    ),
+    (
+        "Encontramos estes no seu Mac. Um já basta para começar.",
+        "We found these on your Mac. One is enough to get started.",
+    ),
     (
         "Encontrar, adicionar e concluir tarefas",
         "Find, add and complete tasks",
@@ -834,7 +896,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Enter durante o ditado", "Enter while dictating"),
     ("Entrada", "Input"),
     ("Entrada em cache", "Cached input"),
-    ("Entrada indisponível por enquanto.", "Input is not available yet."),
+    (
+        "Entrada indisponível por enquanto.",
+        "Input is not available yet.",
+    ),
     ("Entrada sem cache", "Uncached input"),
     ("Entrar", "Sign in"),
     ("Entrar de novo", "Sign in again"),
@@ -842,12 +907,18 @@ const ENTRIES: &[(&str, &str)] = &[
         "Entrar só pelo app Mac: o login abre o navegador.",
         "Sign-in is only available in the Mac app: it opens the browser.",
     ),
-    ("Entre no GitHub CLI em Configurações → Git.", "Sign in to the GitHub CLI in Settings → Git."),
+    (
+        "Entre no GitHub CLI em Configurações → Git.",
+        "Sign in to the GitHub CLI in Settings → Git.",
+    ),
     (
         "Envia este branch e abre o pull request para o branch padrão.",
         "Pushes this branch, then opens the pull request into the default branch.",
     ),
-    ("Enviada: lida no próximo passo", "Sent: read at its next step"),
+    (
+        "Enviada: lida no próximo passo",
+        "Sent: read at its next step",
+    ),
     ("Enviado", "Sent"),
     ("Enviado {}", "Pushed {}"),
     ("Enviado.", "Pushed."),
@@ -864,7 +935,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "Envie /compact sozinho, sem anexos e sem os modos equipe ou depuração.",
         "Send /compact on its own, without attachments, team or debug mode.",
     ),
-    ("Envie este turno a outro agente para revisar o trabalho. Abre em outra aba e só aponta problemas.", "Send this turn to another agent to review the work. It opens in another tab and only reports problems."),
+    (
+        "Envie este turno a outro agente para revisar o trabalho. Abre em outra aba e só aponta problemas.",
+        "Send this turn to another agent to review the work. It opens in another tab and only reports problems.",
+    ),
     ("Equipe", "Team"),
     ("Esc fechar", "Esc close"),
     (
@@ -911,7 +985,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "Escreva um pedido dentro do limite de 64 KiB, incluindo os anexos.",
         "Enter a request within the 64 KiB limit, including attachments.",
     ),
-    ("Escreva um prompt no composer e depois copie o link.", "Write a prompt in the composer, then copy its link."),
+    (
+        "Escreva um prompt no composer e depois copie o link.",
+        "Write a prompt in the composer, then copy its link.",
+    ),
     ("Escrita de cache", "Cache write"),
     ("Escuro", "Dark"),
     ("Esforço e velocidade", "Effort and speed"),
@@ -921,20 +998,32 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Espaçosa", "Spacious"),
     ("Esperando o primeiro passo…", "Waiting for its first step…"),
-    ("Espere o turno atual terminar", "Wait for the current turn to finish"),
+    (
+        "Espere o turno atual terminar",
+        "Wait for the current turn to finish",
+    ),
     ("Esperou a página", "Waited for the page"),
     (
         "Essa conta do GitHub não está conectada.",
         "That GitHub account is not signed in.",
     ),
-    ("Esse computador não reconhece mais este Mac.", "That computer no longer recognises this Mac."),
-    ("Esse computador perdeu o pareamento: pareie de novo.", "This computer lost its pairing: pair it again."),
+    (
+        "Esse computador não reconhece mais este Mac.",
+        "That computer no longer recognises this Mac.",
+    ),
+    (
+        "Esse computador perdeu o pareamento: pareie de novo.",
+        "This computer lost its pairing: pair it again.",
+    ),
     ("Esta parte entra em seguida.", "This part comes next."),
     (
         "Esta pasta não é um repositório Git.",
         "This folder is not a Git repository.",
     ),
-    ("Esta página está numa janela flutuante.", "This page is in a floating window."),
+    (
+        "Esta página está numa janela flutuante.",
+        "This page is in a floating window.",
+    ),
     ("Estado atualizado.", "Status updated."),
     ("Este Mac", "This Mac"),
     (
@@ -958,14 +1047,26 @@ const ENTRIES: &[(&str, &str)] = &[
         "Este documento não tem conteúdo legível.",
         "This document has no readable content.",
     ),
-    ("Este link de prompt não foi aberto.", "This prompt link was not opened."),
-    ("Este link é de outro repositório. Abra-o no projeto dele.", "This link belongs to another repository. Open it in its own project."),
+    (
+        "Este link de prompt não foi aberto.",
+        "This prompt link was not opened.",
+    ),
+    (
+        "Este link é de outro repositório. Abra-o no projeto dele.",
+        "This link belongs to another repository. Open it in its own project.",
+    ),
     (
         "Este pedido já tentou iniciar. Para mudar o texto, cancele e adicione outro pedido.",
         "This request already attempted to start. To change its text, cancel it and add another request.",
     ),
-    ("Este projeto não tem um remote do GitHub (origin): publique-o no GitHub antes de mover.", "This project has no GitHub remote (origin): publish it to GitHub before moving."),
-    ("Este projeto não tem um repositório no GitHub.", "This project has no GitHub repository."),
+    (
+        "Este projeto não tem um remote do GitHub (origin): publique-o no GitHub antes de mover.",
+        "This project has no GitHub remote (origin): publish it to GitHub before moving.",
+    ),
+    (
+        "Este projeto não tem um repositório no GitHub.",
+        "This project has no GitHub repository.",
+    ),
     (
         "Este provedor não informa uso.",
         "This provider does not report usage.",
@@ -1061,7 +1162,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Gerando um código…", "Making a code…"),
     ("Gerar código", "Generate code"),
     ("Gerar título do commit", "Generate commit title"),
-    ("Geração do título cancelada.", "Title generation cancelled."),
+    (
+        "Geração do título cancelada.",
+        "Title generation cancelled.",
+    ),
     (
         "Gerenciadores de senha, segurança do sistema, terminais e ferramentas de automação nunca podem ser controlados.",
         "Password managers, system security, terminals and automation tools can never be controlled.",
@@ -1070,24 +1174,42 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Girar", "Rotate"),
     ("Git detectado", "Git detected"),
     ("Gravação de Tela", "Screen Recording"),
-    ("Gravação salva em Filmes › Sirus", "Recording saved in Movies › Sirus"),
+    (
+        "Gravação salva em Filmes › Sirus",
+        "Recording saved in Movies › Sirus",
+    ),
     ("Gravações do navegador", "Browser recordings"),
     ("Histórico · {}", "History · {}"),
     ("Hoje", "Today"),
-    ("Hoje: {}% de {}% disponíveis", "Today: {}% of {}% available"),
+    (
+        "Hoje: {}% de {}% disponíveis",
+        "Today: {}% of {}% available",
+    ),
     ("Hora de renovar já passou", "Renewal time has passed"),
     (
         "Há agentes trabalhando. Reiniciar interrompe todos. As conversas e as mensagens ficam salvas, e a atualização também vale na próxima vez que você abrir o Sirus.",
         "Agents are working. Restarting interrupts all of them. Conversations and messages are kept, and the update also applies the next time you open Sirus.",
     ),
-    ("Há comandos rodando em: {}. Fechar encerra esses shells e o que estiver rodando neles.", "Commands are running in: {}. Closing ends these shells and whatever runs in them."),
-    ("Há conflitos com o branch base.", "There are conflicts with the base branch."),
+    (
+        "Há comandos rodando em: {}. Fechar encerra esses shells e o que estiver rodando neles.",
+        "Commands are running in: {}. Closing ends these shells and whatever runs in them.",
+    ),
+    (
+        "Há conflitos com o branch base.",
+        "There are conflicts with the base branch.",
+    ),
     (
         "Há conflitos: resolva-os antes de preparar.",
         "There are conflicts: resolve them before staging.",
     ),
-    ("Há mais arquivos do que os listados.", "There are more files than listed."),
-    ("Há um comando rodando em \"{}\". Fechar encerra o shell e o que estiver rodando nele.", "A command is running in \"{}\". Closing ends the shell and whatever runs in it."),
+    (
+        "Há mais arquivos do que os listados.",
+        "There are more files than listed.",
+    ),
+    (
+        "Há um comando rodando em \"{}\". Fechar encerra o shell e o que estiver rodando nele.",
+        "A command is running in \"{}\". Closing ends the shell and whatever runs in it.",
+    ),
     ("Idioma", "Language"),
     ("Ignorado", "Skipped"),
     ("Imagem atual", "Current image"),
@@ -1095,7 +1217,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Indisponível", "Unavailable"),
     ("Informado pelo provedor", "Reported by the provider"),
     ("Informar", "Provide"),
-    ("Informe um site, um usuário e uma senha.", "Enter a site, a username and a password."),
+    (
+        "Informe um site, um usuário e uma senha.",
+        "Enter a site, a username and a password.",
+    ),
     ("Inicialização", "Startup"),
     ("Iniciando", "Starting"),
     ("Iniciando o Simulador…", "Starting the Simulator…"),
@@ -1109,13 +1234,19 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Iniciou", "Started"),
     ("Inspetor da web", "Web Inspector"),
-    ("Instala {} {} (MIT) com o seu npm, cerca de 40 MB. Nada é baixado antes de você pedir.", "Installs {} {} (MIT) with your npm, about 40 MB. Nothing is downloaded until you ask."),
+    (
+        "Instala {} {} (MIT) com o seu npm, cerca de 40 MB. Nada é baixado antes de você pedir.",
+        "Installs {} {} (MIT) with your npm, about 40 MB. Nothing is downloaded until you ask.",
+    ),
     ("Instalado", "Installed"),
     ("Instalado · {}", "Installed · {}"),
     ("Instalados, desligados {}", "Installed, off {}"),
     ("Instalando…", "Installing…"),
     ("Instalar", "Install"),
-    ("Instalar as ferramentas do aparelho", "Install the device tools"),
+    (
+        "Instalar as ferramentas do aparelho",
+        "Install the device tools",
+    ),
     ("Instalação", "Installation"),
     (
         "Instale a Tailscale neste Mac e no celular e entre com a mesma conta. É grátis para uso pessoal.",
@@ -1125,9 +1256,18 @@ const ENTRIES: &[(&str, &str)] = &[
         "Instale o GitHub CLI (gh) para listar pull requests.",
         "Install the GitHub CLI (gh) to list pull requests.",
     ),
-    ("Instale o Node.js {} ou mais novo, com npm, e verifique de novo.", "Install Node.js {} or newer, with npm, and check again."),
-    ("Instale o Xcode com um runtime de iOS e verifique de novo.", "Install Xcode with an iOS runtime and check again."),
-    ("Instale outro provedor para fazer o handoff", "Install another provider to hand off"),
+    (
+        "Instale o Node.js {} ou mais novo, com npm, e verifique de novo.",
+        "Install Node.js {} or newer, with npm, and check again.",
+    ),
+    (
+        "Instale o Xcode com um runtime de iOS e verifique de novo.",
+        "Install Xcode with an iOS runtime and check again.",
+    ),
+    (
+        "Instale outro provedor para fazer o handoff",
+        "Install another provider to hand off",
+    ),
     ("Instruir", "Steer"),
     ("Instruir agora", "Send now"),
     (
@@ -1148,14 +1288,23 @@ const ENTRIES: &[(&str, &str)] = &[
         "Issues, pull requests e repositórios (token)",
         "Issues, pull requests and repositories (token)",
     ),
-    ("Já existe um branch com esse nome.", "A branch with this name already exists."),
+    (
+        "Já existe um branch com esse nome.",
+        "A branch with this name already exists.",
+    ),
     ("Já usado por {}", "Already used by {}"),
-    ("Leia antes de enviar. Nada foi enviado.", "Read it before you send. Nothing was sent."),
+    (
+        "Leia antes de enviar. Nada foi enviado.",
+        "Read it before you send. Nothing was sent.",
+    ),
     (
         "Leia com a câmera do iPhone ou digite o código no app do Sirus.",
         "Scan with the iPhone camera, or type the code in the Sirus app.",
     ),
-    ("Leia o QR ou digite o código", "Scan the QR or type the code"),
+    (
+        "Leia o QR ou digite o código",
+        "Scan the QR or type the code",
+    ),
     ("Leitura de cache", "Cache read"),
     ("Lendo o histórico…", "Reading the history…"),
     ("Lendo o que ele fez…", "Reading what it did…"),
@@ -1203,7 +1352,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Link copiado", "Link copied"),
     ("Link copiado.", "Link copied."),
-    ("Link do prompt copiado. Quem abrir recebe o prompt como rascunho; nada é enviado.", "Prompt link copied. Whoever opens it gets the prompt as a draft; nothing is sent."),
+    (
+        "Link do prompt copiado. Quem abrir recebe o prompt como rascunho; nada é enviado.",
+        "Prompt link copied. Whoever opens it gets the prompt as a draft; nothing is sent.",
+    ),
     (
         "Lista as sessões em que um agente está trabalhando ao lado do campo de mensagem, quando duas ou mais rodam ao mesmo tempo.",
         "Lists the sessions an agent is working on beside the composer, once two or more run at the same time.",
@@ -1223,7 +1375,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Mais ações", "More actions"),
     ("Mais escura ou mais clara.", "Darker or lighter."),
     ("Mais {} não exibidos", "{} more not shown"),
-    ("Mantenha no máximo 10 perfis personalizados.", "Keep at most 10 custom profiles."),
+    (
+        "Mantenha no máximo 10 perfis personalizados.",
+        "Keep at most 10 custom profiles.",
+    ),
     (
         "Mantenha no máximo 20 anexos. Remova um antes de adicionar mais.",
         "Keep at most 20 attachments. Remove one before adding more.",
@@ -1238,7 +1393,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "Keeps the chosen font saved for when this option is off.",
     ),
     ("Marcar como pronto", "Mark as ready"),
-    ("Marcar {} como pronto para revisão?", "Mark {} as ready for review?"),
+    (
+        "Marcar {} como pronto para revisão?",
+        "Mark {} as ready for review?",
+    ),
     ("Mascote", "Mascot"),
     ("Materiais", "Materials"),
     ("Matiz da cor", "Color hue"),
@@ -1257,7 +1415,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Mesclar", "Merge"),
     ("Mesclar {}?", "Merge {}?"),
     ("Meta", "Goal"),
-    ("Mexa o mouse e clique no fundo", "Move the mouse and click the background"),
+    (
+        "Mexa o mouse e clique no fundo",
+        "Move the mouse and click the background",
+    ),
     ("Modelo", "Model"),
     ("Modelos do Cursor", "Cursor models"),
     ("Modelos, datasets e Spaces", "Models, datasets and Spaces"),
@@ -1267,7 +1428,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "Mostra as conversas do projeto como abas no topo da janela. Desligado, a barra mostra só a conversa atual.",
         "Show the project's conversations as tabs at the top of the window. Off, the title bar shows only the current conversation.",
     ),
-    ("Mostra de novo a primeira entrada: seus agentes, um projeto e o visual do Sirus.", "Shows the first-run welcome again: your agents, a project and how Sirus looks."),
+    (
+        "Mostra de novo a primeira entrada: seus agentes, um projeto e o visual do Sirus.",
+        "Shows the first-run welcome again: your agents, a project and how Sirus looks.",
+    ),
     (
         "Mostra um anel de consumo de até dois provedores no rodapé da barra lateral.",
         "Show a usage ring for up to two providers at the bottom of the sidebar.",
@@ -1304,7 +1468,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Movendo a conversa…", "Moving the conversation…"),
     ("Mover", "Move"),
     ("Mover \"{}\" para {}?", "Move \"{}\" to {}?"),
-    ("Mover a pasta “{}” para a Lixeira?", "Move the folder “{}” to the Trash?"),
+    (
+        "Mover a pasta “{}” para a Lixeira?",
+        "Move the folder “{}” to the Trash?",
+    ),
     ("Mover para a Lixeira", "Move to Trash"),
     ("Mover para {}", "Move to {}"),
     ("Mover “{}” para a Lixeira?", "Move “{}” to the Trash?"),
@@ -1318,7 +1485,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Nada encontrado.", "Nothing matches."),
     ("Nada foi desfeito.", "Nothing was undone."),
-    ("Nada foi registrado para este subagente.", "Nothing was recorded for this subagent."),
+    (
+        "Nada foi registrado para este subagente.",
+        "Nothing was recorded for this subagent.",
+    ),
     ("Nada por aqui.", "Nothing here."),
     ("Nada sobrando", "Nothing left over"),
     ("Nas mensagens", "In messages"),
@@ -1336,7 +1506,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Negar", "Deny"),
     ("Nenhum", "None"),
     ("Nenhum agente em execução.", "No agent is running."),
-    ("Nenhum agente encontrado ainda. Instale um e ele aparece em Configurações → Provedores.", "No agent found yet. Install one and it shows up in Settings → Provedores."),
+    (
+        "Nenhum agente encontrado ainda. Instale um e ele aparece em Configurações → Provedores.",
+        "No agent found yet. Install one and it shows up in Settings → Provedores.",
+    ),
     (
         "Nenhum aparelho conectado ainda.",
         "No device connected yet.",
@@ -1368,14 +1541,23 @@ const ENTRIES: &[(&str, &str)] = &[
         "Nenhum modelo habilitado disponível neste provedor.",
         "No enabled models available from this provider.",
     ),
-    ("Nenhum outro modelo deste provedor.", "No other model of this provider."),
+    (
+        "Nenhum outro modelo deste provedor.",
+        "No other model of this provider.",
+    ),
     ("Nenhum para limpar", "None to clean"),
-    ("Nenhum projeto aqui corresponde a “{}”, então o rascunho está no projeto atual.", "No project here matches “{}”, so the draft is in the current project."),
+    (
+        "Nenhum projeto aqui corresponde a “{}”, então o rascunho está no projeto atual.",
+        "No project here matches “{}”, so the draft is in the current project.",
+    ),
     ("Nenhum pull request aberto.", "No open pull requests."),
     ("Nenhum pull request fechado.", "No closed pull requests."),
     ("Nenhum pull request mesclado.", "No merged pull requests."),
     ("Nenhum servidor local", "No local servers"),
-    ("Nenhum simulador de iOS encontrado.", "No iOS simulator found."),
+    (
+        "Nenhum simulador de iOS encontrado.",
+        "No iOS simulator found.",
+    ),
     ("Nenhum uso nesse período.", "No usage in this period."),
     ("Nenhuma", "None"),
     ("Nenhuma CLI detectada ainda.", "No CLI detected yet."),
@@ -1413,8 +1595,14 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Nome do arquivo", "File name"),
     ("Nome do novo branch", "New branch name"),
     ("Nome do perfil", "Profile name"),
-    ("Nome inválido: use letras, números, /, ., - e _, sem espaços nem .. e sem começar com - ou terminar com / ou ponto.", "Invalid name: use letters, numbers, /, ., - and _, with no spaces or .., and not starting with - or ending with / or a dot."),
-    ("Nome longo demais (120 caracteres no máximo).", "Name too long (120 characters at most)."),
+    (
+        "Nome inválido: use letras, números, /, ., - e _, sem espaços nem .. e sem começar com - ou terminar com / ou ponto.",
+        "Invalid name: use letters, numbers, /, ., - and _, with no spaces or .., and not starting with - or ending with / or a dot.",
+    ),
+    (
+        "Nome longo demais (120 caracteres no máximo).",
+        "Name too long (120 characters at most).",
+    ),
     ("Notificações", "Notifications"),
     ("Notificações do sistema", "System notifications"),
     ("Nova aba", "New tab"),
@@ -1436,7 +1624,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "Não consegui copiar os dados do Sirus.",
         "Could not copy the Sirus data.",
     ),
-    ("Não consegui ligar o aparelho: {}", "Could not boot the device: {}"),
+    (
+        "Não consegui ligar o aparelho: {}",
+        "Could not boot the device: {}",
+    ),
     (
         "Não consegui preparar a cópia dos dados.",
         "Could not prepare the data copy.",
@@ -1444,8 +1635,14 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Não detectado", "Not detected"),
     ("Não encontrado", "Not found"),
     ("Não encontrados {}", "Not found {}"),
-    ("Não encontrei certificados do sistema.", "No system certificates were found."),
-    ("Não foi possível abrir esta imagem.", "Could not open this image."),
+    (
+        "Não encontrei certificados do sistema.",
+        "No system certificates were found.",
+    ),
+    (
+        "Não foi possível abrir esta imagem.",
+        "Could not open this image.",
+    ),
     (
         "Não foi possível abrir este documento.",
         "Could not open this document.",
@@ -1474,7 +1671,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Não foi possível verificar", "Could not check"),
     ("Não instalado", "Not installed"),
     ("Não permitir", "Don't allow"),
-    ("Não é um link sirus://new.", "It is not a sirus://new link."),
+    (
+        "Não é um link sirus://new.",
+        "It is not a sirus://new link.",
+    ),
     (
         "O GitHub CLI (gh) não está instalado. Instale com `brew install gh` e depois adicione uma conta aqui.",
         "GitHub CLI (gh) is not installed. Install it with `brew install gh`, then add an account here.",
@@ -1491,25 +1691,43 @@ const ENTRIES: &[(&str, &str)] = &[
         "O HEAD do Git mudou desde esta resposta ({} para {}): houve commit, checkout, rebase ou pull. Nada será desfeito. Abra o diff e reverta à mão, ou use git revert no novo commit.",
         "Git HEAD moved since this reply ({} to {}): a commit, checkout, rebase or pull happened. Nothing is undone. Open the diff and revert it by hand, or use git revert on the new commit.",
     ),
-    ("O Keychain só existe no macOS.", "The Keychain only exists on macOS."),
+    (
+        "O Keychain só existe no macOS.",
+        "The Keychain only exists on macOS.",
+    ),
     (
         "O QR code do app aponta para este endereço.",
         "The app's QR code points to this address.",
     ),
-    ("O Simulador não está disponível", "The Simulator is not available"),
-    ("O Simulador não iniciou: {}", "The Simulator did not start: {}"),
-    ("O Simulador precisa do Node.js", "The Simulator needs Node.js"),
+    (
+        "O Simulador não está disponível",
+        "The Simulator is not available",
+    ),
+    (
+        "O Simulador não iniciou: {}",
+        "The Simulator did not start: {}",
+    ),
+    (
+        "O Simulador precisa do Node.js",
+        "The Simulator needs Node.js",
+    ),
     ("O Simulador precisa do Xcode", "The Simulator needs Xcode"),
     (
         "O Sirus abre o login do serviço no seu navegador; você entra uma vez.",
         "Sirus opens the service's sign-in in your browser; you sign in once.",
     ),
-    ("O Sirus deste iPhone vai controlá-lo.", "Sirus on this iPhone will control it."),
+    (
+        "O Sirus deste iPhone vai controlá-lo.",
+        "Sirus on this iPhone will control it.",
+    ),
     (
         "O Sirus preenche seu login salvo na página. O agente nunca vê a senha, e você não é perguntado de novo sobre este site nesta conversa.",
         "Sirus fills your saved login into the page. The agent never sees the password, and you are not asked again for this site in this conversation.",
     ),
-    ("O Sirus removeu {} caractere(s) invisível(is), que podem esconder instruções para o agente. O link pode ser malicioso: leia o prompt antes de enviar.", "Sirus removed {} invisible character(s), which can hide instructions for the agent. The link may be malicious: read the prompt before you send it."),
+    (
+        "O Sirus removeu {} caractere(s) invisível(is), que podem esconder instruções para o agente. O link pode ser malicioso: leia o prompt antes de enviar.",
+        "Sirus removed {} invisible character(s), which can hide instructions for the agent. The link may be malicious: read the prompt before you send it.",
+    ),
     (
         "O agente consulta, mas não altera o banco.",
         "The agent can query but not change the database.",
@@ -1524,17 +1742,38 @@ const ENTRIES: &[(&str, &str)] = &[
         "O agente só vê e usa os apps que você liberar, naquela sessão. Nada fica guardado depois que você fecha o app.",
         "Agents only see and use apps you allow, for that session. Nothing is remembered after you quit.",
     ),
-    ("O agente trabalha dentro da pasta que você escolher.", "The agent works inside the folder you choose."),
+    (
+        "O agente trabalha dentro da pasta que você escolher.",
+        "The agent works inside the folder you choose.",
+    ),
     (
         "O arquivo está danificado, protegido por senha ou usa um formato não suportado.",
         "This file is damaged, encrypted or uses an unsupported format.",
     ),
-    ("O branch está desatualizado em relação ao base.", "The branch is behind the base."),
-    ("O computador demorou demais para responder.", "The computer took too long to answer."),
-    ("O computador não devolveu a conversa.", "The computer did not return the conversation."),
-    ("O computador não devolveu o projeto.", "The computer did not return the project."),
-    ("O computador recusou o código.", "The computer refused the code."),
-    ("O computador recusou o pedido.", "The computer refused the request."),
+    (
+        "O branch está desatualizado em relação ao base.",
+        "The branch is behind the base.",
+    ),
+    (
+        "O computador demorou demais para responder.",
+        "The computer took too long to answer.",
+    ),
+    (
+        "O computador não devolveu a conversa.",
+        "The computer did not return the conversation.",
+    ),
+    (
+        "O computador não devolveu o projeto.",
+        "The computer did not return the project.",
+    ),
+    (
+        "O computador recusou o código.",
+        "The computer refused the code.",
+    ),
+    (
+        "O computador recusou o pedido.",
+        "The computer refused the request.",
+    ),
     (
         "O conteúdo textual não mudou; o arquivo ou suas permissões foram alterados.",
         "The text content did not change; the file or its permissions changed.",
@@ -1545,24 +1784,45 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("O código tem seis dígitos.", "The code has six digits."),
     ("O diff foi truncado.", "The diff was truncated."),
-    ("O endereço HTTPS dele na Tailscale, como https://nome.rede.ts.net", "Its HTTPS address on Tailscale, such as https://name.network.ts.net"),
+    (
+        "O endereço HTTPS dele na Tailscale, como https://nome.rede.ts.net",
+        "Its HTTPS address on Tailscale, such as https://name.network.ts.net",
+    ),
     (
         "O endereço de qualquer servidor MCP remoto (HTTP).",
         "The address of any remote MCP server (HTTP).",
     ),
-    ("O endereço desse computador é inválido.", "This computer's address is invalid."),
+    (
+        "O endereço desse computador é inválido.",
+        "This computer's address is invalid.",
+    ),
     ("O endereço não resolve.", "The address does not resolve."),
-    ("O endereço precisa ser https.", "The address must be https."),
+    (
+        "O endereço precisa ser https.",
+        "The address must be https.",
+    ),
     (
         "O fetch automático está indisponível enquanto a configuração Git do projeto puder executar helpers ou divulgar credenciais. Faça o fetch manualmente pelo terminal.",
         "Automatic fetch is unavailable while project Git configuration can execute helpers or disclose credentials. Fetch manually in your terminal.",
     ),
-    ("O fundo já muda enquanto você escolhe. Dá para trocar depois nas Configurações.", "The background already changes as you choose. You can change it later in Settings."),
+    (
+        "O fundo já muda enquanto você escolhe. Dá para trocar depois nas Configurações.",
+        "The background already changes as you choose. You can change it later in Settings.",
+    ),
     ("O git falhou.", "Git failed."),
-    ("O link escolheu {} para esta conversa.", "The link picked {} for this thread."),
-    ("O link escolheu {}, mas o modelo não está disponível aqui; o modelo padrão é usado.", "The link picked {}, but its model is not available here; the default model is used."),
+    (
+        "O link escolheu {} para esta conversa.",
+        "The link picked {} for this thread.",
+    ),
+    (
+        "O link escolheu {}, mas o modelo não está disponível aqui; o modelo padrão é usado.",
+        "The link picked {}, but its model is not available here; the default model is used.",
+    ),
     ("O link não pôde ser lido.", "The link could not be read."),
-    ("O link pediu {}, que não está configurado aqui; o seu padrão continua.", "The link asked for {}, which is not set up here; your default stays."),
+    (
+        "O link pediu {}, que não está configurado aqui; o seu padrão continua.",
+        "The link asked for {}, which is not set up here; your default stays.",
+    ),
     (
         "O login do GitHub não terminou.",
         "The GitHub sign-in did not finish.",
@@ -1572,7 +1832,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "O modelo de trabalho que percorre a borda do composer enquanto o agente trabalha.",
         "The working pattern that runs along the composer edge while the agent works.",
     ),
-    ("O modelo não é válido ou não tem provedor.", "Its model is not valid, or has no provider."),
+    (
+        "O modelo não é válido ou não tem provedor.",
+        "Its model is not valid, or has no provider.",
+    ),
     (
         "O modelo, a conta ou o workspace mudou. Cancele os pedidos e envie-os novamente com a nova escolha.",
         "The model, account or workspace changed. Cancel the requests and submit them again with the new selection.",
@@ -1581,7 +1844,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "O modo de aprovação com que novas conversas começam. Um provedor sem ele usa o próximo modo mais seguro que oferece; uma conversa mantém o último modo usado.",
         "The approval mode new conversations start on. A provider without it uses the next safer mode it offers; a conversation keeps the mode it last used.",
     ),
-    ("O motor desta janela, com seus projetos e arquivos.", "This window's engine, with your projects and files."),
+    (
+        "O motor desta janela, com seus projetos e arquivos.",
+        "This window's engine, with your projects and files.",
+    ),
     (
         "O motor do Sirus não respondeu.",
         "The Sirus engine did not respond.",
@@ -1590,15 +1856,27 @@ const ENTRIES: &[(&str, &str)] = &[
         "O motor não gerou um código.",
         "The engine did not generate a code.",
     ),
-    ("O número do pull request não é válido.", "Its pull request number is not valid."),
+    (
+        "O número do pull request não é válido.",
+        "Its pull request number is not valid.",
+    ),
     ("O pareamento foi recusado.", "Pairing was declined."),
     ("O pareamento não respondeu.", "Pairing did not respond."),
     ("O projeto não é válido.", "Its project is not valid."),
-    ("O prompt só tinha caracteres ocultos, então pode ser malicioso.", "Its prompt had only hidden characters, so it may be malicious."),
-    ("O prompt tem mais de 8.000 caracteres.", "Its prompt is longer than 8,000 characters."),
+    (
+        "O prompt só tinha caracteres ocultos, então pode ser malicioso.",
+        "Its prompt had only hidden characters, so it may be malicious.",
+    ),
+    (
+        "O prompt tem mais de 8.000 caracteres.",
+        "Its prompt is longer than 8,000 characters.",
+    ),
     ("O que um aparelho pode fazer", "What a device can do"),
     ("O que vamos fazer em {}?", "What shall we do in {}?"),
-    ("O repositório não está no formato dono/nome.", "Its repository is not owner/name."),
+    (
+        "O repositório não está no formato dono/nome.",
+        "Its repository is not owner/name.",
+    ),
     (
         "O sirus-host não foi encontrado.",
         "sirus-host was not found.",
@@ -1607,7 +1885,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "O terminal usa sempre o shell configurado no sistema.",
         "The PTY always launches $SHELL. This cannot be changed.",
     ),
-    ("O trabalho da conversa, inclusive o que ainda não foi commitado, vai para uma branch sirus/move-… no GitHub do projeto. {} baixa essa branch e continua a conversa lá, com o texto até aqui. Esta conversa fica marcada como movida.", "The conversation's work, including what is not committed yet, goes to a sirus/move-… branch on the project's GitHub. {} fetches that branch and continues the conversation there, with the text so far. This conversation is marked as moved."),
+    (
+        "O trabalho da conversa, inclusive o que ainda não foi commitado, vai para uma branch sirus/move-… no GitHub do projeto. {} baixa essa branch e continua a conversa lá, com o texto até aqui. Esta conversa fica marcada como movida.",
+        "The conversation's work, including what is not committed yet, goes to a sirus/move-… branch on the project's GitHub. {} fetches that branch and continues the conversation there, with the text so far. This conversation is marked as moved.",
+    ),
     (
         "O uso do computador só está disponível no macOS.",
         "Computer use is available on macOS only.",
@@ -1675,7 +1956,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "Os pedidos começam em ordem após uma resposta concluída. A fila fica apenas nesta abertura do app.",
         "Requests start in order after a completed response. The queue lasts for this app run only.",
     ),
-    ("Os seis dígitos de `sirus-host pair`, ou do QR code da página Conexões do outro Mac.", "The six digits from `sirus-host pair`, or from the other Mac's Connections page."),
+    (
+        "Os seis dígitos de `sirus-host pair`, ou do QR code da página Conexões do outro Mac.",
+        "The six digits from `sirus-host pair`, or from the other Mac's Connections page.",
+    ),
     (
         "Ou diga ao agente o que fazer em vez disso (recusa a aprovação)…",
         "Or tell the agent what to do instead (declines the approval)…",
@@ -1720,7 +2004,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Pareie de novo", "Pair again"),
     ("Participação", "Share"),
     ("Parágrafos prontos", "Finished paragraphs"),
-    ("Passa a conversa a outro provedor nesta pasta. A recapitulação vai com a primeira mensagem.", "Hands the conversation to another provider in this folder. The recap goes with the first message."),
+    (
+        "Passa a conversa a outro provedor nesta pasta. A recapitulação vai com a primeira mensagem.",
+        "Hands the conversation to another provider in this folder. The recap goes with the first message.",
+    ),
     ("Passou", "Passed"),
     ("Pasta", "Folder"),
     ("Pasta de skills do Sirus", "Sirus skills folder"),
@@ -1822,10 +2109,16 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Pressão de memória alta", "Memory pressure high"),
     ("Pressão de memória crítica", "Memory pressure critical"),
     ("Pressão de memória normal", "Memory pressure normal"),
-    ("Primeiro dia com leitura: o ponto de partida é a primeira leitura de hoje.", "First day with a reading: the starting point is today's first reading."),
+    (
+        "Primeiro dia com leitura: o ponto de partida é a primeira leitura de hoje.",
+        "First day with a reading: the starting point is today's first reading.",
+    ),
     ("Privado", "Private"),
     ("Processados", "Processed"),
-    ("Procurando agentes instalados no seu Mac…", "Looking for agents installed on your Mac…"),
+    (
+        "Procurando agentes instalados no seu Mac…",
+        "Looking for agents installed on your Mac…",
+    ),
     ("Procurando…", "Searching…"),
     (
         "Procurar atualizações automaticamente",
@@ -1849,7 +2142,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "Pinned projects stay first. Dragging a folder switches to manual order.",
     ),
     ("Projetos, deploys e logs", "Projects, deployments and logs"),
-    ("Prompt adicionado a partir de um link", "Prompt added from a link"),
+    (
+        "Prompt adicionado a partir de um link",
+        "Prompt added from a link",
+    ),
     ("Pronto", "Ready"),
     ("Pronto para revisão", "Ready for review"),
     (
@@ -1956,21 +2252,28 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Renomear {}", "Rename {}"),
     ("Renova em {}", "Renews in {}"),
     ("Repositório", "Repository"),
+    ("Responder", "Reply"),
     ("Resposta incompleta.", "Incomplete reply."),
-    ("Resposta inesperada do GitHub.", "Unexpected reply from GitHub."),
-    ("Resposta inesperada do título do commit.", "Unexpected commit title response."),
+    (
+        "Resposta inesperada do GitHub.",
+        "Unexpected reply from GitHub.",
+    ),
+    (
+        "Resposta inesperada do título do commit.",
+        "Unexpected commit title response.",
+    ),
     ("Resposta inválida.", "Invalid reply."),
     (
         "Restaura a barra lateral e as larguras dos painéis.",
         "Clears sidebar collapse and panel widths in this session.",
     ),
     ("Restaurar", "Reset"),
-    (
-        "Restaurar configurações do Sirus",
-        "Reset Sirus settings",
-    ),
+    ("Restaurar configurações do Sirus", "Reset Sirus settings"),
     ("Restaurar layout da janela", "Reset window layout"),
-    ("Restaurar os padrões desta página?", "Restore this page's defaults?"),
+    (
+        "Restaurar os padrões desta página?",
+        "Restore this page's defaults?",
+    ),
     ("Restaurar padrões", "Restore defaults"),
     ("Restaurar preferências", "Reset preferences"),
     (
@@ -1987,7 +2290,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "Review the diff and commit.",
     ),
     ("Revisores", "Reviewers"),
-    ("Revisores poderão ser notificados.", "Reviewers may be notified."),
+    (
+        "Revisores poderão ser notificados.",
+        "Reviewers may be notified.",
+    ),
     ("Revisou", "Reviewed"),
     ("Revisão", "Review"),
     ("Revisão automática", "Auto-review"),
@@ -2001,13 +2307,22 @@ const ENTRIES: &[(&str, &str)] = &[
         "Roda no worktree sempre que um turno termina (até 2 minutos).",
         "Runs in the worktree each time a turn finishes (up to 2 minutes).",
     ),
-    ("Roda só em um worktree isolado", "Runs only in an isolated worktree"),
+    (
+        "Roda só em um worktree isolado",
+        "Runs only in an isolated worktree",
+    ),
     (
         "Rodam no worktree próprio de cada sessão, como você, igual ao terminal. $SIRUS_PROJECT_ROOT é a pasta deste projeto.",
         "Run in each session's own worktree, as you, like the terminal. $SIRUS_PROJECT_ROOT is this project's folder.",
     ),
-    ("Rodando o script de preparação…", "Running the setup script…"),
-    ("Rodando o script de término…", "Running the on-finish script…"),
+    (
+        "Rodando o script de preparação…",
+        "Running the setup script…",
+    ),
+    (
+        "Rodando o script de término…",
+        "Running the on-finish script…",
+    ),
     ("Rodar ao terminar", "Run on finish"),
     ("Rodar de novo", "Run again"),
     ("Rodar preparação", "Run setup"),
@@ -2035,11 +2350,17 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Script de preparação concluído", "Setup script finished"),
     ("Script de preparação falhou", "Setup script failed"),
     ("Script de preparação interrompido", "Setup script stopped"),
-    ("Script de preparação passou do tempo", "Setup script ran out of time"),
+    (
+        "Script de preparação passou do tempo",
+        "Setup script ran out of time",
+    ),
     ("Script de término concluído", "On-finish script finished"),
     ("Script de término falhou", "On-finish script failed"),
     ("Script de término interrompido", "On-finish script stopped"),
-    ("Script de término passou do tempo", "On-finish script ran out of time"),
+    (
+        "Script de término passou do tempo",
+        "On-finish script ran out of time",
+    ),
     (
         "Se o Sirus fechar inesperadamente enquanto um agente trabalha, a conversa continua na próxima abertura, pedindo que o agente confira primeiro o que já aconteceu. No máximo três vezes seguidas; conversas paradas, adiadas ou aguardando você ficam como estão.",
         "If Sirus closes unexpectedly while an agent works, that conversation continues on the next launch, asking the agent to check what already happened first. At most three times in a row; stopped, snoozed and waiting conversations are left alone.",
@@ -2048,7 +2369,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "Se outro app já usa a combinação, escolha outra.",
         "If another app already uses the combination, choose another.",
     ),
-    ("Segredo do autenticador (opcional)", "Authenticator secret (optional)"),
+    (
+        "Segredo do autenticador (opcional)",
+        "Authenticator secret (optional)",
+    ),
     ("Seguir o sistema", "Follow the system"),
     ("Segunda opinião", "Second opinion"),
     ("Segurança", "Safety"),
@@ -2061,8 +2385,14 @@ const ENTRIES: &[(&str, &str)] = &[
         "Select a pull request or issue from the list.",
     ),
     ("Sem", "None"),
-    ("Sem conexão com {}. Tentando de novo…", "No connection to {}. Trying again…"),
-    ("Sem conexão, tentando de novo", "No connection, trying again"),
+    (
+        "Sem conexão com {}. Tentando de novo…",
+        "No connection to {}. Trying again…",
+    ),
+    (
+        "Sem conexão, tentando de novo",
+        "No connection, trying again",
+    ),
     ("Sem conversas", "No conversations"),
     ("Sem descrição informada.", "No description provided."),
     ("Sem descrição.", "No description."),
@@ -2090,11 +2420,17 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Seu texto foi mantido.", "Your text was kept."),
     ("Seus agentes", "Your agents"),
-    ("Seus agentes de código lado a lado, com as conversas e as mudanças num lugar só.", "Your coding agents side by side, with conversations and changes in one place."),
+    (
+        "Seus agentes de código lado a lado, com as conversas e as mudanças num lugar só.",
+        "Your coding agents side by side, with conversations and changes in one place.",
+    ),
     ("Shell padrão", "Default shell"),
     ("Sim", "Yes"),
     ("Simulador", "Simulator"),
-    ("Sirus {} disponível · Instalar", "Sirus {} available · Install"),
+    (
+        "Sirus {} disponível · Instalar",
+        "Sirus {} available · Install",
+    ),
     ("Sistema", "System"),
     ("Sites, lojas e agendamentos", "Sites, stores and bookings"),
     ("Sites, páginas e CMS", "Sites, pages and CMS"),
@@ -2165,13 +2501,18 @@ const ENTRIES: &[(&str, &str)] = &[
         "Teclas digitadas na página aparecem embaixo do vídeo. Campos de senha nunca aparecem.",
         "Keys typed on the page appear under the video. Password fields never appear.",
     ),
+    ("Tem uma pergunta", "Has a question"),
     ("Tema", "Theme"),
     ("Tema do workspace", "Workspace theme"),
     ("Tentar de novo", "Try again"),
     ("Tentar novamente", "Try again"),
+    ("Terminou", "Finished"),
     ("Testar notificação", "Test notification"),
     ("Teste", "Test"),
-    ("Teste de notificação. Seus avisos de atividade aparecerão aqui.", "Notification test. Your activity alerts will appear here."),
+    (
+        "Teste de notificação. Seus avisos de atividade aparecerão aqui.",
+        "Notification test. Your activity alerts will appear here.",
+    ),
     ("Texto da página", "Page text"),
     (
         "Texto dos slides. Imagens e layout não são exibidos.",
@@ -2238,7 +2579,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "Uma conversa do Claude com mais de 200 mil tokens parada compacta uns dois minutos antes do cache do prompt expirar (1 hora na assinatura, 5 minutos com chave de API), assim ao voltar a conversa inteira não é reenviada. Aparece como um turno /compact; conversas adiadas ficam como estão.",
         "A Claude conversation over 200,000 tokens that sits idle compacts about two minutes before its prompt cache expires (1 hour on a subscription, 5 minutes with an API key), so coming back does not resend the whole conversation. It shows as a /compact turn; snoozed conversations are left alone.",
     ),
-    ("Uma conversa está trabalhando nesta pasta. Puxe quando ela terminar.", "A conversation is working in this folder. Pull when it finishes."),
+    (
+        "Uma conversa está trabalhando nesta pasta. Puxe quando ela terminar.",
+        "A conversation is working in this folder. Pull when it finishes.",
+    ),
     (
         "Uma conversa parada pelo limite da IA envia \"Continue from where you left off.\" quando o limite libera. Dá para cancelar em cada aviso.",
         "A conversation stopped by the provider's limit sends \"Continue from where you left off.\" at the reset. Each notice can cancel it.",
@@ -2289,7 +2633,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "Use um nome curto que ainda não existe, nem Padrão nem Privado.",
         "Use a short name that is not already taken, Default or Private.",
     ),
-    ("Use ⌘ com uma letra ou número livre.", "Use ⌘ with a free letter or number."),
+    (
+        "Use ⌘ com uma letra ou número livre.",
+        "Use ⌘ with a free letter or number.",
+    ),
     ("Uso", "Usage"),
     ("Uso do {}", "{} usage"),
     ("Uso em 5 horas", "5-hour usage"),
@@ -2342,8 +2689,14 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Visibilidade no chat vazio", "Empty chat visibility"),
     ("Visualização", "View"),
     ("Você", "You"),
-    ("Você está na versão mais recente ({}).", "You are on the latest version ({})."),
-    ("Você pode recuperar pela Lixeira no Finder. Tudo que estiver dentro da pasta vai junto.", "You can restore it from the Trash in Finder. Anything inside a folder goes with it."),
+    (
+        "Você está na versão mais recente ({}).",
+        "You are on the latest version ({}).",
+    ),
+    (
+        "Você pode recuperar pela Lixeira no Finder. Tudo que estiver dentro da pasta vai junto.",
+        "You can restore it from the Trash in Finder. Anything inside a folder goes with it.",
+    ),
     ("Voltar", "Back"),
     ("Voltar ao app", "Back to app"),
     ("Voltou", "Went back"),
@@ -2370,7 +2723,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("e mais {} arquivos", "and {} more files"),
     ("estes arquivos", "these files"),
     ("estimativa a preços de tabela", "estimate at list prices"),
-    ("estimativa parcial, há modelos sem preço", "partial estimate, some models have no price"),
+    (
+        "estimativa parcial, há modelos sem preço",
+        "partial estimate, some models have no price",
+    ),
     ("falhou", "failed"),
     ("feito", "done"),
     ("ferramenta", "tool"),
@@ -2382,7 +2738,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("iPhone do trabalho", "Work iPhone"),
     ("iPhone pessoal", "Personal iPhone"),
     ("liberado", "allowed"),
-    ("o motor de aparelhos não respondeu.", "the device hub did not answer."),
+    (
+        "o motor de aparelhos não respondeu.",
+        "the device hub did not answer.",
+    ),
     ("ontem", "yesterday"),
     ("parcial", "partial"),
     ("por {}", "by {}"),
@@ -2398,7 +2757,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("{} anexos", "{} attachments"),
     ("{} arquivos", "{} files"),
     ("{} arquivos alterados", "{} changed files"),
-    ("{} arquivos podem ser desfeitos.", "{} files can be undone."),
+    (
+        "{} arquivos podem ser desfeitos.",
+        "{} files can be undone.",
+    ),
     ("{} assumiu", "{} took over"),
     ("{} commit novo em {}", "{} new commit on {}"),
     ("{} commits novos em {}", "{} new commits on {}"),
@@ -2413,7 +2775,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("{} e mais {} arquivos", "{} and {} more files"),
     ("{} em execução", "{} running"),
     ("{} em segundo plano", "{} in the background"),
-    ("{} entradas anteriores não são mais guardadas", "{} earlier entries are no longer kept"),
+    (
+        "{} entradas anteriores não são mais guardadas",
+        "{} earlier entries are no longer kept",
+    ),
     ("{} falharam", "{} failed"),
     ("{} ferramentas", "{} tools"),
     (
@@ -2431,11 +2796,17 @@ const ENTRIES: &[(&str, &str)] = &[
         "{} mudou de novo em uma resposta posterior desta sessão. Desfaça essa resposta primeiro, ou reverta à mão pelo diff.",
         "{} changed again in a later reply of this session. Undo that reply first, or revert by hand from the diff.",
     ),
-    ("{} não reconhece mais este Mac. Pareie de novo em Configurações → Conexões.", "{} no longer recognises this Mac. Pair it again in Settings → Connections."),
+    (
+        "{} não reconhece mais este Mac. Pareie de novo em Configurações → Conexões.",
+        "{} no longer recognises this Mac. Pair it again in Settings → Connections.",
+    ),
     ("{} passos", "{} steps"),
     ("{} pedidos na fila", "{} queued requests"),
     ("{} quer usar {}", "{} wants to use {}"),
-    ("{} repositórios indisponíveis.", "{} repositories unavailable."),
+    (
+        "{} repositórios indisponíveis.",
+        "{} repositories unavailable.",
+    ),
     ("{} restante", "{} left"),
     ("{} sessões", "{} sessions"),
     ("{} subagentes", "{} subagents"),

@@ -12,7 +12,7 @@ import { dirname, join } from "node:path";
 const root = join(import.meta.dirname, "..");
 const args = process.argv.slice(2);
 const flag = (name) => { const at = args.indexOf(name); return at >= 0 ? args[at + 1] : undefined; };
-const dataDir = flag("--data-dir") ?? join(homedir(), "Library", "Application Support", "com.siruscode.app");
+const dataDir = flag("--data-dir") ?? join(homedir(), "Library", "Application Support", "com.siruscode.native");
 const runtime = /const RUNTIME_VERSION = "([^"]+)"/.exec(readFileSync(join(root, "app.config.ts"), "utf8"))?.[1];
 if (!runtime) throw new Error("RUNTIME_VERSION not found in app.config.ts");
 if (!existsSync(dataDir)) throw new Error(`No Sirus data folder at ${dataDir}`);

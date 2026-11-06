@@ -5,6 +5,7 @@ import Animated, { FadeIn, FadeOut, LinearTransition } from "react-native-reanim
 import { SymbolView, type AppSymbolName } from "./AppSymbol";
 import { AppText } from "./AppText";
 import type { MainTab } from "../screens/main-tabs-context";
+import { ICON } from "../lib/icon-sizes";
 
 const SEGMENTS: readonly { readonly tab: MainTab; readonly label: string; readonly icon: string }[] = [
   { tab: "new", label: "Novo", icon: "square.and.pencil" },
@@ -18,7 +19,7 @@ const tick = () => void Haptics.selectionAsync().catch(() => undefined);
 export function RoundButton(props: { readonly icon: string; readonly label: string; readonly onPress: () => void; readonly badge?: number }) {
   return <Pressable onPress={() => { tick(); props.onPress(); }} accessibilityRole="button" accessibilityLabel={props.label}
     className="size-11 items-center justify-center rounded-full border border-border-subtle bg-glass-fallback active:opacity-60">
-    <SymbolView name={props.icon as AppSymbolName} size={18} weight="medium" tintColorClassName="accent-foreground" />
+    <SymbolView name={props.icon as AppSymbolName} size={ICON.bar} weight="medium" tintColorClassName="accent-foreground" />
     {props.badge ? <View className="absolute -right-0.5 -top-0.5 min-w-[17px] items-center rounded-full bg-[#f0a35e] px-1">
       <AppText className="font-app-bold text-[11px] leading-[17px] text-[#1a1208]">{props.badge}</AppText>
     </View> : null}
@@ -38,7 +39,7 @@ export function TopBar(props: { readonly selected: MainTab; readonly onSelect: (
         return <Animated.View key={segment.tab} layout={LinearTransition.springify().damping(22).stiffness(260)}>
           <Pressable onPress={() => { if (!on) { tick(); props.onSelect(segment.tab); } }} accessibilityRole="tab" accessibilityState={{ selected: on }} accessibilityLabel={segment.label}
             className={`h-9 flex-row items-center gap-1.5 rounded-[20px] ${on ? "bg-subtle-strong px-3.5" : "px-3"}`}>
-            <SymbolView name={segment.icon as AppSymbolName} size={16} weight="medium" tintColorClassName={on ? "accent-foreground" : "accent-foreground-muted"} />
+            <SymbolView name={segment.icon as AppSymbolName} size={ICON.segment} weight="medium" tintColorClassName={on ? "accent-foreground" : "accent-foreground-muted"} />
             {on ? <Animated.View entering={FadeIn.duration(160)} exiting={FadeOut.duration(80)}><AppText className="font-app-medium text-sm">{segment.label}</AppText></Animated.View> : null}
           </Pressable>
         </Animated.View>;

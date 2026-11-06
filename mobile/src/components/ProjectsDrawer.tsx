@@ -133,13 +133,13 @@ function DrawerBody(props: { readonly onClose: () => void; readonly selected: st
         <ControlPillMenu accessibilityLabel="Filtrar projetos" actions={SHOW.map((item) => ({ id: item.id, title: item.title, state: item.id === show ? "on" as const : "off" as const }))}
           onPressAction={({ nativeEvent }) => setShow(nativeEvent.event as Show)}>
           <View className="size-[38px] items-center justify-center rounded-full border border-border-subtle bg-glass-fallback">
-            <SymbolView name={(show === "all" ? "line.3.horizontal.decrease" : "line.3.horizontal.decrease.circle.fill") as AppSymbolName} size={17} weight="medium" tintColorClassName="accent-foreground" />
+            <SymbolView name={(show === "all" ? "line.3.horizontal.decrease" : "line.3.horizontal.decrease.circle.fill") as AppSymbolName} size={19} weight="medium" tintColorClassName="accent-foreground" />
           </View>
         </ControlPillMenu>
         <ControlPillMenu accessibilityLabel="Adicionar projeto" actions={[{ id: "clone", title: "Clonar do GitHub", image: "arrow.down.circle" }, { id: "folder", title: "Adicionar uma pasta", image: "folder.badge.plus" }]}
           onPressAction={({ nativeEvent }) => addProject(nativeEvent.event as "clone" | "folder", projects, pick)}>
           <View className="size-[38px] items-center justify-center rounded-full border border-border-subtle bg-glass-fallback">
-            <SymbolView name="plus" size={17} weight="medium" tintColorClassName="accent-foreground" />
+            <SymbolView name="plus" size={19} weight="medium" tintColorClassName="accent-foreground" />
           </View>
         </ControlPillMenu>
       </View>
@@ -147,7 +147,7 @@ function DrawerBody(props: { readonly onClose: () => void; readonly selected: st
     <AppText className="mb-1.5 ml-0.5 mt-[18px] text-[13px] text-foreground-muted">Projetos</AppText>
     <ScrollView className="flex-1" showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerClassName="gap-0.5 pb-4">
       <Pressable onPress={() => pick(null)} accessibilityRole="button" className={`flex-row items-center gap-3 rounded-[14px] px-2.5 py-[9px] active:opacity-70 ${props.selected === null ? "bg-subtle-strong" : ""}`}>
-        <View className="size-[30px] items-center justify-center"><SymbolView name="square.grid.2x2" size={19} tintColorClassName="accent-foreground-muted" /></View>
+        <View className="size-[30px] items-center justify-center"><SymbolView name="square.grid.2x2" size={21} tintColorClassName="accent-foreground-muted" /></View>
         <AppText className="font-app-medium text-[15.5px]">Todos os projetos</AppText>
       </Pressable>
       {shown.map((item) => {
@@ -156,12 +156,12 @@ function DrawerBody(props: { readonly onClose: () => void; readonly selected: st
           onLong={() => { void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined); props.onClose(); navigation.navigate("Project", { computerId: item.computerId, projectId: item.project.id }); }} />;
       })}
       {!shown.length ? <AppText className="mt-6 text-center text-sm text-foreground-muted">{summaries.length ? "Nenhum projeto aqui." : "Nenhum projeto ainda. Adicione um com o botão +."}</AppText> : null}
-      {shown.length ? <AppText className="mt-3 px-2 text-xs text-foreground-tertiary">Toque e segure um projeto para abrir a página dele.</AppText> : null}
     </ScrollView>
+    {shown.length ? <AppText className="mb-2.5 mt-1 px-2 text-xs text-foreground-tertiary">Toque e segure um projeto para abrir a página dele.</AppText> : null}
     <View className="flex-row items-center gap-2">
       <RoundButton icon="gearshape" label="Ajustes" onPress={() => { props.onClose(); navigation.navigate("Settings"); }} />
       <View className="h-11 flex-1 flex-row items-center gap-2 rounded-[22px] border border-border-subtle bg-glass-fallback px-3.5">
-        <SymbolView name="magnifyingglass" size={16} tintColorClassName="accent-foreground-muted" />
+        <SymbolView name="magnifyingglass" size={18} tintColorClassName="accent-foreground-muted" />
         <AppTextInput value={query} onChangeText={setQuery} placeholder="Buscar" autoCapitalize="none" autoCorrect={false} returnKeyType="search"
           className="min-h-0 flex-1 rounded-none border-0 bg-transparent px-0 py-0 text-base" />
       </View>

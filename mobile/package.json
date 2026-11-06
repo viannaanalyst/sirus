@@ -10,6 +10,7 @@
     "start": "expo start --dev-client --lan",
     "prebuild": "expo prebuild --platform ios --clean",
     "typecheck": "tsc --noEmit",
+    "test": "node --import ./scripts/register-test-loader.mjs --test tests/*.test.ts",
     "publish:update": "node scripts/publish-update.mjs"
   },
   "dependencies": {

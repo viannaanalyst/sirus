@@ -13,6 +13,7 @@ import { ShimmerText } from "./Shimmer";
 import { modelLabel, STATE_COLOR, stepLine, t } from "./steps";
 import { OpenSubagent } from "./subagent-context";
 import { useNow } from "./use-now";
+import { useWorkAnchor } from "./work-anchors";
 
 /** A pulsing status dot while the subagent runs, a still one otherwise. */
 export function StatusDot(props: { readonly status: MemberStatus }) {
@@ -91,6 +92,7 @@ export const SubagentTeam = memo(function SubagentTeam(props: {
   const headline = useMemo(() => teamHeadline("", props.reply, firstLaunchOffset(props.items)), [props.reply, props.items]);
   const running = progress.running > 0;
   const now = useNow(running);
+  const anchor = useWorkAnchor("team", running, () => setCollapsed(false));
   const members = phases.flatMap((phase) => phase.members);
   const started = Math.min(...members.map((member) => member.startedAt ?? Infinity));
   const ended = running || members.some((member) => member.endedAt == null) ? now : Math.max(...members.map((member) => member.endedAt ?? 0));
@@ -101,7 +103,7 @@ export const SubagentTeam = memo(function SubagentTeam(props: {
     progress.failed ? t(progress.failed === 1 ? "team.failedCount.one" : "team.failedCount", { count: progress.failed }) : null,
   ].filter(Boolean).join(" · ");
   let number = 0;
-  return <View className="mt-3 overflow-hidden rounded-[18px] border border-border-subtle bg-card">
+  return <View ref={anchor} collapsable={false} className="mt-3 overflow-hidden rounded-[18px] border border-border-subtle bg-card">
     <Pressable onPress={() => setCollapsed((value) => !value)} accessibilityRole="button" accessibilityLabel={collapsed ? t("team.expand") : t("team.collapse")} className="flex-row items-center gap-2.5 px-3 py-[11px] active:opacity-70">
       <View className="flex-row">
         {members.slice(0, 3).map((member, index) => <View key={member.id} className="size-[26px] items-center justify-center rounded-full border-[1.5px] border-card bg-row-hover" style={{ marginLeft: index ? -8 : 0 }}>

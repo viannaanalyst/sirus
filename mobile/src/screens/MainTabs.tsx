@@ -54,6 +54,12 @@ export function MainTabs() {
     Keyboard.dismiss();
     setSelected(tab);
   }, []);
+  // Choosing a project: on Novo it picks where the conversation starts; anywhere else it shows
+  // that project's conversations (so the drawer's tap is never invisible on Painel).
+  const chooseProject = useCallback((key: string | null) => {
+    setProject(key);
+    if (selected !== "new") open("conversations", "all");
+  }, [selected, open]);
   const context = useMemo(() => ({ selected, open, filter, setFilter, project, setProject, drawerOpen, setDrawerOpen, topInset }), [selected, open, filter, project, drawerOpen, topInset]);
   const screen = theme["--color-screen"];
 
@@ -69,7 +75,7 @@ export function MainTabs() {
           <TopBar selected={selected} onSelect={open} onSidebar={() => setDrawerOpen(true)} onSettings={() => navigation.navigate("Settings")} waiting={waiting} />
         </View>
       </View>
-      <ProjectsDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} selected={project} onSelect={setProject} />
+      <ProjectsDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} selected={project} onSelect={chooseProject} />
     </View>
   </MainTabContext>;
 }

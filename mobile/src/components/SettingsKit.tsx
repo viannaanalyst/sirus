@@ -1,3 +1,4 @@
+import { ICON } from "../lib/icon-sizes";
 import type { ReactNode } from "react";
 import { Pressable, Switch, View } from "react-native";
 
@@ -27,7 +28,7 @@ export function SettingsRow(props: {
   return <Pressable onPress={props.onPress} disabled={!props.onPress || props.disabled} className="min-h-[48px] flex-row items-center gap-3 px-4 py-2.5 active:bg-row-hover">
     {!props.first ? <Divider inset={!!props.icon} /> : null}
     {props.icon ? <View className="size-7 items-center justify-center">
-      <SymbolView name={props.icon as never} size={18} tintColorClassName={props.destructive ? "accent-danger-foreground" : "accent-icon"} />
+      <SymbolView name={props.icon as never} size={ICON.sheetRow} tintColorClassName={props.destructive ? "accent-danger-foreground" : "accent-icon"} />
     </View> : null}
     <View className={`min-w-0 flex-1 ${props.disabled ? "opacity-40" : ""}`}>
       <AppText numberOfLines={2} className={`text-base ${props.destructive ? "text-danger-foreground" : ""}`}>{props.title}</AppText>

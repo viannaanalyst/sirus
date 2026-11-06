@@ -5,6 +5,7 @@ import { ActivityIndicator, Alert, Pressable, View } from "react-native";
 
 import { inkOn, useMacAccent } from "../data/mac-accent";
 import { SymbolView } from "./AppSymbol";
+import { ICON } from "../lib/icon-sizes";
 
 /**
  * The composer's trailing controls: the microphone, and a round button filled with the Mac's
@@ -65,11 +66,11 @@ export function ComposerSend(props: {
   // and nothing is typed, send becomes stop.
   const mic = listening
     ? <Pressable onPress={stopDictation} accessibilityLabel="Concluir ditado" hitSlop={6} className="size-9 items-center justify-center rounded-full bg-foreground active:opacity-70">
-        <SymbolView name="waveform" size={15} weight="semibold" tintColorClassName="accent-screen" />
+        <SymbolView name="waveform" size={17} weight="semibold" tintColorClassName="accent-screen" />
       </Pressable>
     : <Pressable onPress={() => void startDictation()} accessibilityLabel="Ditar" hitSlop={6} disabled={props.disabled}
         className="size-9 items-center justify-center rounded-full active:bg-row-hover">
-        <SymbolView name="mic" size={20} tintColorClassName="accent-foreground-muted" />
+        <SymbolView name="mic" size={ICON.composerMic} tintColorClassName="accent-foreground-muted" />
       </Pressable>;
   const action = !hasText && props.onStop && !listening
     ? <Pressable onPress={props.onStop} accessibilityLabel="Parar" hitSlop={6} className="size-[42px] items-center justify-center rounded-full active:opacity-70" style={{ backgroundColor: accent }}>
@@ -77,7 +78,7 @@ export function ComposerSend(props: {
       </Pressable>
     : <Pressable onPress={props.onSend} disabled={!canSend || props.disabled || props.sending || listening} accessibilityLabel="Enviar" hitSlop={6}
         className="size-[42px] items-center justify-center rounded-full active:opacity-70" style={{ backgroundColor: accent, opacity: !canSend || props.disabled || listening ? 0.35 : 1 }}>
-        {props.sending ? <ActivityIndicator color={ink} size="small" /> : <SymbolView name="arrow.up" size={18} weight="bold" tintColor={ink} />}
+        {props.sending ? <ActivityIndicator color={ink} size="small" /> : <SymbolView name="arrow.up" size={ICON.composerSend} weight="bold" tintColor={ink} />}
       </Pressable>;
   return <View className="flex-row items-center gap-0.5">{mic}{action}</View>;
 }

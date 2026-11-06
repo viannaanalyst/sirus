@@ -3,10 +3,12 @@ import * as Haptics from "expo-haptics";
 import { createContext, use, useEffect, useMemo, useState, type ReactNode } from "react";
 import { ActivityIndicator, Alert, Image, Pressable, ScrollView, View } from "react-native";
 import { KeyboardStickyView } from "react-native-keyboard-controller";
+import { ICON } from "../lib/icon-sizes";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import type { AgentProviderId, BranchInfo, Project } from "@sirus/client/types";
 import { defaultApprovalFor } from "@sirus/lib/composer-approval";
+import { executionWithModes, NO_MODES, promptExtras, setDebugging, setGoal, setPlanning, setTeam } from "@sirus/lib/composer-modes";
 import { latestModelChoices, providerModelChoices } from "@sirus/lib/model-registry";
 import { PROVIDERS, providerById } from "@sirus/lib/provider-registry";
 import { isProviderEnabled } from "@sirus/lib/settings";
@@ -15,12 +17,17 @@ import type { AppSymbolName } from "../components/AppSymbol";
 import { SymbolView } from "../components/AppSymbol";
 import { AppText, AppTextInput } from "../components/AppText";
 import { ComposerSend } from "../components/ComposerSend";
+import { AddSheet } from "../components/composer/AddSheet";
+import { ComposerField } from "../components/composer/ComposerField";
+import { ComposerStrip, type StripAttachment } from "../components/composer/ComposerStrip";
+import { SuggestionsPanel } from "../components/composer/SuggestionsPanel";
+import { useComposer } from "../components/composer/useComposer";
 import { ControlPillMenu } from "../components/ControlPillMenu";
 import { GlassSurface } from "../components/GlassSurface";
 import { ListSection } from "../components/ListSection";
 import { ProjectRobot } from "../components/ProjectRobot";
 import { ProviderIcon } from "../components/ProviderIcon";
-import { pickAttachments } from "../data/attachments";
+import { isImageFile, pickAttachments, type PickedFile } from "../data/attachments";
 import { isScratch, SCRATCH_FOLDER } from "../data/scratch";
 import { computerName, type Computer } from "../data/computers";
 import { useSirus } from "../data/store";
@@ -38,7 +45,7 @@ interface Draft {
   model: string | null;
   isolated: boolean | null;
   prompt: string;
-  files: { name: string; data: string }[];
+  files: PickedFile[];
 }
 export interface ProjectRow { readonly key: string; readonly computer: Computer; readonly project: Project }
 
@@ -186,6 +193,8 @@ function MainPage(props: { readonly embedded?: boolean }) {
       .then((list) => setBranch(list.find((item) => item.current)?.name ?? null), () => undefined);
   }, [chosen?.key]); // once per project
 
+  const skillOwner = useMemo(() => chosen ? { projectId: chosen.project.id, sessionId: null } : scratch ? { projectId: null, sessionId: null } : null, [chosen?.project.id, scratch?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const composer = useComposer({ computerId, owner: skillOwner, provider, model, text: draft.prompt, setText: (prompt) => setDraft((current) => ({ ...current, prompt })) });
   const canStart = !!target && (!!draft.prompt.trim() || draft.files.length > 0) && !busy && installed.length > 0;
   const start = async () => {
     if (!canStart || !computerId) return;
@@ -193,8 +202,11 @@ function MainPage(props: { readonly embedded?: boolean }) {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     try {
       const approval = defaultApprovalFor(providerById(provider).approvalModes, settings?.defaultApproval);
+      // Planning steps Full access down, as in the conversation's composer.
+      const execution = executionWithModes({ approval }, composer.modes, provider, model);
       const projectId = chosen ? chosen.project.id : (await scratchProject(computerId)).id;
-      const session = await useSirus.getState().startSession(computerId, { projectId, agent: provider, model, isolatedWorktree: worktree, prompt: draft.prompt, approval, files: draft.files });
+      const session = await useSirus.getState().startSession(computerId, { projectId, agent: provider, model, isolatedWorktree: worktree, prompt: draft.prompt, approval: execution.approval ?? approval, planning: execution.planning, extras: promptExtras(composer.modes, provider, model), files: draft.files });
+      composer.setModes(NO_MODES);
       started(computerId, session.id);
     } catch (reason) {
       setBusy(false);
@@ -209,6 +221,11 @@ function MainPage(props: { readonly embedded?: boolean }) {
       Alert.alert("Anexos", reason instanceof Error ? reason.message : String(reason));
     }
   };
+  const strip = useMemo<StripAttachment[]>(() => draft.files.map((file, index) => ({
+    key: `${file.name}:${index}`, name: file.name, image: isImageFile(file), uri: isImageFile(file) ? file.uri : undefined,
+    onRemove: () => setDraft((current) => ({ ...current, files: current.files.filter((_, at) => at !== index) })),
+  })), [draft.files]); // eslint-disable-line react-hooks/exhaustive-deps
+  const removeMode = (id: "planning" | "debugging" | "team" | "goal") => composer.changeModes((current) => id === "planning" ? setPlanning(current, false) : id === "debugging" ? setDebugging(current, false) : id === "team" ? setTeam(current, false) : setGoal(current, ""));
   const agentActions = [
     { id: "agents", title: "Agente", displayInline: true, subactions: installed.map((id) => ({ id: `p:${id}`, title: providerById(id).name, state: id === provider ? "on" as const : "off" as const })) },
     { id: "models", title: "Modelo", displayInline: true, subactions: [
@@ -270,24 +287,17 @@ function MainPage(props: { readonly embedded?: boolean }) {
             {worktree ? null : <SymbolView name="chevron.right" size={10} weight="semibold" tintColorClassName="accent-foreground-muted" />}
           </Pressable>
         </View> : null}
+        <SuggestionsPanel composer={composer} />
         <GlassSurface style={{ borderRadius: 26 }} className="gap-1 px-1.5 pb-1.5 pt-1.5">
-          {draft.files.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="always" contentContainerClassName="gap-1.5 px-1.5 pt-1">
-            {draft.files.map((file, index) => <View key={`${file.name}:${index}`} className="h-8 max-w-[180px] flex-row items-center gap-1.5 rounded-full bg-card pl-2.5 pr-1">
-              <SymbolView name="doc" size={12} tintColorClassName="accent-foreground-muted" />
-              <AppText numberOfLines={1} className="shrink text-xs">{file.name}</AppText>
-              <Pressable onPress={() => setDraft((current) => ({ ...current, files: current.files.filter((_, at) => at !== index) }))} hitSlop={8} className="size-6 items-center justify-center rounded-full">
-                <SymbolView name="xmark" size={9} weight="semibold" tintColorClassName="accent-foreground-muted" />
-              </Pressable>
-            </View>)}
-          </ScrollView> : null}
-          <AppTextInput value={draft.prompt} onChangeText={(prompt) => setDraft((current) => ({ ...current, prompt }))} placeholder={embedded ? "Peça algo ao Sirus…" : "Pergunte qualquer coisa…"} multiline autoFocus={!embedded}
-            {...(returnSends ? { submitBehavior: "submit" as const, returnKeyType: "send" as const, onSubmitEditing: () => void start() } : {})}
+          <ComposerStrip attachments={strip} modes={composer.modes} onRemoveMode={removeMode} />
+          <ComposerField ref={composer.field} value={draft.prompt} onChangeText={composer.onChangeText} onSelection={composer.setSelection} caret={composer.caret}
+            onFocus={composer.onFocus} onBlur={composer.onBlur} placeholder={embedded ? "Peça algo ao Sirus…" : "Pergunte qualquer coisa…"} autoFocus={!embedded}
+            submit={returnSends ? () => void start() : undefined}
             className="max-h-40 min-h-[64px] rounded-none border-0 bg-transparent px-2 py-2 text-base" />
           <View className="flex-row items-center gap-1">
-            <ControlPillMenu actions={[{ id: "photos", title: "Fotos", image: "photo" }, { id: "files", title: "Escolher arquivos", image: "folder" }]}
-              onPressAction={({ nativeEvent }) => void attach(nativeEvent.event as "photos" | "files")} accessibilityLabel="Anexar">
-              <View className="size-[38px] items-center justify-center"><SymbolView name="plus" size={20} tintColorClassName="accent-icon" /></View>
-            </ControlPillMenu>
+            <Pressable onPress={composer.openSheet} accessibilityRole="button" accessibilityLabel="Adicionar" className="size-[38px] items-center justify-center active:opacity-60">
+              <SymbolView name="plus" size={ICON.composerPlus} tintColorClassName="accent-icon" />
+            </Pressable>
             <View className="flex-1" />
             <ControlPillMenu actions={agentActions} onPressAction={({ nativeEvent }) => {
               const id = nativeEvent.event;
@@ -295,9 +305,9 @@ function MainPage(props: { readonly embedded?: boolean }) {
               else setDraft((current) => ({ ...current, provider, model: id === DEFAULT_MODEL ? null : id.slice(2) }));
             }} accessibilityLabel="Agente e modelo">
               <View className="h-[38px] max-w-[180px] flex-row items-center gap-1.5 rounded-full px-2.5">
-                <ProviderIcon provider={provider} size={15} />
+                <ProviderIcon provider={provider} size={ICON.capsuleProvider - 3} />
                 <AppText numberOfLines={1} className="shrink font-app-medium text-sm">{modelName}</AppText>
-                <SymbolView name="chevron.down" size={10} weight="semibold" tintColorClassName="accent-foreground-muted" />
+                <SymbolView name="chevron.down" size={ICON.capsuleChevron} weight="semibold" tintColorClassName="accent-foreground-muted" />
               </View>
             </ControlPillMenu>
             <View className="pr-1">
@@ -306,6 +316,7 @@ function MainPage(props: { readonly embedded?: boolean }) {
             </View>
           </View>
         </GlassSurface>
+        <AddSheet composer={composer} provider={provider} model={model} onPhotos={() => void attach("photos")} onFiles={() => void attach("files")} />
       </View>
       </KeyboardStickyView>
     </View>

@@ -7,7 +7,7 @@ import { create } from "zustand";
 import { SymbolView, type AppSymbolName } from "../components/AppSymbol";
 import { AppText } from "../components/AppText";
 import { ListSection } from "../components/ListSection";
-import { ProjectTile } from "../components/ProjectTile";
+import { ProjectRobot } from "../components/ProjectRobot";
 import { ThreadRow } from "../components/ThreadRow";
 import { computerName } from "../data/computers";
 import { prKey, projectRepositories, usePullRequests } from "../data/pull-requests";
@@ -16,6 +16,7 @@ import { useSirus } from "../data/store";
 import { useConversationRows, type ConversationRow } from "../data/use-conversations";
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../native/StackHeader";
 import { EmptyState } from "./ConversationsScreen";
+import { ICON } from "../lib/icon-sizes";
 
 type Diff = { additions: number; deletions: number };
 
@@ -94,7 +95,7 @@ export function ProjectsScreen() {
             accessibilityRole="button" accessibilityLabel={item.project.name} className="bg-grouped-card active:bg-row-hover">
             {index > 0 ? <View className="absolute left-[58px] right-0 top-0 bg-separator" style={{ height: StyleSheet.hairlineWidth }} /> : null}
             <View className="flex-row items-center gap-3 px-4 py-3">
-              <ProjectTile computerId={item.computerId} project={item.project} size={30} />
+              <ProjectRobot project={item.project} size={30} working={working > 0} />
               <View className="min-w-0 flex-1 gap-0.5">
                 <AppText numberOfLines={1} className="font-app-bold text-base">{item.project.name}</AppText>
                 <View className="flex-row flex-wrap items-center gap-x-2.5 gap-y-0.5">
@@ -157,7 +158,7 @@ export function ProjectScreen() {
     <ScrollView className="flex-1 bg-screen" contentInsetAdjustmentBehavior="automatic" contentContainerClassName="gap-6 px-4 pb-10 pt-2"
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); void refresh(true).finally(() => setRefreshing(false)); }} />}>
       <View className="flex-row items-center gap-3.5 px-1">
-        <ProjectTile computerId={computerId} project={project} size={44} />
+        <ProjectRobot project={project} size={48} working={rows.some((row) => row.bucket === "working")} />
         <View className="min-w-0 flex-1 gap-0.5">
           <AppText numberOfLines={1} className="font-app-bold text-2xl">{project.name}</AppText>
           <AppText numberOfLines={1} className="text-sm text-foreground-muted">{several && computer ? `${computerName(computer)} · ` : ""}{project.path.replace(/^\/(Users|home)\/[^/]+/, "~")}</AppText>
@@ -170,14 +171,14 @@ export function ProjectScreen() {
         <Counter value={String(pulls.length)} label={pulls.length === 1 ? "PR aberto" : "PRs abertos"} onPress={() => navigation.navigate("PullRequests", { computerId, projectId })} />
       </View>
       <ListSection title="Projeto">
-        <ToolRow icon="plusminus" tint="#30a46c" label="Alterações e commits" detail={diff && (diff.additions || diff.deletions) ? [diff.additions ? `+${diff.additions}` : "", diff.deletions ? `−${diff.deletions}` : ""].filter(Boolean).join(" ") : undefined} onPress={tool("Git")} />
-        <ToolRow separated icon="arrow.triangle.pull" tint="#e5604d" label="Pull requests" detail={entry?.loading && !entry.inbox ? "…" : pulls.length ? String(pulls.length) : undefined} onPress={() => navigation.navigate("PullRequests", { computerId, projectId })} />
-        <ToolRow separated icon="doc.text" tint="#4f8cff" label="Arquivos" onPress={tool("Files", { title: project.name })} />
-        <ToolRow separated icon="terminal" tint="#6e6e78" label="Terminal" onPress={tool("Terminal")} />
+        <ToolRow icon="plusminus" label="Alterações e commits" detail={diff && (diff.additions || diff.deletions) ? [diff.additions ? `+${diff.additions}` : "", diff.deletions ? `−${diff.deletions}` : ""].filter(Boolean).join(" ") : undefined} onPress={tool("Git")} />
+        <ToolRow separated icon="arrow.triangle.pull" label="Pull requests" detail={entry?.loading && !entry.inbox ? "…" : pulls.length ? String(pulls.length) : undefined} onPress={() => navigation.navigate("PullRequests", { computerId, projectId })} />
+        <ToolRow separated icon="doc.text" label="Arquivos" onPress={tool("Files", { title: project.name })} />
+        <ToolRow separated icon="terminal" label="Terminal" onPress={tool("Terminal")} />
       </ListSection>
       {!anchor ? <AppText className="-mt-3 px-3 text-sm text-foreground-muted">Alterações, arquivos e terminal abrem depois da primeira conversa neste projeto.</AppText> : null}
       <ListSection title={rows.length ? `Conversas · ${rows.length}` : "Conversas"}>
-        {rows.length ? rows.map((row, index) => <ThreadRow key={row.session.id} row={row} grouped separated={index > 0} computerLabel={null}
+        {rows.length ? rows.map((row, index) => <ThreadRow key={row.session.id} robot row={row} grouped separated={index > 0} computerLabel={null}
           onPress={() => navigation.navigate("Thread", { computerId, sessionId: row.session.id })} />)
           : <Pressable onPress={() => navigation.navigate("NewThread", { projectKey: `${computerId}:${projectId}` })} className="bg-grouped-card px-4 py-4 active:bg-row-hover">
             <AppText className="font-app-medium text-base text-adaptive-blue-600-400">Começar uma conversa</AppText>
@@ -194,13 +195,13 @@ function Counter(props: { readonly value: React.ReactNode; readonly label: strin
   </Pressable>;
 }
 
-/** An iOS Settings-style row: a white symbol on a coloured rounded square. */
-export function ToolRow(props: { readonly icon: string; readonly tint: string; readonly label: string; readonly detail?: string; readonly separated?: boolean; readonly onPress?: () => void }) {
+/** A row of the project page: a neutral line icon, the label, a detail and a chevron (as `ListRow`). */
+export function ToolRow(props: { readonly icon: string; readonly label: string; readonly detail?: string; readonly separated?: boolean; readonly onPress?: () => void }) {
   return <Pressable disabled={!props.onPress} onPress={props.onPress} accessibilityRole="button" accessibilityLabel={props.label}
     className={`bg-grouped-card active:bg-row-hover ${props.onPress ? "" : "opacity-45"}`}>
     {props.separated ? <View className="absolute left-[56px] right-0 top-0 bg-separator" style={{ height: StyleSheet.hairlineWidth }} /> : null}
     <View className="min-h-[52px] flex-row items-center gap-3 px-4 py-2.5">
-      <IconTile icon={props.icon} tint={props.tint} />
+      <View className="size-7 items-center justify-center"><SymbolView name={props.icon as AppSymbolName} size={ICON.row} tintColorClassName="accent-icon" type="monochrome" weight="regular" /></View>
       <AppText className="flex-1 text-base">{props.label}</AppText>
       {props.detail ? <AppText className="text-sm tabular-nums text-foreground-muted">{props.detail}</AppText> : null}
       <SymbolView name="chevron.right" size={13} weight="semibold" tintColorClassName="accent-chevron" />
@@ -208,9 +209,3 @@ export function ToolRow(props: { readonly icon: string; readonly tint: string; r
   </Pressable>;
 }
 
-export function IconTile(props: { readonly icon: string; readonly tint: string; readonly size?: number }) {
-  const size = props.size ?? 29;
-  return <View className="items-center justify-center border-continuous" style={{ width: size, height: size, borderRadius: Math.round(size * 0.27), backgroundColor: props.tint, experimental_backgroundImage: "linear-gradient(180deg, rgba(255,255,255,0.18), rgba(255,255,255,0) 70%)" }}>
-    <SymbolView name={props.icon as AppSymbolName} size={Math.round(size * 0.55)} weight="medium" tintColor="#ffffff" />
-  </View>;
-}

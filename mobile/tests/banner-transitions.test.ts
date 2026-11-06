@@ -1,4 +1,4 @@
-// @ts-nocheck -- run with `node --import ../scripts/register-test-loader.mjs --test tests/*.test.ts` (Node's own types are not part of the app's tsconfig)
+// @ts-nocheck -- run with `npm test` (Node's own types are not part of the app's tsconfig)
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { advance, INITIAL_TRANSITIONS, pushBanners, stillRelevant, type Observed, type Snapshot } from "../src/data/banner-transitions.ts";

@@ -1,4 +1,4 @@
-// @ts-nocheck -- run with `node --import ../scripts/register-test-loader.mjs --test tests/*.test.ts`
+// @ts-nocheck -- run with `npm test`
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildFeed, currentStep, describeRequest, hourlyActivity } from "../src/data/dashboard.ts";

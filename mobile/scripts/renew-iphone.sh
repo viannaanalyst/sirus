@@ -10,7 +10,7 @@ export PATH="$HOME/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/us
 ROOT="${0:A:h:h}"
 DEVICE="${SIRUS_IPHONE_ID:-00008150-000E18340100C01C}"
 RENEW_AFTER_DAYS=3
-STATE="$HOME/Library/Application Support/com.siruscode.app/iphone-renew"
+STATE="$HOME/Library/Application Support/com.siruscode.native/iphone-renew"
 BUILD=/tmp/sirus-iphone-renew
 mkdir -p "$STATE"
 log() { print -r -- "$(date '+%Y-%m-%d %H:%M:%S') $*"; }

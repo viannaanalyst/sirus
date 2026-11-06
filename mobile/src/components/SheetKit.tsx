@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { SymbolView, type AppSymbolName } from "./AppSymbol";
 import { AppText } from "./AppText";
 import { RoundButton } from "./TopBar";
+import { ICON } from "../lib/icon-sizes";
 
 /**
  * The sheet of the approved design (tpl2 `.sheet .shd .gr`): a rounded-top card over black with a
@@ -52,7 +53,7 @@ export function SheetRow(props: {
 }) {
   return <Pressable onPress={props.onPress} disabled={!props.onPress || props.disabled}
     className={`flex-row items-center gap-[11px] py-3 active:opacity-60 ${props.first ? "" : "border-t border-border-subtle"} ${props.disabled ? "opacity-40" : ""}`}>
-    {props.lead ?? (props.icon ? <SymbolView name={props.icon as AppSymbolName} size={18} weight="medium" tintColorClassName={props.destructive ? "accent-danger-foreground" : "accent-foreground"} /> : null)}
+    {props.lead ?? (props.icon ? <SymbolView name={props.icon as AppSymbolName} size={ICON.sheetRow} weight="medium" tintColorClassName={props.destructive ? "accent-danger-foreground" : "accent-foreground"} /> : null)}
     <View className="min-w-0 flex-1">
       <AppText numberOfLines={1} className={`text-[15px] ${props.bold ? "font-app-medium" : ""} ${props.destructive ? "text-danger-foreground" : ""}`}>{props.title}</AppText>
       {props.note ? <AppText numberOfLines={2} className="text-[12.5px] text-foreground-muted" style={props.noteColor ? { color: props.noteColor } : undefined}>{props.note}</AppText> : null}

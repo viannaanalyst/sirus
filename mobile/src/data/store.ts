@@ -6,6 +6,7 @@ import type { AgentEvent, AgentInstall, AgentProviderId, AgentResponse, AppData,
 import { applyAgentOutput } from "@sirus/lib/agent-events";
 import { applyRowSettingsAction } from "@sirus/lib/environments";
 import { newRequestId } from "@sirus/lib/ids";
+import type { PromptExtras } from "@sirus/lib/composer-modes";
 import { isSnoozed } from "@sirus/lib/snooze";
 import * as SecureStore from "expo-secure-store";
 
@@ -65,6 +66,8 @@ export interface QueuedPrompt {
   readonly prompt: string;
   readonly attachmentIds: string[];
   readonly execution?: ExecutionOptions;
+  /** Goal, debug and team of the composer's modes, sent with the prompt. */
+  readonly extras?: PromptExtras;
   /** Why the last try failed; it tries again the next time the conversation changes. */
   readonly failed?: string;
 }
@@ -102,10 +105,10 @@ interface SirusState {
   /** Loads the page before the oldest loaded message; false when nothing older remains. */
   loadOlder: (computerId: string, sessionId: string) => Promise<boolean>;
   /** One send; a retry of it passes the same `clientRequestId` (otherwise a new one is made). */
-  sendPrompt: (computerId: string, sessionId: string, prompt: string, attachmentIds?: string[], execution?: ExecutionOptions, clientRequestId?: string) => Promise<void>;
+  sendPrompt: (computerId: string, sessionId: string, prompt: string, attachmentIds?: string[], execution?: ExecutionOptions, clientRequestId?: string, extras?: PromptExtras) => Promise<void>;
   stopAgent: (computerId: string, sessionId: string) => Promise<void>;
   /** Sends now, or queues it while the agent works. */
-  submitPrompt: (computerId: string, sessionId: string, prompt: string, attachmentIds?: string[], execution?: ExecutionOptions) => Promise<"sent" | "queued">;
+  submitPrompt: (computerId: string, sessionId: string, prompt: string, attachmentIds?: string[], execution?: ExecutionOptions, extras?: PromptExtras) => Promise<"sent" | "queued">;
   /** Drops a queued message; with `steer`, its text goes into the running reply instead. */
   unqueue: (computerId: string, sessionId: string, id: string, steer?: boolean) => Promise<void>;
   /** Sends the next queued message when the conversation is free. */
@@ -121,7 +124,7 @@ interface SirusState {
   setSessionModel: (computerId: string, sessionId: string, provider: AgentProviderId, model: string | null) => Promise<void>;
   loadModels: (computerId: string, provider: AgentProviderId) => Promise<void>;
   /** Starts a conversation in a project and sends its first message; resolves to the new session. */
-  startSession: (computerId: string, request: { projectId: string; agent: AgentProviderId; model: string | null; isolatedWorktree: boolean; prompt: string; approval: ApprovalMode; files?: { name: string; data: string }[] }) => Promise<Session>;
+  startSession: (computerId: string, request: { projectId: string; agent: AgentProviderId; model: string | null; isolatedWorktree: boolean; prompt: string; approval: ApprovalMode; planning?: boolean; extras?: PromptExtras; files?: { name: string; data: string }[] }) => Promise<Session>;
   invoke: <T>(computerId: string, command: string, args?: Record<string, unknown>) => Promise<T>;
   /** A computer's socket, for screens that follow their own events (the terminal). */
   transportFor: (computerId: string) => RemoteTransport | null;
@@ -301,19 +304,19 @@ export const useSirus = create<SirusState>()((set, get) => {
       }
     },
 
-    sendPrompt: async (computerId, sessionId, prompt, attachmentIds = [], execution, clientRequestId = newRequestId()) => {
-      await get().invoke<Session>(computerId, "send_prompt", { request: { sessionId, prompt: prompt.trim(), attachmentIds, attachmentOwner: `session:${sessionId}`, clientRequestId, ...(execution ? { execution } : {}) } });
+    sendPrompt: async (computerId, sessionId, prompt, attachmentIds = [], execution, clientRequestId = newRequestId(), extras) => {
+      await get().invoke<Session>(computerId, "send_prompt", { request: { sessionId, prompt: prompt.trim(), attachmentIds, attachmentOwner: `session:${sessionId}`, clientRequestId, ...(execution ? { execution } : {}), ...extras } });
     },
 
     stopAgent: async (computerId, sessionId) => {
       await get().invoke<void>(computerId, "stop_agent", { sessionId });
     },
 
-    submitPrompt: async (computerId, sessionId, prompt, attachmentIds = [], execution) => {
+    submitPrompt: async (computerId, sessionId, prompt, attachmentIds = [], execution, extras) => {
       const sessionKey = key(computerId, sessionId);
       // One id for this send, whether it goes now or after waiting in the queue.
       const clientRequestId = newRequestId();
-      const enqueue = () => set((state) => ({ queue: { ...state.queue, [sessionKey]: [...(state.queue[sessionKey] ?? []), { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, clientRequestId, prompt: prompt.trim(), attachmentIds, execution }] } }));
+      const enqueue = () => set((state) => ({ queue: { ...state.queue, [sessionKey]: [...(state.queue[sessionKey] ?? []), { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, clientRequestId, prompt: prompt.trim(), attachmentIds, execution, extras }] } }));
       const session = get().data[computerId]?.sessions.find((item) => item.id === sessionId);
       // Behind a running reply, or behind messages already waiting, it waits its turn.
       if ((session && ACTIVE_STATUS.has(session.status)) || get().queue[sessionKey]?.length) {
@@ -322,7 +325,7 @@ export const useSirus = create<SirusState>()((set, get) => {
         return "queued";
       }
       try {
-        await get().sendPrompt(computerId, sessionId, prompt, attachmentIds, execution, clientRequestId);
+        await get().sendPrompt(computerId, sessionId, prompt, attachmentIds, execution, clientRequestId, extras);
         return "sent";
       } catch (reason) {
         // The list had not caught up with a reply that had just started.
@@ -349,7 +352,7 @@ export const useSirus = create<SirusState>()((set, get) => {
       draining.add(sessionKey);
       const without = (items: QueuedPrompt[] | undefined) => (items ?? []).filter((entry) => entry.id !== next.id);
       try {
-        await get().sendPrompt(computerId, sessionId, next.prompt, next.attachmentIds, next.execution, next.clientRequestId);
+        await get().sendPrompt(computerId, sessionId, next.prompt, next.attachmentIds, next.execution, next.clientRequestId, next.extras);
         set((state) => ({ queue: { ...state.queue, [sessionKey]: without(state.queue[sessionKey]) } }));
       } catch (reason) {
         const message = reason instanceof Error ? reason.message : String(reason);
@@ -435,7 +438,7 @@ export const useSirus = create<SirusState>()((set, get) => {
       set((current) => ({ models: { ...current.models, [`${computerId}:${provider}`]: list } }));
     },
 
-    startSession: async (computerId, { prompt, approval, files = [], ...request }) => {
+    startSession: async (computerId, { prompt, approval, planning, extras, files = [], ...request }) => {
       const session = await get().invoke<Session>(computerId, "create_session", { request });
       set((current) => {
         const data = current.data[computerId];
@@ -444,8 +447,8 @@ export const useSirus = create<SirusState>()((set, get) => {
       });
       // Attachments picked before the conversation existed go to it now, then the first message.
       const owner = `session:${session.id}`;
-      const attached = files.length ? await get().invoke<{ id: string }[]>(computerId, "paste_prompt_attachments", { owner, files, expectedText: null }) : [];
-      await get().invoke<Session>(computerId, "send_prompt", { request: { sessionId: session.id, prompt: prompt.trim(), attachmentIds: attached.map((item) => item.id), attachmentOwner: owner, execution: { approval } } });
+      const attached = files.length ? await get().invoke<{ id: string }[]>(computerId, "paste_prompt_attachments", { owner, files: files.map(({ name, data }) => ({ name, data })), expectedText: null }) : [];
+      await get().invoke<Session>(computerId, "send_prompt", { request: { sessionId: session.id, prompt: prompt.trim(), attachmentIds: attached.map((item) => item.id), attachmentOwner: owner, execution: { approval, ...(planning ? { planning: true } : {}) }, ...extras } });
       return session;
     },
 

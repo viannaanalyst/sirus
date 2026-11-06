@@ -133,13 +133,13 @@ export function ConversationsScreen(props: { readonly mode?: "tab" | "search" })
     <KeyboardStickyView offset={{ closed: 0, opened: Math.max(insets.bottom, 12) - 8 }} style={{ position: "absolute", left: 0, right: 0, bottom: 0 }}>
       <View style={{ paddingHorizontal: 12, paddingBottom: Math.max(insets.bottom, 12) }}>
         <GlassSurface style={{ borderRadius: 29 }} className="h-[58px] flex-row items-center gap-1 px-2">
-          <View className="size-[42px] items-center justify-center"><SymbolView name="magnifyingglass" size={18} tintColorClassName="accent-foreground-muted" /></View>
+          <View className="size-[42px] items-center justify-center"><SymbolView name="magnifyingglass" size={20} tintColorClassName="accent-foreground-muted" /></View>
           <AppTextInput value={query} onChangeText={setQuery} placeholder="Buscar conversas" autoCapitalize="none" autoCorrect={false} returnKeyType="search"
             className="min-h-0 flex-1 rounded-none border-0 bg-transparent px-0 py-0 text-base" />
-          {query ? <Pressable onPress={() => setQuery("")} hitSlop={8} accessibilityLabel="Limpar busca"><SymbolView name="xmark.circle.fill" size={17} tintColorClassName="accent-foreground-muted" /></Pressable> : null}
+          {query ? <Pressable onPress={() => setQuery("")} hitSlop={8} accessibilityLabel="Limpar busca"><SymbolView name="xmark.circle.fill" size={19} tintColorClassName="accent-foreground-muted" /></Pressable> : null}
           <ControlPillMenu actions={filterActions} onPressAction={({ nativeEvent }) => onFilter(nativeEvent.event)} accessibilityLabel="Filtrar conversas">
             <View className={`size-[42px] items-center justify-center rounded-full ${filtered ? "bg-subtle-strong" : ""}`}>
-              <SymbolView name={(filtered ? "line.3.horizontal.decrease.circle.fill" : "slider.horizontal.3") as never} size={18} tintColorClassName="accent-foreground" />
+              <SymbolView name={(filtered ? "line.3.horizontal.decrease.circle.fill" : "slider.horizontal.3") as never} size={20} tintColorClassName="accent-foreground" />
             </View>
           </ControlPillMenu>
         </GlassSurface>

@@ -4,6 +4,8 @@ import { Pressable, View } from "react-native";
 import { SymbolView } from "../AppSymbol";
 import { AppText } from "../AppText";
 import { ShimmerText } from "./Shimmer";
+import { useWorkAnchor } from "./work-anchors";
+import { ICON } from "../../lib/icon-sizes";
 
 /**
  * One row of the activity tree (the approved preview's `row`): a small rounded tile on the
@@ -22,13 +24,14 @@ export const TreeRow = memo(function TreeRow(props: {
   readonly onPress?: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  const anchor = useWorkAnchor("live", !!props.live);
   const expandable = Boolean(props.body);
   const press = props.onPress ?? (expandable ? () => setOpen((value) => !value) : undefined);
-  return <View>
+  return <View ref={anchor} collapsable={false}>
     <Pressable onPress={press} disabled={!press} accessibilityRole={press ? "button" : undefined} className="min-h-8 flex-row items-center gap-[9px] active:opacity-70">
-      <View className={`size-[26px] items-center justify-center rounded-[9px] border bg-card ${props.live ? "border-[#7fb4ff66]" : "border-border-subtle"}`}
+      <View className={`size-[28px] items-center justify-center rounded-[9px] border bg-card ${props.live ? "border-[#7fb4ff66]" : "border-border-subtle"}`}
         style={props.live ? { shadowColor: "#7fb4ff", shadowOpacity: 0.35, shadowRadius: 4, shadowOffset: { width: 0, height: 0 } } : undefined}>
-        <SymbolView name={props.icon as never} size={14} tintColorClassName={props.failed ? "accent-danger-foreground" : "accent-foreground-muted"} />
+        <SymbolView name={props.icon as never} size={ICON.treeGlyph} tintColorClassName={props.failed ? "accent-danger-foreground" : "accent-foreground-muted"} />
       </View>
       {props.live
         ? <ShimmerText numberOfLines={1} className="min-w-0 flex-1 text-[13.5px] text-foreground-muted">{props.children}</ShimmerText>

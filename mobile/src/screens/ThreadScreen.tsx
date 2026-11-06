@@ -1,15 +1,17 @@
 import { useNavigation, useRoute, type NavigationProp, type ParamListBase, type RouteProp } from "@react-navigation/native";
 import * as Haptics from "expo-haptics";
 import { SymbolView } from "../components/AppSymbol";
+import { ICON } from "../lib/icon-sizes";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as Clipboard from "expo-clipboard";
-import { ActivityIndicator, Alert, FlatList, Pressable, ScrollView, View } from "react-native";
+import { ActivityIndicator, Alert, FlatList, Pressable, View } from "react-native";
+import Animated, { FadeIn, FadeOut, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 import { KeyboardStickyView, useKeyboardState } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import type { Message, PromptAttachment, TurnActivity } from "@sirus/client/types";
+import type { Message, MessageAttachment, PromptAttachment, TurnActivity } from "@sirus/client/types";
+import { afterSend, executionWithModes, promptExtras, setDebugging, setGoal, setPlanning, setTeam } from "@sirus/lib/composer-modes";
 
-import { AppText, AppTextInput } from "../components/AppText";
 import { ComposerSend } from "../components/ComposerSend";
 import { ProviderIcon } from "../components/ProviderIcon";
 import { ControlPillMenu } from "../components/ControlPillMenu";
@@ -19,7 +21,14 @@ import { AgentRequest, PromptQueue } from "../components/AgentRequest";
 import { UserText } from "../components/UserText";
 import { OpenSubagent } from "../components/thread/subagent-context";
 import { SubagentSheet, type SubagentTarget } from "../components/thread/SubagentSheet";
-import { WorkingPill } from "../components/thread/WorkingPill";
+import { WORKING_PILL_HEIGHT, WorkingPill } from "../components/thread/WorkingPill";
+import { createWorkAnchors, scrollTargetFor, WorkAnchorsContext, type WorkAnchor } from "../components/thread/work-anchors";
+import { AddSheet } from "../components/composer/AddSheet";
+import { ComposerField } from "../components/composer/ComposerField";
+import { ComposerStrip, type StripAttachment } from "../components/composer/ComposerStrip";
+import { SuggestionsPanel } from "../components/composer/SuggestionsPanel";
+import { useComposer } from "../components/composer/useComposer";
+import { SentAttachments } from "../components/SentAttachments";
 import { useConversationModel } from "../data/conversation-model";
 import { attachmentOwner, pickAttachments, releaseAttachments, uploadAttachments } from "../data/attachments";
 import { useMacAccent } from "../data/mac-accent";
@@ -30,6 +39,23 @@ import { NativeHeaderToolbar, NativeStackScreenOptions } from "../native/StackHe
 type ThreadParams = { Thread: { computerId: string; sessionId: string } };
 
 const NO_QUEUE: QueuedPrompt[] = [];
+
+/** Room the list keeps above the composer for the "Trabalhando" pill: its height plus a breath. */
+const PILL_SPACE = WORKING_PILL_HEIGHT + 4;
+/** The list's gap between rows. */
+const ROW_GAP = 18;
+
+/**
+ * The end of the list grows by the pill's room while the pill shows, animated so the text above
+ * does not jump when the pill comes or goes. Its negative margin cancels the list's row gap
+ * while it is closed.
+ */
+function PillSpacer(props: { readonly on: boolean }) {
+  const room = useSharedValue(props.on ? PILL_SPACE : 0);
+  useEffect(() => { room.value = withTiming(props.on ? PILL_SPACE : 0, { duration: 220 }); }, [props.on, room]);
+  const style = useAnimatedStyle(() => ({ height: room.value, marginTop: -ROW_GAP * (1 - room.value / PILL_SPACE) }));
+  return <Animated.View pointerEvents="none" style={style} />;
+}
 
 /**
  * A conversation: the native glass header (back, title and project, then the
@@ -64,6 +90,8 @@ export function ThreadScreen() {
   const lift = keyboardHeight ? Math.max(keyboardHeight - safeArea.bottom + 8, 0) : 0;
   const atEnd = useRef(true);
   const dragging = useRef(false);
+  const anchors = useMemo(createWorkAnchors, []);
+  const scroll = useRef({ offset: 0, viewport: 0, content: 0 });
 
   useEffect(() => {
     void useSirus.getState().loadTranscript(computerId, sessionId).catch(() => undefined);
@@ -108,8 +136,45 @@ export function ThreadScreen() {
     for (let index = (messages?.length ?? 0) - 1; index >= 0; index -= 1) if (messages![index]!.role === "agent" && messages![index]!.activity) return messages![index]!.activity ?? undefined;
     return undefined;
   }, [messages]);
+  const pillOn = working && !!latestActivity;
 
-  return <OpenSubagent.Provider value={openSubagent}><View className="flex-1 bg-thread-canvas">
+  /**
+   * The pill's tap: brings the current work into view. Subagents running: their card, opened.
+   * Otherwise the lowest live step (the end of the running tree); with neither on screen, the end.
+   */
+  const jumpToWork = useCallback(async () => {
+    const native = list.current?.getNativeScrollRef() as { measureInWindow?: (callback: (x: number, y: number, width: number, height: number) => void) => void } | null;
+    const place = (anchor: WorkAnchor) => new Promise<{ y: number; height: number } | null>((resolve) => {
+      const node = anchor.ref.current;
+      if (!node || !native?.measureInWindow) return resolve(null);
+      native.measureInWindow((_x, listTop) => node.measureInWindow((_nx, top, _w, height) => resolve({ y: top - listTop + scroll.current.offset, height })));
+    });
+    const lowest = async (pool: readonly WorkAnchor[]) => {
+      let best: { anchor: WorkAnchor; y: number; height: number } | null = null;
+      for (const anchor of pool) {
+        const at = await place(anchor);
+        if (at && (!best || at.y > best.y)) best = { anchor, ...at };
+      }
+      return best;
+    };
+    const all = anchors.all();
+    const teams = all.filter((anchor) => anchor.kind === "team");
+    let target = await lowest(teams.length ? teams : all);
+    if (target && teams.length) {
+      // Open the card, give the layout a moment, and measure it open.
+      target.anchor.expand?.();
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      target = (await lowest([target.anchor])) ?? target;
+    }
+    dragging.current = true;
+    if (!target) { atEnd.current = true; toEnd(true); return; }
+    const { viewport, content } = scroll.current;
+    const offset = scrollTargetFor({ y: target.y, height: target.height, viewport, topPad: safeArea.top + 52, bottomReserve: composerHeight + lift + PILL_SPACE + 12, contentHeight: content });
+    atEnd.current = offset >= content - viewport - 160;
+    list.current?.scrollToOffset({ offset, animated: true });
+  }, [anchors, safeArea.top, composerHeight, lift]);
+
+  return <WorkAnchorsContext.Provider value={anchors}><OpenSubagent.Provider value={openSubagent}><View className="flex-1 bg-thread-canvas">
     <NativeStackScreenOptions options={{ title: session?.title || "Conversa", unstable_headerSubtitle: subtitle }} optionsVersion={[session?.title, subtitle, pinned]} />
     <NativeHeaderToolbar placement="right">
       {/* iOS lays the right placement out in reverse: JSX runs right to left, so the screen reads terminal, files, changes, menu. */}
@@ -148,14 +213,19 @@ export function ThreadScreen() {
       keyExtractor={(message) => message.id}
       renderItem={({ item, index }) => <MessageRow message={item} computerId={computerId} agent={session?.agent ?? "claude"} cwd={cwd} files={files} prompt={shown[index - 1]?.role === "user" ? shown[index - 1]!.content : ""} />}
       // The agent waiting on an approval or an answer, as the desktop's cards under the reply.
-      ListFooterComponent={requests.length ? <View className="gap-3">
-        {requests.map((request) => <AgentRequest key={request.requestId} computerId={computerId} sessionId={sessionId} agent={session?.agent ?? "claude"} request={request} />)}
-      </View> : undefined}
-      contentContainerStyle={{ paddingHorizontal: 18, paddingTop: safeArea.top + 44 + 8, paddingBottom: composerHeight + lift + 12, gap: 18 }}
+      ListFooterComponent={<View style={{ marginTop: requests.length ? 0 : -ROW_GAP }}>
+        {requests.length ? <View className="gap-3">
+          {requests.map((request) => <AgentRequest key={request.requestId} computerId={computerId} sessionId={sessionId} agent={session?.agent ?? "claude"} request={request} />)}
+        </View> : null}
+        <PillSpacer on={pillOn} />
+      </View>}
+      contentContainerStyle={{ paddingHorizontal: 18, paddingTop: safeArea.top + 44 + 8, paddingBottom: composerHeight + lift + 12, gap: ROW_GAP }}
+      onLayout={({ nativeEvent }) => { scroll.current.viewport = nativeEvent.layout.height; }}
+      onContentSizeChange={(_width, height) => { scroll.current.content = height; if (atEnd.current) toEnd(); }}
       // Follows new content while the newest message is in view; a drag up stops it.
-      onContentSizeChange={() => { if (atEnd.current) toEnd(); }}
       onScrollBeginDrag={() => { dragging.current = true; }}
       onScroll={({ nativeEvent }) => {
+        scroll.current = { offset: nativeEvent.contentOffset.y, viewport: nativeEvent.layoutMeasurement.height, content: nativeEvent.contentSize.height };
         if (dragging.current && nativeEvent.contentOffset.y < nativeEvent.layoutMeasurement.height * 1.5) loadOlder();
         const near = nativeEvent.contentOffset.y + nativeEvent.layoutMeasurement.height >= nativeEvent.contentSize.height - 160;
         if (dragging.current) atEnd.current = near;
@@ -166,22 +236,28 @@ export function ThreadScreen() {
     />}
     <Composer computerId={computerId} sessionId={sessionId} working={working} onHeight={setComposerHeight} agent={session?.agent ?? "claude"} queued={queued}
       away={away} onJump={() => { atEnd.current = true; dragging.current = false; setAway(false); toEnd(true); }}
-      pill={working ? <WorkingPill activity={latestActivity} /> : null} />
+      pill={pillOn ? <WorkingPill activity={latestActivity} onPress={() => void jumpToWork()} /> : null} />
     <SubagentSheet computerId={computerId} sessionId={sessionId} target={subagent} provider={session?.agent ?? "claude"} onClose={closeSubagent} />
-  </View></OpenSubagent.Provider>;
+  </View></OpenSubagent.Provider></WorkAnchorsContext.Provider>;
 }
 
 const MessageRow = memo(function MessageRow(props: { readonly message: Message; readonly computerId: string; readonly agent: string; readonly cwd?: string; readonly files?: ReplyFiles; readonly prompt: string }) {
-  if (props.message.role === "user") return <UserBubble text={props.message.content} computerId={props.computerId} />;
+  if (props.message.role === "user") return <UserBubble text={props.message.content} attachments={props.message.attachments} computerId={props.computerId} />;
   return <AgentReply message={props.message} computerId={props.computerId} agent={props.agent} cwd={props.cwd} files={props.files} prompt={props.prompt} />;
 });
 
 /** A sent message in the Mac's accent at 24%: a pill on one line, a card past it (as Monocode's). */
-function UserBubble(props: { readonly text: string; readonly computerId: string }) {
+function UserBubble(props: { readonly text: string; readonly attachments?: readonly MessageAttachment[]; readonly computerId: string }) {
   const accent = useMacAccent(props.computerId);
   const [lines, setLines] = useState(1);
-  return <View style={{ alignSelf: "flex-end", maxWidth: "88%", paddingHorizontal: 14, paddingVertical: 9, borderRadius: lines > 1 ? 14 : 21, borderCurve: "continuous", backgroundColor: `${accent}3d` }}>
+  const bubble = props.text.trim() ? <View style={{ alignSelf: "flex-end", maxWidth: "88%", paddingHorizontal: 14, paddingVertical: 9, borderRadius: lines > 1 ? 14 : 21, borderCurve: "continuous", backgroundColor: `${accent}3d` }}>
     <UserText text={props.text} onLines={setLines} />
+  </View> : null;
+  if (!props.attachments?.length) return bubble;
+  // The files go over the bubble, as on the Mac (`sent_chips`).
+  return <View className="items-end gap-1.5">
+    <SentAttachments attachments={props.attachments} computerId={props.computerId} />
+    {bubble}
   </View>;
 }
 
@@ -205,17 +281,21 @@ function Composer(props: {
   const returnSends = useSirus((state) => state.prefs.returnKey === "send");
   const [busy, setBusy] = useState<"sending" | "attaching" | null>(null);
   const canSend = (text.trim().length > 0 || attachments.length > 0) && !busy;
-  const { execution } = useConversationModel(props.computerId, props.sessionId);
+  const { execution, provider, model, session } = useConversationModel(props.computerId, props.sessionId);
   const accent = useMacAccent(props.computerId);
+  const skillOwner = useMemo(() => ({ projectId: null, sessionId: props.sessionId }), [props.sessionId]);
+  const composer = useComposer({ computerId: props.computerId, owner: skillOwner, provider, model, text, setText, savedGoal: session?.goal });
   const submit = async () => {
     if (!canSend) return;
     setBusy("sending");
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     try {
       // While the agent works it joins the queue and goes once the reply ends.
-      await useSirus.getState().submitPrompt(props.computerId, props.sessionId, text, attachments.map((item) => item.id), execution);
+      await useSirus.getState().submitPrompt(props.computerId, props.sessionId, text, attachments.map((item) => item.id),
+        executionWithModes(execution, composer.modes, provider, model), promptExtras(composer.modes, provider, model));
       setText("");
       setAttachments([]);
+      composer.setModes(afterSend);
     } catch (reason) {
       Alert.alert("Não foi possível enviar", reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -240,35 +320,36 @@ function Composer(props: {
     void releaseAttachments(props.computerId, owner, [id]);
   };
   const stop = () => void useSirus.getState().stopAgent(props.computerId, props.sessionId).catch(() => undefined);
-  const plus = <ControlPillMenu actions={[{ id: "photos", title: "Fotos", image: "photo" }, { id: "files", title: "Escolher arquivos", image: "folder" }]}
-    onPressAction={({ nativeEvent }) => void attach(nativeEvent.event as "photos" | "files")} accessibilityLabel="Anexar">
-    <View className="h-[42px] w-[38px] items-center justify-center"><SymbolView name="plus" size={21} tintColorClassName="accent-icon" /></View>
-  </ControlPillMenu>;
+  const strip = useMemo<StripAttachment[]>(() => attachments.map((item) => ({
+    key: item.id, name: item.name, onRemove: () => remove(item.id),
+    image: !!item.mimeType?.startsWith("image/") || !!item.previewUrl?.startsWith("data:image/"),
+    uri: item.previewUrl?.startsWith("data:image/") ? item.previewUrl : undefined,
+  })), [attachments]); // eslint-disable-line react-hooks/exhaustive-deps
+  const plus = <Pressable onPress={composer.openSheet} accessibilityRole="button" accessibilityLabel="Adicionar" className="h-[42px] w-[38px] items-center justify-center active:opacity-60">
+    <SymbolView name="plus" size={ICON.composerPlus} tintColorClassName="accent-icon" />
+  </Pressable>;
   const send = <ComposerSend text={text} onTextChange={setText} onSend={() => void submit()} sending={busy === "sending"} canSend={canSend} accent={accent}
     onStop={props.working && !attachments.length ? stop : undefined} disabled={busy === "attaching"} />;
-  const field = <AppTextInput value={text} onChangeText={setText} placeholder="Pergunte ao agente…" multiline
-    {...(returnSends ? { submitBehavior: "submit" as const, returnKeyType: "send" as const, onSubmitEditing: () => void submit() } : {})}
+  const field = <ComposerField ref={composer.field} value={text} onChangeText={composer.onChangeText} onSelection={composer.setSelection} caret={composer.caret}
+    onFocus={composer.onFocus} onBlur={composer.onBlur} placeholder="Pergunte ao agente…" submit={returnSends ? () => void submit() : undefined}
     className="max-h-40 min-h-[42px] rounded-none border-0 bg-transparent px-1 py-2.5 text-base" />;
+  const listing = composer.suggestions.visible;
+  const removeMode = (id: "planning" | "debugging" | "team" | "goal") => composer.changeModes((current) => id === "planning" ? setPlanning(current, false) : id === "debugging" ? setDebugging(current, false) : id === "team" ? setTeam(current, false) : setGoal(current, ""));
   return <KeyboardStickyView offset={{ closed: 0, opened: insets.bottom - 8 }} style={{ position: "absolute", left: 0, right: 0, bottom: 0 }}>
-    {props.away ? <Pressable onPress={props.onJump} accessibilityLabel="Ir para a última mensagem" style={{ position: "absolute", top: -52, right: 16 }}>
+    {/* The jump arrow rides above the pill when both show, so they never overlap. */}
+    {props.away && !listing ? <Pressable onPress={props.onJump} accessibilityLabel="Ir para a última mensagem" style={{ position: "absolute", top: props.pill ? -(46 + 46) : -52, right: 16 }}>
       <GlassSurface style={{ borderRadius: 20 }} className="size-10 items-center justify-center">
-        <SymbolView name="arrow.down" size={16} weight="semibold" tintColorClassName="accent-foreground" />
+        <SymbolView name="arrow.down" size={18} weight="semibold" tintColorClassName="accent-foreground" />
       </GlassSurface>
     </Pressable> : null}
-    {props.pill ? <View pointerEvents="none" style={{ position: "absolute", top: -46, left: 0, right: 0, alignItems: "center" }}>{props.pill}</View> : null}
+    {props.pill && !listing ? <Animated.View entering={FadeIn.duration(200)} exiting={FadeOut.duration(160)} pointerEvents="box-none" style={{ position: "absolute", top: -46, left: 0, right: 0, alignItems: "center" }}>{props.pill}</Animated.View> : null}
+    <View style={{ paddingHorizontal: 12 }}><SuggestionsPanel composer={composer} /></View>
     <View style={{ paddingHorizontal: 12, paddingBottom: Math.max(insets.bottom, 12) }} onLayout={(event) => props.onHeight(Math.round(event.nativeEvent.layout.height))}>
       {props.queued.length ? <PromptQueue computerId={props.computerId} sessionId={props.sessionId} agent={props.agent} items={props.queued} /> : null}
       <GlassSurface style={{ borderRadius: 29 }} className="min-h-[58px] justify-center p-[7px]">
-        {attachments.length || busy === "attaching" ? <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="always" contentContainerClassName="gap-1.5 px-1.5 pb-1 pt-1">
-          {attachments.map((item) => <View key={item.id} className="h-8 max-w-[180px] flex-row items-center gap-1.5 rounded-full bg-card pl-2.5 pr-1">
-            <SymbolView name={item.mimeType?.startsWith("image/") ? "photo" : "doc"} size={12} tintColorClassName="accent-foreground-muted" />
-            <AppText numberOfLines={1} className="shrink text-xs">{item.name}</AppText>
-            <Pressable onPress={() => remove(item.id)} hitSlop={8} accessibilityLabel={`Remover ${item.name}`} className="size-6 items-center justify-center rounded-full active:bg-row-hover">
-              <SymbolView name="xmark" size={9} weight="semibold" tintColorClassName="accent-foreground-muted" />
-            </Pressable>
-          </View>)}
+        <ComposerStrip attachments={strip} modes={composer.modes} onRemoveMode={removeMode}>
           {busy === "attaching" ? <View className="h-8 justify-center px-2"><ActivityIndicator size="small" /></View> : null}
-        </ScrollView> : null}
+        </ComposerStrip>
         {/* One row: + , the field, the model, the microphone and send or stop. The controls
             stay at the bottom while the field grows. */}
         <View className="flex-row items-end gap-0.5">
@@ -279,6 +360,7 @@ function Composer(props: {
         </View>
       </GlassSurface>
     </View>
+    <AddSheet composer={composer} provider={provider} model={model} busy={busy !== null} onPhotos={() => void attach("photos")} onFiles={() => void attach("files")} />
   </KeyboardStickyView>;
 }
 
@@ -288,7 +370,7 @@ function ModelButton(props: { readonly computerId: string; readonly sessionId: s
   const { provider, name } = useConversationModel(props.computerId, props.sessionId);
   return <Pressable onPress={() => navigation.navigate("ThreadSettings", { computerId: props.computerId, sessionId: props.sessionId })} accessibilityLabel={`Modelo: ${name}`}
     className="h-[34px] flex-row items-center gap-[3px] rounded-[17px] bg-card px-2.5 active:bg-row-hover">
-    <ProviderIcon provider={provider} size={18} />
-    <SymbolView name="chevron.down" size={10} weight="semibold" tintColorClassName="accent-foreground-muted" />
+    <ProviderIcon provider={provider} size={ICON.capsuleProvider} />
+    <SymbolView name="chevron.down" size={ICON.capsuleChevron} weight="semibold" tintColorClassName="accent-foreground-muted" />
   </Pressable>;
 }

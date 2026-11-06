@@ -5,8 +5,9 @@ use crate::models::{AppData, AppSettings, Project, ProjectAppearance, Session};
 
 /// Eye styles and accessories the avatar draws (ADR-175, v2); anything else is refused.
 pub const EYES: [&str; 4] = ["bars", "dots", "sleepy", "happy"];
-pub const ACCESSORIES: [&str; 9] = [
-    "none", "tophat", "crown", "antenna", "bow", "flower", "beanie", "headset", "scarf",
+pub const ACCESSORIES: [&str; 17] = [
+    "none", "tophat", "crown", "antenna", "bow", "flower", "beanie", "headset", "scarf", "round",
+    "square", "cloud", "ghost", "hex", "capsule", "tv", "bean",
 ];
 
 /// The v2 eyes for a name saved before v2 (`dot` and `round` became `dots`, `wide` became `bars`).

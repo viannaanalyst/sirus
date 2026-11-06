@@ -366,7 +366,7 @@ impl Shell {
                         |this, _, _, cx| {
                             this.term.plus_menu = None;
                             this.term.active = None;
-                            this.new_conversation(None);
+                            this.new_conversation(None, cx);
                             cx.notify();
                         },
                     )),

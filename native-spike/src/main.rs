@@ -59,6 +59,7 @@ mod subagent_team;
 mod syntax;
 mod fonts;
 mod step_lines;
+mod new_tab_field;
 mod tab_label;
 mod tab_tile;
 mod tool_images;

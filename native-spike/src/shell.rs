@@ -914,6 +914,7 @@ pub struct Shell {
     settings: Value,
     provider_accounts: Value,
     selected_accounts: Value,
+    new_tab_fx: crate::new_tab_field::State,
     dock_width: f32,
     resizing_dock: bool,
     /// The add menu: main list, or its goal page.
@@ -1208,6 +1209,7 @@ impl Shell {
             settings: Value::Null,
             provider_accounts: Value::Null,
             selected_accounts: json!({}),
+            new_tab_fx: Default::default(),
             dock_width: 470.,
             resizing_dock: false,
             add_menu: None,
@@ -3274,7 +3276,7 @@ impl Shell {
         conversation.rebuild_last();
     }
 
-    fn new_conversation(&mut self, project: Option<usize>) {
+    fn new_conversation(&mut self, project: Option<usize>, cx: &mut Context<Self>) {
         let active = self.active_conversation();
         let project = project
             .or_else(|| {
@@ -3284,6 +3286,19 @@ impl Shell {
             })
             .or(self.project_order.first().copied());
         let Some(project) = project else { return };
+        // An open tab that is still empty is already a new conversation: go there, no second one.
+        let empty = self.projects[project].conversations.iter().find_map(|&ix| {
+            let conversation = &self.conversations[ix];
+            let blank = conversation.is_blank() && !conversation.working();
+            blank
+                .then(|| self.tabs.iter().find(|t| t.conversation == ix && !t.closing))
+                .flatten()
+                .map(|tab| tab.id)
+        });
+        if let Some(id) = empty {
+            self.select(id, cx);
+            return;
+        }
         let agent = self.conversations[active].provider;
         let model = self.conversations[active].model.clone();
         let id = self.backend.invoke("create_session", json!({ "request": { "projectId": self.projects[project].id, "agent": agent, "isolatedWorktree": false, "model": model } }));
@@ -4604,7 +4619,7 @@ impl Shell {
             .collect();
         match (cmd, shift, ctrl, key) {
             (true, false, false, "q") => cx.quit(),
-            (true, false, false, "t") | (true, false, false, "n") => self.new_conversation(None),
+            (true, false, false, "t") | (true, false, false, "n") => self.new_conversation(None, cx),
             (true, false, false, "w") => self.close(self.active, cx),
             (true, true, false, "p") => self.toggle_pin(self.active, cx),
             (true, false, false, "s") => self.toggle_sidebar(cx),
@@ -5788,7 +5803,7 @@ impl Shell {
                                 if this.term_plus_click(strip_left + add_x, cx) {
                                     return;
                                 }
-                                this.new_conversation(None);
+                                this.new_conversation(None, cx);
                                 cx.notify();
                             })),
                     ),
@@ -6247,7 +6262,7 @@ impl Shell {
                         self.open(next, cx);
                         self.close(tab, cx);
                     }
-                    None => self.new_conversation(project),
+                    None => self.new_conversation(project, cx),
                 }
             }
         }
@@ -6733,7 +6748,7 @@ impl Shell {
                                     close(this);
                                     this.close_project_menu();
                                     this.enter_project(Some(index));
-                                    this.new_conversation(Some(index));
+                                    this.new_conversation(Some(index), cx);
                                     cx.notify();
                                 }),
                             ),
@@ -7198,7 +7213,7 @@ impl Shell {
         if self.tabs.is_empty() {
             match self.projects[index].conversations.first().copied() {
                 Some(first) => self.open(first, cx),
-                None => self.new_conversation(Some(index)),
+                None => self.new_conversation(Some(index), cx),
             }
         }
         cx.notify();
@@ -8700,17 +8715,44 @@ impl Shell {
                         linear_color_stop(transparent(), 1.),
                     )),
             )
+            .children(self.new_tab_field(index, now, moving, cx))
             .children(self.new_tab_greeting(index))
             .child(self.composer(live, cx))
             .children(self.switch_view(now, moving))
             .into_any_element()
     }
 
+    /// The moving background behind a new tab's greeting (new_tab_field.rs).
+    fn new_tab_field(
+        &mut self,
+        index: usize,
+        now: Instant,
+        moving: &mut bool,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let conversation = &self.conversations[index];
+        if !conversation.is_blank() {
+            return None;
+        }
+        let project = self.projects.get(self.project_of(index)?)?;
+        let (shape, color) =
+            crate::project_avatar::look_of(&project.name, &project.appearance);
+        *moving |= self.new_tab_fx.moving(now);
+        Some(crate::new_tab_field::field(
+            shape,
+            color,
+            &self.new_tab_fx,
+            |this: &mut Shell| &mut this.new_tab_fx,
+            cx.entity().downgrade(),
+            cx.reduce_motion(),
+        ))
+    }
+
     /// A conversation with nothing in it yet: its project's icon in the middle, a line under it,
     /// and the composer stays at the bottom.
     fn new_tab_greeting(&self, index: usize) -> Option<AnyElement> {
         let conversation = &self.conversations[index];
-        if !conversation.turns.is_empty() || conversation.handoff.is_some() {
+        if !conversation.is_blank() {
             return None;
         }
         let project = self.projects.get(self.project_of(index)?)?;
@@ -11464,7 +11506,7 @@ impl Shell {
                     self.open(first, cx);
                 }
             }
-            PaletteHit::Command(0) => self.new_conversation(None),
+            PaletteHit::Command(0) => self.new_conversation(None, cx),
             PaletteHit::Command(1) => self.toggle_sidebar(cx),
             PaletteHit::Command(2) => self.toggle_dock(cx),
             PaletteHit::Command(3) => self.toggle_appearance(cx),

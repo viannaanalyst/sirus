@@ -238,6 +238,11 @@ impl Conversation {
             .unwrap_or_default();
     }
 
+    /// Known to hold nothing yet. One still loading may turn out to have a whole transcript.
+    pub fn is_blank(&self) -> bool {
+        self.loaded && self.turns.is_empty() && self.handoff.is_none()
+    }
+
     pub fn working(&self) -> bool {
         matches!(self.status.as_str(), "starting" | "running" | "waiting")
     }

@@ -1,0 +1,247 @@
+//! The new tab's background: a field of letters that draws the project's robot in its colour. It
+//! moves away from the pointer and a click sends a wave through it. Glyphs are shaped once and
+//! painted cell by cell; between events nothing asks for a frame.
+use std::cell::OnceCell;
+use std::time::Instant;
+
+use gpui::{
+    AnyElement, App, Bounds, DispatchPhase, FontId, GlyphId, Hsla, MouseDownEvent, MouseMoveEvent,
+    Pixels, Point, Rgba, Window, point, prelude::*, px,
+};
+
+const CELL_W: f32 = 7.;
+const CELL_H: f32 = 11.;
+const FONT_SIZE: f32 = 10.;
+/// How long a click's wave runs.
+const WAVE_S: f32 = 2.4;
+const WAVE_SPEED: f32 = 420.;
+/// From faint to dense.
+const RAMP: &str = ".,:;-=+*#%@";
+
+#[derive(Default)]
+pub struct State {
+    mouse: Option<Point<Pixels>>,
+    waves: Vec<(Point<Pixels>, Instant)>,
+}
+
+impl State {
+    /// Whether a wave is still running, so the next frame has something to draw.
+    pub fn moving(&mut self, now: Instant) -> bool {
+        self.waves
+            .retain(|(_, at)| now.duration_since(*at).as_secs_f32() < WAVE_S);
+        !self.waves.is_empty()
+    }
+
+    fn point_at(&mut self, position: Option<Point<Pixels>>) -> bool {
+        let changed = self.mouse != position;
+        self.mouse = position;
+        changed
+    }
+
+    fn click(&mut self, at: Point<Pixels>, now: Instant) {
+        self.waves.push((at, now));
+        if self.waves.len() > 4 {
+            self.waves.remove(0);
+        }
+    }
+}
+
+/// Strength at a distance from a click, `age` seconds after it: a ring moving out and fading.
+fn wave_at(distance: f32, age: f32) -> f32 {
+    let front = age * WAVE_SPEED;
+    (-(distance - front).powi(2) / 5200.).exp() * (-age * 1.5).exp()
+}
+
+/// A steady 0..1 per cell, for the grain around the robot.
+fn grain(column: i32, row: i32) -> f32 {
+    let seed = (column as u32).wrapping_mul(73_856_093) ^ (row as u32).wrapping_mul(19_349_663);
+    (seed.wrapping_mul(2_654_435_761) >> 16 & 0xff) as f32 / 255.
+}
+
+/// How much of the robot a point shows: 0 outside it and in its eyes, more toward its middle.
+fn figure(shape: &str, x: f32, y: f32) -> f32 {
+    if !crate::project_avatar::shape_contains(shape, x, y) {
+        return 0.;
+    }
+    let eye = |cx: f32| ((x - cx) / 5.).powi(2) + ((y - 31.) / 7.).powi(2) < 1.;
+    if eye(23.) || eye(41.) {
+        return 0.05;
+    }
+    let from_middle = ((x - 32.).powi(2) + (y - 32.).powi(2)).sqrt() / 32.;
+    0.4 + 0.5 * (1. - from_middle).max(0.)
+}
+
+/// The value a cell is drawn with, 0 to about 1.
+fn cell_value(body: f32, wave: f32, near: f32, grain: f32) -> f32 {
+    body * 0.85 + wave * 0.8 + near * 0.5 + grain * 0.1
+}
+
+fn glyphs(window: &Window) -> (FontId, Vec<GlyphId>) {
+    let font = gpui::font("Menlo");
+    let layout = window.text_system().layout_line(
+        RAMP,
+        px(FONT_SIZE),
+        &[gpui::TextRun {
+            len: RAMP.len(),
+            font: font.clone(),
+            color: gpui::white(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        }],
+        None,
+    );
+    let font_id = window.text_system().resolve_font(&font);
+    let ids = layout
+        .runs
+        .iter()
+        .flat_map(|run| run.glyphs.iter().map(|glyph| glyph.id))
+        .collect();
+    (font_id, ids)
+}
+
+thread_local! {
+    static GLYPHS: OnceCell<(FontId, Vec<GlyphId>)> = const { OnceCell::new() };
+}
+
+/// The field, filling its parent. `set` reaches the shell's `State` from the mouse listeners.
+pub fn field<V: 'static>(
+    shape: &'static str,
+    color: u32,
+    state: &State,
+    set: fn(&mut V) -> &mut State,
+    view: gpui::WeakEntity<V>,
+    still: bool,
+) -> AnyElement {
+    let mouse = if still { None } else { state.mouse };
+    let waves = if still { Vec::new() } else { state.waves.clone() };
+    let tint = Rgba {
+        r: ((color >> 16) & 0xff) as f32 / 255.,
+        g: ((color >> 8) & 0xff) as f32 / 255.,
+        b: (color & 0xff) as f32 / 255.,
+        a: 1.,
+    };
+    gpui::canvas(
+        |_, _, _| {},
+        move |bounds: Bounds<Pixels>, _, window: &mut Window, _: &mut App| {
+            if !still {
+                let moved = view.clone();
+                window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
+                    if phase == DispatchPhase::Capture {
+                        let inside = bounds.contains(&event.position).then_some(event.position);
+                        let _ = moved.update(cx, |this, cx| {
+                            if set(this).point_at(inside) {
+                                cx.notify();
+                            }
+                        });
+                    }
+                });
+                let clicked = view.clone();
+                window.on_mouse_event(move |event: &MouseDownEvent, phase, _, cx| {
+                    if phase == DispatchPhase::Capture && bounds.contains(&event.position) {
+                        let at = event.position;
+                        let _ = clicked.update(cx, |this, cx| {
+                            set(this).click(at, Instant::now());
+                            cx.notify();
+                        });
+                    }
+                });
+            }
+            let (font_id, ids) = GLYPHS.with(|cell| cell.get_or_init(|| glyphs(window)).clone());
+            if ids.is_empty() {
+                return;
+            }
+            let now = Instant::now();
+            let (width, height) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
+            let scale = height * 0.68 / 64.;
+            let (left, top) = (f32::from(bounds.origin.x), f32::from(bounds.origin.y));
+            let ring: Vec<(f32, f32, f32)> = waves
+                .iter()
+                .map(|(at, start)| {
+                    (
+                        f32::from(at.x) - left,
+                        f32::from(at.y) - top,
+                        now.duration_since(*start).as_secs_f32(),
+                    )
+                })
+                .collect();
+            let pointer = mouse.map(|m| (f32::from(m.x) - left, f32::from(m.y) - top));
+            let columns = (width / CELL_W).ceil() as i32;
+            let rows = (height / CELL_H).ceil() as i32;
+            for row in 0..rows {
+                for column in 0..columns {
+                    let (x, y) = (column as f32 * CELL_W, row as f32 * CELL_H);
+                    let body = figure(
+                        shape,
+                        32. + (x - width / 2.) / scale,
+                        32. + (y - height * 0.46) / scale,
+                    );
+                    let wave: f32 = ring
+                        .iter()
+                        .map(|(wx, wy, age)| wave_at((x - wx).hypot(y - wy), *age))
+                        .sum();
+                    let near = pointer.map_or(0., |(mx, my)| {
+                        (-((x - mx).powi(2) + (y - my).powi(2)) / 5200.).exp()
+                    });
+                    let value = cell_value(body, wave, near, grain(column, row));
+                    if value < 0.09 {
+                        continue;
+                    }
+                    let at = ((value * ids.len() as f32) as usize).min(ids.len() - 1);
+                    let shade = Hsla::from(tint);
+                    let origin = point(
+                        px(left + x + wave * (x - width / 2.) * 0.02),
+                        px(top + y - wave * 7.),
+                    );
+                    let _ = window.paint_glyph(
+                        origin + point(px(0.), px(FONT_SIZE)),
+                        font_id,
+                        ids[at],
+                        px(FONT_SIZE),
+                        Hsla {
+                            a: (value * 0.6).min(0.55),
+                            ..shade
+                        },
+                    );
+                }
+            }
+        },
+    )
+    .absolute()
+    .top_0()
+    .left_0()
+    .size_full()
+    .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_wave_is_a_ring_that_moves_out_and_fades() {
+        assert!(wave_at(WAVE_SPEED, 1.) > wave_at(0., 1.));
+        assert!(wave_at(WAVE_SPEED * 2., 2.) < wave_at(WAVE_SPEED, 1.));
+    }
+
+    #[test]
+    fn the_robot_shows_with_its_eyes_empty_and_nothing_outside_it() {
+        assert!(figure("round", 32., 50.) > 0.3);
+        assert!(figure("round", 23., 31.) < 0.1);
+        assert_eq!(figure("round", 1., 1.), 0.);
+    }
+
+    #[test]
+    fn finished_waves_stop_asking_for_frames() {
+        let mut state = State::default();
+        let start = Instant::now();
+        state.click(point(px(1.), px(1.)), start);
+        assert!(state.moving(start));
+        assert!(!state.moving(start + std::time::Duration::from_secs_f32(WAVE_S + 0.1)));
+    }
+
+    #[test]
+    fn grain_alone_stays_faint() {
+        assert!(cell_value(0., 0., 0., 1.) < 0.11);
+    }
+}

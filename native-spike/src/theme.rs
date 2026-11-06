@@ -582,3 +582,16 @@ mod icon_size_tests {
         assert_eq!(icon_size(40.), 24.);
     }
 }
+
+/// How a button answers a press: it sinks a point and dims. Margins that cancel out move it with
+/// no neighbour shifting, since gpui can't scale an element.
+pub trait Sinks {
+    fn sinks(self) -> Self;
+}
+
+impl Sinks for gpui::Stateful<gpui::Div> {
+    fn sinks(self) -> Self {
+        use gpui::StatefulInteractiveElement as _;
+        self.active(|style| style.mt(px(1.)).mb(px(-1.)).opacity(0.78))
+    }
+}

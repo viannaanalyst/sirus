@@ -1782,9 +1782,15 @@ impl Shell {
             .top(px(16.))
             .bottom(px(60.))
             .when(active, |d| d.cursor_crosshair())
+            // By its four sides: a percent height falls back on the picture's own shape here, and
+            // anything less wide than the stage overflowed it, looking zoomed in.
             .child(
                 img(image.clone())
-                    .size_full()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .right_0()
+                    .bottom_0()
                     .object_fit(ObjectFit::Contain),
             )
             .child(drawing)
@@ -2115,12 +2121,16 @@ impl Shell {
             Content::Text(text) => text_view(text.clone()),
             Content::Image(image) if !open.sent => self.markup_stage(image.clone(), cx),
             Content::Image(image) => div()
+                .relative()
                 .flex_1()
                 .min_h_0()
-                .p(px(16.))
                 .child(
                     img(image.clone())
-                        .size_full()
+                        .absolute()
+                        .top(px(16.))
+                        .left(px(16.))
+                        .right(px(16.))
+                        .bottom(px(16.))
                         .object_fit(ObjectFit::Contain),
                 )
                 .into_any_element(),

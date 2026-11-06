@@ -4,11 +4,12 @@ use super::*;
 use crate::panel_files::{TextField, TextFieldEvent};
 use crate::project_actions::{self, Action, ICONS, Saved};
 use crate::terminal_place::Placement;
+use crate::theme::Sinks as _;
 use gpui::{Entity, Subscription};
 
 pub(super) struct ActionsUi {
     pub saved: Saved,
-    /// The chevron's menu: its fade-in, and whether "Editar ação" has its list open beside it.
+    /// The button's menu: its fade-in, and whether "Editar ação" has its list open beside it.
     menu: Option<Tween>,
     editing_list: bool,
     /// Where the button and the "Editar ação" row were last drawn.
@@ -68,8 +69,6 @@ impl Shell {
         let Some(action) = self.actions.saved.find(&project, id).cloned() else {
             return;
         };
-        self.actions.saved.ran(&project, id);
-        project_actions::save(&self.actions.saved);
         let reveal = self.actions.saved.opens_terminal;
         let key = format!("{project}:{id}");
         if self.term.placement == Placement::TitleBar {
@@ -182,92 +181,51 @@ impl Shell {
         self.close_action_dialog(cx);
     }
 
-    /// The footer's split button: runs the current action, or picks another.
+    /// The footer's button, the size of its neighbours: everything is in the menu it opens.
     pub(super) fn actions_button(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let project = self.actions_project()?;
-        let current = self.actions.saved.current(&project).cloned();
+        self.actions_project()?;
         let open = self.actions.menu.is_some();
-        let segment = |id: &'static str| {
-            div()
-                .id(id)
-                .h_full()
-                .flex()
-                .items_center()
-                .rounded(px(6.))
-                .cursor_pointer()
-                .text_color(content(0.45))
-                .group_hover("footer-actions", |s| s.text_color(content(0.8)))
-                .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        };
-        let main = match current {
-            Some(action) => {
-                let id = action.id.clone();
-                segment("footer-action-run")
-                    .px(px(6.))
-                    .gap(px(6.))
-                    .max_w(px(180.))
-                    .min_w_0()
-                    .child(icon(action.icon(), 12.).text_color(content(0.55)))
-                    .child(div().min_w_0().truncate().child(action.name))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.run_project_action(&id, window, cx)
-                    }))
-            }
-            None => segment("footer-action-add")
-                .px(px(6.))
-                .gap(px(6.))
-                .child(icon("play", 12.).text_color(content(0.55)))
-                .child(t("Ações"))
-                .on_click(
-                    cx.listener(|this, _, window, cx| this.open_action_dialog(None, window, cx)),
-                ),
-        };
         let store = self.actions.button.clone();
-        let chevron = segment("footer-action-menu")
-            .relative()
-            .px(px(3.))
-            .when(open, |d| d.bg(content(0.08)).text_color(content(1.)))
-            .child(
-                gpui::canvas(move |bounds, _, _| store.set(Some(bounds)), |_, _, _, _| {})
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .size_full(),
-            )
-            .child(icon("chevron-down", 12.).text_color(content(0.55)))
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.actions.editing_list = false;
-                this.actions.menu = match this.actions.menu {
-                    Some(_) => None,
-                    None => {
-                        let length = if cx.reduce_motion() { 0. } else { MENU };
-                        Some(Tween::from_to(0., 1., Instant::now(), length, Curve::Expo))
-                    }
-                };
-                cx.notify();
-            }));
         Some(
             div()
                 .id("footer-actions")
-                .group("footer-actions")
-                .h(px(20.))
-                .p(px(2.))
-                .gap(px(1.))
-                .flex()
+                .relative()
+                .size(px(24.))
                 .flex_shrink_0()
-                .items_stretch()
-                .whitespace_nowrap()
-                .rounded(px(8.))
-                .when(open, |d| d.bg(content(0.06)))
-                .hover(|s| s.bg(content(0.06)))
-                .child(main)
-                .child(chevron)
+                .rounded(px(crate::theme::RADIUS_SM))
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer()
+                .sinks()
+                .when(open, |d| d.bg(content(0.08)))
+                .hover(|s| s.bg(content(0.08)))
+                .tooltip(message_actions::name_tip(t("Ações")))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.actions.editing_list = false;
+                    this.actions.menu = match this.actions.menu {
+                        Some(_) => None,
+                        None => {
+                            let length = if cx.reduce_motion() { 0. } else { MENU };
+                            Some(Tween::from_to(0., 1., Instant::now(), length, Curve::Expo))
+                        }
+                    };
+                    cx.notify();
+                }))
+                .child(
+                    gpui::canvas(move |bounds, _, _| store.set(Some(bounds)), |_, _, _, _| {})
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full(),
+                )
+                .child(icon("play", 16.).text_color(content(0.6)))
                 .into_any_element(),
         )
     }
 
-    /// The chevron's menu, above the button, with "Editar ação" listing the actions beside it.
+    /// The button's menu, above it, with "Editar ação" listing the actions beside it.
     pub(super) fn actions_menu_view(
         &self,
         now: Instant,
@@ -280,7 +238,7 @@ impl Shell {
         *moving |= !open.done(now);
         let shown = open.at(now).clamp(0., 1.);
         let actions = self.actions.saved.of(&project).to_vec();
-        const WIDTH: f32 = 220.;
+        const WIDTH: f32 = 250.;
         let left = (f32::from(anchor.right()) - WIDTH)
             .min(self.viewport_width - WIDTH - 8.)
             .max(8.);
@@ -503,6 +461,7 @@ impl Shell {
                 .items_center()
                 .text_size(px(13.))
                 .cursor_pointer()
+                .sinks()
                 .child(text)
         };
         Some(

@@ -15,6 +15,7 @@ use crate::connector_marks::MARKS;
 use crate::i18n::{t, tf};
 use crate::motion::{Curve, eased};
 use crate::settings_pages::{Edit, Run, Save};
+use crate::theme::Sinks as _;
 use crate::theme::{accent, content, floating_fill, on_accent};
 use gpui::{
     Animation, AnimationExt, AnyElement, Context, FontWeight, Hsla, div, prelude::*, px, rgb, svg,
@@ -1247,6 +1248,7 @@ fn icon_button<V: 'static>(
         .items_center()
         .justify_center()
         .cursor_pointer()
+        .sinks()
         .hover(|s| s.bg(content(0.07)))
         .on_click(cx.listener(move |this, _, _, cx| on_click(this, cx)))
         .child(svg().path(icon).size(px(15.)).text_color(content(0.55)))
@@ -2220,6 +2222,10 @@ fn segmented<V: 'static>(
     edit: Edit<V>,
     cx: &mut Context<V>,
 ) -> AnyElement {
+    let selected = options
+        .iter()
+        .position(|(_, chosen, _)| *chosen)
+        .unwrap_or(0);
     let items: Vec<AnyElement> = options
         .into_iter()
         .enumerate()
@@ -2227,6 +2233,9 @@ fn segmented<V: 'static>(
             let pending = pending.clone();
             div()
                 .id((id, index))
+                .relative()
+                .child(crate::segment_pill::probe(id, index))
+                .sinks()
                 .h(px(26.))
                 .px(px(11.))
                 .rounded(px(crate::theme::RADIUS_SM))
@@ -2234,7 +2243,6 @@ fn segmented<V: 'static>(
                 .items_center()
                 .text_size(px(12.5))
                 .text_color(content(if chosen { 1. } else { 0.55 }))
-                .when(chosen, |d| d.bg(content(0.1)))
                 .when(!chosen, |d| d.hover(|s| s.text_color(content(0.9))))
                 .cursor_pointer()
                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -2247,6 +2255,7 @@ fn segmented<V: 'static>(
         })
         .collect();
     div()
+        .relative()
         .flex()
         .flex_wrap()
         .self_start()
@@ -2254,6 +2263,12 @@ fn segmented<V: 'static>(
         .rounded(px(crate::theme::RADIUS_MD))
         .border_1()
         .border_color(content(0.1))
+        .child(crate::segment_pill::pill(
+            id,
+            selected,
+            content(0.1),
+            crate::theme::RADIUS_SM,
+        ))
         .children(items)
         .into_any_element()
 }

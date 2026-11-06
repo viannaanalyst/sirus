@@ -8,6 +8,7 @@
 //! timer is the copy check's, started by a click.
 
 use super::*;
+use crate::theme::Sinks as _;
 use gpui::{AnyView, App, ClickEvent, ClipboardItem, Pixels, Point, Render, SharedString};
 use std::time::Duration;
 
@@ -463,6 +464,7 @@ impl Shell {
         }
         button
             .cursor_pointer()
+            .sinks()
             .hover(|s| s.bg(content(0.07)).text_color(content(0.9)))
             .on_click(cx.listener(move |this, _, _, cx| this.run_action(act.clone(), cx)))
             .into_any_element()
@@ -486,6 +488,7 @@ impl Shell {
             .text_size(px(12.))
             .text_color(content(0.6))
             .cursor_pointer()
+            .sinks()
             .hover(|s| s.bg(content(0.07)).text_color(content(0.9)))
             .child(icon("refresh", 12.))
             .child(t("Tentar de novo"))
@@ -530,6 +533,7 @@ impl Shell {
         let (session, reply) = (session.to_owned(), reply.to_owned());
         button
             .cursor_pointer()
+            .sinks()
             .hover(|s| s.bg(content(0.07)).text_color(content(0.9)))
             .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
                 this.run_row(item.row, &session, &reply, event.position(), cx)

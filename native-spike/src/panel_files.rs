@@ -17,6 +17,7 @@ use crate::panels::PanelContext;
 use crate::project_files::{self, Hit};
 use crate::syntax::{self, Group, LineSpans};
 use crate::tab_tile::{Face, TAB_TILE, TAB_TILE_GAP, mark_tile, tab_tile_inset};
+use crate::theme::Sinks as _;
 use crate::theme::{self, accent, content, is_light};
 use crate::tool_images;
 use gpui::{
@@ -1258,6 +1259,7 @@ impl FilesPanel {
                 .border_color(content(0.07))
                 .child(
                     div()
+                        .relative()
                         .flex_shrink_0()
                         .flex()
                         .items_center()
@@ -1265,9 +1267,16 @@ impl FilesPanel {
                         .rounded(px(crate::theme::RADIUS_MD))
                         .border_1()
                         .border_color(content(0.07))
+                        .child(crate::segment_pill::pill(
+                            "files-view",
+                            usize::from(opened.mode == Mode::Source),
+                            content(0.12),
+                            crate::theme::RADIUS_SM,
+                        ))
                         .child(Self::segment(
                             "files-preview",
                             "Preview",
+                            0,
                             Mode::Preview,
                             opened.mode,
                             cx,
@@ -1275,6 +1284,7 @@ impl FilesPanel {
                         .child(Self::segment(
                             "files-source",
                             "Source",
+                            1,
                             Mode::Source,
                             opened.mode,
                             cx,
@@ -1287,6 +1297,7 @@ impl FilesPanel {
     fn segment(
         id: &'static str,
         label: &'static str,
+        ix: usize,
         target: Mode,
         active: Mode,
         cx: &mut Context<Self>,
@@ -1294,6 +1305,9 @@ impl FilesPanel {
         let on = target == active;
         div()
             .id(id)
+            .relative()
+            .child(crate::segment_pill::probe("files-view", ix))
+            .sinks()
             .h(px(22.))
             .px(px(9.))
             .rounded(px(crate::theme::RADIUS_SM))
@@ -1301,7 +1315,6 @@ impl FilesPanel {
             .items_center()
             .text_size(px(11.5))
             .text_color(content(if on { 0.95 } else { 0.5 }))
-            .when(on, |segment| segment.bg(content(0.12)))
             .when(!on, |segment| {
                 segment.hover(|style| style.bg(content(0.06)))
             })

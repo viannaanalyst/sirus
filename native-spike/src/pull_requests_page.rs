@@ -10,6 +10,7 @@ use crate::i18n::{t, tf};
 use crate::motion::{Curve, Tween};
 use crate::panel_changes::{age, diff_line, note};
 use crate::panel_files::{TextField, TextFieldEvent};
+use crate::theme::Sinks as _;
 use crate::theme::{RADIUS_MD, RADIUS_SM, accent, content, diff_colors, icon, on_accent};
 use gpui::{
     AnyElement, App, Context, Div, ElementId, Entity, EventEmitter, FontWeight, Render,
@@ -1105,7 +1106,7 @@ fn button(
         base.bg(content(0.07)).text_color(content(0.85))
     };
     if enabled {
-        base.cursor_pointer().hover(|s| s.opacity(0.88))
+        base.cursor_pointer().sinks().hover(|s| s.opacity(0.88))
     } else {
         base.opacity(0.4)
     }

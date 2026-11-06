@@ -3,9 +3,10 @@
 //! question, a card slides in at the top right, under the title bar. Newest on top, three at
 //! most and then a "+N avisos" line. A permission card approves or denies right there with the
 //! command the transcript uses; a question card opens the conversation (Responder also puts
-//! the cursor in its composer); a result card opens it. Results leave by themselves after six
-//! seconds; permission and question cards stay until answered, and go when the request is gone
-//! from the conversation (answered on the phone) or when the conversation is opened. Project
+//! the cursor in its composer); a result card opens it. Results stay until they are clicked,
+//! closed or their conversation is opened; permission and question cards stay until answered, and
+//! go when the request is gone from the conversation (answered on the phone) or when the
+//! conversation is opened. Project
 //! rows carry a small badge while something is waiting or unseen.
 //!
 //! The rules are plain functions and a plain `State` so they are tested without a window; the
@@ -20,8 +21,6 @@ use std::time::Duration;
 pub(crate) const MAX_VISIBLE: usize = 3;
 /// Cards kept in all; the oldest results go first.
 const MAX_KEPT: usize = 24;
-/// How long a result card stays.
-pub(crate) const RESULT_FOR: Duration = Duration::from_secs(6);
 /// A request card is believed for this long before the conversation shows the request: the
 /// host's alert and its session snapshot travel as two events.
 pub(crate) const GRACE: Duration = Duration::from_millis(3200);
@@ -195,14 +194,6 @@ impl State {
         true
     }
 
-    /// Results past their time leave. True when something went.
-    pub(crate) fn expire(&mut self, now: Instant) -> bool {
-        let before = self.cards.len();
-        self.cards
-            .retain(|c| c.event.kind.waits() || now.saturating_duration_since(c.at) < RESULT_FOR);
-        before != self.cards.len()
-    }
-
     /// Request cards go once the conversation no longer lists their request (answered
     /// elsewhere), or when it never listed it within the grace time. `pending` says whether
     /// a conversation lists a request.
@@ -317,14 +308,7 @@ impl Shell {
         };
         let visible = self.visible_sessions().contains(&event.session);
         let show = shows(toasts_on(&self.settings), self.window_active, visible);
-        let (kind, wait) = (
-            event.kind,
-            if event.kind.waits() {
-                GRACE
-            } else {
-                RESULT_FOR
-            },
-        );
+        let kind = event.kind;
         if !self.cards.admit(event, show, Instant::now()) {
             return;
         }
@@ -332,10 +316,14 @@ impl Shell {
         if let Some(sound) = card_sound(&self.settings, kind, self.window_active) {
             crate::native_notify::play(&sound);
         }
-        // One wake-up when the card is due to leave or to be checked against the conversation.
+        // A request is checked against the conversation once; a result stays until it's seen.
+        if !kind.waits() {
+            cx.notify();
+            return;
+        }
         cx.spawn(async move |this, cx| {
             cx.background_executor()
-                .timer(wait + Duration::from_millis(50))
+                .timer(GRACE + Duration::from_millis(50))
                 .await;
             let _ = this.update(cx, |this, cx| {
                 this.cards_settle();
@@ -349,7 +337,6 @@ impl Shell {
     /// Drops what has run its course: results past their time and requests no longer listed.
     pub(super) fn cards_settle(&mut self) {
         let now = Instant::now();
-        self.cards.expire(now);
         let conversations = &self.conversations;
         self.cards.settle(now, |session, request| {
             conversations
@@ -831,14 +818,11 @@ mod tests {
         state.admit(event("bad", "s2", Kind::Failed), true, now);
         state.admit(event("ask", "s3", Kind::Question), true, now);
         state.admit(event("run", "s4", Kind::Permission), true, now);
-        assert!(!state.expire(secs(now, 5)));
-        assert!(state.expire(secs(now, 6)));
+        // Nothing leaves by time: results wait to be seen, requests to be answered.
         let left: Vec<&str> = state.cards.iter().map(|c| c.event.id.as_str()).collect();
-        assert_eq!(left, ["ask", "run"]);
-        assert!(
-            !state.expire(secs(now, 600)),
-            "requests stay until answered"
-        );
+        assert_eq!(left, ["done", "bad", "ask", "run"]);
+        assert!(state.seen(&["s1".to_owned()]));
+        assert_eq!(state.cards.len(), 3);
     }
 
     #[test]
@@ -903,10 +887,6 @@ mod tests {
         state.dismiss("done");
         assert!(state.is_empty());
         assert_eq!(state.result_of("s1"), Some(Kind::Finished));
-        // Auto-dismissal leaves it too.
-        state.admit(event("bad", "s2", Kind::Failed), true, now);
-        state.expire(secs(now, 7));
-        assert_eq!(state.result_of("s2"), Some(Kind::Failed));
     }
 
     #[test]

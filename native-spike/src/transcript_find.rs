@@ -10,6 +10,7 @@
 //! This module is a child of `shell` (`#[path]`), so it reaches the window's private state.
 
 use super::*;
+use crate::theme::Sinks as _;
 use gpui::{Keystroke, Stateful};
 use std::ops::Range;
 
@@ -202,6 +203,7 @@ fn find_button(id: &'static str, name: &'static str) -> Stateful<Div> {
         .items_center()
         .justify_center()
         .cursor_pointer()
+        .sinks()
         .hover(|s| s.bg(content(0.07)))
         .child(icon(name, 13.))
 }

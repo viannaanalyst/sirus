@@ -60,6 +60,7 @@ mod remote_tls;
 mod reply_render;
 mod reply_rich;
 mod reply_view;
+mod segment_pill;
 mod send_morph;
 mod settings_connectors;
 mod settings_pages;

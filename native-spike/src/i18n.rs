@@ -332,7 +332,6 @@ const ENTRIES: &[(&str, &str)] = &[
         "Ajusta o espaçamento sem mudar o tamanho do texto.",
         "Adjusts spacing without changing the text size.",
     ),
-    ("Ajustes do projeto", "Project settings"),
     ("Alguém", "Someone"),
     ("Alterar arquivos", "Change files"),
     ("Alterações", "Changes"),

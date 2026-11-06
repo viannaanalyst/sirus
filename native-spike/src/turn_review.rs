@@ -11,6 +11,7 @@
 use super::message_actions::{Review, ReviewFile};
 use super::*;
 use crate::panel_changes::{diff_line, note};
+use crate::theme::Sinks as _;
 use std::collections::{HashMap, HashSet};
 
 /// Files a card shows before "Show more".
@@ -515,6 +516,7 @@ fn review_button(id: &'static str, label: &str, enabled: bool) -> Stateful<Div> 
         .bg(content(0.08))
         .when(enabled, |d| {
             d.cursor_pointer()
+                .sinks()
                 .hover(|style| style.bg(content(0.12)).text_color(content(1.)))
         })
         .child(label.to_owned())

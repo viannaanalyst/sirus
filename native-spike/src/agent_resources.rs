@@ -383,7 +383,7 @@ impl Shell {
     }
 
     /// Asks the host for a reading, unless one is already on its way.
-    fn read_resources(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn read_resources(&mut self, cx: &mut Context<Self>) {
         if self.resources.reading {
             return;
         }
@@ -523,19 +523,23 @@ impl Shell {
             .snapshot
             .as_ref()
             .map_or(Level::Normal, Snapshot::level);
+        // Only when there's something to act on, as Monocode's chip; its panel stays reachable.
+        if level == Level::Normal && self.resources.open.is_none() {
+            return None;
+        }
         let store = self.resources.chip.clone();
         Some(
             div()
                 .id("agent-resources")
                 .relative()
-                .size(px(20.))
-                .rounded_full()
+                .size(px(24.))
+                .rounded(px(crate::theme::RADIUS_SM))
                 .flex()
                 .items_center()
                 .justify_center()
                 .flex_shrink_0()
                 .cursor_pointer()
-                .hover(|s| s.bg(content(0.07)))
+                .hover(|s| s.bg(content(0.08)))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(|this, _, _, cx| this.toggle_resources(cx)))
                 .child(
@@ -543,7 +547,7 @@ impl Shell {
                         .absolute()
                         .size_full(),
                 )
-                .child(icon("zap", 12.).text_color(level.color().unwrap_or_else(|| content(0.6))))
+                .child(icon("zap", 16.).text_color(level.color().unwrap_or_else(|| content(0.6))))
                 .into_any_element(),
         )
     }
@@ -685,7 +689,10 @@ impl Shell {
                         )
                         .text_color(content(0.45)),
                     )
-                    .children(row.provider.map(|provider| crate::tab_tile::provider_mark(provider, 14.)))
+                    .children(
+                        row.provider
+                            .map(|provider| crate::tab_tile::provider_mark(provider, 14.)),
+                    )
                     .child(
                         div()
                             .min_w_0()

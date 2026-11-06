@@ -1,6 +1,8 @@
 //! The window: title strip, sidebar and a transcript with the live activity tree.
 #[path = "shell_actions.rs"]
 mod shell_actions;
+#[path = "shell_agents.rs"]
+mod shell_agents;
 #[path = "shell_terminal.rs"]
 mod shell_terminal;
 use crate::backend::{self, Backend, Incoming};
@@ -15,6 +17,7 @@ use crate::tab_tile::{
     ACTIVITY_TILE, Face, FanCard, TAB_TILE, activity_face, fan_card, fan_tile, fan_width,
     mark_tile, push_tile, tab_tile_inset,
 };
+use crate::theme::Sinks as _;
 use crate::theme::{
     ACCENTS, FOOTER, Look, PLATE, PRESETS, Palette, TITLE_BAR, accent, accent_wash, chrome_wash,
     content, diff_colors, field_fill, floating_fill, icon as theme_icon, mix, on_accent, palette,
@@ -1229,6 +1232,8 @@ pub struct Shell {
     composer_width: Rc<Cell<f32>>,
     /// The key that must be pressed once more to act, and when it was first pressed.
     press_again: Option<(Press, Instant)>,
+    /// The pill over the project rail, for agents working in other projects.
+    agents: shell_agents::AgentsPill,
     /// The footer's project actions.
     actions: shell_actions::ActionsUi,
     /// The Actions dialog closed: the keys go back to the composer on the next frame.
@@ -1367,6 +1372,12 @@ impl Shell {
                             != this.caret_drawn.get();
                     if pulse || flip {
                         cx.notify();
+                    }
+                    // The footer's bolt shows under pressure, so it needs a reading to know.
+                    if this.tick % RESOURCE_TICKS == 0
+                        && this.conversations.iter().any(Conversation::working)
+                    {
+                        this.read_resources(cx);
                     }
                 });
                 if alive.is_err() {
@@ -1567,6 +1578,7 @@ impl Shell {
             composer_rise: Default::default(),
             composer_width: Default::default(),
             press_again: None,
+            agents: Default::default(),
             actions: shell_actions::ActionsUi::new(),
             refocus: false,
             project_editor_row: Default::default(),
@@ -3126,10 +3138,10 @@ impl Shell {
                         .px(px(13.))
                         .py(px(6.))
                         .opacity(shown)
-                        .rounded_full()
+                        .rounded(px(crate::theme::RADIUS_LG))
                         .border_1()
                         .border_color(content(0.12))
-                        .child(crate::theme::floating_surface(99.))
+                        .child(crate::theme::floating_surface(crate::theme::RADIUS_LG))
                         .shadow_lg()
                         .relative()
                         .text_size(px(12.5))
@@ -3427,6 +3439,8 @@ impl Shell {
 
     fn open_settings_page(&mut self, name: &'static str, cx: &mut Context<Self>) {
         self.usage_popup = None;
+        // The settings have their own column, which the peeking sidebar would lie over.
+        self.peek = None;
         self.settings_page = name;
         self.settings_since = Instant::now();
         if self.appearance.is_none() {
@@ -6708,6 +6722,7 @@ impl Shell {
                             .items_center()
                             .justify_center()
                             .cursor_pointer()
+                            .sinks()
                             .hover(|s| s.opacity(1.).bg(content(0.07)))
                             .child(
                                 icon("plus", 14.)
@@ -6846,7 +6861,25 @@ impl Shell {
                 .child(crate::theme::peek_surface(crate::theme::RADIUS_LG))
                 .shadow_lg()
                 .overflow_hidden()
-                .child(contents("sidebar-list", self, cx, drawn))
+                .child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .bottom(px(FOOTER))
+                        .child(contents("sidebar-list", self, cx, drawn)),
+                )
+                // The footer's rail isn't there while the sidebar is collapsed: it comes along.
+                .child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .right_0()
+                        .bottom_0()
+                        .h(px(FOOTER))
+                        .children(self.project_rail(width, cx)),
+                )
                 .into_any_element();
         }
         div()
@@ -6930,6 +6963,7 @@ impl Shell {
             .items_center()
             .justify_center()
             .cursor_pointer()
+            .sinks()
             .when(lit, |d| d.bg(content(0.09)))
             .hover(|s| s.bg(content(0.07)))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -7702,20 +7736,14 @@ impl Shell {
                             ),
                         )
                         .child(
-                            item(
-                                "menu-project-settings",
-                                "tuning",
-                                "Ajustes do projeto",
-                                None,
-                            )
-                            .on_click(cx.listener(
-                                move |this, _, _, cx| {
+                            item("menu-project-settings", "tuning", "Aparência", None).on_click(
+                                cx.listener(move |this, _, _, cx| {
                                     close(this);
                                     this.switch_project(index, cx);
                                     this.toggle_project_menu(cx);
                                     this.open_project_sub(ProjectSub::Settings, cx);
-                                },
-                            )),
+                                }),
+                            ),
                         )
                         .child(divider())
                         .child(
@@ -8872,7 +8900,7 @@ impl Shell {
             .child(row(
                 "project-settings",
                 "tuning",
-                crate::i18n::t("Ajustes do projeto"),
+                crate::i18n::t("Aparência"),
                 None,
                 ProjectSub::Settings,
                 cx,
@@ -9402,12 +9430,23 @@ impl Shell {
                     )
                     .child(
                         div()
+                            .relative()
                             .mt(px(8.))
                             .p(px(2.))
                             .rounded(px(crate::theme::RADIUS_MD))
                             .bg(field_fill())
                             .flex()
                             .gap(px(2.))
+                            .child(crate::segment_pill::pill(
+                                "project-look-tabs",
+                                match menu.look_tab {
+                                    LookTab::Color => 0,
+                                    LookTab::Mascot => 1,
+                                    LookTab::Eyes => 2,
+                                },
+                                content(0.12),
+                                crate::theme::RADIUS_SM,
+                            ))
                             .children(
                                 [
                                     (LookTab::Color, crate::i18n::t("Cor")),
@@ -9420,6 +9459,9 @@ impl Shell {
                                     let on = menu.look_tab == tab;
                                     div()
                                         .id(("project-look-tab", at))
+                                        .relative()
+                                        .child(crate::segment_pill::probe("project-look-tabs", at))
+                                        .sinks()
                                         .flex_1()
                                         .h(px(24.))
                                         .rounded(px(crate::theme::RADIUS_SM))
@@ -9428,7 +9470,6 @@ impl Shell {
                                         .justify_center()
                                         .text_size(px(12.))
                                         .text_color(content(if on { 0.95 } else { 0.55 }))
-                                        .when(on, |d| d.bg(content(0.12)))
                                         .cursor_pointer()
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             if let Some(menu) = this.project_menu.as_mut() {
@@ -9600,6 +9641,7 @@ impl Shell {
                 .items_center()
                 .justify_center()
                 .cursor_pointer()
+                .sinks()
                 .hover(|s| s.bg(content(0.07)))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(|this, _, _, cx| this.toggle_palette(false, cx)))
@@ -9734,6 +9776,7 @@ impl Shell {
             .items_center()
             .justify_center()
             .cursor_pointer()
+            .sinks()
             .when(open, |d| d.bg(content(0.09)))
             .hover(|s| s.bg(content(0.07)))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -9865,6 +9908,10 @@ impl Shell {
     fn set_peek(&mut self, open: bool, cx: &mut Context<Self>) {
         self.peek_close = None;
         if open && (self.sidebar_open || self.sidebar.at(Instant::now()) > 0.001) {
+            return;
+        }
+        // The settings have their own column: nothing peeks over it.
+        if open && (self.appearance.is_some() || self.usage_page_open()) {
             return;
         }
         let now = Instant::now();
@@ -11761,6 +11808,7 @@ impl Shell {
                 .items_center()
                 .justify_center()
                 .cursor_pointer()
+                .sinks()
                 .hover(|s| s.bg(content(0.07)))
                 .child(icon(name, 15.).text_color(content(0.6)))
         };
@@ -11776,6 +11824,7 @@ impl Shell {
                 .text_size(px(12.))
                 .text_color(content(0.6))
                 .cursor_pointer()
+                .sinks()
                 .hover(|s| s.bg(content(0.07)).text_color(content(0.95)))
         };
         let ring = self.context_ring(cx);
@@ -12234,6 +12283,7 @@ impl Shell {
                                             .text_size(px(12.))
                                             .text_color(access_color)
                                             .cursor_pointer()
+                                            .sinks()
                                             .hover(|s| s.bg(content(0.07)))
                                             .child(icon(access_glyph, 14.).text_color(access_color))
                                             .when(!no_access_label, |d| d.child(access))
@@ -12505,8 +12555,8 @@ impl Shell {
             })
             .child(div().flex_1())
             .when_some(self.update_notice(cx), |d, notice| d.child(notice))
-            .children(self.actions_button(cx))
             .when_some(self.resources_gauge(cx), |d, gauge| d.child(gauge))
+            .children(self.actions_button(cx))
             .child(self.usage_button(cx))
             .child(self.settings_button(cx))
             .into_any_element()
@@ -13115,24 +13165,16 @@ impl Shell {
                 .glides
                 .get(&conversation)
                 .is_some_and(|glide| glide.anchored);
-        if let Some(start) = steer_block_start.filter(|_| anchored_last) {
-            let stretch: Vec<AnyElement> = blocks.drain(start..).collect();
-            let view = self
-                .view_sizes
-                .get(&conversation)
-                .map_or(600., |size| size.1);
-            blocks.push(
-                div()
-                    .w_full()
-                    .flex()
-                    .flex_col()
-                    .gap(px(8.))
-                    .min_h(px((view - 28.).max(0.)))
-                    .pt(px(ANCHOR_TOP))
-                    .children(stretch)
-                    .into_any_element(),
-            );
-        }
+        // From the instruction on, the stretch fills the view, the answer and its cards included:
+        // holding only what comes before them would leave a hole above the answer.
+        let stretch: Option<(Vec<AnyElement>, f32)> =
+            steer_block_start.filter(|_| anchored_last).map(|start| {
+                let view = self
+                    .view_sizes
+                    .get(&conversation)
+                    .map_or(600., |size| size.1);
+                (blocks.drain(start..).collect(), view)
+            });
         let prompt_key = (conversation, index);
         let prompt_overflows = !turn.user.is_empty()
             && self
@@ -13284,37 +13326,49 @@ impl Shell {
                 )
             })
             .children(blocks)
-            .children(agents)
-            .children(
-                turn.visuals
-                    .iter()
-                    .enumerate()
-                    .map(|(i, visual)| self.visual_element(index, i, visual, cx)),
-            )
-            .when_some(answer_view, |d, shown| {
-                d.child(transcript_select::scoped(
-                    &self.select,
-                    transcript_select::Reply {
-                        conversation,
-                        turn: index,
-                        user: false,
-                    },
-                    || {
-                        // Linked pictures and videos, diagrams, formulas and HTML open from here.
-                        let body = crate::markdown::render_rich(shown, &rich);
-                        self.wake_reply_assets(cx);
-                        body
-                    },
-                ))
-            })
-            .when_some(self.delegated_tasks_view(turn, cx), |d, row| d.child(row))
-            .when_some(
-                self.turn_actions(conversation, index, turn, cx),
-                |d, row| d.child(row),
-            )
-            .when_some(
-                self.turn_review_view(conversation, index, turn, cx),
-                |d, review| d.child(review),
+            .child(
+                div()
+                    .w_full()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.))
+                    .when_some(stretch, |d, (held, view)| {
+                        d.min_h(px((view - 28.).max(0.)))
+                            .pt(px(ANCHOR_TOP))
+                            .children(held)
+                    })
+                    .children(agents)
+                    .children(
+                        turn.visuals
+                            .iter()
+                            .enumerate()
+                            .map(|(i, visual)| self.visual_element(index, i, visual, cx)),
+                    )
+                    .when_some(answer_view, |d, shown| {
+                        d.child(transcript_select::scoped(
+                            &self.select,
+                            transcript_select::Reply {
+                                conversation,
+                                turn: index,
+                                user: false,
+                            },
+                            || {
+                                // Linked pictures and videos, diagrams, formulas and HTML open from here.
+                                let body = crate::markdown::render_rich(shown, &rich);
+                                self.wake_reply_assets(cx);
+                                body
+                            },
+                        ))
+                    })
+                    .when_some(self.delegated_tasks_view(turn, cx), |d, row| d.child(row))
+                    .when_some(
+                        self.turn_actions(conversation, index, turn, cx),
+                        |d, row| d.child(row),
+                    )
+                    .when_some(
+                        self.turn_review_view(conversation, index, turn, cx),
+                        |d, review| d.child(review),
+                    ),
             )
             .into_any_element()
     }
@@ -14990,14 +15044,24 @@ impl Shell {
             pick: fn(&mut Look, usize),
         ) -> AnyElement {
             div()
+                .relative()
                 .flex()
                 .p(px(2.))
                 .rounded(px(crate::theme::RADIUS_SM))
                 .border_1()
                 .border_color(content(0.1))
+                .child(crate::segment_pill::pill(
+                    id,
+                    chosen,
+                    content(0.1),
+                    crate::theme::RADIUS_SM,
+                ))
                 .children(options.iter().enumerate().map(|(ix, label)| {
                     div()
                         .id((id, ix))
+                        .relative()
+                        .child(crate::segment_pill::probe(id, ix))
+                        .sinks()
                         .h(px(24.))
                         .px(px(10.))
                         .rounded(px(crate::theme::RADIUS_SM))
@@ -15005,7 +15069,6 @@ impl Shell {
                         .items_center()
                         .text_size(px(12.5))
                         .text_color(content(if ix == chosen { 1. } else { 0.55 }))
-                        .when(ix == chosen, |d| d.bg(content(0.1)))
                         .when(ix != chosen, |d| d.hover(|s| s.text_color(content(0.9))))
                         .cursor_pointer()
                         .on_click(
@@ -16087,6 +16150,9 @@ fn composer_fits(width: f32) -> (bool, bool) {
 const CONVERSATION_MIN: f32 = 420.;
 const DOCK_FLOOR: f32 = 280.;
 
+/// How many of the window's 33 ms ticks between readings of what the agents use: about 5 s.
+const RESOURCE_TICKS: u32 = 150;
+
 /// The bars on each side of the listening robot.
 const LISTEN_BARS: usize = 14;
 
@@ -16392,6 +16458,7 @@ fn nav_button(
         .when(enabled, |d| {
             d.hover(|s| s.bg(content(0.07)))
                 .cursor_pointer()
+                .sinks()
                 .on_click(cx.listener(move |this, _, _, cx| this.navigate(forward, cx)))
         })
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -16416,6 +16483,7 @@ fn icon_button(id: &'static str, name: &'static str, side: f32) -> Stateful<Div>
         .justify_center()
         .hover(|s| s.bg(content(0.07)))
         .cursor_pointer()
+        .sinks()
         .child(icon(name, side).text_color(content(0.6)))
 }
 
@@ -16629,6 +16697,18 @@ impl Render for Shell {
         let menu = self.menu_view(now, &mut moving, cx);
         let open = self.sidebar.at(now);
         let footer = self.footer(self.sidebar_width * open, cx);
+        let peeking = self.peek.is_some() && !docked;
+        let agents_pill = self.agents_pill_view(
+            if peeking {
+                PEEK_INSET + self.sidebar_width
+            } else {
+                (self.sidebar_width * open).max(200.)
+            },
+            FOOTER + 6. + if peeking { PEEK_INSET } else { 0. },
+            now,
+            &mut moving,
+            cx,
+        );
         let panel = self.appearance_view(now, &mut moving, cx);
         self.usage_settle(now);
         let usage_page = self.usage_page_view(now, &mut moving, window, cx);
@@ -16898,6 +16978,7 @@ impl Render for Shell {
                 .size_full()
             }))
             .children(peek_panel)
+            .children(agents_pill)
             .children(project_menu)
             .children(filter_menu)
             .children(sidebar_options)
@@ -17028,16 +17109,26 @@ fn segmented_icons(
     // Its own row, so the control takes the width of its options, not of the page.
     div().flex().child(
         div()
+            .relative()
             .flex()
             .flex_none()
             .gap(px(2.))
             .p(px(3.))
             .rounded(px(crate::theme::RADIUS_MD))
             .bg(content(0.06))
+            .child(crate::segment_pill::pill(
+                id,
+                chosen,
+                content(0.14),
+                crate::theme::RADIUS_SM,
+            ))
             .children(options.iter().enumerate().map(|(ix, (glyph, label))| {
                 let on = ix == chosen;
                 div()
                     .id((id, ix))
+                    .relative()
+                    .child(crate::segment_pill::probe(id, ix))
+                    .sinks()
                     .flex()
                     .items_center()
                     .justify_center()
@@ -17047,7 +17138,6 @@ fn segmented_icons(
                     .rounded(px(crate::theme::RADIUS_SM))
                     .text_size(px(13.))
                     .text_color(content(if on { 1. } else { 0.65 }))
-                    .when(on, |d| d.bg(content(0.14)))
                     .when(!on, |d| d.hover(|s| s.bg(content(0.06))))
                     .cursor_pointer()
                     .on_click(

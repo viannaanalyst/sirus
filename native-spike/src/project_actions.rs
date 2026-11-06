@@ -1,5 +1,5 @@
-//! Project actions, as Monocode's: saved commands that the footer runs in a terminal with one
-//! click. The button shows the last one run; its chevron lists the rest and opens the editor.
+//! Project actions, as Monocode's: saved commands that run in a terminal with one click, from
+//! the menu of the footer's button, which also opens the editor.
 //! This file holds what is kept and decided; the window draws it in `shell_actions.rs`.
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -29,8 +29,6 @@ impl Action {
 struct Project {
     #[serde(default)]
     actions: Vec<Action>,
-    #[serde(default)]
-    last: Option<String>,
 }
 
 fn opens_by_default() -> bool {
@@ -62,28 +60,13 @@ impl Saved {
             .map_or(&[], |saved| saved.actions.as_slice())
     }
 
-    /// The one the footer's button runs: the last one run, else the first.
-    pub fn current(&self, project: &str) -> Option<&Action> {
-        let saved = self.projects.get(project)?;
-        saved
-            .last
-            .as_ref()
-            .and_then(|id| saved.actions.iter().find(|action| action.id == *id))
-            .or_else(|| saved.actions.first())
-    }
-
     pub fn find(&self, project: &str, id: &str) -> Option<&Action> {
         self.of(project).iter().find(|action| action.id == id)
     }
 
-    pub fn ran(&mut self, project: &str, id: &str) {
-        self.projects.entry(project.to_owned()).or_default().last = Some(id.to_owned());
-    }
-
-    /// Replaces the action with this id, or adds it; either way it becomes the current one.
+    /// Replaces the action with this id, or adds it.
     pub fn put(&mut self, project: &str, action: Action) {
         let saved = self.projects.entry(project.to_owned()).or_default();
-        saved.last = Some(action.id.clone());
         match saved.actions.iter_mut().find(|old| old.id == action.id) {
             Some(slot) => *slot = action,
             None => saved.actions.push(action),
@@ -93,9 +76,6 @@ impl Saved {
     pub fn remove(&mut self, project: &str, id: &str) {
         if let Some(saved) = self.projects.get_mut(project) {
             saved.actions.retain(|action| action.id != id);
-            if saved.last.as_deref() == Some(id) {
-                saved.last = None;
-            }
             if saved.actions.is_empty() {
                 self.projects.remove(project);
             }
@@ -134,20 +114,6 @@ mod tests {
     }
 
     #[test]
-    fn the_current_action_is_the_last_run_else_the_first() {
-        let mut saved = Saved::default();
-        assert!(saved.current("p").is_none());
-        saved.put("p", action("a"));
-        saved.put("p", action("b"));
-        assert_eq!(saved.current("p").unwrap().id, "b");
-        saved.ran("p", "a");
-        assert_eq!(saved.current("p").unwrap().id, "a");
-        saved.remove("p", "a");
-        assert_eq!(saved.current("p").unwrap().id, "b");
-        assert!(saved.of("other").is_empty());
-    }
-
-    #[test]
     fn editing_keeps_its_place_and_the_last_one_leaves_no_project() {
         let mut saved = Saved::default();
         saved.put("p", action("a"));
@@ -159,7 +125,7 @@ mod tests {
         assert_eq!(saved.of("p").len(), 2);
         saved.remove("p", "a");
         saved.remove("p", "b");
-        assert!(saved.current("p").is_none());
+        assert!(saved.of("p").is_empty());
     }
 
     #[test]

@@ -23,6 +23,7 @@ use crate::i18n::{t, tf};
 use crate::panel_files::{TextField, TextFieldEvent};
 use crate::panels::PanelContext;
 use crate::theme;
+use crate::theme::Sinks as _;
 use gpui::StyledImage as _;
 use gpui::{
     Animation, AnimationExt, AnyElement, AnyView, App, Bounds, ClipboardItem, Context,
@@ -1485,6 +1486,7 @@ impl Browser {
         if enabled {
             button
                 .cursor_pointer()
+                .sinks()
                 .hover(|s| s.bg(theme::content(0.08)))
                 .on_click(cx.listener(move |this, _, window, cx| action(this, window, cx)))
         } else {
@@ -1513,6 +1515,7 @@ impl Browser {
         if enabled {
             button
                 .cursor_pointer()
+                .sinks()
                 .hover(|s| s.bg(theme::content(0.08)))
                 .on_click(cx.listener(|this, _, _, cx| this.toggle_recording(cx)))
         } else {
@@ -2100,6 +2103,7 @@ impl Browser {
             .items_center()
             .justify_center()
             .cursor_pointer()
+            .sinks()
             .hover(|s| s.bg(theme::content(0.1)))
             .on_click(cx.listener(move |this, _, window, cx| action(this, window, cx)))
             .child(theme::icon(icon, 13.).text_color(theme::content(0.6)))
@@ -2122,6 +2126,7 @@ impl Browser {
             .flex()
             .items_center()
             .cursor_pointer()
+            .sinks()
             .text_size(px(12.))
             .text_color(if main {
                 theme::on_accent()

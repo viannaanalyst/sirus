@@ -11,6 +11,7 @@
 use crate::i18n::{t, tf};
 use crate::motion::{Curve, eased};
 use crate::settings_pages::{Edit, Run};
+use crate::theme::Sinks as _;
 use crate::theme::{accent, content, floating_fill, on_accent};
 use chrono::{DateTime, Utc};
 use gpui::{
@@ -769,6 +770,7 @@ fn button<V: 'static>(
         return base.opacity(0.45).into_any_element();
     }
     base.cursor_pointer()
+        .sinks()
         .hover(|s| s.opacity(0.88))
         .on_click(cx.listener(move |this, _, _, cx| {
             // The shell routes commands to `command` above.

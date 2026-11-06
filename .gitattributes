@@ -1,4 +1,3 @@
 # GitHub's language bar counts bytes. The self-contained design previews and the
 # demo video stage inline images, fonts and scripts, so they would dominate it.
 previews/** linguist-documentation
-graphify-out/** linguist-generated

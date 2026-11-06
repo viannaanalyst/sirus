@@ -1,0 +1,15 @@
+{
+  "0": "commands.rs",
+  "1": "models.rs",
+  "2": "PtySession",
+  "3": "paths.rs",
+  "4": "tauri.conf.json",
+  "5": "error.rs",
+  "6": "agent.rs",
+  "7": "git.rs",
+  "8": "default.json",
+  "9": "persist.rs",
+  "10": "build.rs",
+  "11": "main.rs",
+  "12": "switchyard"
+}

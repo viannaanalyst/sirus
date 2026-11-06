@@ -364,12 +364,11 @@ The app may stay open for hours. No polling loops (exceptions: CI auto-fix polls
 
 ### Features
 
-1. This file + relevant ADRs + Graphify if structural.
+1. This file + relevant ADRs.
 2. Skills (few).
 3. Short plan: modules, IPC, security.
 4. Implement on the correct side of the boundary.
 5. The checks in [`building.md`](building.md).
-6. `graphify update .` if structure changed.
 
 Checks are listed in [`building.md`](building.md). Tests use disposable fixtures, never user repositories.
 

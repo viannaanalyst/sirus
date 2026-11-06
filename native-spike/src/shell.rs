@@ -1074,6 +1074,8 @@ pub struct Shell {
     dock_drawn: f32,
     ignored_text: String,
     composer_layout: std::cell::RefCell<Option<TextLayout>>,
+    /// Groups of steps the person opened or closed: (conversation, turn, first step).
+    phase_open: HashMap<(usize, usize, usize), bool>,
     /// The composer's text scrolls under this, following the caret as it moves.
     composer_scroll: gpui::ScrollHandle,
     composer_caret_seen: Rc<Cell<(usize, usize)>>,
@@ -1401,6 +1403,7 @@ impl Shell {
             dock_drawn: 0.,
             ignored_text: String::new(),
             composer_layout: Default::default(),
+            phase_open: HashMap::new(),
             composer_scroll: gpui::ScrollHandle::new(),
             composer_caret_seen: Default::default(),
             selecting: false,
@@ -1545,7 +1548,11 @@ impl Shell {
 
     fn receive(&mut self, message: Incoming, cx: &mut Context<Self>) {
         match message {
-            Incoming::Problem(problem) => self.problem = Some(problem),
+            Incoming::Problem(problem) => {
+                if !is_not_a_repository(&problem) {
+                    self.problem = Some(problem);
+                }
+            }
             Incoming::Ready(state) => {
                 self.load_state(state, cx);
                 self.computer_arrived(cx);
@@ -1933,7 +1940,12 @@ impl Shell {
                 }
                 Some(Waiting::Session(usize::MAX)) => {}
                 Some(Waiting::Session(_)) if ok => self.session_updated(&value, cx),
-                Some(_) | None if !ok => self.problem = Some(error_text(&value)),
+                Some(_) | None if !ok => {
+                    let message = error_text(&value);
+                    if !is_not_a_repository(&message) {
+                        self.problem = Some(message);
+                    }
+                }
                 _ => {}
             },
             Incoming::Event { name, payload } => match name.as_str() {
@@ -11622,6 +11634,31 @@ impl Shell {
                         |(text, _)| text.clone(),
                     )),
             )
+            // Refresh sits right beside the numbers, as in Monocode.
+            .child(
+                div()
+                    .id("refresh-usage")
+                    .size(px(20.))
+                    .ml(px(-4.))
+                    .rounded_full()
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .opacity(if self.usage_refreshing { 0.5 } else { 1. })
+                    .when(!self.usage_refreshing, |d| {
+                        d.hover(|s| s.bg(content(0.1)))
+                    })
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if !this.usage_refreshing {
+                            this.request_usage(true);
+                            cx.notify();
+                        }
+                    }))
+                    .child(icon("refresh", 12.)),
+            )
             .when_some(self.computer_chip(cx), |d, chip| d.child(chip))
             .when_some(self.problem.clone(), |d, problem| {
                 d.child(
@@ -11665,6 +11702,233 @@ impl Shell {
         text
     }
 
+    /// A group of steps: its tile and title, and the steps on a rail when open. The running group
+    /// is open by itself, inside a window that follows the newest step (Monocode's live phase);
+    /// a settled one opens with a click.
+    #[allow(clippy::too_many_arguments)]
+    fn phase_view(
+        &self,
+        conversation: usize,
+        index: usize,
+        turn: &Turn,
+        range: std::ops::Range<usize>,
+        active: bool,
+        now: Instant,
+        moving: &mut bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let start = range.start;
+        let steps = &turn.steps[range];
+        let key = (conversation, index, start);
+        let open = self.phase_open.get(&key).copied().unwrap_or(active);
+        let roll_key = 1_000_000 + index * 4096 + start;
+        let roll = self.roll(conversation, roll_key, now, moving);
+        let lead = steps
+            .iter()
+            .find(|s| s.kind == "command")
+            .or(steps.first())
+            .map_or("terminal", step_glyph);
+        let (face, mark, ink) = if active {
+            (
+                Face::Neutral,
+                self.spin(now).into_any_element(),
+                crate::tab_tile::tile_ink(),
+            )
+        } else {
+            activity_face(lead)
+        };
+        let morph = if active { roll } else { roll.max(if open { 1. } else { 0. }) };
+        let chevron = icon("chevron-right", 14.)
+            .text_color(ink)
+            .with_transformation(Transformation::rotate(percentage(if open {
+                0.25
+            } else {
+                0.
+            })))
+            .into_any_element();
+        let clock = now.duration_since(self.epoch).as_secs_f32();
+        let title: AnyElement = if active {
+            let phase = live_summary(steps);
+            shimmer(if phase.is_empty() { summary(steps) } else { phase }, clock)
+        } else {
+            div().truncate().child(summary(steps)).into_any_element()
+        };
+        let header = div()
+            .id(("phase", index * 4096 + start))
+            .h(px(STEP_ROW))
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .text_size(px(14.))
+            .text_color(content(0.5))
+            .cursor_pointer()
+            .hover(|s| s.text_color(content(0.8)))
+            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                this.set_roll(conversation, roll_key, *hovered, cx)
+            }))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.phase_open.insert(key, !open);
+                cx.notify();
+            }))
+            .child(push_tile(
+                &ACTIVITY_TILE,
+                face,
+                mark,
+                chevron,
+                morph.clamp(0., 1.),
+            ))
+            .child(title);
+        let mut block = div().w_full().min_w_0().flex().flex_col().child(header);
+        if !open {
+            return block.into_any_element();
+        }
+        let rows = steps.iter().enumerate().map(|(i, step)| {
+            let inner: AnyElement = match &step.image {
+                Some(path) => self
+                    .image_row(path, step, format!("image-step-{index}-{}", start + i), cx)
+                    .into_any_element(),
+                None if step.running => {
+                    let text = if step.kind == "command" && !step.caption.is_empty() {
+                        step.caption.clone()
+                    } else {
+                        crate::step_lines::text(&step_line(step))
+                    };
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .child(shimmer(text, clock))
+                        .into_any_element()
+                }
+                None => step_row(step).into_any_element(),
+            };
+            div()
+                .relative()
+                .w_full()
+                .h(px(STEP_ROW))
+                .overflow_hidden()
+                .pl(px(TILE_RAIL_INDENT))
+                .flex()
+                .items_center()
+                .gap(px(7.))
+                .text_size(px(14.))
+                .text_color(content(0.5))
+                .child(rail(i + 1 == steps.len()))
+                .child(inner)
+                .into_any_element()
+        });
+        let rows: Vec<AnyElement> = rows.collect();
+        if !active {
+            return block.children(rows).into_any_element();
+        }
+        // At most 280 px or 45% of the view; it follows the newest step while the reader has not
+        // scrolled up, and the steps fade at the edges with no colour laid over the glass.
+        let body_height = rows.len() as f32 * STEP_ROW;
+        let view = self.view_sizes.get(&conversation).map_or(600., |size| size.1);
+        let max_height = 280f32.min(view * 0.45).max(96.);
+        let (handle, was_at_bottom, offset, max) = {
+            let mut scrolls = self.phase_scrolls.borrow_mut();
+            let entry = scrolls
+                .entry((conversation, index * 4096 + start))
+                .or_insert_with(|| (gpui::ScrollHandle::new(), std::cell::Cell::new(0.)));
+            let offset = -f32::from(entry.0.offset().y);
+            let max = f32::from(entry.0.max_offset().y);
+            let was_at_bottom = offset >= entry.1.get() - 1.;
+            entry.1.set(max);
+            (entry.0.clone(), was_at_bottom, offset, max)
+        };
+        if was_at_bottom {
+            handle.scroll_to_bottom();
+        }
+        let top_fade = if offset > 1. { 24. } else { 0. };
+        let bottom_fade = if max - offset > 1. { 32. } else { 0. };
+        let mask = |begin: bool| {
+            gpui::canvas(
+                |_, _, _| {},
+                move |bounds, _, window, _| {
+                    if top_fade > 0. || bottom_fade > 0. {
+                        let scale = window.scale_factor();
+                        window.paint_layer(bounds, |window| {
+                            window.paint_quad(gpui::fill(bounds, gpui::black()).border_color(
+                                gpui_apple::metal_renderer::edge_fade_marker(
+                                    begin,
+                                    top_fade * scale,
+                                    bottom_fade * scale,
+                                ),
+                            ));
+                        });
+                    }
+                },
+            )
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+        };
+        block = block.child(
+            div()
+                .relative()
+                .w_full()
+                .h(px(body_height.min(max_height)))
+                .overflow_hidden()
+                .child(mask(true))
+                .child(
+                    div()
+                        .id(("live-steps", index * 4096 + start))
+                        .size_full()
+                        .overflow_y_scroll()
+                        .track_scroll(&handle)
+                        .children(rows),
+                )
+                .child(mask(false)),
+        );
+        block.into_any_element()
+    }
+
+    /// What the person sent into the running reply, as a message of theirs, where it arrived.
+    fn steer_bubble(
+        &self,
+        index: usize,
+        steer: usize,
+        turn: &Turn,
+        conversation: usize,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let Some(steer_data) = turn.steers.get(steer) else {
+            return div().into_any_element();
+        };
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .items_end()
+            .gap(px(8.))
+            .py(px(4.))
+            .when(!steer_data.attachments.is_empty(), |d| {
+                d.child(self.sent_chips(
+                    conversation,
+                    1_000 + index * 64 + steer,
+                    &steer_data.attachments,
+                    cx,
+                ))
+            })
+            .when(!steer_data.text.is_empty(), |d| {
+                d.child(
+                    div()
+                        .max_w(px(576.))
+                        .min_w_0()
+                        .px(px(12.))
+                        .py(px(8.))
+                        .rounded(px(12.))
+                        .bg(accent_wash(0.24))
+                        .text_size(px(14.))
+                        .line_height(px(20.))
+                        .text_color(content(1.))
+                        .child(steer_data.text.clone()),
+                )
+            })
+            .into_any_element()
+    }
+
     fn turn_body(
         &self,
         conversation: usize,
@@ -11681,6 +11945,8 @@ impl Shell {
             .provider
             .unwrap_or(self.conversations[conversation].provider);
         let live = turn.live;
+        // Only a finished turn with work before its answer folds; otherwise the header only labels.
+        let foldable = !live && data::folds_work(&turn.beats);
         // The tree stays open while the turn works, then folds itself shut; a click overrides.
         let openness = match turn.toggled {
             Some(at) => {
@@ -11737,7 +12003,7 @@ impl Shell {
         // Pointing at the tile pushes the model's mark out to the right as the chevron slides
         // in from the left; an open fold keeps the chevron (Monocode's phase_tile.rs).
         let roll = self.roll(conversation, index * 2, now, moving);
-        let shown = if live { roll } else { roll.max(openness) }.clamp(0., 1.);
+        let shown = if foldable { roll.max(openness) } else { 0. }.clamp(0., 1.);
         let chevron = icon("chevron-right", 14.)
             .text_color(gpui::white())
             .with_transformation(Transformation::rotate(percentage(openness * 0.25)))
@@ -11750,14 +12016,18 @@ impl Shell {
             .gap(px(8.))
             .text_size(px(14.))
             .text_color(content(0.5))
-            .hover(|s| s.text_color(content(0.8)))
-            .cursor_pointer()
+            .when(foldable, |d| {
+                d.hover(|s| s.text_color(content(0.8))).cursor_pointer()
+            })
             .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                 this.set_roll(conversation, index * 2, *hovered, cx)
             }))
             .on_click(cx.listener(move |this, _, _, cx| {
+                if !foldable {
+                    return;
+                }
                 let turn = &mut this.conversations[conversation].turns[index];
-                let was = turn.toggled.map_or(turn.live, |_| turn.open);
+                let was = turn.toggled.map_or(false, |_| turn.open);
                 turn.open = !was;
                 turn.toggled = Some(Instant::now());
                 cx.notify();
@@ -11771,188 +12041,76 @@ impl Shell {
             ))
             .child(label);
 
-        let mut rows: Vec<(f32, AnyElement)> = Vec::new();
-        let child_row = |height: f32, last: bool, inner: AnyElement| {
+        // The turn in order. A finished one folds what came before its answer under the header.
+        let answer_at = data::final_answer(&turn.beats);
+        let shown_answer = self.paced_answer(conversation, index, turn, moving);
+        let rich = crate::reply_view::Rich {
+            session: self.conversations[conversation].session_id.clone(),
+            cwd: self.conversations[conversation].worktree.clone(),
+            streaming: turn.live,
+            act: std::rc::Rc::new(cx.listener(|this, act: &crate::reply_rich::Act, _, cx| {
+                this.reply_act(act.clone(), cx)
+            })),
+        };
+        let last_steps = turn
+            .beats
+            .iter()
+            .rposition(|beat| matches!(beat, data::Beat::Steps(_)));
+        let mut folded: Vec<AnyElement> = Vec::new();
+        let mut flow: Vec<AnyElement> = Vec::new();
+        for (at, beat) in turn.beats.iter().enumerate() {
+            if Some(at) == answer_at && !live {
+                continue;
+            }
+            let element = match beat {
+                data::Beat::Text(range) => {
+                    let end = range.end.min(shown_answer.len());
+                    if range.start >= end {
+                        continue;
+                    }
+                    let body = crate::markdown::render_rich(&shown_answer[range.start..end], &rich);
+                    self.wake_reply_assets(cx);
+                    body
+                }
+                data::Beat::Steps(range) => self.phase_view(
+                    conversation,
+                    index,
+                    turn,
+                    range.clone(),
+                    live && Some(at) == last_steps,
+                    now,
+                    moving,
+                    cx,
+                ),
+                data::Beat::Steer(steer) => self.steer_bubble(index, *steer, turn, conversation, cx),
+            };
+            if foldable && answer_at.is_some_and(|answer| at < answer) {
+                folded.push(element);
+            } else {
+                flow.push(element);
+            }
+        }
+        let folded_count = folded.len();
+        let folded = folded.into_iter().enumerate().map(|(at, element)| {
             div()
                 .relative()
                 .w_full()
-                .h(px(height))
-                .overflow_hidden()
+                .min_w_0()
                 .pl(px(TILE_RAIL_INDENT))
-                .flex()
-                .items_center()
-                .gap(px(7.))
-                .text_size(px(13.))
-                .text_color(content(0.55))
-                .child(rail(last))
-                .child(inner)
+                .pb(px(6.))
+                .child(rail(at + 1 == folded_count))
+                .child(element)
                 .into_any_element()
+        });
+        let folded: Vec<AnyElement> = if openness > 0.001 {
+            folded.collect()
+        } else {
+            Vec::new()
         };
-        let step_text = |step: &data::Step| {
-            if step.kind == "command" && !step.caption.is_empty() {
-                step.caption.clone()
-            } else {
-                crate::step_lines::text(&step_line(step))
-            }
-        };
-        if live {
-            // The phase's header and the steps as they happen, the one running on a spinner,
-            // inside a bounded window that follows the newest (Monocode's live phase).
-            let lead = turn
-                .steps
-                .iter()
-                .find(|s| s.kind == "command")
-                .or(turn.steps.first())
-                .map_or("terminal", step_glyph);
-            let _ = lead;
-            // A running group holds its spinner; pointing at it brings the chevron.
-            let roll = self.roll(conversation, index * 2 + 1, now, moving).clamp(0., 1.);
-            let chevron = icon("chevron-right", 14.)
-                .text_color(crate::tab_tile::tile_ink())
-                .with_transformation(Transformation::rotate(percentage(0.25)))
-                .into_any_element();
-            let phase = live_summary(&turn.steps);
-            let title: AnyElement = if phase.is_empty() {
-                shimmer(name.clone(), clock)
-            } else {
-                shimmer(phase, clock)
-            };
-            let header = div()
-                .id(("live-phase", index))
-                .flex()
-                .items_center()
-                .gap(px(8.))
-                .text_size(px(14.))
-                .text_color(content(0.5))
-                .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                    this.set_roll(conversation, index * 2 + 1, *hovered, cx)
-                }))
-                .child(push_tile(
-                    &ACTIVITY_TILE,
-                    Face::Neutral,
-                    self.spin(now).into_any_element(),
-                    chevron,
-                    roll,
-                ))
-                .child(title)
-                .into_any_element();
-            rows.push((STEP_ROW, child_row(STEP_ROW, false, header)));
-            let shown_steps = &turn.steps[..];
-            for (i, step) in shown_steps.iter().enumerate() {
-                let text: AnyElement = if step.running {
-                    shimmer(step_text(step), clock)
-                } else {
-                    div().truncate().child(step_text(step)).into_any_element()
-                };
-                let inner = div()
-                    .flex()
-                    .flex_1()
-                    .min_w_0()
-                    .items_center()
-                    .gap(px(7.))
-                    .text_size(px(14.))
-                    .text_color(content(0.5))
-                    // A step of a group is bare, as in Monocode: only the header has a tile.
-                    .child(match &step.image {
-                        Some(path) => self
-                            .image_row(path, step, format!("image-step-{index}-{i}"), cx)
-                            .into_any_element(),
-                        None => div().flex_1().min_w_0().child(text).into_any_element(),
-                    })
-                    .into_any_element();
-                rows.push((
-                    STEP_ROW,
-                    child_row(STEP_ROW, i + 1 == shown_steps.len(), inner),
-                ));
-            }
-        } else if !turn.steps.is_empty() {
-            let nested_turn =
-                turn.steps_toggled
-                    .map_or(if turn.steps_open { 1. } else { 0. }, |at| {
-                        let since = now.duration_since(at).as_secs_f32();
-                        if since < DISCLOSE {
-                            *moving = true;
-                        }
-                        let p = eased(since / DISCLOSE, Curve::Expo);
-                        if turn.steps_open { p } else { 1. - p }
-                    });
-            let roll = self.roll(conversation, index * 2 + 1, now, moving);
-            let lead = turn
-                .steps
-                .iter()
-                .find(|s| s.kind == "command")
-                .or(turn.steps.first())
-                .map_or("terminal", step_glyph);
-            let (face, mark, ink) = activity_face(lead);
-            let chevron = icon("chevron-right", 14.)
-                .text_color(ink)
-                .with_transformation(Transformation::rotate(percentage(nested_turn * 0.25)))
-                .into_any_element();
-            let inner = div()
-                .id(("summary", index))
-                .flex()
-                .items_center()
-                .gap(px(8.))
-                .cursor_pointer()
-                .hover(|s| s.text_color(content(0.8)))
-                .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                    this.set_roll(conversation, index * 2 + 1, *hovered, cx)
-                }))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    let turn = &mut this.conversations[conversation].turns[index];
-                    turn.steps_open = !turn.steps_open;
-                    turn.steps_toggled = Some(Instant::now());
-                    cx.notify();
-                }))
-                .child(push_tile(
-                    &ACTIVITY_TILE,
-                    face,
-                    mark,
-                    chevron,
-                    roll.max(nested_turn).clamp(0., 1.),
-                ))
-                .child(summary(&turn.steps))
-                .into_any_element();
-            rows.push((STEP_ROW, child_row(STEP_ROW, true, inner)));
-            if nested_turn > 0.001 {
-                for (i, step) in turn.steps.iter().enumerate() {
-                    let height = step_height(step) * nested_turn;
-                    rows.push((
-                        height,
-                        div()
-                            .relative()
-                            .w_full()
-                            .h(px(height))
-                            .opacity(nested_turn)
-                            .overflow_hidden()
-                            .pl(px(TILE_RAIL_INDENT + ACTIVITY_TILE.w + 8.))
-                            .child(
-                                div()
-                                    .absolute()
-                                    .top_0()
-                                    .left(px(TILE_RAIL_INDENT))
-                                    .w(px(TILE_RAIL_X + 10.))
-                                    .h_full()
-                                    .child(rail(i + 1 == turn.steps.len())),
-                            )
-                            .flex()
-                            .items_center()
-                            .gap(px(7.))
-                            .text_size(px(14.))
-                            .text_color(content(0.5))
-                            .child(match &step.image {
-                                Some(path) => self
-                                    .image_row(path, step, format!("image-step-{index}-{i}"), cx)
-                                    .into_any_element(),
-                                None => step_row(step).into_any_element(),
-                            })
-                            .into_any_element(),
-                    ));
-                }
-            }
-        }
-        let body_height: f32 = rows.iter().map(|(h, _)| *h).sum();
-        let body: Vec<AnyElement> = rows.into_iter().map(|(_, row)| row).collect();
+        let answer_view = answer_at.filter(|_| !live).and_then(|at| match &turn.beats[at] {
+            data::Beat::Text(range) => shown_answer.get(range.start..range.end.min(shown_answer.len())),
+            _ => None,
+        });
         let has_header =
             live || !turn.steps.is_empty() || !turn.agents.is_empty() || turn.seconds.is_some();
         // Subagents, as one card (subagent_card.rs), and the pill for the ones in the background.
@@ -12066,83 +12224,18 @@ impl Shell {
                 ),
                 None => d.child(header),
             })
-            .when(body_height > 0., |d| {
-                if !live {
-                    return d.child(
-                        div()
-                            .w_full()
-                            .mt(px(-6.))
-                            .h(px(body_height * openness))
-                            .opacity(openness.clamp(0., 1.))
-                            .overflow_hidden()
-                            .children(body),
-                    );
-                }
-                // The window is at most 280 px or 45% of the view; it scrolls to the newest
-                // step while the reader has not scrolled up, and fades where more is hidden.
-                let view = self.view_sizes.get(&conversation).map_or(600., |size| size.1);
-                let max_height = 280f32.min(view * 0.5).max(96.);
-                let (handle, was_at_bottom, offset, max) = {
-                    let mut scrolls = self.phase_scrolls.borrow_mut();
-                    let entry = scrolls
-                        .entry((conversation, index))
-                        .or_insert_with(|| (gpui::ScrollHandle::new(), std::cell::Cell::new(0.)));
-                    let offset = -f32::from(entry.0.offset().y);
-                    let max = f32::from(entry.0.max_offset().y);
-                    let was_at_bottom = offset >= entry.1.get() - 1.;
-                    entry.1.set(max);
-                    (entry.0.clone(), was_at_bottom, offset, max)
-                };
-                if was_at_bottom {
-                    handle.scroll_to_bottom();
-                }
-                // The steps themselves fade out at the edges (Monocode's live_phase.rs), so no
-                // colour is laid over the glass behind them.
-                let top_fade = if offset > 1. { 24. } else { 0. };
-                let bottom_fade = if max - offset > 1. { 32. } else { 0. };
-                let mask = |begin: bool| {
-                    gpui::canvas(
-                        |_, _, _| {},
-                        move |bounds, _, window, _| {
-                            if top_fade > 0. || bottom_fade > 0. {
-                                let scale = window.scale_factor();
-                                window.paint_layer(bounds, |window| {
-                                    window.paint_quad(gpui::fill(bounds, gpui::black()).border_color(
-                                        gpui_apple::metal_renderer::edge_fade_marker(
-                                            begin,
-                                            top_fade * scale,
-                                            bottom_fade * scale,
-                                        ),
-                                    ));
-                                });
-                            }
-                        },
-                    )
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .size_full()
-                };
+            .when(!folded.is_empty(), |d| {
                 d.child(
                     div()
-                        .relative()
                         .w_full()
-                        .mt(px(-6.))
-                        .h(px(body_height.min(max_height) * openness))
+                        .mt(px(-4.))
+                        .flex()
+                        .flex_col()
                         .opacity(openness.clamp(0., 1.))
-                        .overflow_hidden()
-                        .child(mask(true))
-                        .child(
-                            div()
-                                .id(("live-steps", index))
-                                .size_full()
-                                .overflow_y_scroll()
-                                .track_scroll(&handle)
-                                .children(body),
-                        )
-                        .child(mask(false)),
+                        .children(folded),
                 )
             })
+            .children(flow)
             .children(agents)
             .children(
                 turn.visuals
@@ -12150,7 +12243,7 @@ impl Shell {
                     .enumerate()
                     .map(|(i, visual)| self.visual_element(index, i, visual, cx)),
             )
-            .when(!turn.answer.is_empty(), |d| {
+            .when_some(answer_view, |d, shown| {
                 d.child(transcript_select::scoped(
                     &self.select,
                     transcript_select::Reply {
@@ -12160,17 +12253,6 @@ impl Shell {
                     },
                     || {
                         // Linked pictures and videos, diagrams, formulas and HTML open from here.
-                        let rich = crate::reply_view::Rich {
-                            session: self.conversations[conversation].session_id.clone(),
-                            cwd: self.conversations[conversation].worktree.clone(),
-                            streaming: turn.live,
-                            act: std::rc::Rc::new(cx.listener(
-                                |this, act: &crate::reply_rich::Act, _, cx| {
-                                    this.reply_act(act.clone(), cx)
-                                },
-                            )),
-                        };
-                        let shown = self.paced_answer(conversation, index, turn, moving);
                         let body = crate::markdown::render_rich(shown, &rich);
                         self.wake_reply_assets(cx);
                         body
@@ -14823,6 +14905,11 @@ fn step_line(step: &data::Step) -> crate::step_lines::Line {
 }
 
 /// What a tool acted on, in the tree: a small mono chip.
+/// A project with no Git is normal: a Git call failing on it is not a problem to report.
+fn is_not_a_repository(message: &str) -> bool {
+    message.contains("not a git repository")
+}
+
 /// How far the composer's text should be scrolled so the caret's line shows: unchanged when it
 /// already does, else just enough to bring it in.
 fn follow_caret(top: Pixels, line: Pixels, scrolled: Pixels, seen: Pixels) -> Pixels {
@@ -14898,8 +14985,8 @@ fn step_row(step: &data::Step) -> Div {
                     div()
                         .min_w_0()
                         .truncate()
-                        .text_size(px(13.))
-                        .text_color(content(0.7))
+                        .text_size(px(14.))
+                        .text_color(content(0.5))
                         .child(title),
                 )
             })

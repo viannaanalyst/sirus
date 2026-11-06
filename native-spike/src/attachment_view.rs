@@ -1131,6 +1131,11 @@ impl Shell {
             for info in &turn.attachments {
                 want(&self.viewer, &owner, info);
             }
+            for steer in &turn.steers {
+                for info in &steer.attachments {
+                    want(&self.viewer, &owner, info);
+                }
+            }
         }
         for (owner, id) in wanted
             .into_iter()

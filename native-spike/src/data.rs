@@ -45,6 +45,9 @@ impl Handoff {
 }
 
 pub struct Turn {
+    /// The turn in order: prose, groups of steps and instructions.
+    pub beats: Vec<Beat>,
+    pub steers: Vec<Steer>,
     pub user: String,
     /// The files sent with the message.
     pub attachments: Vec<crate::attachment_doc::Info>,
@@ -76,6 +79,24 @@ pub struct Turn {
     pub finished: Option<Instant>,
     pub steps_open: bool,
     pub steps_toggled: Option<Instant>,
+}
+
+/// One moment of a turn, in the order it happened (Monocode's activity rows).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Beat {
+    /// What the agent wrote: a byte range of `Turn::answer`.
+    Text(std::ops::Range<usize>),
+    /// A run of steps with no prose between them: a range of `Turn::steps`.
+    Steps(std::ops::Range<usize>),
+    /// What the person sent into the running reply ("Instruir agora").
+    Steer(usize),
+}
+
+/// An instruction sent into a running reply.
+#[derive(Clone)]
+pub struct Steer {
+    pub text: String,
+    pub attachments: Vec<crate::attachment_doc::Info>,
 }
 
 #[derive(Clone)]
@@ -316,8 +337,85 @@ impl Conversation {
     }
 }
 
+/// The byte length of the first `units` UTF-16 units of `text`, on a character boundary.
+fn utf16_to_byte(text: &str, units: usize) -> usize {
+    let mut seen = 0;
+    for (at, character) in text.char_indices() {
+        if seen >= units {
+            return at;
+        }
+        seen += character.len_utf16();
+    }
+    text.len()
+}
+
+/// One reply's moments. `offsets` has the reply's length (UTF-16) when each step began and
+/// `steers` when each instruction arrived; the prose between them becomes its own beat.
+fn beats_of(
+    base: usize,
+    content: &str,
+    first_step: usize,
+    offsets: &[Option<u64>],
+    first_steer: usize,
+    steers: &[usize],
+) -> Vec<Beat> {
+    let mut beats: Vec<Beat> = Vec::new();
+    let mut cursor = 0;
+    let mut pending = steers.iter().enumerate().peekable();
+    let text_until = |beats: &mut Vec<Beat>, cursor: &mut usize, units: usize| {
+        let to = utf16_to_byte(content, units).max(*cursor);
+        if !content[*cursor..to].trim().is_empty() {
+            beats.push(Beat::Text(base + *cursor..base + to));
+        }
+        *cursor = to;
+    };
+    for (at, offset) in offsets.iter().enumerate() {
+        let units = offset.map_or(usize::MAX, |o| o as usize);
+        while let Some((ix, steer)) = pending.peek().map(|(ix, steer)| (*ix, **steer)) {
+            if steer > units {
+                break;
+            }
+            text_until(&mut beats, &mut cursor, steer);
+            beats.push(Beat::Steer(first_steer + ix));
+            pending.next();
+        }
+        if offset.is_some() {
+            text_until(&mut beats, &mut cursor, units);
+        }
+        let step = first_step + at;
+        match beats.last_mut() {
+            Some(Beat::Steps(run)) if run.end == step => run.end = step + 1,
+            _ => beats.push(Beat::Steps(step..step + 1)),
+        }
+    }
+    for (ix, steer) in pending {
+        text_until(&mut beats, &mut cursor, *steer);
+        beats.push(Beat::Steer(first_steer + ix));
+    }
+    if !content[cursor..].trim().is_empty() {
+        beats.push(Beat::Text(base + cursor..base + content.len()));
+    }
+    beats
+}
+
+/// The index of the turn's final answer among its beats: its last prose.
+pub fn final_answer(beats: &[Beat]) -> Option<usize> {
+    beats.iter().rposition(|beat| matches!(beat, Beat::Text(_)))
+}
+
+/// Whether a finished turn folds its work: there is an answer, and steps before it.
+pub fn folds_work(beats: &[Beat]) -> bool {
+    final_answer(beats).is_some_and(|answer| {
+        beats[..answer]
+            .iter()
+            .any(|beat| matches!(beat, Beat::Steps(_)))
+    })
+}
+
 fn blank(user: &str) -> Turn {
     Turn {
+        beats: Vec::new(),
+        steers: Vec::new(),
         user: user.to_owned(),
         attachments: Vec::new(),
         steps: Vec::new(),
@@ -397,6 +495,10 @@ fn turns_of(messages: &[Value]) -> Vec<Turn> {
                 turns.push(blank(""));
             }
             let turn = turns.last_mut().unwrap();
+            let base = turn.answer.len();
+            let first_step = turn.steps.len();
+            let first_steer = turn.steers.len();
+            let mut offsets = Vec::new();
             if let Some(text) = message["content"].as_str() {
                 turn.answer.push_str(text);
             }
@@ -471,8 +573,82 @@ fn turns_of(messages: &[Value]) -> Vec<Turn> {
                     caption: item["caption"].as_str().unwrap_or("").to_owned(),
                     running: item["state"].as_str() == Some("running"),
                 });
+                offsets.push(item["offset"].as_u64());
             }
+            let mut steers = Vec::new();
+            for steer in message["steers"].as_array().into_iter().flatten() {
+                turn.steers.push(Steer {
+                    text: steer["text"].as_str().unwrap_or("").to_owned(),
+                    attachments: steer["attachments"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .map(crate::attachment_doc::Info::from_message)
+                        .collect(),
+                });
+                steers.push(steer["offset"].as_u64().unwrap_or(u64::MAX) as usize);
+            }
+            let beats = beats_of(base, content, first_step, &offsets, first_steer, &steers);
+            turn.beats.extend(beats);
         }
     }
     turns
+}
+
+#[cfg(test)]
+mod beat_tests {
+    use super::*;
+
+    #[test]
+    fn prose_splits_the_steps_in_the_order_they_happened() {
+        let beats = beats_of(0, "ab", 0, &[Some(0), Some(0), Some(1)], 0, &[]);
+        assert_eq!(
+            beats,
+            vec![
+                Beat::Steps(0..2),
+                Beat::Text(0..1),
+                Beat::Steps(2..3),
+                Beat::Text(1..2),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_instruction_lands_where_it_arrived() {
+        let beats = beats_of(0, "ab", 0, &[Some(2)], 0, &[1]);
+        assert_eq!(
+            beats,
+            vec![
+                Beat::Text(0..1),
+                Beat::Steer(0),
+                Beat::Text(1..2),
+                Beat::Steps(0..1),
+            ]
+        );
+        assert_eq!(beats_of(0, "", 0, &[], 3, &[9]), vec![Beat::Steer(3)]);
+    }
+
+    #[test]
+    fn offsets_count_utf16_and_later_replies_add_their_base() {
+        let beats = beats_of(10, "é😀x", 4, &[Some(3)], 0, &[]);
+        assert_eq!(
+            beats,
+            vec![Beat::Text(10..16), Beat::Steps(4..5), Beat::Text(16..17)]
+        );
+    }
+
+    #[test]
+    fn a_step_with_no_offset_stays_with_the_last_group() {
+        let beats = beats_of(0, "ab", 0, &[Some(0), None], 0, &[]);
+        assert_eq!(beats, vec![Beat::Steps(0..2), Beat::Text(0..2)]);
+    }
+
+    #[test]
+    fn work_folds_only_with_steps_before_an_answer() {
+        let answer = Beat::Text(0..1);
+        assert!(folds_work(&[Beat::Steps(0..1), answer.clone()]));
+        assert!(!folds_work(&[answer.clone(), Beat::Steps(0..1)]));
+        assert!(!folds_work(&[Beat::Steps(0..1)]));
+        assert_eq!(final_answer(&[answer, Beat::Steps(0..1)]), Some(0));
+    }
 }

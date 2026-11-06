@@ -73,12 +73,6 @@ pub struct Turn {
     pub started_ms: Option<u64>,
     pub paused_ms: u64,
     pub model: Option<String>,
-    pub open: bool,
-    pub toggled: Option<Instant>,
-    /// When it stopped being live on screen: its tree folds shut from here.
-    pub finished: Option<Instant>,
-    pub steps_open: bool,
-    pub steps_toggled: Option<Instant>,
 }
 
 /// One moment of a turn, in the order it happened (Monocode's activity rows).
@@ -314,23 +308,14 @@ impl Conversation {
         self.turns.extend(tail);
     }
 
-    /// New turns keep what the person opened or folded in the old ones; `offset` is where they start.
+    /// Marks the newest turn live while the conversation works; `offset` is where the new turns start.
     fn carried_over(&self, mut turns: Vec<Turn>, old: Vec<Turn>, offset: usize) -> Vec<Turn> {
         let working = self.working();
-        let mut old = old.into_iter();
+        let _ = old;
         let count = offset + turns.len();
         for (ix, turn) in turns.iter_mut().enumerate() {
             if offset + ix + 1 == count && working && turn.answer.is_empty() {
                 turn.live = true;
-            }
-            if let Some(before) = old.next() {
-                turn.open = before.open;
-                turn.toggled = before.toggled;
-                turn.steps_open = before.steps_open;
-                turn.steps_toggled = before.steps_toggled;
-                turn.finished = before
-                    .finished
-                    .or((before.live && !turn.live).then(Instant::now));
             }
         }
         turns
@@ -403,6 +388,14 @@ pub fn final_answer(beats: &[Beat]) -> Option<usize> {
     beats.iter().rposition(|beat| matches!(beat, Beat::Text(_)))
 }
 
+/// The words a settled turn ends on, drawn apart from the rest: its last beat, when that is prose.
+pub fn settled_answer(turn: &Turn) -> Option<&str> {
+    match turn.beats.last()? {
+        Beat::Text(range) if !turn.live => turn.answer.get(range.clone()),
+        _ => None,
+    }
+}
+
 /// Whether a finished turn folds its work: there is an answer, and steps before it.
 pub fn folds_work(beats: &[Beat]) -> bool {
     final_answer(beats).is_some_and(|answer| {
@@ -433,11 +426,6 @@ fn blank(user: &str) -> Turn {
         started_ms: None,
         paused_ms: 0,
         model: None,
-        open: false,
-        toggled: None,
-        finished: None,
-        steps_open: false,
-        steps_toggled: None,
     }
 }
 

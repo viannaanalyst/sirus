@@ -1,6 +1,6 @@
 # ADR-177: Solar icons in the Linear style, like Zeron
 
-**Status:** Accepted (2026-10-28). Replaces the icon family chosen with Phosphor in the interface (see `docs/development/ui-arc.md`).
+**Status:** Superseded by [ADR-196](ADR-196-hugeicons-code-pills-find-words.md) (2026-11-06). Accepted (2026-10-28). Replaces the icon family chosen with Phosphor in the interface (see `docs/development/ui-arc.md`).
 
 ## Context
 

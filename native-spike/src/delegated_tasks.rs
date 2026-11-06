@@ -90,7 +90,7 @@ impl Shell {
                 .gap(px(10.))
                 .cursor_pointer()
                 .on_click(cx.listener(move |this, _, _, cx| this.open(ix, cx)))
-                .child(provider_glyph(conversation.provider, 16.))
+                .child(crate::tab_tile::provider_mark(conversation.provider, 16.))
                 .child(
                     div()
                         .flex_1()

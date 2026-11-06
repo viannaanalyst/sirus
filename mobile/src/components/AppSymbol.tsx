@@ -1,143 +1,145 @@
-import type { Icon } from "@tabler/icons-react-native/types";
+import {
+  IconAdjustmentsHorizontal,
+  IconArrowsSort,
+  IconPinnedFilled,
+  IconShare,
+  IconWaveSine,
+  IconAlignLeft,
+  IconAlertCircle,
+  IconAlertTriangle,
+  IconApps,
+  IconArchive,
+  IconArrowBackUp,
+  IconArrowDown,
+  IconArrowForwardUp,
+  IconArrowLeft,
+  IconArrowRight,
+  IconArrowDownCircle,
+  IconArrowRightCircle,
+  IconArrowUp,
+  IconArrowUpCircle,
+  IconArrowUpRight,
+  IconArrowUpRightCircle,
+  IconArrowsLeftRight,
+  IconArrowsDiagonal2,
+  IconArrowsMinimize,
+  IconBellRinging,
+  IconBolt,
+  IconBox,
+  IconBrain,
+  IconCamera,
+  IconCar,
+  IconChartBar,
+  IconCheck,
+  IconCloud,
+  IconChevronDown,
+  IconChevronLeft,
+  IconChevronRight,
+  IconChevronUp,
+  IconCircle,
+  IconCircleCheck,
+  IconCircleDashed,
+  IconCircleDot,
+  IconCircleXFilled,
+  IconTicket,
+  IconClock,
+  IconCode,
+  IconCopy,
+  IconDatabase,
+  IconDeviceDesktop,
+  IconDeviceLaptop,
+  IconDeviceMobile,
+  IconDots,
+  IconPlusMinus,
+  IconDotsVertical,
+  IconDotsCircleHorizontal,
+  IconEdit,
+  IconExternalLink,
+  IconEyeOff,
+  IconEye,
+  IconFileText,
+  IconFileDiff,
+  IconFilter,
+  IconFilterFilled,
+  IconFolder,
+  IconFolderOpen,
+  IconHeadphones,
+  IconFolderPlus,
+  IconGitPullRequestClosed,
+  IconGitPullRequestDraft,
+  IconGitCommit,
+  IconGitBranch,
+  IconGitMerge,
+  IconGitPullRequest,
+  IconHammer,
+  IconHome,
+  IconInfoCircle,
+  IconKeyboard,
+  IconKeyboardHide,
+  IconLock,
+  IconLayoutColumns,
+  IconLayoutSidebar,
+  IconLayoutSidebarRight,
+  IconLetterSpacing,
+  IconMicrophone,
+  IconLink,
+  IconListNumbers,
+  IconMenu2,
+  IconMessageCircleQuestion,
+  IconMessage,
+  IconMessagePlus,
+  IconMinus,
+  IconMoon,
+  IconNetwork,
+  IconPalette,
+  IconPencil,
+  IconPlug,
+  IconPhoto,
+  IconPin,
+  IconPinnedOff,
+  IconPlayerPlay,
+  IconPlayerStopFilled,
+  IconPlus,
+  IconQrcode,
+  IconRefresh,
+  IconSearch,
+  IconServer,
+  IconSettings,
+  IconSparkles,
+  IconStack2,
+  IconStar,
+  IconStarFilled,
+  IconStethoscope,
+  IconSun,
+  IconShieldQuestion,
+  IconTarget,
+  IconTerminal2,
+  IconTextDecrease,
+  IconTextIncrease,
+  IconTool,
+  IconTrash,
+  IconTypography,
+  IconUpload,
+  IconUserCircle,
+  IconUserCheck,
+  IconUserX,
+  IconUserQuestion,
+  IconUserPlus,
+  IconUsers,
+  IconWifi,
+  IconWifiOff,
+  IconWorld,
+  IconX,
+} from "./AppSymbol.icons";
+import type { Icon } from "./AppSymbol.icons";
 /*
  * Keep these as per-icon exports. Importing the package root eagerly registers
  * the entire Tabler icon set in Metro.
  */
-import IconAdjustmentsHorizontal from "@tabler/icons-react-native/IconAdjustmentsHorizontal";
-import IconArrowsSort from "@tabler/icons-react-native/IconArrowsSort";
-import IconPinnedFilled from "@tabler/icons-react-native/IconPinnedFilled";
-import IconShare from "@tabler/icons-react-native/IconShare";
-import IconWaveSine from "@tabler/icons-react-native/IconWaveSine";
-import IconAlignLeft from "@tabler/icons-react-native/IconAlignLeft";
-import IconAlertCircle from "@tabler/icons-react-native/IconAlertCircle";
-import IconAlertTriangle from "@tabler/icons-react-native/IconAlertTriangle";
-import IconApps from "@tabler/icons-react-native/IconApps";
-import IconArchive from "@tabler/icons-react-native/IconArchive";
-import IconArrowBackUp from "@tabler/icons-react-native/IconArrowBackUp";
-import IconArrowDown from "@tabler/icons-react-native/IconArrowDown";
-import IconArrowForwardUp from "@tabler/icons-react-native/IconArrowForwardUp";
-import IconArrowLeft from "@tabler/icons-react-native/IconArrowLeft";
-import IconArrowRight from "@tabler/icons-react-native/IconArrowRight";
-import IconArrowDownCircle from "@tabler/icons-react-native/IconArrowDownCircle";
-import IconArrowRightCircle from "@tabler/icons-react-native/IconArrowRightCircle";
-import IconArrowUp from "@tabler/icons-react-native/IconArrowUp";
-import IconArrowUpCircle from "@tabler/icons-react-native/IconArrowUpCircle";
-import IconArrowUpRight from "@tabler/icons-react-native/IconArrowUpRight";
-import IconArrowUpRightCircle from "@tabler/icons-react-native/IconArrowUpRightCircle";
-import IconArrowsLeftRight from "@tabler/icons-react-native/IconArrowsLeftRight";
-import IconArrowsDiagonal2 from "@tabler/icons-react-native/IconArrowsDiagonal2";
-import IconArrowsMinimize from "@tabler/icons-react-native/IconArrowsMinimize";
-import IconBellRinging from "@tabler/icons-react-native/IconBellRinging";
-import IconBolt from "@tabler/icons-react-native/IconBolt";
-import IconBox from "@tabler/icons-react-native/IconBox";
-import IconBrain from "@tabler/icons-react-native/IconBrain";
-import IconCamera from "@tabler/icons-react-native/IconCamera";
-import IconCar from "@tabler/icons-react-native/IconCar";
-import IconChartBar from "@tabler/icons-react-native/IconChartBar";
-import IconCheck from "@tabler/icons-react-native/IconCheck";
-import IconCloud from "@tabler/icons-react-native/IconCloud";
-import IconChevronDown from "@tabler/icons-react-native/IconChevronDown";
-import IconChevronLeft from "@tabler/icons-react-native/IconChevronLeft";
-import IconChevronRight from "@tabler/icons-react-native/IconChevronRight";
-import IconChevronUp from "@tabler/icons-react-native/IconChevronUp";
-import IconCircle from "@tabler/icons-react-native/IconCircle";
-import IconCircleCheck from "@tabler/icons-react-native/IconCircleCheck";
-import IconCircleDashed from "@tabler/icons-react-native/IconCircleDashed";
-import IconCircleDot from "@tabler/icons-react-native/IconCircleDot";
-import IconCircleXFilled from "@tabler/icons-react-native/IconCircleXFilled";
-import IconTicket from "@tabler/icons-react-native/IconTicket";
-import IconClock from "@tabler/icons-react-native/IconClock";
-import IconCode from "@tabler/icons-react-native/IconCode";
-import IconCopy from "@tabler/icons-react-native/IconCopy";
-import IconDatabase from "@tabler/icons-react-native/IconDatabase";
-import IconDeviceDesktop from "@tabler/icons-react-native/IconDeviceDesktop";
-import IconDeviceLaptop from "@tabler/icons-react-native/IconDeviceLaptop";
-import IconDeviceMobile from "@tabler/icons-react-native/IconDeviceMobile";
-import IconDots from "@tabler/icons-react-native/IconDots";
-import IconPlusMinus from "@tabler/icons-react-native/IconPlusMinus";
-import IconDotsVertical from "@tabler/icons-react-native/IconDotsVertical";
-import IconDotsCircleHorizontal from "@tabler/icons-react-native/IconDotsCircleHorizontal";
-import IconEdit from "@tabler/icons-react-native/IconEdit";
-import IconExternalLink from "@tabler/icons-react-native/IconExternalLink";
-import IconEyeOff from "@tabler/icons-react-native/IconEyeOff";
-import IconEye from "@tabler/icons-react-native/IconEye";
-import IconFileText from "@tabler/icons-react-native/IconFileText";
-import IconFileDiff from "@tabler/icons-react-native/IconFileDiff";
-import IconFilter from "@tabler/icons-react-native/IconFilter";
-import IconFilterFilled from "@tabler/icons-react-native/IconFilterFilled";
-import IconFolder from "@tabler/icons-react-native/IconFolder";
-import IconFolderOpen from "@tabler/icons-react-native/IconFolderOpen";
-import IconHeadphones from "@tabler/icons-react-native/IconHeadphones";
-import IconFolderPlus from "@tabler/icons-react-native/IconFolderPlus";
-import IconGitPullRequestClosed from "@tabler/icons-react-native/IconGitPullRequestClosed";
-import IconGitPullRequestDraft from "@tabler/icons-react-native/IconGitPullRequestDraft";
-import IconGitCommit from "@tabler/icons-react-native/IconGitCommit";
-import IconGitBranch from "@tabler/icons-react-native/IconGitBranch";
-import IconGitMerge from "@tabler/icons-react-native/IconGitMerge";
-import IconGitPullRequest from "@tabler/icons-react-native/IconGitPullRequest";
-import IconHammer from "@tabler/icons-react-native/IconHammer";
-import IconHome from "@tabler/icons-react-native/IconHome";
-import IconInfoCircle from "@tabler/icons-react-native/IconInfoCircle";
-import IconKeyboard from "@tabler/icons-react-native/IconKeyboard";
-import IconKeyboardHide from "@tabler/icons-react-native/IconKeyboardHide";
-import IconLock from "@tabler/icons-react-native/IconLock";
-import IconLayoutColumns from "@tabler/icons-react-native/IconLayoutColumns";
-import IconLayoutSidebar from "@tabler/icons-react-native/IconLayoutSidebar";
-import IconLayoutSidebarRight from "@tabler/icons-react-native/IconLayoutSidebarRight";
-import IconLetterSpacing from "@tabler/icons-react-native/IconLetterSpacing";
-import IconMicrophone from "@tabler/icons-react-native/IconMicrophone";
-import IconLink from "@tabler/icons-react-native/IconLink";
-import IconListNumbers from "@tabler/icons-react-native/IconListNumbers";
-import IconMenu2 from "@tabler/icons-react-native/IconMenu2";
-import IconMessageCircleQuestion from "@tabler/icons-react-native/IconMessageCircleQuestion";
-import IconMessage from "@tabler/icons-react-native/IconMessage";
-import IconMessagePlus from "@tabler/icons-react-native/IconMessagePlus";
-import IconMinus from "@tabler/icons-react-native/IconMinus";
-import IconMoon from "@tabler/icons-react-native/IconMoon";
-import IconNetwork from "@tabler/icons-react-native/IconNetwork";
-import IconPalette from "@tabler/icons-react-native/IconPalette";
-import IconPencil from "@tabler/icons-react-native/IconPencil";
-import IconPlug from "@tabler/icons-react-native/IconPlug";
-import IconPhoto from "@tabler/icons-react-native/IconPhoto";
-import IconPin from "@tabler/icons-react-native/IconPin";
-import IconPinnedOff from "@tabler/icons-react-native/IconPinnedOff";
-import IconPlayerPlay from "@tabler/icons-react-native/IconPlayerPlay";
-import IconPlayerStopFilled from "@tabler/icons-react-native/IconPlayerStopFilled";
-import IconPlus from "@tabler/icons-react-native/IconPlus";
-import IconQrcode from "@tabler/icons-react-native/IconQrcode";
-import IconRefresh from "@tabler/icons-react-native/IconRefresh";
-import IconSearch from "@tabler/icons-react-native/IconSearch";
-import IconServer from "@tabler/icons-react-native/IconServer";
-import IconSettings from "@tabler/icons-react-native/IconSettings";
-import IconSparkles from "@tabler/icons-react-native/IconSparkles";
-import IconStack2 from "@tabler/icons-react-native/IconStack2";
-import IconStar from "@tabler/icons-react-native/IconStar";
-import IconStarFilled from "@tabler/icons-react-native/IconStarFilled";
-import IconStethoscope from "@tabler/icons-react-native/IconStethoscope";
-import IconSun from "@tabler/icons-react-native/IconSun";
-import IconShieldQuestion from "@tabler/icons-react-native/IconShieldQuestion";
-import IconTarget from "@tabler/icons-react-native/IconTarget";
-import IconTerminal2 from "@tabler/icons-react-native/IconTerminal2";
-import IconTextDecrease from "@tabler/icons-react-native/IconTextDecrease";
-import IconTextIncrease from "@tabler/icons-react-native/IconTextIncrease";
-import IconTool from "@tabler/icons-react-native/IconTool";
-import IconTrash from "@tabler/icons-react-native/IconTrash";
-import IconTypography from "@tabler/icons-react-native/IconTypography";
-import IconUpload from "@tabler/icons-react-native/IconUpload";
-import IconUserCircle from "@tabler/icons-react-native/IconUserCircle";
-import IconUserCheck from "@tabler/icons-react-native/IconUserCheck";
-import IconUserX from "@tabler/icons-react-native/IconUserX";
-import IconUserQuestion from "@tabler/icons-react-native/IconUserQuestion";
-import IconUserPlus from "@tabler/icons-react-native/IconUserPlus";
-import IconUsers from "@tabler/icons-react-native/IconUsers";
-import IconWifi from "@tabler/icons-react-native/IconWifi";
-import IconWifiOff from "@tabler/icons-react-native/IconWifiOff";
-import IconWorld from "@tabler/icons-react-native/IconWorld";
-import IconX from "@tabler/icons-react-native/IconX";
 import type { AndroidSymbol, SFSymbol, SymbolViewProps } from "expo-symbols";
 import { withUniwind } from "uniwind";
 
-const ANDROID_ICON_BY_SF_SYMBOL = {
+const ICON_BY_SF_SYMBOL = {
   waveform: IconWaveSine,
   "pin.fill": IconPinnedFilled,
   "square.and.arrow.up": IconShare,
@@ -291,13 +293,13 @@ const SF_ICON_LOOKUP: Partial<
     SFSymbol | "git.pull-request.closed" | "git.pull-request.draft" | "git.commit" | "file.diff",
     Icon
   >
-> = ANDROID_ICON_BY_SF_SYMBOL;
+> = ICON_BY_SF_SYMBOL;
 
 // Callers can pass `{ ios, android }` names where `android` is a Material
 // icon name (the raw expo-symbols contract). Resolve those here too so the
 // android key keeps working through this wrapper — it wins over the SF map
 // when both match (e.g. folder vs folder_open for expanded project groups).
-const ANDROID_ICON_BY_MATERIAL_NAME = {
+const ICON_BY_MATERIAL_NAME = {
   auto_awesome: IconSparkles,
   bolt: IconBolt,
   build: IconTool,
@@ -329,35 +331,34 @@ const ANDROID_ICON_BY_MATERIAL_NAME = {
 
 export type { SFSymbol } from "expo-symbols";
 export type AppSymbolName =
-  | keyof typeof ANDROID_ICON_BY_SF_SYMBOL
+  | keyof typeof ICON_BY_SF_SYMBOL
   | {
       ios: SFSymbol;
-      android: keyof typeof ANDROID_ICON_BY_MATERIAL_NAME;
+      android: keyof typeof ICON_BY_MATERIAL_NAME;
     };
 
 export type AppSymbolViewProps = Omit<SymbolViewProps, "name"> & { name: AppSymbolName };
 
 export function isAppSymbolName(name: string): name is Extract<AppSymbolName, string> {
-  return Object.prototype.hasOwnProperty.call(ANDROID_ICON_BY_SF_SYMBOL, name);
+  return Object.prototype.hasOwnProperty.call(ICON_BY_SF_SYMBOL, name);
 }
 
 function AppSymbolView(props: AppSymbolViewProps) {
   const materialName = typeof props.name === "string" ? undefined : props.name.android;
   const sfSymbol = typeof props.name === "string" ? props.name : props.name.ios;
-  const AndroidIcon =
-    (materialName ? ANDROID_ICON_BY_MATERIAL_NAME[materialName] : undefined) ??
+  const Glyph =
+    (materialName ? ICON_BY_MATERIAL_NAME[materialName] : undefined) ??
     (sfSymbol ? SF_ICON_LOOKUP[sfSymbol] : undefined);
 
-  if (!AndroidIcon) {
+  if (!Glyph) {
     return props.fallback ?? null;
   }
 
   return (
-    <AndroidIcon
+    <Glyph
       accessibilityLabel={props.accessibilityLabel}
-      color={props.tintColor}
+      color={props.tintColor as string | undefined}
       size={props.size}
-      strokeWidth={2}
       style={props.style}
       testID={props.testID}
     />
@@ -365,7 +366,7 @@ function AppSymbolView(props: AppSymbolViewProps) {
 }
 
 /**
- * expo-symbols and the Android Tabler fallback both expose tint as a native
+ * expo-symbols names map to Hugeicons on both platforms, and tint is a native
  * prop rather than a React Native style. Keep that third-party boundary here
  * so callers can use Uniwind's `tintColorClassName` instead of subscribing to
  * theme variables in every parent component.

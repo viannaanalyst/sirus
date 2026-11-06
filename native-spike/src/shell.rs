@@ -6,7 +6,7 @@ use crate::data::{self, Conversation, Project, Turn};
 use crate::effort_energy;
 use crate::git_sync::{self, IncomingState};
 use crate::i18n::{t, tf};
-use crate::marks::{SPINNER_PERIOD, TILE_RAIL_INDENT, TILE_RAIL_X, rail, shimmer, spinner_at};
+use crate::marks::{SPINNER_PERIOD, TILE_RAIL_INDENT, rail, shimmer, spinner_at};
 use crate::motion::{Curve, DISCLOSE, MENU, REORDER, SIDEBAR, SWITCH, TAB_OPEN, Tween, eased};
 use crate::tab_label::tab_label;
 use crate::tab_tile::{
@@ -781,21 +781,38 @@ fn access_look(mode: &str) -> (&'static str, &'static str, &'static str, gpui::H
 
 /// `text` with its `/` and `@` tokens in the accent color.
 fn styled_tokens(text: String) -> StyledText {
-    let ranges = data::token_ranges(&text);
-    StyledText::new(text).with_highlights(
-        ranges
-            .into_iter()
-            .map(|r| {
+    let tokens = data::token_ranges(&text);
+    let found = crate::markdown::search_ranges(&text);
+    let mut cuts = vec![0, text.len()];
+    for range in tokens.iter().chain(found.iter().map(|(range, _)| range)) {
+        cuts.push(range.start);
+        cuts.push(range.end);
+    }
+    cuts.sort_unstable();
+    cuts.dedup();
+    let highlights: Vec<_> = cuts
+        .windows(2)
+        .filter_map(|pair| {
+            let (a, b) = (pair[0], pair[1]);
+            let inside = |range: &std::ops::Range<usize>| range.start <= a && b <= range.end;
+            let token = tokens.iter().any(inside);
+            let fill = found
+                .iter()
+                .find(|(range, _)| inside(range))
+                .map(|(_, fill)| *fill);
+            (token || fill.is_some()).then(|| {
                 (
-                    r,
+                    a..b,
                     gpui::HighlightStyle {
-                        color: Some(accent()),
+                        color: token.then(accent),
+                        background_color: fill,
                         ..Default::default()
                     },
                 )
             })
-            .collect::<Vec<_>>(),
-    )
+        })
+        .collect();
+    StyledText::new(text).with_highlights(highlights)
 }
 
 /// What a reply from the back end is for.
@@ -1076,6 +1093,13 @@ pub struct Shell {
     composer_layout: std::cell::RefCell<Option<TextLayout>>,
     /// Groups of steps the person opened or closed: (conversation, turn, first step).
     phase_open: HashMap<(usize, usize, usize), bool>,
+    /// When each group of steps last changed between open and closed, and those running now.
+    phase_moved: std::cell::RefCell<HashMap<(usize, usize, usize), Instant>>,
+    phase_live: std::cell::RefCell<HashSet<(usize, usize, usize)>>,
+    /// The width of the conversation's column, for measuring what a fold reveals.
+    turn_width: Rc<Cell<Pixels>>,
+    /// Where the pointer met the message trail, for placing its preview.
+    trail_x: f32,
     /// The composer's text scrolls under this, following the caret as it moves.
     composer_scroll: gpui::ScrollHandle,
     composer_caret_seen: Rc<Cell<(usize, usize)>>,
@@ -1404,6 +1428,10 @@ impl Shell {
             ignored_text: String::new(),
             composer_layout: Default::default(),
             phase_open: HashMap::new(),
+            phase_moved: Default::default(),
+            phase_live: Default::default(),
+            turn_width: Rc::new(Cell::new(px(0.))),
+            trail_x: 0.,
             composer_scroll: gpui::ScrollHandle::new(),
             composer_caret_seen: Default::default(),
             selecting: false,
@@ -1867,6 +1895,7 @@ impl Shell {
                 }
                 Some(Waiting::Usage) if !ok => self.usage_refreshing = false,
                 Some(Waiting::Usage) => {
+                    self.usage_warm(cx);
                     self.usage_refreshing = false;
                     self.usage_value = value.clone();
                     let parts: Vec<String> = value["windows"]
@@ -1956,6 +1985,12 @@ impl Shell {
                 "notification-activity" => self.activity_event(&payload, cx),
                 "agent-output" => self.agent_output(&payload),
                 "agent-exit" => self.refresh_diff(),
+                // Monocode's chime for activity on something linked to a session.
+                "pr-watch-activity" => {
+                    if self.settings["notifications"]["sounds"].as_bool() != Some(false) {
+                        crate::sound::play(crate::sound::Cue::LinkedActivity);
+                    }
+                }
                 "notification-native" => {
                     crate::native_notify::deliver(&payload, self.window_active)
                 }
@@ -6424,6 +6459,7 @@ impl Shell {
                 .flex()
                 .flex_col()
                 .child(this.project_header(cx))
+                .children(this.sidebar_new(cx))
                 .children(this.sidebar_pulls(cx))
                 .child(
                     div()
@@ -7483,14 +7519,15 @@ impl Shell {
                     .id(("trail-tick", at))
                     .h(px(12.))
                     .w_full()
-                    .pr(px(10.))
+                    .pl(px(10.))
                     .flex()
                     .flex_shrink_0()
                     .items_center()
-                    .justify_end()
+                    .justify_start()
                     .cursor_pointer()
                     .on_hover(cx.listener(move |this, hovering: &bool, window, cx| {
                         if *hovering {
+                            this.trail_x = f32::from(window.mouse_position().x);
                             this.trail_hover = Some((at, f32::from(window.mouse_position().y)));
                         } else if this.trail_hover.is_some_and(|h| h.0 == at) {
                             this.trail_hover = None;
@@ -7522,7 +7559,7 @@ impl Shell {
                 .absolute()
                 .top_0()
                 .bottom_0()
-                .right_0()
+                .left_0()
                 .w(px(44.))
                 .flex()
                 .flex_col()
@@ -7570,7 +7607,7 @@ impl Shell {
         Some(
             div()
                 .absolute()
-                .right(px(self.dock_drawn + 62.))
+                .left(px(self.trail_x + 44.))
                 .top(px((y - 34.).clamp(TITLE_BAR, self.viewport_height - 170.)))
                 .w(px(290.))
                 .px(px(14.))
@@ -8909,8 +8946,53 @@ impl Shell {
         )
     }
 
-    /// The Pull requests entry below the project switcher, a row like the conversations' that is lit
-    /// while its tab is the one showing.
+    /// A row of the sidebar's navigation, sized as Monocode's.
+    fn sidebar_nav_row(id: &'static str, active: bool) -> Stateful<Div> {
+        div()
+            .id(id)
+            .h(px(32.))
+            .px(px(8.))
+            .rounded(px(crate::theme::RADIUS_MD))
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .text_size(px(14.))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(content(if active { 1. } else { 0.5 }))
+            .cursor_pointer()
+            .when(active, |d| d.bg(content(0.1)))
+            .hover(|s| s.bg(content(0.1)).text_color(content(1.)))
+    }
+
+    /// "New" (⌘T), at the top of the sidebar: opens a new conversation.
+    fn sidebar_new(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.sidebar_items.shown("new") {
+            return None;
+        }
+        Some(
+            div()
+                .flex_shrink_0()
+                .px(px(6.))
+                .pt(px(4.))
+                .child(
+                    Self::sidebar_nav_row("sidebar-new", false)
+                        .on_click(cx.listener(|this, _, _, cx| this.new_conversation(None, cx)))
+                        .child(icon("square-plus", 16.).text_color(content(0.35)))
+                        .child(div().flex_1().min_w_0().truncate().child(t("Novo")))
+                        .child(
+                            div()
+                                .flex_shrink_0()
+                                .text_size(px(12.))
+                                .font_weight(FontWeight::NORMAL)
+                                .text_color(content(0.35))
+                                .child("⌘T"),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
+    /// The Pull requests entry below "New", marked while its tab is the one showing.
     fn sidebar_pulls(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.sidebar_items.shown("pulls") {
             return None;
@@ -8920,30 +9002,14 @@ impl Shell {
             div()
                 .flex_shrink_0()
                 .px(px(6.))
-                .pt(px(4.))
                 .pb(px(6.))
                 .child(
-                    div()
-                        .id("sidebar-pulls")
-                        .h(px(CONV_ROW - 2.))
-                        .pl(px(10.))
-                        .pr(px(8.))
-                        .rounded(px(crate::theme::RADIUS_MD))
-                        .flex()
-                        .items_center()
-                        .gap(px(8.))
-                        .text_size(px(13.))
-                        .text_color(content(if active { 1. } else { 0.68 }))
-                        .cursor_pointer()
-                        .when(active, |d| d.bg(content(0.09)))
-                        .when(!active, |d| {
-                            d.hover(|s| s.bg(content(0.07)).text_color(content(0.95)))
-                        })
+                    Self::sidebar_nav_row("sidebar-pulls", active)
                         .on_click(cx.listener(|this, _, _, cx| this.open_pull_requests(cx)))
-                        .child(icon("git-pull-request", 14.).text_color(content(if active {
-                            0.9
+                        .child(icon("git-pull-request", 16.).text_color(content(if active {
+                            0.7
                         } else {
-                            0.55
+                            0.35
                         })))
                         .child(
                             div()
@@ -9435,16 +9501,6 @@ impl Shell {
                 if animating {
                     window.request_animation_frame();
                 }
-                // The ⌘F hit's turn takes the accent wash (transcript_find.rs).
-                let view = if this.find.current() == Some(item - 1) {
-                    div()
-                        .rounded(px(crate::theme::RADIUS_LG))
-                        .bg(crate::theme::accent_wash(0.1))
-                        .child(view)
-                        .into_any_element()
-                } else {
-                    view
-                };
                 let view = if last && anchored {
                     div()
                         .min_h(px((view_height - 28.).max(0.)))
@@ -10885,7 +10941,11 @@ impl Shell {
                 }
             },
         )
+        // Pinned to the corner: with no offsets it would sit after the text, and the caret's
+        // place measured from it would never grow.
         .absolute()
+        .top_0()
+        .left_0()
         .size_full();
         let text = div()
             .relative()
@@ -11713,6 +11773,7 @@ impl Shell {
         turn: &Turn,
         range: std::ops::Range<usize>,
         active: bool,
+        width: Pixels,
         now: Instant,
         moving: &mut bool,
         cx: &mut Context<Self>,
@@ -11721,6 +11782,26 @@ impl Shell {
         let steps = &turn.steps[range];
         let key = (conversation, index, start);
         let open = self.phase_open.get(&key).copied().unwrap_or(active);
+        // A group that was running closes the same way a click closes it.
+        if active {
+            self.phase_live.borrow_mut().insert(key);
+        } else if self.phase_live.borrow_mut().remove(&key) {
+            self.phase_moved.borrow_mut().insert(key, now);
+        }
+        let reveal_of = |curve: fn(f32) -> f32, length: f32, moving: &mut bool| {
+            let Some(at) = self.phase_moved.borrow().get(&key).copied() else {
+                return if open { 1. } else { 0. };
+            };
+            let since = now.duration_since(at).as_secs_f32();
+            if since < length {
+                *moving = true;
+            }
+            let eased = curve(since / length);
+            if open { eased } else { 1. - eased }
+        };
+        let height = reveal_of(crate::disclosure::settle, crate::disclosure::REVEAL, moving);
+        let fade = reveal_of(crate::disclosure::ease, crate::disclosure::FADE, moving);
+        let turned = reveal_of(crate::disclosure::settle, crate::disclosure::TURN, moving);
         let roll_key = 1_000_000 + index * 4096 + start;
         let roll = self.roll(conversation, roll_key, now, moving);
         let lead = steps
@@ -11737,14 +11818,10 @@ impl Shell {
         } else {
             activity_face(lead)
         };
-        let morph = if active { roll } else { roll.max(if open { 1. } else { 0. }) };
+        let morph = if active { roll } else { roll.max(turned) };
         let chevron = icon("chevron-right", 14.)
             .text_color(ink)
-            .with_transformation(Transformation::rotate(percentage(if open {
-                0.25
-            } else {
-                0.
-            })))
+            .with_transformation(Transformation::rotate(percentage(turned * 0.25)))
             .into_any_element();
         let clock = now.duration_since(self.epoch).as_secs_f32();
         let title: AnyElement = if active {
@@ -11768,6 +11845,7 @@ impl Shell {
             }))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.phase_open.insert(key, !open);
+                this.phase_moved.borrow_mut().insert(key, Instant::now());
                 cx.notify();
             }))
             .child(push_tile(
@@ -11778,10 +11856,23 @@ impl Shell {
                 morph.clamp(0., 1.),
             ))
             .child(title);
-        let mut block = div().w_full().min_w_0().flex().flex_col().child(header);
-        if !open {
+        let block = div().w_full().min_w_0().flex().flex_col().child(header);
+        if height <= 0.001 {
             return block.into_any_element();
         }
+        // In motion the body is measured and revealed; at rest it is simply there.
+        let framed = |body: AnyElement| -> AnyElement {
+            if height >= 0.999 || width <= px(0.) {
+                body
+            } else {
+                div()
+                    .w_full()
+                    .overflow_hidden()
+                    .opacity(fade)
+                    .child(crate::disclosure::Disclosure::new(body, width, height))
+                    .into_any_element()
+            }
+        };
         let rows = steps.iter().enumerate().map(|(i, step)| {
             let inner: AnyElement = match &step.image {
                 Some(path) => self
@@ -11818,7 +11909,8 @@ impl Shell {
         });
         let rows: Vec<AnyElement> = rows.collect();
         if !active {
-            return block.children(rows).into_any_element();
+            let body = div().w_full().flex().flex_col().children(rows);
+            return block.child(framed(body.into_any_element())).into_any_element();
         }
         // At most 280 px or 45% of the view; it follows the newest step while the reader has not
         // scrolled up, and the steps fade at the edges with no colour laid over the glass.
@@ -11864,7 +11956,7 @@ impl Shell {
             .left_0()
             .size_full()
         };
-        block = block.child(
+        let window_body = 
             div()
                 .relative()
                 .w_full()
@@ -11879,9 +11971,10 @@ impl Shell {
                         .track_scroll(&handle)
                         .children(rows),
                 )
-                .child(mask(false)),
-        );
-        block.into_any_element()
+                .child(mask(false));
+        block
+            .child(framed(window_body.into_any_element()))
+            .into_any_element()
     }
 
     /// What the person sent into the running reply, as a message of theirs, where it arrived.
@@ -11929,43 +12022,21 @@ impl Shell {
             .into_any_element()
     }
 
-    fn turn_body(
+    /// A stretch's header: the model's tile and how long it worked. A click opens what is folded.
+    #[allow(clippy::too_many_arguments)]
+    fn work_header(
         &self,
         conversation: usize,
         index: usize,
+        section: usize,
         turn: &Turn,
+        provider: &'static str,
+        (working, last, foldable): (bool, bool, bool),
+        (key, open, openness): ((usize, usize, usize), bool, f32),
         now: Instant,
         moving: &mut bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        if context_meter::is_compact_command(&turn.user) {
-            return self.compaction_row(conversation, index, turn, now, moving);
-        }
-        let provider = turn
-            .provider
-            .unwrap_or(self.conversations[conversation].provider);
-        let live = turn.live;
-        // Only a finished turn with work before its answer folds; otherwise the header only labels.
-        let foldable = !live && data::folds_work(&turn.beats);
-        // The tree stays open while the turn works, then folds itself shut; a click overrides.
-        let openness = match turn.toggled {
-            Some(at) => {
-                let since = now.duration_since(at).as_secs_f32();
-                if since < DISCLOSE {
-                    *moving = true;
-                }
-                let p = eased(since / DISCLOSE, Curve::Expo);
-                if turn.open { p } else { 1. - p }
-            }
-            None if live => 1.,
-            None => turn.finished.map_or(0., |at| {
-                let since = now.duration_since(at).as_secs_f32();
-                if since < DISCLOSE {
-                    *moving = true;
-                }
-                1. - eased(since / DISCLOSE, Curve::Expo)
-            }),
-        };
         let clock = now.duration_since(self.epoch).as_secs_f32();
         let name = model_label(
             turn.model
@@ -11973,7 +12044,7 @@ impl Shell {
                 .or(self.conversations[conversation].model.as_deref()),
             provider,
         );
-        let label: AnyElement = if live {
+        let label: AnyElement = if working {
             let running = turn.started_ms.map(|start| {
                 (chrono::Utc::now().timestamp_millis().max(0) as u64)
                     .saturating_sub(start)
@@ -11991,7 +12062,7 @@ impl Shell {
                 clock,
             )
         } else {
-            let worked = match turn.seconds {
+            let worked = match turn.seconds.filter(|_| last) {
                 Some(s) if s >= 60 => {
                     tf("{} trabalhou por {}m {}s", &[&name, &(s / 60), &(s % 60)])
                 }
@@ -12002,14 +12073,15 @@ impl Shell {
         };
         // Pointing at the tile pushes the model's mark out to the right as the chevron slides
         // in from the left; an open fold keeps the chevron (Monocode's phase_tile.rs).
-        let roll = self.roll(conversation, index * 2, now, moving);
+        let roll_key = 2_000_000 + index * 64 + section;
+        let roll = self.roll(conversation, roll_key, now, moving);
         let shown = if foldable { roll.max(openness) } else { 0. }.clamp(0., 1.);
         let chevron = icon("chevron-right", 14.)
             .text_color(gpui::white())
             .with_transformation(Transformation::rotate(percentage(openness * 0.25)))
             .into_any_element();
-        let header = div()
-            .id(("activity", index))
+        div()
+            .id(("activity", index * 64 + section))
             .h(px(STEP_ROW))
             .flex()
             .items_center()
@@ -12020,17 +12092,14 @@ impl Shell {
                 d.hover(|s| s.text_color(content(0.8))).cursor_pointer()
             })
             .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                this.set_roll(conversation, index * 2, *hovered, cx)
+                this.set_roll(conversation, roll_key, *hovered, cx)
             }))
             .on_click(cx.listener(move |this, _, _, cx| {
-                if !foldable {
-                    return;
+                if foldable {
+                    this.phase_open.insert(key, !open);
+                    this.phase_moved.borrow_mut().insert(key, Instant::now());
+                    cx.notify();
                 }
-                let turn = &mut this.conversations[conversation].turns[index];
-                let was = turn.toggled.map_or(false, |_| turn.open);
-                turn.open = !was;
-                turn.toggled = Some(Instant::now());
-                cx.notify();
             }))
             .child(push_tile(
                 &ACTIVITY_TILE,
@@ -12039,10 +12108,26 @@ impl Shell {
                 chevron,
                 shown,
             ))
-            .child(label);
+            .child(label)
+            .into_any_element()
+    }
 
-        // The turn in order. A finished one folds what came before its answer under the header.
-        let answer_at = data::final_answer(&turn.beats);
+    fn turn_body(
+        &self,
+        conversation: usize,
+        index: usize,
+        turn: &Turn,
+        now: Instant,
+        moving: &mut bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        if context_meter::is_compact_command(&turn.user) {
+            return self.compaction_row(conversation, index, turn, now, moving);
+        }
+        let provider = turn
+            .provider
+            .unwrap_or(self.conversations[conversation].provider);
+        let live = turn.live;
         let shown_answer = self.paced_answer(conversation, index, turn, moving);
         let rich = crate::reply_view::Rich {
             session: self.conversations[conversation].session_id.clone(),
@@ -12056,63 +12141,171 @@ impl Shell {
             .beats
             .iter()
             .rposition(|beat| matches!(beat, data::Beat::Steps(_)));
-        let mut folded: Vec<AnyElement> = Vec::new();
-        let mut flow: Vec<AnyElement> = Vec::new();
+        let turn_width = self.turn_width.get();
+        // An instruction opens a new stretch of the turn, as a prompt does in Monocode: its bubble,
+        // then a header of its own over what followed.
+        let mut sections: Vec<(Option<usize>, std::ops::Range<usize>)> = Vec::new();
+        let (mut start, mut before) = (0, None);
         for (at, beat) in turn.beats.iter().enumerate() {
-            if Some(at) == answer_at && !live {
-                continue;
-            }
-            let element = match beat {
-                data::Beat::Text(range) => {
-                    let end = range.end.min(shown_answer.len());
-                    if range.start >= end {
-                        continue;
-                    }
-                    let body = crate::markdown::render_rich(&shown_answer[range.start..end], &rich);
-                    self.wake_reply_assets(cx);
-                    body
+            if let data::Beat::Steer(steer) = beat {
+                if at > start || before.is_some() {
+                    sections.push((before, start..at));
                 }
-                data::Beat::Steps(range) => self.phase_view(
+                before = Some(*steer);
+                start = at + 1;
+            }
+        }
+        sections.push((before, start..turn.beats.len()));
+        let count = sections.len();
+        let has_header =
+            live || !turn.steps.is_empty() || !turn.agents.is_empty() || turn.seconds.is_some();
+        let mut pill = self.background_pill(turn);
+        let mut blocks: Vec<AnyElement> = Vec::new();
+        let mut answer_view = None;
+        for (section, (steer, range)) in sections.into_iter().enumerate() {
+            let last_section = section + 1 == count;
+            let working = live && last_section;
+            let beats = &turn.beats[range.clone()];
+            if let Some(steer) = steer {
+                blocks.push(self.steer_bubble(index, steer, turn, conversation, cx));
+            }
+            // What came before the newest words folds under the header, even while the turn works:
+            // the view keeps the latest reply and the running group, as in Monocode.
+            let foldable = data::folds_work(beats);
+            let answer = data::final_answer(beats);
+            let key = (conversation, index, FOLD_KEY + section);
+            // A ⌘F hit inside the fold shows: the current turn opens what holds the word.
+            let found_inside = self.find.current() == Some(index)
+                && self.find.query().is_some_and(|query| {
+                    answer.is_some_and(|answer| {
+                        beats[..answer].iter().any(|beat| {
+                            matches!(beat, data::Beat::Text(text) if turn.answer.get(text.clone())
+                                .is_some_and(|words| !transcript_find::ranges(words, query).is_empty()))
+                        })
+                    })
+                });
+            let open = found_inside || self.phase_open.get(&key).copied().unwrap_or(false);
+            let openness = self.phase_moved.borrow().get(&key).copied().filter(|_| !found_inside).map_or(
+                if open { 1. } else { 0. },
+                |at| {
+                    let since = now.duration_since(at).as_secs_f32();
+                    if since < DISCLOSE {
+                        *moving = true;
+                    }
+                    let eased = crate::disclosure::settle(since / DISCLOSE);
+                    if open { eased } else { 1. - eased }
+                },
+            );
+            let labelled = if section == 0 {
+                has_header
+            } else {
+                working || !beats.is_empty()
+            };
+            if labelled {
+                let header = self.work_header(
                     conversation,
                     index,
+                    section,
                     turn,
-                    range.clone(),
-                    live && Some(at) == last_steps,
+                    provider,
+                    (working, last_section, foldable),
+                    (key, open, openness),
                     now,
                     moving,
                     cx,
-                ),
-                data::Beat::Steer(steer) => self.steer_bubble(index, *steer, turn, conversation, cx),
-            };
-            if foldable && answer_at.is_some_and(|answer| at < answer) {
-                folded.push(element);
-            } else {
-                flow.push(element);
+                );
+                blocks.push(match pill.take().filter(|_| section == 0) {
+                    Some(pill) => div()
+                        .flex()
+                        .items_center()
+                        .gap(px(10.))
+                        .child(header)
+                        .child(pill)
+                        .into_any_element(),
+                    None => header,
+                });
+            }
+            let fold_at = blocks.len();
+            let mut folded: Vec<AnyElement> = Vec::new();
+            for (at, beat) in beats.iter().enumerate() {
+                let hidden = foldable && answer.is_some_and(|answer| at < answer);
+                if hidden && openness <= 0.001 {
+                    continue;
+                }
+                let absolute = range.start + at;
+                let element = match beat {
+                    data::Beat::Text(text) => {
+                        let end = text.end.min(shown_answer.len());
+                        if text.start >= end {
+                            continue;
+                        }
+                        // A settled turn's last words are drawn after its cards, with selection.
+                        if !working && last_section && at + 1 == beats.len() {
+                            answer_view = Some(&shown_answer[text.start..end]);
+                            continue;
+                        }
+                        let body =
+                            crate::markdown::render_rich(&shown_answer[text.start..end], &rich);
+                        self.wake_reply_assets(cx);
+                        body
+                    }
+                    data::Beat::Steps(steps) => self.phase_view(
+                        conversation,
+                        index,
+                        turn,
+                        steps.clone(),
+                        live && Some(absolute) == last_steps,
+                        if hidden {
+                            turn_width - px(TILE_RAIL_INDENT)
+                        } else {
+                            turn_width
+                        },
+                        now,
+                        moving,
+                        cx,
+                    ),
+                    data::Beat::Steer(_) => continue,
+                };
+                if hidden {
+                    folded.push(element);
+                } else {
+                    blocks.push(element);
+                }
+            }
+            if !folded.is_empty() {
+                let total = folded.len();
+                let rows = folded.into_iter().enumerate().map(|(at, element)| {
+                    div()
+                        .relative()
+                        .w_full()
+                        .min_w_0()
+                        .pl(px(TILE_RAIL_INDENT))
+                        .pb(px(6.))
+                        .child(rail(at + 1 == total))
+                        // Work under the fold reads a step back from the answer, as in Monocode.
+                        .child(div().opacity(0.83).child(element))
+                });
+                let body = div().w_full().flex().flex_col().children(rows);
+                let body = if openness >= 0.999 || turn_width <= px(0.) {
+                    body.into_any_element()
+                } else {
+                    div()
+                        .w_full()
+                        .overflow_hidden()
+                        .opacity(openness.clamp(0., 1.))
+                        .child(crate::disclosure::Disclosure::new(
+                            body, turn_width, openness,
+                        ))
+                        .into_any_element()
+                };
+                // The fold goes right under the header, above the answer.
+                let at = fold_at;
+                blocks.insert(
+                    at,
+                    div().w_full().mt(px(-6.)).child(body).into_any_element(),
+                );
             }
         }
-        let folded_count = folded.len();
-        let folded = folded.into_iter().enumerate().map(|(at, element)| {
-            div()
-                .relative()
-                .w_full()
-                .min_w_0()
-                .pl(px(TILE_RAIL_INDENT))
-                .pb(px(6.))
-                .child(rail(at + 1 == folded_count))
-                .child(element)
-                .into_any_element()
-        });
-        let folded: Vec<AnyElement> = if openness > 0.001 {
-            folded.collect()
-        } else {
-            Vec::new()
-        };
-        let answer_view = answer_at.filter(|_| !live).and_then(|at| match &turn.beats[at] {
-            data::Beat::Text(range) => shown_answer.get(range.start..range.end.min(shown_answer.len())),
-            _ => None,
-        });
-        let has_header =
-            live || !turn.steps.is_empty() || !turn.agents.is_empty() || turn.seconds.is_some();
         // Subagents, as one card (subagent_card.rs), and the pill for the ones in the background.
         let prompt_key = (conversation, index);
         let prompt_overflows = !turn.user.is_empty()
@@ -12123,12 +12316,23 @@ impl Shell {
                 .unwrap_or(false);
         let prompt_collapsed = prompt_overflows && !self.expanded_prompts.contains(&prompt_key);
         let agents = self.subagent_card(conversation, index, turn, provider, now, moving, cx);
-        let pill = self.background_pill(turn);
+        let width_store = self.turn_width.clone();
         div()
             .group(format!("turn-actions-{index}"))
+            .relative()
             .flex()
             .flex_col()
             .gap(px(8.))
+            .child(
+                gpui::canvas(
+                    move |bounds, _, _| width_store.set(bounds.size.width),
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full(),
+            )
             .when(!turn.attachments.is_empty(), |d| {
                 d.child(self.sent_chips(conversation, index, &turn.attachments, cx))
             })
@@ -12184,11 +12388,13 @@ impl Shell {
                                         styled_tokens(turn.user.clone()),
                                     )))
                         .when(prompt_overflows, |d| {
-                            d.child(
+                            d.child(div().flex().child(
                                 div()
                                     .id(("prompt-more", index))
                                     .mt_1()
                                     .px_1()
+                                    // Its label lines up with the text; the padding is for the hover.
+                                    .ml(px(-4.))
                                     .py(px(2.))
                                     .rounded(px(4.))
                                     .text_size(px(12.))
@@ -12206,36 +12412,13 @@ impl Shell {
                                             this.expanded_prompts.insert(prompt_key);
                                         }
                                         cx.notify();
-                                    })),
-                            )
+                                    }))))
                         })
                             ),
                         )
                 )
             })
-            .when(has_header, |d| match pill {
-                Some(pill) => d.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(10.))
-                        .child(header)
-                        .child(pill),
-                ),
-                None => d.child(header),
-            })
-            .when(!folded.is_empty(), |d| {
-                d.child(
-                    div()
-                        .w_full()
-                        .mt(px(-4.))
-                        .flex()
-                        .flex_col()
-                        .opacity(openness.clamp(0., 1.))
-                        .children(folded),
-                )
-            })
-            .children(flow)
+            .children(blocks)
             .children(agents)
             .children(
                 turn.visuals
@@ -13353,7 +13536,7 @@ impl Shell {
                 .occlude()
                 .absolute()
                 .right(px(10.))
-                .top(px(TITLE_BAR + 2. + (1. - p) * -6.))
+                .top(px(TITLE_BAR + 10. + (1. - p) * -6.))
                 .w(px(248.))
                 .p(px(4.))
                 .rounded(px(crate::theme::RADIUS_LG))
@@ -14905,6 +15088,9 @@ fn step_line(step: &data::Step) -> crate::step_lines::Line {
 }
 
 /// What a tool acted on, in the tree: a small mono chip.
+/// The first fold key among `phase_open`'s (conversation, turn, key); below it are step indexes.
+const FOLD_KEY: usize = 1 << 40;
+
 /// A project with no Git is normal: a Git call failing on it is not a problem to report.
 fn is_not_a_repository(message: &str) -> bool {
     message.contains("not a git repository")
@@ -15838,5 +16024,87 @@ mod follow_caret_tests {
         assert_eq!(follow_caret(px(198.), line, px(0.), seen), px(30.));
         // Going back past the top does the same the other way.
         assert_eq!(follow_caret(px(22.), line, px(100.), seen), px(22.));
+    }
+}
+
+#[cfg(test)]
+mod composer_follow_tests {
+    use super::*;
+    use gpui::{Render, TestAppContext, VisualTestContext};
+
+    struct View {
+        text: String,
+        cursor: usize,
+        handle: gpui::ScrollHandle,
+        seen: Rc<Cell<(usize, usize)>>,
+    }
+    impl Render for View {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let styled = gpui::StyledText::new(self.text.clone());
+            let layout = styled.layout().clone();
+            let (handle, seen, cursor, key) = (
+                self.handle.clone(),
+                self.seen.clone(),
+                self.cursor,
+                (self.cursor, self.text.len()),
+            );
+            let overlay = gpui::canvas(
+                |_, _, _| {},
+                move |bounds, _, window, _| {
+                    let line = layout.line_height();
+                    if seen.replace(key) != key
+                        && let Some(at) = layout.position_for_index(cursor)
+                    {
+                        let top = at.y - bounds.origin.y;
+                        let height = handle.bounds().size.height;
+                        let scrolled = -handle.offset().y;
+                        let target = follow_caret(top, line, scrolled, height);
+                        if target != scrolled {
+                            handle.set_offset(gpui::point(px(0.), -target));
+                            window.on_next_frame(|window, _| window.refresh());
+                        }
+                    }
+                },
+            )
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full();
+            div().size_full().flex().flex_col().child(
+                div()
+                    .id("composer-text")
+                    .max_h(px(100.))
+                    .overflow_y_scroll()
+                    .track_scroll(&self.handle)
+                    .text_size(px(14.))
+                    .line_height(px(22.))
+                    .child(div().relative().w_full().child(styled).child(overlay)),
+            )
+        }
+    }
+
+    #[gpui::test]
+    fn the_text_scrolls_with_the_caret(cx: &mut TestAppContext) {
+        let window = cx.add_window(|_, _| View {
+            text: "a".into(),
+            cursor: 1,
+            handle: gpui::ScrollHandle::new(),
+            seen: Default::default(),
+        });
+        let mut vcx = VisualTestContext::from_window(window.into(), cx);
+        let mut offsets = Vec::new();
+        for _ in 0..12 {
+            window
+                .update(&mut vcx, |view, _, cx| {
+                    view.text.push_str("\nline");
+                    view.cursor = view.text.len();
+                    cx.notify();
+                })
+                .unwrap();
+            vcx.run_until_parked();
+            offsets.push(window.update(&mut vcx, |view, _, _| view.handle.offset().y).unwrap());
+        }
+        // 13 lines of 22 px in a 100 px window: the last line stays in view.
+        assert_eq!(*offsets.last().unwrap(), px(-(13. * 22. - 100.)));
     }
 }

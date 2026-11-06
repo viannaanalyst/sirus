@@ -97,7 +97,7 @@ Trust boundary: every client is untrusted. Rust validates every path and every p
 | `fs_tree.rs` | lazy directory listing and bounded, owner-scoped composer filename suggestions; ignores `node_modules` `.git` `target` … |
 | `text_search.rs` | Files pane text search (ADR-095): `rg --json`, else Git's non-ignored file list, else a bounded walk; root-checked, link-free, bounded matches/files/excerpts/time |
 | `workspace_entries.rs` | explicit session-owned empty file/folder creation; bounded single names, Unix descriptor-relative non-overwriting admission |
-| `editor.rs` | fixed editor allowlist (`detect_editors` / `open_in_editor`), real app icons (`editor_app_icons`) and jailed bounded text read/overwrite |
+| `editor.rs` | fixed editor allowlist (`detect_editors` / `open_in_editor`, through `open -a`), real app icons from each bundle's `.icns` (`editor_app_icons`) and jailed bounded text read/overwrite |
 | `cli_output.rs` | bounded read-only probe capture and owned process cleanup |
 | `detect.rs` | Nine allowlisted CLI providers on PATH or fixed user install locations; also lists every install found (`AgentInstall.candidates`, ≤8, each `--version`-probed) for the Settings → Providers executable picker (ADR-074) |
 | `dictation.rs` | native macOS dictation (bounded `AVAudioEngine` capture to a private temp file, on-stop macOS 26 `DictationTranscriber`; no live events). The bundle is signed with the hardened runtime, so `src-tauri/Entitlements.plist` declares `com.apple.security.device.audio-input`; without it macOS reports the microphone as denied |
@@ -123,7 +123,7 @@ Trust boundary: every client is untrusted. Rust validates every path and every p
 | `provider_accounts.rs` | private Codex/Claude profiles, fixed vendor login/cancel, metadata and new-session defaults |
 | `account_move.rs` | `move_session_account`: a stopped Claude/Codex session continues on another signed-in account of its provider; copies the native transcript into that profile, else arms a handoff recap (ADR-063 amendment) |
 | `execution.rs` | catalog-validated effort/Fast/planning, typed per-turn approval profiles and Codex preferences |
-| `attachments.rs` | owner-bound IDs, bounded file snapshots, typed image/file input blocks and cache lifetime |
+| `attachments.rs` | owner-bound IDs, bounded file snapshots, typed image/file input blocks, cache lifetime and the copy kept with a sent picture (`message_thumbnail`) |
 | `thumbnails.rs` | sent image thumbnails (1280 px JPEG) as `thumbnails/<attachment id>.jpg` next to `state.json` (canonical UUID names only); messages keep `hasThumbnail`, not base64. Served on the `sirus-thumb://` scheme (immutable cache) and, for paired devices, `/api/thumbnail/<id>?token=` in `remote.rs`; `src/lib/thumbnail-url.ts` picks the URL per transport. Embedded thumbnails move to files when transcripts load (stripped only after the write succeeds); files are removed with their sessions or as orphans at load |
 | `tool_output.rs` | Large command output stored apart (ADR-147): `split` turns a settled command row over 1 KiB into its last 6 lines (at most 480 bytes) plus `outputBytes` when a message is stored, returning the full text for `tool_outputs`; `split_value` does the same on stored JSON for the one-time schema v6 migration; `restore_fork` puts stored outputs back into a fork's copied messages; `locate` / `bounded` / `valid_id` serve `transcript_action { toolOutput }`. The renderer shows the preview with "Show full output (size)" (`ToolOutputBlock.tsx`, cache in `src/lib/tool-output.ts`) |
 | `window_attachment.rs` | explicit macOS 14+ native single-window selection, bounded JPEG capture and generation-bound picker cleanup; no renderer window identities or control |
@@ -374,7 +374,7 @@ Checks are listed in [`building.md`](building.md). Tests use disposable fixtures
 
 ### Bugs
 
-Reproduce, find the flow, Graphify if cross-module, fix the cause, check regressions. No cosmetic hacks over broken Git/agent state. The UI must show real install/git/process status.
+Reproduce, find the flow, fix the cause, check regressions. No cosmetic hacks over broken Git/agent state. The UI must show real install/git/process status.
 
 ### Dependencies
 

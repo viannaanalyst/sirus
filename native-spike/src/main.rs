@@ -31,8 +31,10 @@ mod folder_icon_data;
 mod fonts;
 mod git_sync;
 mod hover_track;
+mod disclosure;
 mod i18n;
 mod image_markup;
+mod sound;
 mod local_git;
 mod markdown;
 mod marks;
@@ -124,6 +126,11 @@ impl AssetSource for Assets {
             "copy" => include_bytes!("../assets/copy.svg"),
             "pencil" => include_bytes!("../assets/pencil.svg"),
             "square-pen" => include_bytes!("../assets/square-pen.svg"),
+            "square-plus" => include_bytes!("../assets/square-plus.svg"),
+            "queue-list" => include_bytes!("../assets/queue-list.svg"),
+            "queue-steer" => include_bytes!("../assets/queue-steer.svg"),
+            "queue-pause" => include_bytes!("../assets/queue-pause.svg"),
+            "queue-play" => include_bytes!("../assets/queue-play.svg"),
             "calendar-range" => include_bytes!("../assets/calendar-range.svg"),
             "calendar-today" => include_bytes!("../assets/calendar-today.svg"),
             "calendar-week" => include_bytes!("../assets/calendar-week.svg"),

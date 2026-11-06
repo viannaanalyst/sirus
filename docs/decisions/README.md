@@ -239,3 +239,5 @@ Write an ADR when a change constrains future work, is expensive to reverse, or r
 - [ADR-192: The phone is rebuilt around the Mac's conversation, and other conversations announce themselves](ADR-192-phone-rebuild-and-activity-cards.md)
 - [ADR-193: The transcript glides, a failed turn says why, and commands read as their description](ADR-193-glide-failure-card-command-tree.md)
 - [ADR-194: The changes card, drawing on a draft picture, and a tree closer to Monocode](ADR-194-changes-card-picture-markup-tree-steps.md)
+- [ADR-195: Reveal motion, photos, sounds and "open in" follow Monocode, and sent pictures survive a restart](ADR-195-monocode-motion-photos-sounds-open-in.md)
+- [ADR-196: Hugeicons on Mac and phone, code as pills, ⌘F marks the word](ADR-196-hugeicons-code-pills-find-words.md)

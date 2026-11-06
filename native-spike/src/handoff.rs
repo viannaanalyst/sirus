@@ -572,7 +572,7 @@ impl Shell {
                     .when(active, |d| d.bg(content(0.08)))
                     .hover(|s| s.bg(content(0.07)))
                     .on_click(cx.listener(move |this, _, _, cx| this.browse(provider, cx)))
-                    .child(provider_glyph(provider, 18.))
+                    .child(crate::tab_tile::provider_mark(provider, 18.))
                     .into_any_element()
             })
             .collect();
@@ -640,7 +640,7 @@ impl Shell {
                 } else {
                     models.push(
                         row(("handoff-default", 0))
-                            .child(provider_glyph(scope, 16.))
+                            .child(crate::tab_tile::provider_mark(scope, 16.))
                             .child(
                                 div()
                                     .min_w_0()
@@ -776,10 +776,10 @@ impl Shell {
                         .gap(px(6.))
                         .text_size(px(12.5))
                         .text_color(content(0.85))
-                        .child(provider_glyph(from, 14.))
+                        .child(crate::tab_tile::provider_mark(from, 14.))
                         .child(name_of(from))
                         .child(icon("chevron-right", 11.).text_color(content(0.45)))
-                        .child(provider_glyph(to, 14.))
+                        .child(crate::tab_tile::provider_mark(to, 14.))
                         .child(name_of(to)),
                 )
                 .child(div().flex_1())
@@ -821,7 +821,14 @@ impl Shell {
         moving: &mut bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        // ⌘F marks the words while this turn is drawn.
+        crate::markdown::set_search(
+            self.find
+                .query()
+                .map(|query| (query, self.find.current() == Some(index))),
+        );
         let body = self.turn_body(conversation, index, turn, now, moving, cx);
+        crate::markdown::set_search(None);
         let conv = &self.conversations[conversation];
         let previous = match index {
             0 => conv.handoff.as_ref().map(|handoff| handoff.from),
@@ -862,9 +869,9 @@ fn handoff_divider(from: &'static str, to: &'static str) -> AnyElement {
                 .border_1()
                 .border_color(content(0.12))
                 .bg(content(0.03))
-                .child(provider_glyph(from, 13.))
+                .child(crate::tab_tile::provider_mark(from, 13.))
                 .child(icon("chevron-right", 11.).text_color(content(0.5)))
-                .child(provider_glyph(to, 13.))
+                .child(crate::tab_tile::provider_mark(to, 13.))
                 .child(tf("{} assumiu", &[&name_of(to)])),
         )
         .child(rule())

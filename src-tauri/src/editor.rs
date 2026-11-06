@@ -85,6 +85,43 @@ pub fn editor_app_icons() -> Vec<EditorAppIcon> {
         .collect()
 }
 
+/// The app's own icon as a small PNG, in base64, from the icon file its bundle names.
+#[cfg(target_os = "macos")]
+fn app_icon_png(bundle: &str) -> Option<String> {
+    use base64::Engine;
+    let root = Path::new(bundle);
+    let plist = root.join("Contents/Info.plist");
+    let named = std::process::Command::new("/usr/bin/plutil")
+        .args(["-extract", "CFBundleIconFile", "raw"])
+        .arg(&plist)
+        .output()
+        .ok()
+        .filter(|output| output.status.success())?;
+    let name = String::from_utf8_lossy(&named.stdout).trim().to_owned();
+    if name.is_empty() || name.contains('/') {
+        return None;
+    }
+    let file = root
+        .join("Contents/Resources")
+        .join(format!("{}.icns", name.trim_end_matches(".icns")));
+    let out = std::env::temp_dir().join(format!(
+        "sirus-app-icon-{}-{}.png",
+        std::process::id(),
+        root.file_stem()?.to_string_lossy().replace(' ', "-")
+    ));
+    let made = std::process::Command::new("/usr/bin/sips")
+        .args(["-s", "format", "png", "-Z", "64"])
+        .arg(&file)
+        .arg("--out")
+        .arg(&out)
+        .output()
+        .is_ok_and(|output| output.status.success());
+    let bytes = made.then(|| std::fs::read(&out).ok()).flatten();
+    let _ = std::fs::remove_file(&out);
+    bytes.map(|bytes| base64::engine::general_purpose::STANDARD.encode(bytes))
+}
+
+#[cfg(not(target_os = "macos"))]
 fn app_icon_png(_bundle: &str) -> Option<String> {
     None
 }
@@ -117,8 +154,28 @@ pub async fn open_in_editor(
         target
     };
     // Finder cannot "open" a file as an editor would (macOS refuses it); it shows the file instead.
-    let _ = (app, target);
-    Ok(())
+    let _ = app;
+    open_with(spec.bundle, &target)
+}
+
+/// Opens `target` with the app at `bundle`.
+#[cfg(target_os = "macos")]
+fn open_with(bundle: &str, target: &Path) -> Result<()> {
+    let opened = std::process::Command::new("/usr/bin/open")
+        .arg("-a")
+        .arg(bundle)
+        .arg(target)
+        .status()?;
+    if opened.success() {
+        Ok(())
+    } else {
+        Err(Error::new("invalid", "the app could not open this folder"))
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn open_with(_bundle: &str, _target: &Path) -> Result<()> {
+    Err(Error::new("invalid", "opening an app needs a Mac"))
 }
 
 pub async fn read_text_file(

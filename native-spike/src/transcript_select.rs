@@ -181,6 +181,9 @@ fn extend(anchor: (Pos, Pos), gran: Gran, seq: usize, text: &str, byte: usize) -
     }
 }
 
+/// Ends a recorded fragment that continues the line of the next one.
+const GLUE: char = '\u{e000}';
+
 /// The text between two positions over all of a reply's fragments, one per line.
 fn extract(texts: &[String], a: Pos, b: Pos) -> Option<String> {
     let (a, b) = ordered(a, b);
@@ -196,7 +199,20 @@ fn extract(texts: &[String], a: Pos, b: Pos) -> Option<String> {
             parts.push(text[s..e].to_owned());
         }
     }
-    let joined = parts.join("\n").trim().to_owned();
+    // A piece of a flowing paragraph reads on into the next; anything else starts a new line.
+    let mut joined = String::new();
+    for (at, part) in parts.iter().enumerate() {
+        match part.strip_suffix(GLUE) {
+            Some(glued) => joined.push_str(glued),
+            None => {
+                joined.push_str(part);
+                if at + 1 < parts.len() {
+                    joined.push('\n');
+                }
+            }
+        }
+    }
+    let joined = joined.trim().to_owned();
     (!joined.is_empty()).then_some(joined)
 }
 
@@ -510,13 +526,28 @@ pub(crate) fn wrap_links(
     text: SharedString,
     links: Vec<(Range<usize>, String)>,
 ) -> AnyElement {
+    wrap_piece(styled, text, links, false)
+}
+
+/// A fragment that may be one piece of a flowing paragraph: with `glue`, copying carries on into
+/// the next fragment on the same line.
+pub(crate) fn wrap_piece(
+    styled: StyledText,
+    text: SharedString,
+    links: Vec<(Range<usize>, String)>,
+    glue: bool,
+) -> AnyElement {
     let claimed = SCOPE.with_borrow_mut(|scope| {
         let scope = scope.as_mut()?;
         let seq = scope.next;
         scope.next += 1;
         match &mut scope.mode {
             Mode::Record(texts) => {
-                texts.push(text.to_string());
+                let mut recorded = text.to_string();
+                if glue {
+                    recorded.push(GLUE);
+                }
+                texts.push(recorded);
                 None
             }
             Mode::Draw => Some((scope.state.clone(), scope.reply, seq)),
@@ -714,8 +745,10 @@ impl Shell {
                 streaming: turn.live,
                 act: std::rc::Rc::new(|_, _, _| {}),
             };
+            // Only the answer drawn under the header is selectable, not the folded work.
+            let answer = data::settled_answer(turn).unwrap_or("").to_owned();
             record(|| {
-                crate::markdown::render_rich(&turn.answer, &rich);
+                crate::markdown::render_rich(&answer, &rich);
             })
         }
     }

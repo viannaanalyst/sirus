@@ -152,6 +152,33 @@ fn rates_of(v: &Value) -> Option<Rates> {
     })
 }
 
+fn usage_cache_path() -> std::path::PathBuf {
+    crate::backend::data_dir().join("usage-cache.json")
+}
+
+/// Keeps the last reading, so the page has something to show before the logs are read again.
+fn write_usage_cache(history: &Value, prices: Option<&Value>) {
+    let body = json!({ "history": history, "prices": prices });
+    let bytes = body.to_string();
+    std::thread::spawn(move || {
+        let path = usage_cache_path();
+        let temporary = path.with_extension("json.tmp");
+        if std::fs::write(&temporary, bytes).is_ok() {
+            let _ = std::fs::rename(&temporary, &path);
+        }
+    });
+}
+
+fn read_usage_cache() -> Option<(Vec<Entry>, Vec<String>, HashMap<String, Price>)> {
+    let bytes = std::fs::read(usage_cache_path()).ok()?;
+    let body: Value = serde_json::from_slice(&bytes).ok()?;
+    let entries = parse_entries(&body["history"]);
+    if entries.is_empty() {
+        return None;
+    }
+    Some((entries, Vec::new(), parse_prices(&body["prices"])))
+}
+
 pub(crate) fn parse_prices(value: &Value) -> HashMap<String, Price> {
     value["prices"]
         .as_object()
@@ -874,6 +901,8 @@ pub(super) struct State {
     tab: Tab,
     range: u32,
     entries: Option<Vec<Entry>>,
+    /// The last reading was restored and a new one asked for (`usage_warm`).
+    warmed: bool,
     prices: HashMap<String, Price>,
     problems: Vec<String>,
     error: Option<String>,
@@ -900,6 +929,7 @@ impl Default for State {
             tab: Tab::Cost,
             range: 30,
             entries: None,
+            warmed: false,
             prices: HashMap::new(),
             problems: Vec::new(),
             error: None,
@@ -1086,6 +1116,21 @@ impl Shell {
         cx.notify();
     }
 
+    /// Once per run, soon after launch: the last reading shows at once when the page opens, and
+    /// the host reads the logs now, so the page does not wait for that scan.
+    pub(super) fn usage_warm(&mut self, cx: &mut Context<Self>) {
+        if std::mem::replace(&mut self.usage_page.warmed, true) {
+            return;
+        }
+        if let Some((entries, problems, prices)) = read_usage_cache() {
+            let page = &mut self.usage_page;
+            page.entries = Some(entries);
+            page.problems = problems;
+            page.prices = prices;
+        }
+        self.usage_load_history(cx);
+    }
+
     fn usage_load_history(&mut self, cx: &mut Context<Self>) {
         if self.usage_page.loading {
             return;
@@ -1115,12 +1160,13 @@ impl Shell {
                     models.sort_unstable();
                     models.dedup();
                     // Without prices the built-in list applies.
-                    let prices = message_actions::settle(
+                    let raw_prices = message_actions::settle(
                         backend.request("usage_prices", json!({ "models": models })),
                     )
                     .await
-                    .ok()
-                    .map(|value| parse_prices(&value));
+                    .ok();
+                    write_usage_cache(value, raw_prices.as_ref());
+                    let prices = raw_prices.map(|value| parse_prices(&value));
                     (Some(entries), problems, prices)
                 }
                 Err(_) => (None, Vec::new(), None),

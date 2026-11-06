@@ -1279,6 +1279,19 @@ pub async fn attachment_image(
         .map(|bytes| format!("data:{mime};base64,{}", STANDARD.encode(bytes)))
 }
 
+/// The copy of a sent picture kept with its message, which outlives the composer's attachment.
+pub async fn message_thumbnail(
+    state: crate::runtime::State<'_, Arc<crate::commands::AppState>>,
+    id: String,
+) -> Result<String> {
+    let data_path = state.data_path.clone();
+    tokio::task::spawn_blocking(move || crate::thumbnails::read(&data_path, &id))
+        .await
+        .map_err(|_| Error::new("attachment", "Cannot read the attachment."))?
+        .map(|bytes| format!("data:image/jpeg;base64,{}", STANDARD.encode(bytes)))
+        .ok_or_else(|| Error::new("document_unavailable", "This picture has no saved copy."))
+}
+
 /// The sent message's copy alone (tests and callers without a chip).
 #[cfg(test)]
 pub(crate) fn thumbnail(bytes: &[u8]) -> Option<Vec<u8>> {

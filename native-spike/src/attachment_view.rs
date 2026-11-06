@@ -24,9 +24,10 @@ const MAX_BATCH: u64 = 40 * 1024 * 1024;
 const HEADER: f32 = 46.;
 const BAR: f32 = 40.;
 /// The side of a picture waiting in the composer.
-const DRAFT_PICTURE: f32 = 64.;
-/// What the pencil draws with (#e5484d, as in the old app).
-const MARKUP_INK: u32 = 0xe5484d;
+const DRAFT_PICTURE: f32 = 36.;
+/// The longest side of a sent picture.
+const PHOTO_SIDE: f32 = 240.;
+const PHOTO_RADIUS: f32 = 16.;
 
 // ---- State -------------------------------------------------------------------------------
 
@@ -88,7 +89,12 @@ impl Files {
                     .border_color(content(0.1))
                     .bg(content(0.05))
                     .when_some(self.thumb_of(info), |d, thumb| {
-                        d.child(img(thumb).size_full().object_fit(ObjectFit::Cover))
+                        d.child(
+                            img(thumb)
+                                .size_full()
+                                .rounded(px(crate::theme::RADIUS_SM))
+                                .object_fit(ObjectFit::Cover),
+                        )
                     })
             })
             .collect()
@@ -260,6 +266,17 @@ fn prepare_files(paths: &[std::path::PathBuf], existing: usize) -> Result<Vec<Va
 
 // ---- Loading -----------------------------------------------------------------------------
 
+/// The copy of a sent picture the host keeps with its message. Blocks.
+fn sent_thumbnail(backend: &Backend, id: &str) -> Option<Arc<gpui::Image>> {
+    let reply = backend
+        .request("message_thumbnail", json!({ "id": id }))
+        .recv_blocking();
+    match reply {
+        Ok(Ok(Value::String(url))) => decode_image(&url),
+        _ => None,
+    }
+}
+
 /// Asks the host for an attachment's document. Blocks.
 fn fetch(
     backend: &Backend,
@@ -301,7 +318,10 @@ fn load(backend: &Backend, info: &Info, owner: &str) -> Content {
                 Content::Image,
             ),
             Ok(_) => failed(t("Não foi possível abrir este documento.")),
-            Err(message) => failed(message),
+            // The full picture lasts while the app runs; after that the kept copy shows.
+            Err(message) => {
+                sent_thumbnail(backend, &info.id).map_or_else(|| failed(message), Content::Image)
+            }
         },
         Viewer::Pdf => {
             match fetch(backend, "attachment_preview", owner, &info.id, false).and_then(|v| {
@@ -1146,10 +1166,13 @@ impl Shell {
             let (tx, rx) = async_channel::bounded(1);
             let asked = id.clone();
             std::thread::spawn(move || {
-                let image = match fetch(&backend, "attachment_image", &owner, &asked, false) {
-                    Ok(Value::String(url)) => decode_image(&url),
-                    _ => None,
-                };
+                // A sent picture keeps its small copy on the host, across restarts.
+                let image = sent_thumbnail(&backend, &asked).or_else(|| {
+                    match fetch(&backend, "attachment_image", &owner, &asked, false) {
+                        Ok(Value::String(url)) => decode_image(&url),
+                        _ => None,
+                    }
+                });
                 let _ = tx.send_blocking(image);
             });
             cx.spawn(async move |this, cx| {
@@ -1661,6 +1684,7 @@ impl Shell {
                     .child(match self.viewer.thumb_of(info) {
                         Some(thumb) => img(thumb)
                             .size_full()
+                            .rounded(px(crate::theme::RADIUS_MD))
                             .object_fit(ObjectFit::Cover)
                             .into_any_element(),
                         None => div().size_full().into_any_element(),
@@ -1684,7 +1708,7 @@ impl Shell {
         let store = markup.stage.clone();
         let strokes = markup.strokes.clone();
         let size = markup.size;
-        let ink = gpui::Hsla::from(gpui::rgb(MARKUP_INK));
+        let chosen = markup.ink;
         let drawing = gpui::canvas(
             move |bounds, _, _| store.set(Some(bounds)),
             move |bounds, _, window, _| {
@@ -1701,7 +1725,8 @@ impl Shell {
                     )
                 };
                 for stroke in &strokes {
-                    if let [dot] = stroke.as_slice() {
+                    let ink = gpui::Hsla::from(gpui::rgb(stroke.ink));
+                    if let [dot] = stroke.marks.as_slice() {
                         let at = place(dot) - gpui::point(width / 2., width / 2.);
                         window.paint_quad(
                             gpui::fill(Bounds::new(at, gpui::size(width, width)), ink)
@@ -1710,7 +1735,7 @@ impl Shell {
                         continue;
                     }
                     let mut path = gpui::PathBuilder::stroke(width);
-                    for (index, mark) in stroke.iter().enumerate() {
+                    for (index, mark) in stroke.marks.iter().enumerate() {
                         if index == 0 {
                             path.move_to(place(mark));
                         } else {
@@ -1723,12 +1748,18 @@ impl Shell {
                 }
             },
         )
+        // Pinned to the corner: an absolute child with no offsets sits after its siblings.
         .absolute()
+        .top_0()
+        .left_0()
         .size_full();
         let stage = div()
             .id("markup-stage")
-            .relative()
-            .size_full()
+            .absolute()
+            .left(px(16.))
+            .right(px(16.))
+            .top(px(16.))
+            .bottom(px(60.))
             .when(active, |d| d.cursor_crosshair())
             .child(
                 img(image.clone())
@@ -1785,6 +1816,34 @@ impl Shell {
             };
         let pencil_image = image.clone();
         let (apply_fill, apply_text) = crate::theme::primary_action(has_strokes && !busy);
+        let swatches = image_markup::INKS.iter().enumerate().map(|(at, ink)| {
+            let swatch_image = image.clone();
+            div()
+                .id(("markup-ink", at))
+                .size(px(22.))
+                .rounded_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer()
+                .border_2()
+                .border_color(if at == chosen {
+                    content(0.85)
+                } else {
+                    gpui::transparent_black()
+                })
+                .hover(|s| s.bg(content(0.14)))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    let markup = &mut this.viewer.markup;
+                    markup.ink = at;
+                    // Choosing a colour means drawing with it.
+                    if !markup.active {
+                        markup.toggle(swatch_image.bytes());
+                    }
+                    cx.notify();
+                }))
+                .child(div().size(px(14.)).rounded_full().bg(gpui::rgb(*ink)))
+        });
         let bar = div()
             .flex()
             .items_center()
@@ -1795,6 +1854,8 @@ impl Shell {
             .border_color(content(0.16))
             .bg(crate::theme::floating_fill())
             .occlude()
+            .children(swatches)
+            .child(div().w(px(1.)).h(px(18.)).mx(px(4.)).bg(content(0.14)))
             .child(
                 tool("markup-pencil", "pencil", !busy, active, "Marcar na imagem").on_click(
                     cx.listener(move |this, _, _, cx| {
@@ -1862,8 +1923,6 @@ impl Shell {
             .relative()
             .flex_1()
             .min_h_0()
-            .p(px(16.))
-            .pb(px(60.))
             .child(stage)
             .child(
                 div()
@@ -1918,12 +1977,7 @@ impl Shell {
         let backend = self.backend.clone();
         let (tx, rx) = async_channel::bounded(1);
         std::thread::spawn(move || {
-            let ink = [
-                (MARKUP_INK >> 16) as u8,
-                (MARKUP_INK >> 8) as u8,
-                MARKUP_INK as u8,
-            ];
-            let _ = tx.send_blocking(image_markup::burn(&bytes, &strokes, ink));
+            let _ = tx.send_blocking(image_markup::burn(&bytes, &strokes));
         });
         cx.spawn(async move |this, cx| {
             let burned = rx.recv().await.ok().flatten();
@@ -2597,12 +2651,13 @@ fn picture_tile(
     thumb: Option<Arc<gpui::Image>>,
     click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
 ) -> Stateful<Div> {
+    let (width, height) = photo_size(thumb.as_ref());
     div()
         .id(id)
-        .size(px(96.))
+        .w(px(width))
+        .h(px(height))
         .flex_shrink_0()
-        .rounded(px(crate::theme::RADIUS_LG))
-        .overflow_hidden()
+        .rounded(px(PHOTO_RADIUS))
         .border_1()
         .border_color(content(0.1))
         .bg(content(0.05))
@@ -2610,11 +2665,39 @@ fn picture_tile(
         .hover(|s| s.border_color(content(0.28)))
         .on_click(click)
         .when_some(thumb, |d, thumb| {
-            d.child(img(thumb).size_full().object_fit(ObjectFit::Cover))
+            // The image takes the corners itself: a parent clips only to a rectangle.
+            d.child(
+                img(thumb)
+                    .size_full()
+                    .rounded(px(PHOTO_RADIUS))
+                    .object_fit(ObjectFit::Cover),
+            )
         })
 }
 
-/// A picture waiting in the composer: only the image, with its cross in the corner.
+/// A sent picture's size: its own shape, its longest side at `PHOTO_SIDE` (Monocode's `photo`).
+fn photo_size(thumb: Option<&Arc<gpui::Image>>) -> (f32, f32) {
+    thread_local! {
+        static SHAPES: RefCell<HashMap<usize, Option<(u32, u32)>>> = RefCell::new(HashMap::new());
+    }
+    let shape = thumb.and_then(|thumb| {
+        SHAPES.with(|shapes| {
+            *shapes
+                .borrow_mut()
+                .entry(Arc::as_ptr(thumb) as usize)
+                .or_insert_with(|| crate::image_markup::dimensions(thumb.bytes()))
+        })
+    });
+    match shape {
+        Some((w, h)) if w > 0 && h > 0 => {
+            let scale = PHOTO_SIDE / w.max(h) as f32;
+            ((w as f32 * scale).round(), (h as f32 * scale).round())
+        }
+        _ => (PHOTO_SIDE, PHOTO_SIDE),
+    }
+}
+
+/// A picture waiting in the composer: only the image, with its cross just off the corner.
 fn draft_picture(
     index: usize,
     thumb: Option<Arc<gpui::Image>>,
@@ -2630,7 +2713,6 @@ fn draft_picture(
                 .id(("attached", index))
                 .size_full()
                 .rounded(px(crate::theme::RADIUS_MD))
-                .overflow_hidden()
                 .border_1()
                 .border_color(content(0.1))
                 .bg(content(0.05))
@@ -2638,24 +2720,31 @@ fn draft_picture(
                 .hover(|s| s.border_color(content(0.28)))
                 .on_click(open)
                 .when_some(thumb, |d, thumb| {
-                    d.child(img(thumb).size_full().object_fit(ObjectFit::Cover))
+                    d.child(
+                        img(thumb)
+                            .size_full()
+                            .rounded(px(crate::theme::RADIUS_MD))
+                            .object_fit(ObjectFit::Cover),
+                    )
                 }),
         )
         .child(
             div()
                 .id(("attached-remove", index))
                 .absolute()
-                .top(px(3.))
-                .right(px(3.))
-                .size(px(18.))
+                .top(px(-5.))
+                .right(px(-5.))
+                .size(px(16.))
                 .rounded_full()
                 .flex()
                 .items_center()
                 .justify_center()
                 .bg(gpui::Hsla {
-                    a: 0.62,
+                    a: 0.75,
                     ..gpui::black()
                 })
+                .border_1()
+                .border_color(content(0.2))
                 .cursor_pointer()
                 .hover(|s| s.bg(gpui::black()))
                 .on_click(remove)

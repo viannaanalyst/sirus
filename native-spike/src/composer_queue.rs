@@ -24,7 +24,6 @@ const CONTEXT: &str = "O modelo, a conta ou o workspace mudou. Cancele os pedido
 const INVALID: &str = "Escreva um pedido dentro do limite de 64 KiB, incluindo os anexos.";
 const FULL: &str =
     "A fila aceita até 8 pedidos de 64 KiB cada. Confira também se a troca de modelo terminou.";
-const SESSION_ONLY: &str = "Os pedidos começam em ordem após uma resposta concluída. A fila fica apenas nesta abertura do app.";
 const RETRY_ONLY: &str =
     "Este pedido já tentou iniciar. Para mudar o texto, cancele e adicione outro pedido.";
 const ATTACHMENTS_ONLY: &str = "Analisar anexos";
@@ -1165,70 +1164,39 @@ impl Shell {
                 .when(!enabled, |d| d.opacity(0.4))
         };
 
-        let header = div()
-            .flex()
-            .items_center()
-            .gap(px(8.))
-            .px(px(12.))
-            .py(px(8.))
-            .child(icon("list-ordered", 15.).text_color(content(0.45)))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_size(px(12.))
-                    .text_color(content(0.62))
-                    .child(format!(
-                        "{} · {}",
-                        if count == 1 {
-                            t("1 pedido na fila").to_owned()
-                        } else {
-                            tf("{} pedidos na fila", &[&count])
-                        },
-                        t(if paused { "Pausada" } else { "Em espera" })
-                    )),
-            )
-            .child({
-                let enabled = in_flight.is_none() && editing.is_none();
-                let session_id = session_id.clone();
-                button("queue-toggle".into(), enabled)
-                    .child(
-                        icon(if paused { "play" } else { "pause" }, 12.).text_color(content(0.62)),
-                    )
-                    .child(t(if paused {
-                        "Continuar fila"
-                    } else {
-                        "Pausar fila"
-                    }))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if enabled {
-                            this.toggle_queue(&session_id, cx);
-                        }
-                    }))
-            });
-
+        // Only a paused queue says so, with the way out: the rows speak for themselves (Monocode).
+        let header = paused.then(|| {
+            let enabled = in_flight.is_none() && editing.is_none();
+            let session_id = session_id.clone();
+            div()
+                .h(px(28.))
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .border_b_1()
+                .border_color(content(0.05))
+                .child(icon("queue-pause", 14.).text_color(content(0.5)))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .child(t(queue.reason.unwrap_or("Pausada"))),
+                )
+                .child(
+                    button("queue-toggle".into(), enabled)
+                        .h(px(24.))
+                        .child(icon("queue-play", 14.).text_color(content(0.62)))
+                        .child(t("Continuar fila"))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if enabled {
+                                this.toggle_queue(&session_id, cx);
+                            }
+                        })),
+                )
+        });
         let rows = queue.items.iter().enumerate().map(|(i, item)| {
             let is_editing = editing.as_ref().is_some_and(|(id, _)| *id == item.id);
-            let approval = match item.execution["approval"].as_str() {
-                Some("full") => t("Acesso total"),
-                Some("auto") => t("Revisão automática"),
-                _ => t("Pedir aprovação"),
-            };
-            let model = self.model_display(&item.binding.agent, item.binding.model.as_deref());
-            let mut caption = format!("{model} · {approval}");
-            // Attachments lead the meta line: "2 anexos · Haiku 5.5 · ...".
-            match item.attachments.len() {
-                0 => {}
-                1 => caption.insert_str(0, &format!("{} · ", t("1 anexo"))),
-                n => caption.insert_str(0, &format!("{} · ", tf("{} anexos", &[&n]))),
-            }
-            if item.planning {
-                caption.push_str(&format!(" · {}", t("Modo planejamento")));
-            }
-            if item.debugging {
-                caption.push_str(&format!(" · {}", t("Modo debug")));
-            }
             let pictures = self.viewer.queue_tiles(&item.attachments, i);
             let body = if is_editing {
                 let text = editing
@@ -1287,10 +1255,8 @@ impl Shell {
                     .into_any_element()
             } else {
                 div()
-                    .text_size(px(13.))
-                    .line_height(px(20.8))
-                    .text_color(content(0.95))
-                    .line_clamp(2)
+                    .truncate()
+                    .text_color(content(0.75))
                     .child(if item.text.is_empty() {
                         t(ATTACHMENTS_ONLY).to_owned()
                     } else {
@@ -1310,6 +1276,8 @@ impl Shell {
                         let (id, session_id) = (item.id.clone(), session_id.clone());
                         row = row.child(
                             button((tag, i).into(), enabled)
+                                .size(px(24.))
+                                .px(px(0.))
                                 .child(icon(glyph, 12.).text_color(content(0.62)))
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     if enabled {
@@ -1336,7 +1304,10 @@ impl Shell {
                     );
                     row = row.child(
                         button(("queue-steer", i).into(), enabled)
-                            .child(t("Instruir agora"))
+                            .size(px(24.))
+                            .px(px(0.))
+                            .tooltip(message_actions::name_tip(t("Instruir agora")))
+                            .child(icon("queue-steer", 14.).text_color(content(0.62)))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if enabled {
                                     this.queues.steering = Some(id.clone());
@@ -1362,7 +1333,10 @@ impl Shell {
                         (item.id.clone(), session_id.clone(), item.text.clone());
                     row = row.child(
                         button(("queue-edit", i).into(), enabled)
-                            .child(t("Editar"))
+                            .size(px(24.))
+                            .px(px(0.))
+                            .tooltip(message_actions::name_tip(t("Editar")))
+                            .child(icon("pencil", 14.).text_color(content(0.62)))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if enabled {
                                     let Some(at) = this
@@ -1386,7 +1360,10 @@ impl Shell {
                     let (id, session_id) = (item.id.clone(), session_id.clone());
                     row = row.child(
                         button(("queue-cancel", i).into(), enabled)
-                            .child(t("Cancelar"))
+                            .size(px(24.))
+                            .px(px(0.))
+                            .tooltip(message_actions::name_tip(t("Cancelar")))
+                            .child(icon("close", 14.).text_color(content(0.62)))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if enabled {
                                     let files = this.queues.cancel(&session_id, &id);
@@ -1397,61 +1374,51 @@ impl Shell {
                             })),
                     );
                 }
+                // With nothing saying the queue runs, its pause sits on the first row.
+                if i == 0 && !paused {
+                    let enabled = in_flight.is_none() && editing.is_none();
+                    let session_id = session_id.clone();
+                    row = row.child(
+                        button("queue-toggle".into(), enabled)
+                            .size(px(24.))
+                            .px(px(0.))
+                            .tooltip(message_actions::name_tip(t("Pausar fila")))
+                            .child(icon("queue-pause", 14.).text_color(content(0.62)))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if enabled {
+                                    this.toggle_queue(&session_id, cx);
+                                }
+                            })),
+                    );
+                }
                 row
             });
 
             div()
                 .id(("queue-item", i))
-                .px(px(12.))
-                .py(px(8.))
-                .when(i + 1 < count, |d| {
-                    d.border_b_1().border_color(content(0.07))
-                })
+                .min_h(px(32.))
+                .when(i > 0, |d| d.border_t_1().border_color(content(0.05)))
                 .flex()
-                .items_start()
-                .gap(px(8.))
-                .child(
-                    div()
-                        .pt(px(4.))
-                        .text_size(px(11.))
-                        .text_color(content(0.45))
-                        .child((i + 1).to_string()),
-                )
+                .items_center()
+                .gap(px(10.))
+                .child(icon("queue-list", 14.).text_color(content(0.35)))
                 .when(!pictures.is_empty(), |d| {
-                    // The images lead the text: small tiles, as the sent bubble keeps them.
-                    d.child(
-                        div()
-                            .pt(px(1.))
-                            .flex()
-                            .flex_shrink_0()
-                            .gap(px(4.))
-                            .children(pictures),
-                    )
+                    d.child(div().flex().flex_shrink_0().gap(px(4.)).children(pictures))
                 })
                 .child(
                     div()
                         .flex_1()
                         .min_w_0()
+                        .py(px(4.))
                         .flex()
                         .flex_col()
                         .child(body)
-                        .child(
-                            div()
-                                .mt(px(4.))
-                                .truncate()
-                                .text_size(px(11.))
-                                .line_height(px(16.5))
-                                .text_color(content(0.45))
-                                .child(caption),
-                        )
                         .when(
                             item.after.is_some() && in_flight.as_deref() != Some(item.id.as_str()),
                             |d| {
                                 d.child(
                                     div()
-                                        .mt(px(4.))
                                         .text_size(px(11.))
-                                        .line_height(px(16.5))
                                         .text_color(content(0.45))
                                         .child(t(RETRY_ONLY)),
                                 )
@@ -1461,48 +1428,46 @@ impl Shell {
                 .children(actions)
         });
 
+        // A ledge on the composer's top edge, as Monocode's: inset, open at the bottom.
         Some(
             div()
-                .mb(px(8.))
-                .w_full()
-                .overflow_hidden()
-                .rounded(px(crate::theme::RADIUS_XL))
-                .border_1()
-                .border_color(content(0.07))
+                .mx(px(8.))
                 .relative()
-                .child(crate::theme::composer_surface(crate::theme::RADIUS_XL))
-                .child(header)
-                .when_some(
-                    queue.paused.then_some(queue.reason).flatten(),
-                    |d, reason| {
-                        d.child(
-                            div()
-                                .px(px(12.))
-                                .pb(px(8.))
-                                .text_size(px(11.))
-                                .line_height(px(16.5))
-                                .text_color(content(0.45))
-                                .child(t(reason)),
-                        )
-                    },
+                .rounded_t(px(10.))
+                .border_1()
+                .border_b_0()
+                .border_color(content(0.08))
+                .px(px(10.))
+                .py(px(2.))
+                .text_size(px(12.))
+                .text_color(content(0.55))
+                .child(
+                    gpui::canvas(
+                        |_, _, _| {},
+                        |bounds, _, window, _| {
+                            let corners = gpui::Corners {
+                                top_left: px(10.),
+                                top_right: px(10.),
+                                bottom_left: px(0.),
+                                bottom_right: px(0.),
+                            };
+                            window.paint_quad(
+                                gpui::fill(bounds, content(0.03)).corner_radii(corners),
+                            );
+                        },
+                    )
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full(),
                 )
+                .children(header)
                 .child(
                     div()
                         .id("queue-list")
                         .max_h(px(224.))
                         .overflow_y_scroll()
-                        .border_t_1()
-                        .border_color(content(0.07))
                         .children(rows),
-                )
-                .child(
-                    div()
-                        .px(px(12.))
-                        .py(px(8.))
-                        .text_size(px(11.))
-                        .line_height(px(16.5))
-                        .text_color(content(0.45))
-                        .child(t(SESSION_ONLY)),
                 )
                 .into_any_element(),
         )

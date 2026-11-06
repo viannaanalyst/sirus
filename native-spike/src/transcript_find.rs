@@ -1,9 +1,9 @@
 //! ⌘F: the find bar over the open conversation (ports Sirus Code's `TranscriptSearchBar`).
 //!
 //! It searches each turn's user text and answer, case and accents folded, and walks the hits with
-//! Enter, ⇧Enter, the arrows and wrap-around. Going to a hit scrolls its turn into view and washes
-//! the turn with the accent. The markdown renderer takes no highlight ranges, so the match inside
-//! the turn is not marked. Hits are computed when the query changes or the conversation gains
+//! Enter, ⇧Enter, the arrows and wrap-around. Going to a hit scrolls its turn into view. The words
+//! themselves are marked (`markdown::set_search`), in the accent on the current turn and in amber
+//! on the others, as in Monocode. Hits are computed when the query changes or the conversation gains
 //! turns, never per frame. While the bar is up it takes the typing (`query_target`); Esc closes
 //! it and gives the focus back to the composer, and never stops the agent.
 //!
@@ -11,6 +11,7 @@
 
 use super::*;
 use gpui::{Keystroke, Stateful};
+use std::ops::Range;
 
 /// Lowercase with accents and combining marks taken off: "Ação" folds to "acao".
 pub(crate) fn fold(text: &str) -> String {
@@ -29,6 +30,45 @@ pub(crate) fn fold(text: &str) -> String {
             other => other,
         })
         .collect()
+}
+
+/// Where `query` occurs in `text`, by bytes of `text`, case and accents folded.
+pub(crate) fn ranges(text: &str, query: &str) -> Vec<Range<usize>> {
+    let needle: Vec<char> = fold(query.trim()).chars().collect();
+    if needle.is_empty() {
+        return Vec::new();
+    }
+    // Each folded character with the byte range it came from.
+    let mut folded: Vec<(char, Range<usize>)> = Vec::new();
+    for (at, character) in text.char_indices() {
+        let span = at..at + character.len_utf8();
+        let mut buffer = [0; 4];
+        let piece: &str = character.encode_utf8(&mut buffer);
+        let mut produced = false;
+        for mapped in fold(piece).chars() {
+            folded.push((mapped, span.clone()));
+            produced = true;
+        }
+        // A combining mark folds to nothing: it belongs to the letter before it.
+        if !produced && let Some(last) = folded.last_mut() {
+            last.1.end = span.end;
+        }
+    }
+    let mut out = Vec::new();
+    let mut at = 0;
+    while at + needle.len() <= folded.len() {
+        if folded[at..at + needle.len()]
+            .iter()
+            .zip(&needle)
+            .all(|((have, _), want)| have == want)
+        {
+            out.push(folded[at].1.start..folded[at + needle.len() - 1].1.end);
+            at += needle.len();
+        } else {
+            at += 1;
+        }
+    }
+    out
 }
 
 /// The indices of the turns whose (user text, answer) holds the query. A blank query matches nothing.
@@ -94,6 +134,11 @@ impl State {
     }
 
     /// The turn of the current hit, while the bar is up (the wash marks it).
+    /// The query while the bar is up with something typed.
+    pub(crate) fn query(&self) -> Option<&str> {
+        (self.shown() && !self.query.trim().is_empty()).then_some(self.query.as_str())
+    }
+
     pub(crate) fn current(&self) -> Option<usize> {
         if !self.shown {
             return None;
@@ -324,6 +369,13 @@ impl Shell {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ranges_find_the_word_in_the_original_text() {
+        assert_eq!(ranges("Os Ícones e icons", "icon"), vec![3..8, 13..17]);
+        assert_eq!(ranges("ação", "acao"), vec![0..6]);
+        assert!(ranges("nada", " ").is_empty());
+    }
 
     #[test]
     fn fold_lowercases_and_drops_accents() {

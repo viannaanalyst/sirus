@@ -144,7 +144,7 @@ pub fn rail(last: bool) -> impl IntoElement {
                 .top_0()
                 .left_0()
                 .w(px(1.))
-                .map(|d| if last { d.h(px(6.)) } else { d.h_full() })
+                .map(|d| if last { d.h(px(7.)) } else { d.h_full() })
                 .bg(color),
         )
         .child(
@@ -152,7 +152,7 @@ pub fn rail(last: bool) -> impl IntoElement {
                 .path("tool-branch")
                 .absolute()
                 .left_0()
-                .top(px(5.))
+                .top(px(6.))
                 .size(px(9.))
                 .text_color(color),
         )

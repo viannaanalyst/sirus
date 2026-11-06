@@ -15,6 +15,7 @@ agent_resources::agent_resource_action
 review_guides::review_guide_action
 commands::retry_last_turn
 attachments::attachment_image
+attachments::message_thumbnail
 chat_background::chat_background_image
 vscode_theme::vscode_themes_search
 vscode_theme::vscode_themes_fetch

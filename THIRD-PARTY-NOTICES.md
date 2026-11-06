@@ -47,9 +47,9 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-## Solar Icon Set (interface icons)
+## Solar Icon Set (the remaining filled shapes)
 
-The interface icons are from the Solar Icon Set by 480 Design
+The filled shapes left in `native-spike/assets` (`zap-fill`, `star-fill`, `square-fill`) are from the Solar Icon Set by 480 Design
 (https://www.figma.com/community/file/1166831539721848736), licensed under the Creative Commons
 Attribution 4.0 International license (CC BY 4.0, https://creativecommons.org/licenses/by/4.0/).
 The icons are taken from the `@iconify-json/solar` package and from Zeron's adjusted copies
@@ -65,3 +65,9 @@ The window draws Mermaid diagrams and KaTeX formulas with the files committed in
 npm packages they are built from (mostly MIT and ISC, with some Apache-2.0, BSD-3-Clause, MPL-2.0 or Apache-2.0,
 EPL-2.0 for ELK, and Unlicense). The licence text of every package is kept in
 `native-spike/assets/reply-render/LICENSES.txt`, which `bundle.sh` ships inside the app.
+
+The notification sounds in `native-spike/src/sound.rs` come from Monocode (MIT, `native-spike/LICENSE-MONOCODE-MIT`) and use recipes from cuelume by Daniel Belyi (MIT).
+
+## Hugeicons (interface icons on the Mac and the phone)
+
+The interface icons are from Hugeicons' free set (MIT, `native-spike/assets/hugeicons.LICENSE`), most through Monocode (MIT).

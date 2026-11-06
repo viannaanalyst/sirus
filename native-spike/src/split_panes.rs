@@ -1406,7 +1406,7 @@ impl Shell {
                 },
                 |drag, _, _, cx| cx.new(|_| DragChip(drag.title.clone())),
             )
-            .child(provider_glyph(conversation.provider, 14.))
+            .child(crate::tab_tile::provider_mark(conversation.provider, 14.))
             .child(
                 div()
                     .flex_1()

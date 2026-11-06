@@ -10,6 +10,16 @@ use std::rc::Rc;
 /// A point on the picture, each axis from 0 to 1.
 pub(crate) type Mark = (f32, f32);
 
+/// One stroke and its colour.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Stroke {
+    pub ink: u32,
+    pub marks: Vec<Mark>,
+}
+
+/// The colours the pencil offers.
+pub(crate) const INKS: [u32; 5] = [0xe5484d, 0xf5b800, 0x30a46c, 0x3e8bff, 0xffffff];
+
 /// Points closer than this (in picture proportions) add nothing to a stroke.
 const MIN_STEP: f32 = 0.001;
 
@@ -17,7 +27,9 @@ const MIN_STEP: f32 = 0.001;
 #[derive(Default)]
 pub(crate) struct Markup {
     pub active: bool,
-    pub strokes: Vec<Vec<Mark>>,
+    pub strokes: Vec<Stroke>,
+    /// The chosen colour, an index into `INKS`.
+    pub ink: usize,
     pub drawing: bool,
     /// The burned picture is on its way to the host.
     pub busy: bool,
@@ -40,7 +52,10 @@ impl Markup {
     /// Starts a stroke at a window position.
     pub(crate) fn begin(&mut self, at: Point<Pixels>) {
         if let Some(mark) = self.mark_at(at) {
-            self.strokes.push(vec![mark]);
+            self.strokes.push(Stroke {
+                ink: INKS[self.ink % INKS.len()],
+                marks: vec![mark],
+            });
             self.drawing = true;
         }
     }
@@ -53,6 +68,7 @@ impl Markup {
         let Some(stroke) = self.strokes.last_mut().filter(|_| self.drawing) else {
             return false;
         };
+        let stroke = &mut stroke.marks;
         let last = stroke.last().copied().unwrap_or(mark);
         if (last.0 - mark.0).abs().max((last.1 - mark.1).abs()) < MIN_STEP {
             return false;
@@ -104,7 +120,7 @@ pub(crate) fn annotated_name(name: &str) -> String {
     format!("{base}-annotated.png")
 }
 
-fn dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+pub(crate) fn dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
     image::ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()
         .ok()?
@@ -113,13 +129,19 @@ fn dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
 }
 
 /// The picture with the strokes burned in, as a PNG.
-pub(crate) fn burn(bytes: &[u8], strokes: &[Vec<Mark>], color: [u8; 3]) -> Option<Vec<u8>> {
+pub(crate) fn burn(bytes: &[u8], strokes: &[Stroke]) -> Option<Vec<u8>> {
     let mut canvas = image::load_from_memory(bytes).ok()?.to_rgba8();
     let size = canvas.dimensions();
     let radius = stroke_width(size) / 2.;
-    let ink = image::Rgba([color[0], color[1], color[2], 255]);
     let place = |mark: Mark| (mark.0 * size.0 as f32, mark.1 * size.1 as f32);
     for stroke in strokes {
+        let ink = image::Rgba([
+            (stroke.ink >> 16) as u8,
+            (stroke.ink >> 8) as u8,
+            stroke.ink as u8,
+            255,
+        ]);
+        let stroke = &stroke.marks;
         let Some(first) = stroke.first() else {
             continue;
         };
@@ -176,10 +198,17 @@ mod tests {
         png.into_inner()
     }
 
+    fn stroke(ink: u32, marks: &[Mark]) -> Stroke {
+        Stroke {
+            ink,
+            marks: marks.to_vec(),
+        }
+    }
+
     #[test]
     fn burning_keeps_the_size_and_inks_along_the_stroke() {
         let png = white_png(300, 100);
-        let out = burn(&png, &[vec![(0.1, 0.5), (0.9, 0.5)]], [229, 72, 77]).unwrap();
+        let out = burn(&png, &[stroke(0xe5484d, &[(0.1, 0.5), (0.9, 0.5)])]).unwrap();
         let burned = image::load_from_memory(&out).unwrap().to_rgba8();
         assert_eq!(burned.dimensions(), (300, 100));
         assert_eq!(burned.get_pixel(150, 50), &image::Rgba([229, 72, 77, 255]));
@@ -187,21 +216,26 @@ mod tests {
     }
 
     #[test]
-    fn a_single_click_leaves_a_dot() {
-        let out = burn(&white_png(100, 100), &[vec![(0.5, 0.5)]], [1, 2, 3]).unwrap();
+    fn each_stroke_burns_in_its_own_colour_and_a_click_leaves_a_dot() {
+        let strokes = [
+            stroke(0x010203, &[(0.25, 0.5)]),
+            stroke(0x0a0b0c, &[(0.75, 0.5)]),
+        ];
+        let out = burn(&white_png(100, 100), &strokes).unwrap();
         let burned = image::load_from_memory(&out).unwrap().to_rgba8();
-        assert_eq!(burned.get_pixel(50, 50), &image::Rgba([1, 2, 3, 255]));
+        assert_eq!(burned.get_pixel(25, 50), &image::Rgba([1, 2, 3, 255]));
+        assert_eq!(burned.get_pixel(75, 50), &image::Rgba([10, 11, 12, 255]));
     }
 
     #[test]
     fn strokes_at_the_edges_stay_inside_the_picture() {
-        let strokes = [vec![(0., 0.), (1., 1.)]];
-        assert!(burn(&white_png(10, 10), &strokes, [0, 0, 0]).is_some());
+        let strokes = [stroke(0, &[(0., 0.), (1., 1.)])];
+        assert!(burn(&white_png(10, 10), &strokes).is_some());
     }
 
     #[test]
     fn something_that_is_not_a_picture_does_not_burn_or_open_the_pencil() {
-        assert!(burn(b"nope", &[], [0, 0, 0]).is_none());
+        assert!(burn(b"nope", &[]).is_none());
         let mut markup = Markup::default();
         markup.toggle(b"nope");
         assert!(!markup.active);
@@ -219,9 +253,9 @@ mod tests {
             size(px(300.), px(100.)),
         )));
         markup.begin(point(px(150.), px(50.)));
-        assert_eq!(markup.strokes[0][0], (0.5, 0.5));
+        assert_eq!(markup.strokes[0].marks[0], (0.5, 0.5));
         markup.begin(point(px(10.), px(50.)));
-        assert_eq!(markup.strokes[1][0], (0., 0.5));
+        assert_eq!(markup.strokes[1].marks[0], (0., 0.5));
     }
 
     #[test]

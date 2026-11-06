@@ -1631,6 +1631,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Nova sessão", "New Session"),
     ("Novas abas abrem em", "New tabs open in"),
     ("Novas sessões", "New threads"),
+    ("Novo", "New"),
     ("Novo código", "New code"),
     ("Novo projeto", "New project"),
     ("Novo terminal", "New Terminal"),

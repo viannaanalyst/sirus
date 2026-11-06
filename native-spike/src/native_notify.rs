@@ -6,7 +6,6 @@ use std::cell::{Cell, RefCell};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2::{MainThreadOnly, define_class, msg_send};
-use objc2_app_kit::NSSound;
 use objc2_foundation::{MainThreadMarker, NSObject, NSObjectProtocol, NSString};
 use objc2_user_notifications::{
     UNAuthorizationOptions, UNMutableNotificationContent, UNNotification,
@@ -40,37 +39,23 @@ define_class!(
 thread_local! {
     static READY: Cell<bool> = const { Cell::new(false) };
     static DELEGATE: RefCell<Option<Retained<Delegate>>> = const { RefCell::new(None) };
-    static SOUND: RefCell<Option<Retained<NSSound>>> = const { RefCell::new(None) };
 }
 
-/// The system's sound for a saved choice; an unknown name plays nothing.
-fn sound_name(choice: &str) -> Option<&'static str> {
+/// Which of Monocode's sounds a saved choice stands for: the finished chime, or the one that asks
+/// for attention. An unknown name plays nothing.
+fn cue_of(choice: &str) -> Option<crate::sound::Cue> {
+    use crate::sound::Cue;
     Some(match choice {
-        "glass" => "Glass",
-        "ping" => "Ping",
-        "pop" => "Pop",
-        "submarine" => "Submarine",
-        "tink" => "Tink",
-        "hero" => "Hero",
+        "glass" | "hero" => Cue::Finished,
+        "ping" | "pop" | "submarine" | "tink" => Cue::Input,
         _ => return None,
     })
 }
 
 pub fn play(choice: &str) {
-    let Some(name) = sound_name(choice) else {
-        return;
-    };
-    let Some(sound) = NSSound::soundNamed(&NSString::from_str(name)) else {
-        return;
-    };
-    SOUND.with(|slot| {
-        let mut slot = slot.borrow_mut();
-        if let Some(previous) = slot.take() {
-            previous.stop();
-        }
-        sound.play();
-        *slot = Some(sound);
-    });
+    if let Some(cue) = cue_of(choice) {
+        crate::sound::play(cue);
+    }
 }
 
 /// The delegate and the permission prompt, once. The prompt only appears the first time.
@@ -133,7 +118,7 @@ mod tests {
 
     #[test]
     fn only_the_saved_sounds_have_a_name() {
-        assert_eq!(sound_name("glass"), Some("Glass"));
-        assert_eq!(sound_name("../evil"), None);
+        assert!(cue_of("glass").is_some());
+        assert!(cue_of("../evil").is_none());
     }
 }

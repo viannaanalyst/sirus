@@ -685,7 +685,7 @@ impl Shell {
                         )
                         .text_color(content(0.45)),
                     )
-                    .children(row.provider.map(|provider| provider_glyph(provider, 14.)))
+                    .children(row.provider.map(|provider| crate::tab_tile::provider_mark(provider, 14.)))
                     .child(
                         div()
                             .min_w_0()

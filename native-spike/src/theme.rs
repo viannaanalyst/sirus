@@ -386,16 +386,10 @@ pub fn floating_surface(radius: f32) -> impl IntoElement {
 pub fn composer_surface(radius: f32) -> impl IntoElement {
     frosted(radius, content(0.03), field_fill(), 24.)
 }
+/// 14% ink, as Monocode mixes it. Translucent, because the conversation can sit on glass, where
+/// a colour mixed from the opaque pane reads as a black line.
 pub fn rail_color() -> Hsla {
-    let (base, ink) = (pane_opaque().to_rgb(), current().ink.to_rgb());
-    let mix = |b: f32, i: f32| b + (i - b) * 0.14;
-    Rgba {
-        r: mix(base.r, ink.r),
-        g: mix(base.g, ink.g),
-        b: mix(base.b, ink.b),
-        a: 1.,
-    }
-    .into()
+    content(0.14)
 }
 /// The one scale icons come in. A size asked for between two steps takes the nearest.
 const ICON_SIZES: [f32; 5] = [12., 14., 16., 18., 24.];

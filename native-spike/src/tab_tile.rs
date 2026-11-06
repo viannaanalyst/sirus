@@ -303,6 +303,19 @@ fn tile_lifted(
 }
 
 /// A single mark on a tile.
+/// A provider's mark on its own colour: the bare glyph is white and vanishes on light surfaces.
+pub(crate) fn provider_mark(provider: &str, side: f32) -> Div {
+    mark_tile(
+        &TileSize {
+            w: side + 4.,
+            h: side + 2.,
+            radius: (side * 0.3).round(),
+        },
+        Face::provider(provider),
+        crate::theme::provider_glyph(provider, (side * 0.72).round()),
+    )
+}
+
 pub(crate) fn mark_tile(size: &TileSize, face: Face, mark: impl IntoElement) -> Div {
     tile(size, 0., face, mark.into_any_element()).flex_shrink_0()
 }

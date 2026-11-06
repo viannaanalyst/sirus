@@ -5,7 +5,7 @@ use std::time::Instant;
 pub const TAB_OPEN: f32 = 0.20;
 pub const REORDER: f32 = 0.16;
 pub const SIDEBAR: f32 = 0.24;
-pub const DISCLOSE: f32 = 0.22;
+pub const DISCLOSE: f32 = 0.34;
 pub const SWITCH: f32 = 0.16;
 pub const MENU: f32 = 0.12;
 

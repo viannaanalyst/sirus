@@ -22,6 +22,8 @@ use crate::error::{Error, Result};
 use crate::models::{ApprovalMode, ExecutionOptions, SendPromptRequest, Session};
 
 pub const CHANGED: &str = "pr-watch-changed";
+/// A watched pull request changed and woke its session.
+pub const ACTIVITY: &str = "pr-watch-activity";
 const POLL: Duration = Duration::from_secs(60);
 /// A watched PR is read again only after this long, whatever wakes the timer.
 const MIN_INTERVAL_SECS: i64 = 55;
@@ -817,7 +819,12 @@ async fn round(app: &AppHandle, state: &Arc<AppState>, watch: &PrWatch) -> Resul
         client_request_id: None,
     };
     let sent: State<'_, Arc<AppState>> = app.state::<Arc<AppState>>();
-    if let Err(error) = crate::commands::send_prompt(app.clone(), sent, request).await {
+    let started = crate::commands::send_prompt(app.clone(), sent, request).await;
+    if started.is_ok() {
+        // Something new happened on the session's pull request: the window chimes.
+        let _ = app.emit(ACTIVITY, ());
+    }
+    if let Err(error) = started {
         {
             let mut data = state.data.lock();
             if let Some(item) = data

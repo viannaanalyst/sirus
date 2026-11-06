@@ -17,6 +17,8 @@ const ITALIC: u8 = 2;
 const STRIKE: u8 = 4;
 const LINK: u8 = 8;
 const CODE: u8 = 16;
+const SEARCH: u8 = 32;
+const SEARCH_NOW: u8 = 64;
 
 #[derive(Clone)]
 enum Block {
@@ -213,7 +215,8 @@ fn draw(blocks: Vec<Block>, rich: Option<&Rich>) -> AnyElement {
     stack(blocks, 16., rich)
         .text_size(px(14.))
         .line_height(px(24.))
-        .text_color(content(1.))
+        // Monocode's reading contrast: prose a step back, emphasis at full ink.
+        .text_color(content(0.78))
         .into_any_element()
 }
 
@@ -525,18 +528,67 @@ impl Inline {
     }
 }
 
+/// A found word's fill, as Monocode's: the accent on the current turn, amber on the others.
+fn search_fill(flags: u8) -> Option<gpui::Hsla> {
+    if flags & SEARCH_NOW != 0 {
+        Some(gpui::Hsla {
+            a: 0.62,
+            ..accent()
+        })
+    } else if flags & SEARCH != 0 {
+        let amber: gpui::Hsla = gpui::rgb(0xe2c08d).into();
+        Some(gpui::Hsla { a: 0.46, ..amber })
+    } else {
+        None
+    }
+}
+
+thread_local! {
+    static FIND: std::cell::RefCell<Option<(String, bool)>> = const { std::cell::RefCell::new(None) };
+}
+
+/// What ⌘F marks in the text drawn next: the query, and whether this is the current turn.
+pub fn set_search(query: Option<(&str, bool)>) {
+    FIND.with_borrow_mut(|find| *find = query.map(|(text, now)| (text.to_owned(), now)));
+}
+
+/// A found word's fill for text drawn outside the markdown, as the prompt's bubble.
+pub fn search_ranges(text: &str) -> Vec<(Range<usize>, gpui::Hsla)> {
+    FIND.with_borrow(|find| {
+        let Some((query, now)) = find else {
+            return Vec::new();
+        };
+        let flags = if *now { SEARCH_NOW } else { SEARCH };
+        crate::shell::transcript_find::ranges(text, query)
+            .into_iter()
+            .filter_map(|range| search_fill(flags).map(|fill| (range, fill)))
+            .collect()
+    })
+}
+
+fn mark_search(inl: &mut Inline) {
+    FIND.with_borrow(|find| {
+        if let Some((query, now)) = find {
+            let flags = if *now { SEARCH_NOW } else { SEARCH };
+            for range in crate::shell::transcript_find::ranges(&inl.text, query) {
+                inl.spans.push((range, flags));
+            }
+        }
+    });
+}
+
 fn style(flags: u8) -> HighlightStyle {
     HighlightStyle {
         color: if flags & LINK != 0 {
             Some(accent())
-        } else if flags & BOLD != 0 {
+        } else if flags & (BOLD | ITALIC | CODE) != 0 {
             Some(content(1.))
         } else {
             None
         },
         font_weight: (flags & BOLD != 0).then_some(FontWeight::SEMIBOLD),
         font_style: (flags & ITALIC != 0).then_some(FontStyle::Italic),
-        background_color: (flags & CODE != 0).then(|| content(0.09)),
+        background_color: search_fill(flags),
         strikethrough: (flags & STRIKE != 0).then(|| StrikethroughStyle {
             thickness: px(1.),
             color: None,
@@ -547,6 +599,10 @@ fn style(flags: u8) -> HighlightStyle {
 
 fn text(mut inl: Inline) -> AnyElement {
     autolink(&mut inl);
+    mark_search(&mut inl);
+    if inl.spans.iter().any(|(_, flags)| flags & CODE != 0) {
+        return flowing(inl);
+    }
     let links = std::mem::take(&mut inl.links);
     let (s, highlights, fonts) = inl.finish();
     let s = SharedString::from(s);
@@ -554,6 +610,145 @@ fn text(mut inl: Inline) -> AnyElement {
         .with_highlights(highlights)
         .with_font_family_overrides(fonts);
     crate::shell::transcript_select::wrap_links(styled, s, links)
+}
+
+/// A file named in code gets its icon in the pill (Monocode's file chip).
+fn is_file_chip(code: &str) -> bool {
+    !code.chars().any(char::is_whitespace)
+        && code
+            .rsplit('/')
+            .next()
+            .is_some_and(|name| name.contains('.'))
+}
+
+/// A paragraph with inline code: words flow and wrap one by one, and each piece of code is a pill
+/// (Monocode's `rich_inline`), which a single run of text cannot draw. The pieces still read and
+/// select as one paragraph (`wrap_piece`).
+fn flowing(inl: Inline) -> AnyElement {
+    let mut cuts = vec![0, inl.text.len()];
+    for (range, _) in &inl.spans {
+        cuts.push(range.start);
+        cuts.push(range.end);
+    }
+    for (range, _) in &inl.links {
+        cuts.push(range.start);
+        cuts.push(range.end);
+    }
+    cuts.sort_unstable();
+    cuts.dedup();
+    let flags_at = |a: usize, b: usize| {
+        inl.spans
+            .iter()
+            .filter(|(r, _)| r.start <= a && b <= r.end)
+            .fold(0u8, |acc, (_, f)| acc | f)
+    };
+    // Runs of one style, each split further at line breaks.
+    let mut lines: Vec<Vec<(String, u8, Option<String>)>> = vec![Vec::new()];
+    for pair in cuts.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        if a == b {
+            continue;
+        }
+        let flags = flags_at(a, b);
+        let link = inl
+            .links
+            .iter()
+            .find(|(r, _)| r.start <= a && b <= r.end)
+            .map(|(_, url)| url.clone());
+        for (at, part) in inl.text[a..b].split('\n').enumerate() {
+            if at > 0 {
+                lines.push(Vec::new());
+            }
+            if !part.is_empty() {
+                lines.last_mut().expect("starts with one line").push((
+                    part.to_owned(),
+                    flags,
+                    link.clone(),
+                ));
+            }
+        }
+    }
+    let line_count = lines.len();
+    let rows = lines.into_iter().enumerate().map(|(line_at, runs)| {
+        // Every piece but the line's last reads on into the next one when copied.
+        let mut pieces: Vec<(String, u8, Option<String>, bool)> = Vec::new();
+        for (text, flags, link) in runs {
+            if flags & CODE != 0 {
+                pieces.push((text, flags, link, true));
+            } else {
+                for word in text.split_inclusive(char::is_whitespace) {
+                    pieces.push((word.to_owned(), flags, link.clone(), false));
+                }
+            }
+        }
+        let count = pieces.len();
+        let _ = line_count;
+        let _ = line_at;
+        let children = pieces
+            .into_iter()
+            .enumerate()
+            .map(|(at, (text, flags, link, code))| {
+                let glue = at + 1 < count;
+                let shared = SharedString::from(text);
+                let len = shared.len();
+                let links = link.map(|url| vec![(0..len, url)]).unwrap_or_default();
+                let highlight = if code {
+                    HighlightStyle {
+                        color: Some(content(1.)),
+                        background_color: search_fill(flags),
+                        ..Default::default()
+                    }
+                } else {
+                    style(flags)
+                };
+                let styled = StyledText::new(shared.clone()).with_highlights([(0..len, highlight)]);
+                let piece = crate::shell::transcript_select::wrap_piece(
+                    styled,
+                    shared.clone(),
+                    links,
+                    glue,
+                );
+                if !code {
+                    return div()
+                        .flex_shrink_0()
+                        .max_w_full()
+                        .child(piece)
+                        .into_any_element();
+                }
+                div()
+                    .flex()
+                    .flex_shrink_0()
+                    .max_w_full()
+                    .items_center()
+                    .gap(px(4.))
+                    .min_h(px(24.))
+                    .mx(px(2.))
+                    .px(px(6.))
+                    .rounded(px(6.))
+                    .bg(content(0.08))
+                    .font_family("Menlo")
+                    .text_size(px(11.2))
+                    .line_height(px(24.))
+                    .when(is_file_chip(&shared), |d| {
+                        d.child(crate::file_icons::file_icon(&shared, false, 14.))
+                    })
+                    .child(piece)
+                    .into_any_element()
+            });
+        div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .min_w_0()
+            .children(children)
+    });
+    div()
+        .w_full()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .children(rows)
+        .into_any_element()
 }
 
 fn stack(blocks: Vec<Block>, gap: f32, rich: Option<&Rich>) -> Div {
@@ -644,10 +839,10 @@ fn block(b: Block, rich: Option<&Rich>) -> AnyElement {
             view::math_block(&tex, code_block(&fallback), rich)
         }
         Block::Quote(inner) => div()
-            .border_l_2()
-            .border_color(content(0.15))
-            .pl(px(12.))
-            .text_color(content(0.6))
+            .ml(px(4.))
+            .pl(px(16.))
+            .border_l_4()
+            .border_color(content(0.2))
             .child(stack(inner, 16., rich))
             .into_any_element(),
         Block::List(start, items) => {
@@ -656,13 +851,13 @@ fn block(b: Block, rich: Option<&Rich>) -> AnyElement {
                     Some(n) => format!("{}.", n + i as u64),
                     None => "•".to_string(),
                 };
-                // Nested lists sit in the content column, so each level adds one 18 px marker column.
+                // Nested lists sit in the content column, so each level adds one 24 px marker column.
                 div()
                     .flex()
                     .flex_row()
                     .child(
                         div()
-                            .min_w(px(18.))
+                            .w(px(24.))
                             .flex_shrink_0()
                             .whitespace_nowrap()
                             .child(marker),
@@ -692,7 +887,8 @@ fn block(b: Block, rich: Option<&Rich>) -> AnyElement {
                             .min_w_0()
                             .px(px(10.))
                             .py(px(6.))
-                            .text_size(px(13.))
+                            .text_size(px(12.))
+                            .line_height(px(18.))
                             .child(text(c))
                     }))
             };
@@ -719,8 +915,8 @@ fn code_block(code: &str) -> AnyElement {
         .border_color(content(0.08))
         .p(px(10.))
         .font_family("Menlo")
-        .text_size(px(12.5))
-        .line_height(px(19.))
+        .text_size(px(12.))
+        .line_height(px(20.))
         .child({
             let code = SharedString::from(code.trim_end_matches('\n').to_string());
             crate::shell::transcript_select::wrap(StyledText::new(code.clone()), code)

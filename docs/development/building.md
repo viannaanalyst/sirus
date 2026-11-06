@@ -60,16 +60,6 @@ Restart=on-failure
 WantedBy=default.target
 ```
 
-## Graphify
-
-After structural code changes:
-
-```bash
-graphify update .
-```
-
-Full rebuild is rarely needed. See `AGENTS.md`.
-
 ## Opt-in provider smoke tests
 
 These tests make real inference calls using existing CLI authentication, inside owned temporary Git/worktree fixtures. They are excluded from ordinary tests; no authentication files are changed. Run a specific provider intentionally:

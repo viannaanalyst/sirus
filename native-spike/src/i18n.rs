@@ -302,7 +302,6 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Agentes neste Mac", "Agents on this Mac"),
     ("Agentes podem usar este login", "Agents may use this login"),
     ("Agora não", "Not now"),
-    ("Aguardando minha revisão", "Needs my review"),
     ("Aguardando o navegador…", "Waiting for the browser…"),
     (
         "Ainda não há o que compactar: esta conversa não começou.",
@@ -390,7 +389,6 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Atividade recente", "Recent activity"),
     ("Ativos {}", "Active {}"),
     ("Atribuídos", "Assignees"),
-    ("Atribuídos a mim", "Assigned to me"),
     ("Atualizado a partir de {}", "Updated from {}"),
     ("Atualizado agora", "Updated now"),
     ("Atualizado há {} h", "Updated {} h ago"),
@@ -410,7 +408,6 @@ const ENTRIES: &[(&str, &str)] = &[
         "Automatically fetch when opening project",
     ),
     ("Atualizar skills", "Refresh skills"),
-    ("Atualização", "Updated"),
     ("Atualização pronta · Reiniciar", "Update ready · Restart"),
     ("Atualizações", "Updates"),
     (
@@ -545,7 +542,6 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Comentar", "Comment"),
     ("Comentou", "Commented"),
     ("Comentário enviado.", "Comment sent."),
-    ("Comentários", "Comments"),
     ("Começar", "Get started"),
     ("Commit e Push", "Commit and Push"),
     ("Commit inválido.", "Invalid commit."),
@@ -667,7 +663,6 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Cores do diff", "Diff colors"),
     ("Cores do tema", "Theme colors"),
     ("Corrigir CI automaticamente", "Fix CI automatically"),
-    ("Criados por mim", "Authored by me"),
     ("Criando…", "Creating…"),
     ("Criar", "Create"),
     ("Criar PR", "Create PR"),
@@ -861,7 +856,6 @@ const ENTRIES: &[(&str, &str)] = &[
         "Send /compact on its own, without attachments, team or debug mode.",
     ),
     ("Envie este turno a outro agente para revisar o trabalho. Abre em outra aba e só aponta problemas.", "Send this turn to another agent to review the work. It opens in another tab and only reports problems."),
-    ("Envolvendo-me", "Involving me"),
     ("Equipe", "Team"),
     ("Esc fechar", "Esc close"),
     (
@@ -953,10 +947,12 @@ const ENTRIES: &[(&str, &str)] = &[
         "This document has no readable content.",
     ),
     ("Este link de prompt não foi aberto.", "This prompt link was not opened."),
+    ("Este link é de outro repositório. Abra-o no projeto dele.", "This link belongs to another repository. Open it in its own project."),
     (
         "Este pedido já tentou iniciar. Para mudar o texto, cancele e adicione outro pedido.",
         "This request already attempted to start. To change its text, cancel it and add another request.",
     ),
+    ("Este projeto não tem um repositório no GitHub.", "This project has no GitHub repository."),
     (
         "Este provedor não informa uso.",
         "This provider does not report usage.",
@@ -1359,7 +1355,9 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Nenhum outro modelo deste provedor.", "No other model of this provider."),
     ("Nenhum para limpar", "None to clean"),
     ("Nenhum projeto aqui corresponde a “{}”, então o rascunho está no projeto atual.", "No project here matches “{}”, so the draft is in the current project."),
-    ("Nenhum projeto com repositório no GitHub.", "No project has a GitHub repository."),
+    ("Nenhum pull request aberto.", "No open pull requests."),
+    ("Nenhum pull request fechado.", "No closed pull requests."),
+    ("Nenhum pull request mesclado.", "No merged pull requests."),
     ("Nenhum servidor local", "No local servers"),
     ("Nenhum simulador de iOS encontrado.", "No iOS simulator found."),
     ("Nenhum uso nesse período.", "No usage in this period."),
@@ -1373,6 +1371,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Nenhuma conta do GitHub conectada.",
         "No GitHub account signed in.",
     ),
+    ("Nenhuma issue aberta.", "No open issues."),
     ("Nenhuma pasta criada", "No folders created"),
     ("Nenhuma skill encontrada", "No skills found"),
     ("Neste projeto · {}", "In this project · {}"),
@@ -1605,7 +1604,6 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Ordem da lista", "List order"),
     ("Ordem das sessões", "Thread order"),
     ("Ordem dos projetos", "Project order"),
-    ("Ordenar: {}", "Sort: {}"),
     (
         "Organiza as sessões dentro de cada projeto. As fixadas mantêm sua própria área.",
         "Orders sessions inside each project. Pinned sessions keep their own area.",
@@ -1843,7 +1841,6 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Páginas escuras", "Dark pages"),
     ("Quadros por segundo", "Frame rate"),
     ("Quadros, itens e atualizações", "Boards, items and updates"),
-    ("Qualquer pessoa", "Anyone"),
     (
         "Quando os checks do PR aberto de uma sessão falham, o agente dela recebe os erros e corrige; depois o Sirus faz commit e push do branch da sessão (nunca forçado). Até 3 tentativas por falha; senão pausa e avisa.",
         "When the checks of a session's open pull request fail, its agent gets the errors and fixes them, then Sirus commits and pushes the session branch (never forced). Up to 3 attempts per failure; it pauses and notifies you otherwise.",
@@ -1958,7 +1955,6 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Revisão", "Review"),
     ("Revisão automática", "Auto-review"),
     ("Revisão solicitada", "Review requested"),
-    ("Revisão solicitada a mim", "Review requested from me"),
     ("Revogar", "Revoke"),
     (
         "Roda em um worktree novo antes do primeiro turno (até 10 minutos).",

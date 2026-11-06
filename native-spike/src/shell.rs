@@ -880,7 +880,6 @@ const PEEK_EDGE: f32 = 6.;
 const PEEK_INSET: f32 = 6.;
 const PEEK_DRIFT: f32 = 12.;
 const PEEK_CLOSE: Duration = Duration::from_millis(180);
-const SIDEBAR_SEARCH: f32 = 42.;
 /// Where the sidebar menu's switches start numbering, clear of Settings' own.
 const SIDEBAR_SWITCH_ID: usize = 800_000;
 /// Settings, same pages in the same order as Sirus's SettingsSidebar.
@@ -2588,8 +2587,23 @@ impl Shell {
             .position(|p| p.conversations.contains(&conversation))
     }
 
+    /// The id of the project the sidebar shows: the current one, or the first in the list.
+    pub(super) fn sidebar_project_id(&self) -> Option<String> {
+        self.current_project
+            .or(self.project_order.first().copied())
+            .map(|ix| self.projects[ix].id.clone())
+    }
+
+    /// Tells the Pull requests page which project is selected, so it shows that repository.
+    pub(super) fn sync_pulls_project(&self, cx: &mut Context<Self>) {
+        if let Some(view) = self.term.pulls.clone() {
+            let id = self.sidebar_project_id();
+            view.update(cx, |page, cx| page.set_project(id, cx));
+        }
+    }
+
     /// Tabs belong to their project, as in Monocode: going to another project brings its own.
-    fn enter_project(&mut self, project: Option<usize>) {
+    fn enter_project(&mut self, project: Option<usize>, cx: &mut Context<Self>) {
         if project == self.current_project {
             return;
         }
@@ -2600,6 +2614,7 @@ impl Shell {
             self.parked.insert(old, (kept, self.active));
         }
         self.current_project = project;
+        self.sync_pulls_project(cx);
         self.drag = None;
         self.menu = None;
         self.card_hovered = None;
@@ -3849,7 +3864,7 @@ impl Shell {
 
     fn open(&mut self, conversation: usize, cx: &mut Context<Self>) {
         let project = self.project_of(conversation);
-        self.enter_project(project);
+        self.enter_project(project, cx);
         if let Some(id) = self
             .tabs
             .iter()
@@ -6184,7 +6199,6 @@ impl Shell {
                     .flex()
                     .flex_col()
                     .child(this.project_header(cx))
-                    .children(this.sidebar_search(cx))
                     .children(this.sidebar_pulls(cx))
                     .child(
                         div()
@@ -7068,7 +7082,7 @@ impl Shell {
                                 cx.listener(move |this, _, _, cx| {
                                     close(this);
                                     this.close_project_menu();
-                                    this.enter_project(Some(index));
+                                    this.enter_project(Some(index), cx);
                                     this.new_conversation(Some(index), cx);
                                     cx.notify();
                                 }),
@@ -7405,18 +7419,18 @@ impl Shell {
             .pt(px(6.))
             .flex()
             .items_center()
-            .gap(px(4.))
+            .gap(px(1.))
             .child(
                 div()
                     .id("project-switcher")
                     .relative()
                     .min_w_0()
                     .h(px(30.))
-                    .px(px(5.))
+                    .px(px(3.))
                     .rounded(px(crate::theme::RADIUS_MD))
                     .flex()
                     .items_center()
-                    .gap(px(7.))
+                    .gap(px(5.))
                     .cursor_pointer()
                     .when(open, |d| d.bg(content(0.09)))
                     .hover(|s| s.bg(content(0.07)))
@@ -7427,7 +7441,7 @@ impl Shell {
                             .absolute()
                             .size_full(),
                     )
-                    .children(current.map(|ix| self.project_avatar_for(ix, 24.)))
+                    .children(current.map(|ix| self.project_avatar_for(ix, 20.)))
                     .child(
                         div()
                             .min_w_0()
@@ -7440,6 +7454,7 @@ impl Shell {
                     .child(chevron_down().flex_shrink_0()),
             )
             .child(div().flex_1())
+            .children(self.sidebar_search_button(cx))
             .child(self.sidebar_options_button(cx))
             .into_any_element()
     }
@@ -7533,7 +7548,7 @@ impl Shell {
 
     fn switch_project(&mut self, index: usize, cx: &mut Context<Self>) {
         self.close_project_menu();
-        self.enter_project(Some(index));
+        self.enter_project(Some(index), cx);
         if self.tabs.is_empty() {
             match self.projects[index].conversations.first().copied() {
                 Some(first) => self.open(first, cx),
@@ -8613,58 +8628,42 @@ impl Shell {
             .into_any_element()
     }
 
-    /// ⌘K lives in the sidebar, as Monocode's: conversations, messages, projects and commands.
-    fn sidebar_search(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// The magnifier beside the three dots: it opens the ⌘K palette (conversations, messages,
+    /// projects and commands). The "Buscar" switch of the three-dots menu shows or hides it.
+    fn sidebar_search_button(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.sidebar_items.shown("search") {
             return None;
         }
-        Some(div()
-            .flex_shrink_0()
-            .h(px(SIDEBAR_SEARCH))
-            .px(px(6.))
-            .pt(px(6.))
-            .child(
-                div()
-                    .id("sidebar-search")
-                    .h(px(30.))
-                    .px(px(8.))
-                    .rounded(px(crate::theme::RADIUS_MD))
-                    .border_1()
-                    .border_color(content(0.09))
-                    .bg(content(0.02))
-                    .flex()
-                    .items_center()
-                    .gap(px(7.))
-                    .text_size(px(13.))
-                    .text_color(content(0.5))
-                    .cursor_pointer()
-                    .hover(|s| s.bg(content(0.06)).text_color(content(0.8)))
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_palette(false, cx)))
-                    .child(icon("search", 14.).text_color(content(0.5)))
-                    .child(div().flex_1().child(t("Buscar")))
-                    .child(
-                        div()
-                            .text_size(px(11.))
-                            .text_color(content(0.35))
-                            .child("⌘K"),
-                    ),
-            )
-            .into_any_element())
+        Some(
+            div()
+                .id("sidebar-search")
+                .flex_shrink_0()
+                .size(px(24.))
+                .rounded(px(crate::theme::RADIUS_MD))
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer()
+                .hover(|s| s.bg(content(0.07)))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_palette(false, cx)))
+                .child(icon("search", 16.).text_color(content(0.6)))
+                .into_any_element(),
+        )
     }
 
-    /// The Pull requests entry below the search field, a row like the conversations' that is lit
+    /// The Pull requests entry below the project switcher, a row like the conversations' that is lit
     /// while its tab is the one showing.
     fn sidebar_pulls(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.sidebar_items.shown("pulls") {
             return None;
         }
         let active = self.term.pulls_active;
-        let search = self.sidebar_items.shown("search");
         Some(
             div()
                 .flex_shrink_0()
                 .px(px(6.))
-                .pt(px(if search { 0. } else { 4. }))
+                .pt(px(4.))
                 .pb(px(6.))
                 .child(
                     div()
@@ -8731,7 +8730,7 @@ impl Shell {
             .id("sidebar-options")
             .relative()
             .flex_shrink_0()
-            .size(px(28.))
+            .size(px(24.))
             .rounded(px(crate::theme::RADIUS_MD))
             .flex()
             .items_center()

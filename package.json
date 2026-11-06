@@ -15,7 +15,8 @@
     "lint": "eslint src scripts tests",
     "build:ghostty-wasm": "bash scripts/build-libghostty-wasm.sh",
     "test:arc": "node src/components/arc/demo/verify-previews.mjs",
-    "release": "node scripts/release.ts"
+    "release": "node scripts/release.ts",
+    "release:sirus": "node scripts/release-sirus.ts"
   },
   "dependencies": {
     "@betteroffice/docx": "0.4.3",

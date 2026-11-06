@@ -1,21 +1,23 @@
 //! The Pull requests page, after Sirus Code's `src/components/pull-requests/` (ADR-050): the review
-//! inbox of the GitHub repositories of the saved projects, with a list column (search, kind, state,
-//! involvement and sort) beside the selected item's detail (Resumo, Atividade, Checks and Código).
+//! inbox of the GitHub repository of the project selected in the sidebar, with a list column
+//! (search and four segments: Abertos, Mesclados, Fechados, Issues) beside the selected item's detail (Resumo, Atividade, Checks and Código).
 //! It opens as a tab in the title bar (shell_terminal.rs). Everything runs on the host through
 //! `pull_request_action`; this file only asks and draws. The parsing and the list logic at the top
 //! are pure and tested. Not ported: pins and unread marks (they live in the saved settings), the
 //! review guide, inline review threads, the PR watch list and "send to agent".
 use crate::backend::Backend;
 use crate::i18n::{t, tf};
+use crate::motion::{Curve, Tween};
 use crate::panel_changes::{age, diff_line, note};
 use crate::panel_files::{TextField, TextFieldEvent};
 use crate::theme::{RADIUS_MD, RADIUS_SM, accent, content, diff_colors, icon, on_accent};
+use std::time::Instant;
 use gpui::{
     AnyElement, App, Context, Div, ElementId, Entity, EventEmitter, FontWeight, Render,
     SharedString, Stateful, Subscription, Window, div, prelude::*, px, rgb, uniform_list,
 };
 use serde_json::{Value, json};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 // ---------------------------------------------------------------------------------------------
@@ -291,79 +293,55 @@ pub fn item_key(item: &Item) -> String {
     format!("{}#{}", item.repository, item.number)
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Involvement {
-    Anyone,
-    ReviewRequested,
-    Authored,
-    Involving,
-    Assigned,
-}
-
-impl Involvement {
-    const ALL: [Involvement; 5] = [
-        Involvement::Anyone,
-        Involvement::ReviewRequested,
-        Involvement::Authored,
-        Involvement::Involving,
-        Involvement::Assigned,
-    ];
-    fn label(self) -> &'static str {
-        match self {
-            Involvement::Anyone => t("Qualquer pessoa"),
-            Involvement::ReviewRequested => t("Revisão solicitada a mim"),
-            Involvement::Authored => t("Criados por mim"),
-            Involvement::Involving => t("Envolvendo-me"),
-            Involvement::Assigned => t("Atribuídos a mim"),
-        }
-    }
-    fn next(self) -> Involvement {
-        let at = Self::ALL.iter().position(|v| *v == self).unwrap_or(0);
-        Self::ALL[(at + 1) % Self::ALL.len()]
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Sort {
-    Updated,
-    Created,
-    Comments,
-}
-
-impl Sort {
-    fn label(self) -> &'static str {
-        match self {
-            Sort::Updated => t("Atualização"),
-            Sort::Created => t("Criação"),
-            Sort::Comments => t("Comentários"),
-        }
-    }
-    fn next(self) -> Sort {
-        match self {
-            Sort::Updated => Sort::Created,
-            Sort::Created => Sort::Comments,
-            Sort::Comments => Sort::Updated,
-        }
-    }
-}
-
 fn same(a: Option<&str>, b: Option<&str>) -> bool {
     matches!((a, b), (Some(a), Some(b)) if a.eq_ignore_ascii_case(b))
 }
 
-/// How the viewer relates to an item.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Who {
-    pub authored: bool,
-    pub review_requested: bool,
-    pub assigned: bool,
+/// The four segments of the list column, in the order they are drawn.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Segment {
+    Open,
+    Merged,
+    Closed,
+    Issues,
 }
 
-pub fn involvement_of(item: &Item, viewer: Option<&str>) -> Who {
-    Who {
-        authored: same(item.author.as_deref(), viewer),
-        review_requested: item.review_requests.iter().any(|l| same(Some(l), viewer)),
-        assigned: item.assignees.iter().any(|l| same(Some(l), viewer)),
+impl Segment {
+    const ALL: [Segment; 4] = [
+        Segment::Open,
+        Segment::Merged,
+        Segment::Closed,
+        Segment::Issues,
+    ];
+    fn label(self) -> &'static str {
+        match self {
+            Segment::Open => t("Abertos"),
+            Segment::Merged => t("Mesclados"),
+            Segment::Closed => t("Fechados"),
+            Segment::Issues => t("Issues"),
+        }
+    }
+    /// What the host is asked for: the first three list pull requests in that state, "Issues"
+    /// lists the open issues.
+    pub fn list(self) -> (Kind, State) {
+        match self {
+            Segment::Open => (Kind::Pull, State::Open),
+            Segment::Merged => (Kind::Pull, State::Merged),
+            Segment::Closed => (Kind::Pull, State::Closed),
+            Segment::Issues => (Kind::Issue, State::Open),
+        }
+    }
+    fn index(self) -> usize {
+        Self::ALL.iter().position(|s| *s == self).unwrap_or(0)
+    }
+    /// The plain message of an empty list.
+    fn empty(self) -> &'static str {
+        match self {
+            Segment::Open => t("Nenhum pull request aberto."),
+            Segment::Merged => t("Nenhum pull request mesclado."),
+            Segment::Closed => t("Nenhum pull request fechado."),
+            Segment::Issues => t("Nenhuma issue aberta."),
+        }
     }
 }
 
@@ -429,29 +407,35 @@ pub fn parse_reference(input: &str) -> Option<Reference> {
     })
 }
 
-/// Items matching the involvement filter and the search box (a pasted link finds that item).
-pub fn filter_items(
-    items: &[Item],
-    viewer: Option<&str>,
-    involvement: Involvement,
-    query: &str,
-) -> Vec<Item> {
+/// The GitHub repositories of one project (the inbox maps each repository to project ids).
+pub fn project_repositories<'a>(inbox: &'a Inbox, project: Option<&str>) -> Vec<&'a str> {
+    let Some(project) = project else {
+        return Vec::new();
+    };
+    inbox
+        .repositories
+        .iter()
+        .filter(|(_, ids)| ids.iter().any(|id| id == project))
+        .map(|(repository, _)| repository.as_str())
+        .collect()
+}
+
+/// The project's own items matching the search box (a pasted link finds that item), newest
+/// updated first. The project scope comes first, so nothing of another repository is ever
+/// matched, not even by a pasted link.
+pub fn visible_items(inbox: &Inbox, project: Option<&str>, query: &str) -> Vec<Item> {
+    let repositories = project_repositories(inbox, project);
     let reference = parse_reference(query);
     let needle = query.trim().to_lowercase();
-    items
+    let mut items: Vec<Item> = inbox
+        .items
         .iter()
         .filter(|item| {
-            let who = involvement_of(item, viewer);
-            let kept = match involvement {
-                Involvement::Anyone => true,
-                Involvement::Involving => who.authored || who.review_requested || who.assigned,
-                Involvement::ReviewRequested => who.review_requested,
-                Involvement::Authored => who.authored,
-                Involvement::Assigned => who.assigned,
-            };
-            if !kept {
-                return false;
-            }
+            repositories
+                .iter()
+                .any(|repository| same(Some(repository), Some(&item.repository)))
+        })
+        .filter(|item| {
             if let Some(reference) = &reference {
                 return same(Some(&item.repository), Some(&reference.repository))
                     && item.number == reference.number;
@@ -471,63 +455,20 @@ pub fn filter_items(
             .contains(&needle)
         })
         .cloned()
-        .collect()
+        .collect();
+    items.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    items
 }
 
-/// Newest first by the chosen order.
-pub fn sort_items(items: &mut [Item], sort: Sort) {
-    match sort {
-        Sort::Updated => items.sort_by(|a, b| b.updated_at.cmp(&a.updated_at)),
-        Sort::Created => items.sort_by(|a, b| b.created_at.cmp(&a.created_at)),
-        Sort::Comments => items.sort_by(|a, b| b.comment_count.cmp(&a.comment_count)),
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum SectionKey {
-    Authored,
-    Review,
-    Involving,
-    Other,
-}
-
-impl SectionKey {
-    fn label(self) -> &'static str {
-        match self {
-            SectionKey::Authored => t("Criados por mim"),
-            SectionKey::Review => t("Aguardando minha revisão"),
-            SectionKey::Involving => t("Envolvendo-me"),
-            SectionKey::Other => t("Outros"),
-        }
-    }
-}
-
-/// Authored by me, Needs my review, Involving me, Everything else; each item once, empty ones left out.
-pub fn sections(items: &[Item], viewer: Option<&str>) -> Vec<(SectionKey, Vec<Item>)> {
-    let mut out: Vec<(SectionKey, Vec<Item>)> = [
-        SectionKey::Authored,
-        SectionKey::Review,
-        SectionKey::Involving,
-        SectionKey::Other,
-    ]
-    .into_iter()
-    .map(|key| (key, Vec::new()))
-    .collect();
-    for item in items {
-        let who = involvement_of(item, viewer);
-        let at = if who.authored {
-            0
-        } else if who.review_requested {
-            1
-        } else if who.assigned {
-            2
-        } else {
-            3
-        };
-        out[at].1.push(item.clone());
-    }
-    out.retain(|(_, items)| !items.is_empty());
-    out
+/// A pasted link or `owner/repo#n` that points outside the project's repositories, which the
+/// page refuses to open.
+pub fn foreign_reference(inbox: &Inbox, project: Option<&str>, query: &str) -> Option<Reference> {
+    let reference = parse_reference(query)?;
+    let repositories = project_repositories(inbox, project);
+    (!repositories
+        .iter()
+        .any(|repository| same(Some(repository), Some(&reference.repository))))
+    .then_some(reference)
 }
 
 /// Why GitHub would refuse a merge now, or None when it can be tried.
@@ -673,12 +614,6 @@ pub enum PullsEvent {
 impl EventEmitter<PullsEvent> for PullRequestsPage {}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Scope {
-    All,
-    Kind(Kind),
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
     Summary,
     Activity,
@@ -725,14 +660,14 @@ enum Pending {
 
 pub struct PullRequestsPage {
     backend: Backend,
-    scope: Scope,
-    state: State,
-    sort: Sort,
-    involvement: Involvement,
+    segment: Segment,
+    /// The segment's highlight, as a position in `Segment::ALL`.
+    glide: Tween,
+    /// The saved project selected in the sidebar; the page shows only its repository.
+    project: Option<String>,
     query: Entity<TextField>,
     comment: Entity<TextField>,
     lists: HashMap<(Kind, State), Load>,
-    collapsed: HashSet<SectionKey>,
     opened: Option<Opened>,
     _subscriptions: Vec<Subscription>,
 }
@@ -755,9 +690,12 @@ const PURPLE: u32 = 0xa371f7;
 const RED: u32 = 0xf85149;
 const AMBER: u32 = 0xd29922;
 const LIST_WIDTH: f32 = 340.;
+/// Four segments share the column: its width less the padding (10 each side), the track's border
+/// and padding (4 each side) the column's right border (1) and the three gaps of 2.
+const SEGMENT_WIDTH: f32 = (LIST_WIDTH - 1. - 20. - 8. - 6.) / 4.;
 
 impl PullRequestsPage {
-    pub fn new(backend: Backend, cx: &mut Context<Self>) -> Self {
+    pub fn new(backend: Backend, project: Option<String>, cx: &mut Context<Self>) -> Self {
         let query =
             cx.new(|cx| TextField::new(t("Buscar por título, repositório, autor ou #"), cx));
         let comment = cx.new(|cx| TextField::new(t("Escreva um comentário…"), cx));
@@ -777,14 +715,12 @@ impl PullRequestsPage {
         ];
         let mut page = Self {
             backend,
-            scope: Scope::All,
-            state: State::Open,
-            sort: Sort::Updated,
-            involvement: Involvement::Anyone,
+            segment: Segment::Open,
+            glide: Tween::still(0., Instant::now()),
+            project,
             query,
             comment,
             lists: HashMap::new(),
-            collapsed: HashSet::new(),
             opened: None,
             _subscriptions: subscriptions,
         };
@@ -792,12 +728,37 @@ impl PullRequestsPage {
         page
     }
 
-    /// Reloads the lists of the shown state (issues have no merged state: they show closed).
+    /// Reloads the list of the shown segment.
     pub fn reload(&mut self, cx: &mut Context<Self>) {
-        self.load_list(Kind::Pull, self.state, cx);
-        if self.state != State::Merged {
-            self.load_list(Kind::Issue, self.state, cx);
+        let (kind, state) = self.segment.list();
+        self.load_list(kind, state, cx);
+    }
+
+    /// Follows the sidebar's project: another one closes the opened item and reads the list again.
+    pub fn set_project(&mut self, project: Option<String>, cx: &mut Context<Self>) {
+        if self.project == project {
+            return;
         }
+        self.project = project;
+        self.opened = None;
+        self.reload(cx);
+        cx.notify();
+    }
+
+    fn set_segment(&mut self, segment: Segment, cx: &mut Context<Self>) {
+        if self.segment == segment {
+            return;
+        }
+        self.segment = segment;
+        self.opened = None;
+        self.glide.set(
+            segment.index() as f32,
+            Instant::now(),
+            if cx.reduce_motion() { 0. } else { 0.32 },
+            Curve::Expo,
+        );
+        self.reload(cx);
+        cx.notify();
     }
 
     fn load_list(&mut self, kind: Kind, state: State, cx: &mut Context<Self>) {
@@ -827,67 +788,28 @@ impl PullRequestsPage {
         cx.notify();
     }
 
-    /// Both kinds of the shown state, as one inbox.
-    fn combined(&self) -> Option<Inbox> {
-        let mut merged: Option<Inbox> = None;
-        let kinds: &[Kind] = if self.state == State::Merged {
-            &[Kind::Pull]
-        } else {
-            &[Kind::Pull, Kind::Issue]
-        };
-        for kind in kinds {
-            let Some(inbox) = self
-                .lists
-                .get(&(*kind, self.state))
-                .and_then(|l| l.inbox.as_ref())
-            else {
-                continue;
-            };
-            match merged.as_mut() {
-                None => merged = Some(inbox.clone()),
-                Some(all) => {
-                    all.viewer = all.viewer.clone().or_else(|| inbox.viewer.clone());
-                    all.items.extend(inbox.items.iter().cloned());
-                    for failure in &inbox.failures {
-                        if !all.failures.iter().any(|f| f.0 == failure.0) {
-                            all.failures.push(failure.clone());
-                        }
-                    }
-                }
-            }
-        }
-        merged
+    /// What the shown segment's last read returned.
+    fn inbox(&self) -> Option<&Inbox> {
+        self.lists
+            .get(&self.segment.list())
+            .and_then(|load| load.inbox.as_ref())
     }
 
     fn loading(&self) -> bool {
         self.lists
-            .iter()
-            .any(|((_, state), load)| *state == self.state && load.loading)
+            .get(&self.segment.list())
+            .is_some_and(|load| load.loading)
     }
 
     fn list_error(&self) -> Option<String> {
         self.lists
-            .iter()
-            .find(|((_, state), load)| *state == self.state && load.error.is_some())
-            .and_then(|(_, load)| load.error.clone())
+            .get(&self.segment.list())
+            .and_then(|load| load.error.clone())
     }
 
-    /// Items to draw: filtered by involvement and search, then by scope, then sorted.
-    fn visible(&self, inbox: &Inbox, cx: &App) -> (Vec<Item>, [usize; 3]) {
-        let query = self.query.read(cx).text().to_owned();
-        let mut items = filter_items(
-            &inbox.items,
-            inbox.viewer.as_deref(),
-            self.involvement,
-            &query,
-        );
-        let pulls = items.iter().filter(|i| i.kind == Kind::Pull).count();
-        let counts = [items.len(), pulls, items.len() - pulls];
-        if let Scope::Kind(kind) = self.scope {
-            items.retain(|item| item.kind == kind);
-        }
-        sort_items(&mut items, self.sort);
-        (items, counts)
+    /// Items to draw: the project's, filtered by the search, newest updated first.
+    fn visible(&self, inbox: &Inbox, cx: &App) -> Vec<Item> {
+        visible_items(inbox, self.project.as_deref(), self.query.read(cx).text())
     }
 
     fn select(&mut self, item: Item, cx: &mut Context<Self>) {
@@ -1092,7 +1014,7 @@ impl PullRequestsPage {
 
     /// The saved projects that own the opened item's repository.
     fn owned(&self) -> bool {
-        let (Some(opened), Some(inbox)) = (self.opened.as_ref(), self.combined()) else {
+        let (Some(opened), Some(inbox)) = (self.opened.as_ref(), self.inbox()) else {
             return false;
         };
         inbox.repositories.iter().any(|(repository, projects)| {
@@ -1246,82 +1168,48 @@ impl PullRequestsPage {
             .into_any_element()
     }
 
-    fn controls(&self, counts: [usize; 3], cx: &mut Context<Self>) -> AnyElement {
-        let scope = |ix: usize, label: &'static str, scope: Scope, count: usize| {
-            pill(
-                ("pulls-scope", ix),
-                format!("{label} {count}"),
-                self.scope == scope,
-            )
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.scope = scope;
-                cx.notify();
-            }))
-        };
-        let state = |ix: usize, label: &'static str, state: State| {
-            pill(("pulls-state", ix), label, self.state == state).on_click(cx.listener(
-                move |this, _, _, cx| {
-                    if this.state != state {
-                        this.state = state;
-                        this.opened = None;
-                        this.reload(cx);
-                    }
-                    cx.notify();
-                },
-            ))
-        };
+    /// The four segments in one row, with a highlight that slides to the chosen one.
+    fn controls(&self, now: Instant, moving: &mut bool, cx: &mut Context<Self>) -> AnyElement {
+        let glide = self.glide.at(now);
+        if !self.glide.done(now) {
+            *moving = true;
+        }
+        let segments = Segment::ALL.into_iter().enumerate().map(|(ix, segment)| {
+            div()
+                .id(("pulls-segment", ix))
+                .w(px(SEGMENT_WIDTH))
+                .h(px(24.))
+                .rounded(px(RADIUS_SM))
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_size(px(11.5))
+                .cursor_pointer()
+                .text_color(content(if self.segment == segment { 0.95 } else { 0.55 }))
+                .hover(|s| s.text_color(content(0.95)))
+                .on_click(cx.listener(move |this, _, _, cx| this.set_segment(segment, cx)))
+                .child(segment.label())
+        });
         div()
+            .relative()
+            .p(px(3.))
             .flex()
-            .flex_col()
-            .gap(px(6.))
+            .gap(px(2.))
+            .rounded(px(crate::theme::RADIUS_LG))
+            .border_1()
+            .border_color(content(0.08))
+            .bg(content(0.03))
             .child(
                 div()
-                    .flex()
-                    .gap(px(2.))
-                    .child(scope(0, t("Todos"), Scope::All, counts[0]))
-                    .child(scope(
-                        1,
-                        t("Pull requests"),
-                        Scope::Kind(Kind::Pull),
-                        counts[1],
-                    ))
-                    .child(scope(2, t("Issues"), Scope::Kind(Kind::Issue), counts[2])),
+                    .absolute()
+                    .top(px(3.))
+                    .bottom(px(3.))
+                    .left(px(3. + glide * (SEGMENT_WIDTH + 2.)))
+                    .w(px(SEGMENT_WIDTH))
+                    .rounded(px(RADIUS_SM))
+                    .bg(content(0.12)),
             )
-            .child(
-                div()
-                    .flex()
-                    .gap(px(2.))
-                    .child(state(0, t("Abertos"), State::Open))
-                    .child(state(1, t("Fechados"), State::Closed))
-                    .child(state(2, t("Mesclados"), State::Merged)),
-            )
-            .child(
-                div()
-                    .flex()
-                    .gap(px(2.))
-                    .child(
-                        pill(
-                            "pulls-involvement",
-                            self.involvement.label(),
-                            self.involvement != Involvement::Anyone,
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.involvement = this.involvement.next();
-                            cx.notify();
-                        })),
-                    )
-                    .child(
-                        pill(
-                            "pulls-sort",
-                            tf("Ordenar: {}", &[&self.sort.label()]),
-                            false,
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.sort = this.sort.next();
-                            cx.notify();
-                        })),
-                    ),
-            )
+            .children(segments)
             .into_any_element()
     }
 
@@ -1402,17 +1290,18 @@ impl PullRequestsPage {
             .into_any_element()
     }
 
-    fn list_column(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let inbox = self.combined();
-        let (items, counts) = match &inbox {
+    fn list_column(&mut self, now: Instant, moving: &mut bool, cx: &mut Context<Self>) -> AnyElement {
+        let inbox = self.inbox().cloned();
+        let items = match &inbox {
             Some(inbox) => self.visible(inbox, cx),
-            None => (Vec::new(), [0; 3]),
+            None => Vec::new(),
         };
         let mut body: Vec<AnyElement> = Vec::new();
         if let Some(error) = self.list_error() {
             body.push(note(&error, true));
         }
         if let Some(inbox) = &inbox {
+            let repositories = project_repositories(inbox, self.project.as_deref());
             let sign_in = inbox
                 .failures
                 .iter()
@@ -1427,61 +1316,32 @@ impl PullRequestsPage {
                     false,
                 ));
             }
-            if inbox.repositories.is_empty() {
-                body.push(note(t("Nenhum projeto com repositório no GitHub."), false));
+            let query = self.query.read(cx).text().to_owned();
+            if repositories.is_empty() {
+                body.push(note(t("Este projeto não tem um repositório no GitHub."), false));
+            } else if foreign_reference(inbox, self.project.as_deref(), &query).is_some() {
+                body.push(note(
+                    t("Este link é de outro repositório. Abra-o no projeto dele."),
+                    false,
+                ));
             } else if items.is_empty() && sign_in.is_none() {
-                body.push(note(t("Nada por aqui."), false));
+                body.push(note(
+                    if query.trim().is_empty() {
+                        self.segment.empty()
+                    } else {
+                        t("Nada por aqui.")
+                    },
+                    false,
+                ));
             }
-        } else if self.loading() {
-            body.push(note(t("Carregando…"), false));
-        }
-        let mut ix = 0;
-        if let Some(inbox) = &inbox {
-            for (key, group) in sections(&items, inbox.viewer.as_deref()) {
-                let folded = self.collapsed.contains(&key);
-                body.push(
-                    div()
-                        .id(("pulls-section", ix))
-                        .h(px(24.))
-                        .px(px(10.))
-                        .mt(px(4.))
-                        .flex()
-                        .items_center()
-                        .gap(px(5.))
-                        .text_size(px(11.))
-                        .text_color(content(0.45))
-                        .cursor_pointer()
-                        .hover(|s| s.text_color(content(0.8)))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if !this.collapsed.remove(&key) {
-                                this.collapsed.insert(key);
-                            }
-                            cx.notify();
-                        }))
-                        .child(icon(
-                            if folded {
-                                "chevron-right"
-                            } else {
-                                "chevron-down"
-                            },
-                            12.,
-                        ))
-                        .child(key.label())
-                        .child(group.len().to_string())
-                        .into_any_element(),
-                );
-                if !folded {
-                    for item in &group {
-                        ix += 1;
-                        body.push(self.row(ix, item, cx));
-                    }
-                }
-                ix += 1;
+            for (ix, item) in items.iter().enumerate() {
+                body.push(self.row(ix, item, cx));
             }
             let unavailable = inbox
                 .failures
                 .iter()
                 .filter(|f| f.1 != "cliMissing" && f.1 != "authRequired")
+                .filter(|f| repositories.iter().any(|r| same(Some(r), Some(&f.0))))
                 .count();
             if unavailable > 0 {
                 body.push(note(
@@ -1493,6 +1353,8 @@ impl PullRequestsPage {
                     false,
                 ));
             }
+        } else if self.loading() {
+            body.push(note(t("Carregando…"), false));
         }
         div()
             .w(px(LIST_WIDTH))
@@ -1511,7 +1373,7 @@ impl PullRequestsPage {
                     .p(px(10.))
                     .child(self.header(self.loading(), cx))
                     .child(self.query.clone())
-                    .child(self.controls(counts, cx)),
+                    .child(self.controls(now, moving, cx)),
             )
             .child(
                 div()
@@ -2172,10 +2034,16 @@ fn entry(
 
 impl Render for PullRequestsPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let now = Instant::now();
+        let mut moving = false;
+        let list = self.list_column(now, &mut moving, cx);
+        if moving {
+            window.request_animation_frame();
+        }
         div()
             .size_full()
             .flex()
-            .child(self.list_column(cx))
+            .child(list)
             .child(self.detail_column(window, cx))
     }
 }
@@ -2316,41 +2184,13 @@ mod tests {
     }
 
     #[test]
-    fn filters_by_involvement() {
-        let mut mine = item("o/r", 1, "mine");
-        mine.author = Some("Ana".into());
-        let mut review = item("o/r", 2, "review");
-        review.author = Some("bia".into());
-        review.review_requests = vec!["ana".into()];
-        let mut assigned = item("o/r", 3, "assigned");
-        assigned.author = Some("bia".into());
-        assigned.assignees = vec!["ANA".into()];
-        let other = item("o/r", 4, "other");
-        let mut other = other;
-        other.author = Some("caio".into());
-        let all = vec![mine, review, assigned, other];
-        let numbers = |involvement| {
-            filter_items(&all, Some("ana"), involvement, "")
-                .iter()
-                .map(|i| i.number)
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(numbers(Involvement::Anyone), vec![1, 2, 3, 4]);
-        assert_eq!(numbers(Involvement::Authored), vec![1]);
-        assert_eq!(numbers(Involvement::ReviewRequested), vec![2]);
-        assert_eq!(numbers(Involvement::Assigned), vec![3]);
-        assert_eq!(numbers(Involvement::Involving), vec![1, 2, 3]);
-        assert!(filter_items(&all, None, Involvement::Authored, "").is_empty());
-    }
-
-    #[test]
     fn filters_by_search_text_and_pasted_link() {
         let all = vec![
             item("o/app", 10, "Fix login"),
             item("o/app", 11, "Add logout"),
         ];
         let found = |query: &str| {
-            filter_items(&all, None, Involvement::Anyone, query)
+            visible_items(&inbox(all.clone()), Some("p1"), query)
                 .iter()
                 .map(|i| i.number)
                 .collect::<Vec<_>>()
@@ -2362,59 +2202,6 @@ mod tests {
         assert_eq!(found("feature"), vec![10, 11]);
         assert_eq!(found("https://github.com/O/app/pull/11"), vec![11]);
         assert_eq!(found("o/app#99"), Vec::<u64>::new());
-    }
-
-    #[test]
-    fn sorts_newest_first_by_the_chosen_order() {
-        let mut a = item("o/r", 1, "a");
-        a.updated_at = "2026-02-01T00:00:00Z".into();
-        a.created_at = "2026-01-01T00:00:00Z".into();
-        a.comment_count = 1;
-        let mut b = item("o/r", 2, "b");
-        b.updated_at = "2026-01-05T00:00:00Z".into();
-        b.created_at = "2026-01-09T00:00:00Z".into();
-        b.comment_count = 5;
-        let order = |sort| {
-            let mut items = vec![a.clone(), b.clone()];
-            sort_items(&mut items, sort);
-            items.iter().map(|i| i.number).collect::<Vec<_>>()
-        };
-        assert_eq!(order(Sort::Updated), vec![1, 2]);
-        assert_eq!(order(Sort::Created), vec![2, 1]);
-        assert_eq!(order(Sort::Comments), vec![2, 1]);
-    }
-
-    #[test]
-    fn groups_each_item_once_and_drops_empty_sections() {
-        let mut mine = item("o/r", 1, "mine");
-        mine.author = Some("ana".into());
-        mine.review_requests = vec!["ana".into()];
-        let mut review = item("o/r", 2, "review");
-        review.author = Some("bia".into());
-        review.review_requests = vec!["ana".into()];
-        let mut assigned = item("o/r", 3, "assigned");
-        assigned.author = Some("bia".into());
-        assigned.assignees = vec!["ana".into()];
-        let mut other = item("o/r", 4, "other");
-        other.author = Some("caio".into());
-        let grouped = sections(&[mine, review, assigned, other], Some("ana"));
-        let shape: Vec<(SectionKey, Vec<u64>)> = grouped
-            .iter()
-            .map(|(key, items)| (*key, items.iter().map(|i| i.number).collect()))
-            .collect();
-        assert_eq!(
-            shape,
-            vec![
-                (SectionKey::Authored, vec![1]),
-                (SectionKey::Review, vec![2]),
-                (SectionKey::Involving, vec![3]),
-                (SectionKey::Other, vec![4]),
-            ]
-        );
-        let only = sections(&[item("o/r", 5, "x")], None);
-        assert_eq!(only.len(), 1);
-        assert_eq!(only[0].0, SectionKey::Other);
-        assert!(sections(&[], None).is_empty());
     }
 
     #[test]
@@ -2541,15 +2328,71 @@ diff --git a/b.txt b/b.txt\nnew file mode 100644\n--- /dev/null\n+++ b/b.txt\n+x
         assert_eq!(ask_action(&d)["action"]["context"]["state"], "merged");
     }
 
-    #[test]
-    fn involvement_and_sort_cycle_through_every_value() {
-        let mut seen = vec![Involvement::Anyone];
-        let mut v = Involvement::Anyone.next();
-        while v != Involvement::Anyone {
-            seen.push(v);
-            v = v.next();
+    /// An inbox of two repositories: `o/app` belongs to project p1, `o/lib` to project p2.
+    fn inbox(items: Vec<Item>) -> Inbox {
+        Inbox {
+            viewer: None,
+            repositories: vec![
+                ("o/app".into(), vec!["p1".into()]),
+                ("o/lib".into(), vec!["p2".into()]),
+            ],
+            items,
+            failures: Vec::new(),
         }
-        assert_eq!(seen.len(), 5);
-        assert_eq!(Sort::Updated.next().next().next(), Sort::Updated);
+    }
+
+    #[test]
+    fn segments_map_to_the_list_the_host_is_asked_for() {
+        let lists: Vec<(Kind, State)> = Segment::ALL.iter().map(|s| s.list()).collect();
+        assert_eq!(
+            lists,
+            vec![
+                (Kind::Pull, State::Open),
+                (Kind::Pull, State::Merged),
+                (Kind::Pull, State::Closed),
+                (Kind::Issue, State::Open),
+            ]
+        );
+        let labels: Vec<&str> = Segment::ALL.iter().map(|s| s.label()).collect();
+        assert_eq!(labels, vec!["Abertos", "Mesclados", "Fechados", "Issues"]);
+        assert!(Segment::ALL.iter().enumerate().all(|(i, s)| s.index() == i));
+        assert_eq!(Segment::ALL[0], Segment::Open);
+    }
+
+    #[test]
+    fn only_the_selected_projects_repository_is_listed_newest_updated_first() {
+        let mut old = item("o/app", 1, "Old");
+        old.updated_at = "2026-01-01T00:00:00Z".into();
+        let mut new = item("o/APP", 2, "New");
+        new.updated_at = "2026-03-01T00:00:00Z".into();
+        let other = item("o/lib", 3, "Elsewhere");
+        let inbox = inbox(vec![old, other, new]);
+        let numbers = |project: Option<&str>| {
+            visible_items(&inbox, project, "")
+                .iter()
+                .map(|i| i.number)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(numbers(Some("p1")), vec![2, 1]);
+        assert_eq!(numbers(Some("p2")), vec![3]);
+        assert!(numbers(Some("p3")).is_empty());
+        assert!(numbers(None).is_empty());
+        assert_eq!(project_repositories(&inbox, Some("p1")), vec!["o/app"]);
+    }
+
+    #[test]
+    fn a_link_from_another_repository_is_refused_not_matched() {
+        let inbox = inbox(vec![item("o/app", 1, "A"), item("o/lib", 3, "B")]);
+        let link = "https://github.com/o/lib/pull/3";
+        assert!(visible_items(&inbox, Some("p1"), link).is_empty());
+        assert_eq!(
+            foreign_reference(&inbox, Some("p1"), link).map(|r| r.number),
+            Some(3)
+        );
+        assert!(foreign_reference(&inbox, Some("p2"), link).is_none());
+        let own = "https://github.com/o/app/pull/1";
+        assert_eq!(visible_items(&inbox, Some("p1"), own).len(), 1);
+        assert!(foreign_reference(&inbox, Some("p1"), own).is_none());
+        assert!(foreign_reference(&inbox, Some("p1"), "plain text").is_none());
     }
 }

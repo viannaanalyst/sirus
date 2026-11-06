@@ -217,7 +217,8 @@ impl Shell {
     pub(super) fn open_pull_requests(&mut self, cx: &mut Context<Self>) {
         if self.term.pulls.is_none() {
             let backend = self.backend.clone();
-            let view = cx.new(|cx| PullRequestsPage::new(backend, cx));
+            let project = self.sidebar_project_id();
+            let view = cx.new(|cx| PullRequestsPage::new(backend, project, cx));
             self.term._pulls_events = Some(cx.subscribe(
                 &view,
                 |this: &mut Shell, _, event: &PullsEvent, _| match event {
@@ -230,6 +231,7 @@ impl Shell {
             ));
             self.term.pulls = Some(view);
         } else if let Some(view) = self.term.pulls.clone() {
+            self.sync_pulls_project(cx);
             view.update(cx, |page, cx| page.reload(cx));
         }
         match self.term.pulls_tab.as_mut() {

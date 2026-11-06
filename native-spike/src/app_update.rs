@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 /// Where this app reads its updates: a fixed release tag whose feed file every release replaces.
 /// Sirus Code installs read `releases/latest/download/latest.json` and never see this one.
 pub const FEED_URL: &str =
-    "https://github.com/viannaanalyst/sirus-code/releases/download/sirus-channel/sirus-latest.json";
+    "https://github.com/viannaanalyst/sirus/releases/download/sirus-channel/sirus-latest.json";
 /// The updater key's public half, as in `src-tauri/tauri.conf.json` (`plugins.updater.pubkey`);
 /// a test keeps the two equal.
 pub const PUBLIC_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZGNDdGMUM5M0JBOEVDMjgKUldRbzdLZzd5ZkZIYjRHWVNZcHA4NjdXK2lWUXdpTUlKRnNGWmhhWWV0MStrTTdRY1Q4VGZmdWEK";

@@ -2,7 +2,7 @@
 // update signature check. scripts/release.ts does the side effects; tests/release.test.ts covers these.
 import { createHash, createPublicKey, verify } from "node:crypto";
 
-export const REPOSITORY = "viannaanalyst/sirus-code";
+export const REPOSITORY = "viannaanalyst/sirus";
 /** The updater's platform key for Apple silicon Macs; the only build published today. */
 export const PLATFORM = "darwin-aarch64";
 /** Asset names without spaces; the website's download button points at the DMG name. */

@@ -2,7 +2,7 @@
 # lockfile, unrelated to the Tauri app in src-tauri.
 [package]
 name = "sirus-native-spike"
-version = "0.0.1"
+version = "0.1.0"
 edition = "2024"
 publish = false
 

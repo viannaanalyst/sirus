@@ -448,10 +448,10 @@ export function SettingsAboutScreen() {
         if (result === "none") Alert.alert("Atualização", "Você já está na versão mais nova.");
         else if (result === "unavailable") Alert.alert("Atualização", "Não foi possível procurar agora. O computador que publica as atualizações precisa estar conectado.");
       })} />
-      <ListRow icon={icon("chevron.left.forwardslash.chevron.right")} label="Código do Sirus" detail="GitHub" onPress={() => void Linking.openURL("https://github.com/viannaanalyst/sirus-code")} />
+      <ListRow icon={icon("chevron.left.forwardslash.chevron.right")} label="Código do Sirus" detail="GitHub" onPress={() => void Linking.openURL("https://github.com/viannaanalyst/sirus")} />
     </ListSection>
     <ListSection>
-      <ListRow icon={icon("doc.text")} label="Licenças de código aberto" onPress={() => void Linking.openURL("https://github.com/viannaanalyst/sirus-code/blob/main/THIRD-PARTY-NOTICES.md")} />
+      <ListRow icon={icon("doc.text")} label="Licenças de código aberto" onPress={() => void Linking.openURL("https://github.com/viannaanalyst/sirus/blob/main/THIRD-PARTY-NOTICES.md")} />
     </ListSection>
   </Page>;
 }

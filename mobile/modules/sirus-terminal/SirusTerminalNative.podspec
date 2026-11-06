@@ -7,7 +7,7 @@ Pod::Spec.new do |s|
   s.version = package['version']
   s.summary = 'Native terminal surface for the Sirus Code iPhone app.'
   s.description = 'A libghostty terminal surface for the Sirus Code React Native app.'
-  s.homepage = 'https://github.com/viannaanalyst/sirus-code'
+  s.homepage = 'https://github.com/viannaanalyst/sirus'
   s.license = { :type => 'MIT' }
   s.author = 'Sirus Code'
   s.platforms = { :ios => '16.1' }

@@ -1,7 +1,7 @@
 //! The row of actions under a finished reply, as Sirus Code shows it (MessageActions.tsx,
 //! UndoTurnButton.tsx, ADR-187): copy the answer, try the latest turn again, undo the turn's file
 //! changes after a read-only check and a confirmation, and a `⋯` button. The `⋯` opens a popup
-//! with the side chat, fork, handoff and second opinion (handoff.rs opens the last two's popups).
+//! with the side chat, fork and handoff (handoff.rs opens the handoff's popup).
 //!
 //! This module is a child of `shell` (`#[path]`), so it reaches the window's private state. It
 //! draws nothing on its own: the row fades in on hover of the turn (`group_hover`), and the only
@@ -164,7 +164,6 @@ pub(crate) enum Row {
     SideChat,
     Fork,
     Handoff,
-    Opinion,
 }
 
 /// One row of the popup: hidden when its rule does not apply, dimmed while its action cannot run.
@@ -174,17 +173,16 @@ pub(crate) struct MoreRow {
     pub enabled: bool,
 }
 
-/// Which of the fork, handoff and second opinion actions may run now: the conversation is idle
-/// and, for the two popups, another provider is on offer and no handoff is under way.
+/// Which of the fork and handoff actions may run now: the conversation is idle and, for the
+/// handoff, another provider is on offer and no handoff is under way.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Can {
     pub fork: bool,
     pub handoff: bool,
-    pub opinion: bool,
 }
 
-/// The `⋯` popup's rows for a turn: the side chat when the answer is there, then the three
-/// reply actions, each only when `handoff::shown` says the turn has a settled reply for it.
+/// The `⋯` popup's rows for a turn: the side chat when the answer is there, then the reply
+/// actions, each only when `handoff::shown` says the turn has a settled reply for it.
 pub(crate) fn more_rows(shown: &Shown, reply: &handoff::Shown, can: Can) -> Vec<MoreRow> {
     let mut rows = Vec::new();
     if shown.side_chat {
@@ -203,12 +201,6 @@ pub(crate) fn more_rows(shown: &Shown, reply: &handoff::Shown, can: Can) -> Vec<
         rows.push(MoreRow {
             row: Row::Handoff,
             enabled: can.handoff,
-        });
-    }
-    if reply.opinion {
-        rows.push(MoreRow {
-            row: Row::Opinion,
-            enabled: can.opinion,
         });
     }
     rows
@@ -457,7 +449,7 @@ impl Shell {
         })
     }
 
-    /// The `⋯` popup's rows for a turn, with the fork, handoff and second opinion rules of handoff.rs.
+    /// The `⋯` popup's rows for a turn, with the fork and handoff rules of handoff.rs.
     fn more_rows_of(&self, conversation: usize, index: usize, turn: &Turn) -> Vec<MoreRow> {
         let shown = self.shown_of(conversation, index, turn);
         let settled = handoff::shown(
@@ -621,7 +613,6 @@ impl Shell {
             Row::SideChat => ("message-square", t("Chat lateral")),
             Row::Fork => ("branch", t("Fork")),
             Row::Handoff => ("handoff", t("Handoff")),
-            Row::Opinion => ("messages", t("Segunda opinião")),
         };
         let row = div()
             .id(("turn-more-row", i))
@@ -679,8 +670,8 @@ impl Shell {
         cx.notify();
     }
 
-    /// A row's action: the popup closes, then the side chat, a fork, or the handoff and second
-    /// opinion popups (handoff.rs), which open where the `⋯` button was pressed.
+    /// A row's action: the popup closes, then the side chat, a fork, or the handoff popup
+    /// (handoff.rs), which opens where the `⋯` button was pressed.
     fn run_more(
         &mut self,
         row: Row,
@@ -693,8 +684,7 @@ impl Shell {
         match row {
             Row::SideChat => self.open_pane(4, cx),
             Row::Fork => self.fork_turn(session, reply, cx),
-            Row::Handoff => self.open_popup(handoff::Kind::Handoff, session, reply, at, cx),
-            Row::Opinion => self.open_popup(handoff::Kind::Opinion, session, reply, at, cx),
+            Row::Handoff => self.open_popup(session, reply, at, cx),
         }
         cx.notify();
     }
@@ -970,7 +960,6 @@ mod tests {
     const ALL_CAN: Can = Can {
         fork: true,
         handoff: true,
-        opinion: true,
     };
 
     /// The `⋯` popup's rows for a settled-or-live turn, as `turn_actions` builds them.
@@ -990,14 +979,13 @@ mod tests {
     }
 
     #[test]
-    fn a_settled_answer_lists_all_four_rows_in_order() {
+    fn a_settled_answer_lists_all_rows_in_order() {
         assert_eq!(
             enabled_rows(&more(true, true, true, ALL_CAN)),
             [
                 (Row::SideChat, true),
                 (Row::Fork, true),
                 (Row::Handoff, true),
-                (Row::Opinion, true),
             ]
         );
     }
@@ -1027,7 +1015,6 @@ mod tests {
                 (Row::SideChat, true),
                 (Row::Fork, false),
                 (Row::Handoff, false),
-                (Row::Opinion, false),
             ]
         );
     }
@@ -1044,7 +1031,6 @@ mod tests {
                 (Row::SideChat, true),
                 (Row::Fork, true),
                 (Row::Handoff, false),
-                (Row::Opinion, true),
             ]
         );
     }

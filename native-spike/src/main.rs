@@ -24,6 +24,7 @@ mod computer_move;
 mod computers;
 mod connector_marks;
 mod data;
+mod disclosure;
 mod effort_energy;
 mod file_editor;
 mod file_icons;
@@ -31,10 +32,8 @@ mod folder_icon_data;
 mod fonts;
 mod git_sync;
 mod hover_track;
-mod disclosure;
 mod i18n;
 mod image_markup;
-mod sound;
 mod local_git;
 mod markdown;
 mod marks;
@@ -67,6 +66,7 @@ mod settings_pair;
 mod shell;
 mod sidebar_items;
 mod simulator;
+mod sound;
 mod step_lines;
 mod subagent_team;
 mod syntax;
@@ -95,6 +95,7 @@ impl AssetSource for Assets {
         }
         let bytes: &'static [u8] = match path {
             "plus" => include_bytes!("../assets/plus.svg"),
+            "comment-add" => include_bytes!("../assets/comment-add.svg"),
             "cursor" => include_bytes!("../assets/cursor.svg"),
             "grok" => include_bytes!("../assets/grok.svg"),
             "antigravity" => include_bytes!("../assets/antigravity.svg"),

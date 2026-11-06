@@ -72,7 +72,7 @@ These are not a changelog. Overturned decisions get a new ADR; the old one is ma
 - [ADR-053: Side-by-side conversations](ADR-053-side-by-side-conversations.md) — memory-only pane tree (≤4) where the active pane is the selected session; drag to a pane edge with a lit-half target; no IPC.
 - [ADR-054: Global window snap](ADR-054-global-window-snap.md) — opt-in Carbon hotkey snaps the frontmost app window into a nonce-bound native slot; closed `window_snap_action` claim/discard into the open composer.
 - [ADR-055: Temporary chats](ADR-055-temporary-chats.md) — landing toggle; the session is deleted once left and settled, worktree kept.
-- [ADR-056: Second opinion](ADR-056-second-opinion.md) — another provider/model reviews a settled turn read-only in a same-workspace session opened beside it.
+- [ADR-056: Second opinion](ADR-056-second-opinion.md) — another provider/model reviews a settled turn read-only in a same-workspace session opened beside it. Removed by ADR-198.
 - [ADR-057: Context usage and compaction](ADR-057-context-usage-and-compaction.md) — provider-reported `Session.contextUsage`, composer ring, `/compact` (Codex `thread/compact/start`, Claude native command).
 - [ADR-058: Mermaid diagrams](ADR-058-mermaid-diagrams.md) — lazy strict-mode Mermaid with nonce-bound SVG styles in the transcript and Markdown preview.
 - [ADR-059: Project folder colour, emoji and logo](ADR-059-project-look.md) — closed `project_look_action` with preset/hex colours, short emoji and a native-picked, bounded 96 px PNG logo.

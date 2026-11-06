@@ -64,7 +64,7 @@ pub struct Turn {
     pub answer: String,
     /// The reply that carries the turn's changes, and the changes (message_actions.rs).
     pub message_id: Option<String>,
-    /// The id of the turn's last reply, which fork, handoff and second opinion act on.
+    /// The id of the turn's last reply, which fork and handoff act on.
     pub reply: Option<String>,
     pub review: Option<crate::shell::message_actions::Review>,
     pub live: bool,

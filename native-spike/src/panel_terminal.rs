@@ -67,6 +67,13 @@ pub fn new(context: PanelContext, cx: &mut App) -> AnyView {
 
 /// The panel's view: a tab strip over the terminals it holds. Every terminal
 /// keeps running; only the active one is drawn.
+/// A terminal tab being dragged out of the panel.
+pub struct TermTabDrag {
+    pub panel: gpui::WeakEntity<TerminalPanel>,
+    pub ix: usize,
+    pub title: String,
+}
+
 pub struct TerminalPanel {
     cwd: String,
     terminals: Vec<Entity<Terminal>>,
@@ -88,6 +95,24 @@ impl TerminalPanel {
             terminals: vec![first],
             active: 0,
         }
+    }
+    /// Gives up a terminal, shell and all, to live elsewhere. The panel is never left empty.
+    fn take_terminal(
+        &mut self,
+        ix: usize,
+        cx: &mut Context<Self>,
+    ) -> Option<(String, Entity<Terminal>)> {
+        if ix >= self.terminals.len() {
+            return None;
+        }
+        let terminal = self.terminals.remove(ix);
+        if self.terminals.is_empty() {
+            let fresh = self.spawn(cx);
+            self.terminals.push(fresh);
+        }
+        self.active = self.active.min(self.terminals.len() - 1);
+        cx.notify();
+        Some((self.cwd.clone(), terminal))
     }
     /// A shell in the panel's folder. Only the first terminal prints the banner.
     fn spawn(&self, cx: &mut Context<Self>) -> Entity<Terminal> {
@@ -225,6 +250,16 @@ impl Render for TerminalPanel {
                     .on_click(cx.listener(move |this, _, window, cx| this.select(ix, window, cx)));
                 div()
                     .id(("terminal-tab", ix))
+                    .on_drag(
+                        TermTabDrag {
+                            panel: cx.entity().downgrade(),
+                            ix,
+                            title: label.to_string(),
+                        },
+                        |drag, _, _, cx| {
+                            cx.new(|_| crate::shell::split_panes::DragChip::new(drag.title.clone()))
+                        },
+                    )
                     .group(group)
                     .h_full()
                     .w(px(224.))
@@ -775,6 +810,36 @@ pub fn focus_in(view: &AnyView, window: &mut Window, cx: &mut App) {
 pub struct TerminalGroup {
     cwd: String,
     panes: Vec<Entity<Terminal>>,
+}
+
+/// Takes the dragged terminal out of its panel, into a group of its own.
+pub fn group_from_drag(drag: &TermTabDrag, cx: &mut App) -> Option<Entity<TerminalGroup>> {
+    let panel = drag.panel.upgrade()?;
+    let (cwd, terminal) = panel.update(cx, |panel, cx| panel.take_terminal(drag.ix, cx))?;
+    Some(cx.new(|_| TerminalGroup {
+        cwd,
+        panes: vec![terminal],
+    }))
+}
+
+/// Puts a title tab's shells back in the Terminal pane, the last one active.
+pub fn adopt_group(
+    view: &AnyView,
+    group: &Entity<TerminalGroup>,
+    window: &mut Window,
+    cx: &mut App,
+) -> bool {
+    let Ok(panel) = view.clone().downcast::<TerminalPanel>() else {
+        return false;
+    };
+    let panes = group.update(cx, |group, _| std::mem::take(&mut group.panes));
+    panel.update(cx, |panel, cx| {
+        panel.terminals.extend(panes);
+        panel.active = panel.terminals.len() - 1;
+        panel.focus_active(window, cx);
+        cx.notify();
+    });
+    true
 }
 
 impl TerminalGroup {

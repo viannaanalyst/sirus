@@ -297,6 +297,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Added {} · last used {}",
     ),
     ("Adicionar", "Add"),
+    ("Adicionar ao chat", "Add to chat"),
     ("Adicionar conector personalizado", "Add a custom connector"),
     ("Adicionar conta", "Add account"),
     ("Adicionar login", "Add login"),
@@ -942,10 +943,6 @@ const ENTRIES: &[(&str, &str)] = &[
         "Envie /compact sozinho, sem anexos e sem os modos equipe ou depuração.",
         "Send /compact on its own, without attachments, team or debug mode.",
     ),
-    (
-        "Envie este turno a outro agente para revisar o trabalho. Abre em outra aba e só aponta problemas.",
-        "Send this turn to another agent to review the work. It opens in another tab and only reports problems.",
-    ),
     ("Equipe", "Team"),
     ("Esc fechar", "Esc close"),
     (
@@ -1022,8 +1019,14 @@ const ENTRIES: &[(&str, &str)] = &[
         "Esse computador perdeu o pareamento: pareie de novo.",
         "This computer lost its pairing: pair it again.",
     ),
-    ("Esta conta atingiu o limite de uso.", "This account reached its usage limit."),
-    ("Esta conta atingiu o limite de uso. Volta às {}.", "This account reached its usage limit. It returns at {}."),
+    (
+        "Esta conta atingiu o limite de uso.",
+        "This account reached its usage limit.",
+    ),
+    (
+        "Esta conta atingiu o limite de uso. Volta às {}.",
+        "This account reached its usage limit. It returns at {}.",
+    ),
     (
         "Esta conversa parou por um erro",
         "This conversation stopped on an error",
@@ -1559,10 +1562,6 @@ const ENTRIES: &[(&str, &str)] = &[
         "Nenhum modelo habilitado disponível neste provedor.",
         "No enabled models available from this provider.",
     ),
-    (
-        "Nenhum outro modelo deste provedor.",
-        "No other model of this provider.",
-    ),
     ("Nenhum para limpar", "None to clean"),
     (
         "Nenhum projeto aqui corresponde a “{}”, então o rascunho está no projeto atual.",
@@ -1658,7 +1657,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "Não encontrei certificados do sistema.",
         "No system certificates were found.",
     ),
-    ("Não foi possível abrir a janela de arquivos. Feche e abra o Sirus.", "The file window could not open. Quit and reopen Sirus."),
+    (
+        "Não foi possível abrir a janela de arquivos. Feche e abra o Sirus.",
+        "The file window could not open. Quit and reopen Sirus.",
+    ),
     (
         "Não foi possível abrir esta imagem.",
         "Could not open this image.",
@@ -1847,7 +1849,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "O link pediu {}, que não está configurado aqui; o seu padrão continua.",
         "The link asked for {}, which is not set up here; your default stays.",
     ),
-    ("O login de {} sai deste Mac. Conversas que usam esta conta impedem a remoção.", "{}'s sign-in leaves this Mac. Conversations using this account prevent removal."),
+    (
+        "O login de {} sai deste Mac. Conversas que usam esta conta impedem a remoção.",
+        "{}'s sign-in leaves this Mac. Conversations using this account prevent removal.",
+    ),
     (
         "O login desta conta expirou ou foi sobrescrito por outra sessão.",
         "This account's sign-in expired or was overwritten by another session.",
@@ -2069,7 +2074,6 @@ const ENTRIES: &[(&str, &str)] = &[
         "Ask before closing a terminal tab; its shell and history end.",
     ),
     ("Perguntar", "Ask"),
-    ("Perguntar no chat lateral", "Ask in the side chat"),
     ("Perguntar sempre", "Ask every time"),
     ("Perguntas do agente", "Questions from the agent"),
     ("Pergunte sem interromper", "Ask without interrupting"),
@@ -2407,7 +2411,6 @@ const ENTRIES: &[(&str, &str)] = &[
         "Authenticator secret (optional)",
     ),
     ("Seguir o sistema", "Follow the system"),
-    ("Segunda opinião", "Second opinion"),
     ("Segurança", "Safety"),
     (
         "Selecione um fluxo para adicionar /nome-da-skill ao rascunho.",

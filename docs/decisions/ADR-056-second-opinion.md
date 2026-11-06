@@ -1,6 +1,6 @@
 # ADR-056: Second opinion
 
-**Status:** Accepted
+**Status:** Superseded by ADR-198: the action was removed from the turn's menu in Sirus Native.
 
 ## Context
 

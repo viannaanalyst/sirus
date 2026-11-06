@@ -29,6 +29,7 @@ use gpui::{
     Bounds, ElementInputHandler, EntityInputHandler, StyledText, TextLayout, UTF16Selection,
 };
 use serde_json::{Value, json};
+use shell_terminal::{TERM_CARD, terminal_tile};
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ops::Range;
@@ -1096,7 +1097,12 @@ pub struct Shell {
     /// Groups of steps the person opened or closed: (conversation, turn, first step).
     phase_open: HashMap<(usize, usize, usize), bool>,
     /// The first project the sidebar's rail shows.
-    rail_first: usize,
+    /// How far along the rail is, in tiles, while it slides or follows a swipe.
+    rail_pos: std::cell::Cell<Tween>,
+    /// The project the rail last revealed: only a new one moves it, so it stays where it's left.
+    rail_seen: std::cell::Cell<Option<usize>>,
+    /// Counts swipe events; the last one's timer settles the rail on a whole tile.
+    rail_swipe: u64,
     /// Projects, the last used first, and the ⌥Tab switcher while it is held.
     project_recent: Vec<usize>,
     project_switch: Option<ProjectSwitch>,
@@ -1208,6 +1214,8 @@ pub struct Shell {
     /// The send button's morph (send_morph.rs) and whether it wants another frame.
     send_morph: std::cell::RefCell<crate::send_morph::Morph>,
     send_moving: std::cell::Cell<bool>,
+    /// Per conversation, the composer text's measured height and the tween its box follows.
+    composer_rise: std::cell::RefCell<HashMap<usize, (Rc<std::cell::Cell<f32>>, Tween)>>,
     system_dark: bool,
     theme_menu: Option<PaletteState>,
     settings_page: &'static str,
@@ -1447,7 +1455,9 @@ impl Shell {
             ignored_text: String::new(),
             composer_layout: Default::default(),
             phase_open: HashMap::new(),
-            rail_first: 0,
+            rail_pos: std::cell::Cell::new(Tween::still(0., Instant::now())),
+            rail_seen: Default::default(),
+            rail_swipe: 0,
             project_recent: Vec::new(),
             project_switch: None,
             prompt_moved: HashMap::new(),
@@ -1533,6 +1543,7 @@ impl Shell {
             look: load_look(),
             send_morph: Default::default(),
             send_moving: Default::default(),
+            composer_rise: Default::default(),
             system_dark: true,
             theme_menu: None,
             settings_page: APPEARANCE,
@@ -3025,7 +3036,8 @@ impl Shell {
                     "remove_provider_account",
                     json!({ "provider": provider, "accountId": id }),
                 );
-                this.waiting.insert(call, Waiting::AccountRemoved(id.clone(), provider));
+                this.waiting
+                    .insert(call, Waiting::AccountRemoved(id.clone(), provider));
                 cx.notify();
             },
             cx,
@@ -4312,7 +4324,8 @@ impl Shell {
         } else {
             (TAB_OPEN, REORDER, FAN)
         };
-        let pinned = self.tabs.iter().filter(|t| t.pinned && !t.closing).count();
+        let pinned = self.tabs.iter().filter(|t| t.pinned && !t.closing).count()
+            + self.term.pinned_ids().len();
         let pulls_live = self.term.pulls_tab.as_ref().is_some_and(|t| !t.closing);
         let pulls_shown = pulls_live && self.term.pulls_active;
         let free = (self.tabs.iter().filter(|t| !t.pinned && !t.closing).count()
@@ -4418,11 +4431,18 @@ impl Shell {
         reduced: bool,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let pinned: Vec<(u64, usize)> = self
+        // Conversations, then terminals; a terminal's card has its key above TERM_CARD.
+        let pinned: Vec<(u64, Option<usize>)> = self
             .tabs
             .iter()
             .filter(|t| t.pinned && !t.closing)
-            .map(|t| (t.id, t.conversation))
+            .map(|t| (t.id, Some(t.conversation)))
+            .chain(
+                self.term
+                    .pinned_ids()
+                    .into_iter()
+                    .map(|id| (TERM_CARD + id, None)),
+            )
             .collect();
         if pinned.is_empty() {
             self.deck_front = None;
@@ -4431,7 +4451,8 @@ impl Shell {
         let count = pinned.len();
         let stacks = count > ROW_MAX;
         let fan = self.fan.at(now);
-        let front = pinned.iter().position(|(id, _)| *id == self.active);
+        let active_card = self.term.active_card().unwrap_or(self.active);
+        let front = pinned.iter().position(|(id, _)| *id == active_card);
         let top = front
             .or_else(|| {
                 pinned
@@ -4469,7 +4490,11 @@ impl Shell {
             .collect();
         let caption = hovered_card.and_then(|c| {
             let ix = pinned.iter().position(|(id, _)| *id == c)?;
-            Some((self.conversations[pinned[ix].1].title.clone(), places[ix].x))
+            let title = match pinned[ix].1 {
+                Some(conversation) => self.conversations[conversation].title.clone(),
+                None => self.term_title(pinned[ix].0 - TERM_CARD, cx),
+            };
+            Some((title, places[ix].x))
         });
         let mut order: Vec<usize> = (0..count).collect();
         order.sort_by(|a, b| places[*b].z.total_cmp(&places[*a].z));
@@ -4477,9 +4502,13 @@ impl Shell {
         for ix in order {
             let (id, conversation) = pinned[ix];
             let place = &places[ix];
-            let selected = id == self.active;
+            let selected = id == active_card;
             let hovered = hovered_card == Some(id);
-            let (face, mark) = self.tile_parts(&self.conversations[conversation], now);
+            let terminal = conversation.is_none().then(|| id - TERM_CARD);
+            let (face, mark) = match conversation {
+                Some(conversation) => self.tile_parts(&self.conversations[conversation], now),
+                None => terminal_tile(),
+            };
             cards.push(
                 div()
                     .id(("pinned-tab", id))
@@ -4528,6 +4557,10 @@ impl Shell {
                         MouseButton::Right,
                         cx.listener(move |this, event: &MouseDownEvent, _, cx| {
                             cx.stop_propagation();
+                            if let Some(terminal) = terminal {
+                                this.ask_chip_menu(terminal, event.position, cx);
+                                return;
+                            }
                             let duration = if cx.reduce_motion() { 0. } else { MENU };
                             this.menu = Some(Menu {
                                 tab: id,
@@ -4537,7 +4570,15 @@ impl Shell {
                             cx.notify();
                         }),
                     )
-                    .on_click(cx.listener(move |this, _, _, cx| this.select(id, cx)))
+                    .when_some(terminal, |d, terminal| {
+                        d.on_drag(self.term_drag(terminal, cx), |drag, _, _, cx| {
+                            cx.new(|_| split_panes::DragChip::new(drag.title.clone()))
+                        })
+                    })
+                    .on_click(cx.listener(move |this, _, window, cx| match terminal {
+                        Some(terminal) => this.open_title_tab(terminal, window, cx),
+                        None => this.select(id, cx),
+                    }))
                     .into_any_element(),
             );
         }
@@ -5626,14 +5667,12 @@ impl Shell {
             multiple: true,
             prompt: None,
         });
-        cx.spawn(async move |this, cx| {
-            match paths.await {
-                Ok(Ok(Some(paths))) => {
-                    let _ = this.update(cx, |this, cx| this.attach_paths(paths, cx));
-                }
-                Ok(Err(_)) => panel_failed(&this, cx),
-                _ => {}
+        cx.spawn(async move |this, cx| match paths.await {
+            Ok(Ok(Some(paths))) => {
+                let _ = this.update(cx, |this, cx| this.attach_paths(paths, cx));
             }
+            Ok(Err(_)) => panel_failed(&this, cx),
+            _ => {}
         })
         .detach();
     }
@@ -6483,6 +6522,12 @@ impl Shell {
                 true,
             ))
             .children(term_chips)
+            // A terminal tab pulled from the panel becomes a tab here, shell and all.
+            .on_drop(cx.listener(
+                |this, drag: &crate::panel_terminal::TermTabDrag, window, cx| {
+                    this.adopt_terminal(drag, window, cx);
+                },
+            ))
             .child(
                 div()
                     .absolute()
@@ -6612,7 +6657,6 @@ impl Shell {
                         )
                         .child(this.filter_button(cx)),
                 )
-                .children(this.project_rail(cx))
         };
         // A collapsed sidebar slides out over the workspace while the pointer holds it there.
         if open < 0.001 {
@@ -8009,13 +8053,27 @@ impl Shell {
     }
 
     /// The row of projects while ⌥Tab is held.
-    fn project_switch_view(&self) -> Option<AnyElement> {
+    fn project_switch_view(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let switch = self.project_switch.as_ref()?;
         if switch.since.elapsed().as_secs_f32() < SWITCH_SHOWS_AFTER {
             return None;
         }
         let tiles = switch.order.iter().enumerate().map(|(at, project)| {
+            let target = *project;
             div()
+                .id(("project-switch", at))
+                .cursor_pointer()
+                // The pointer picks too, while the keys stay down.
+                .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                    if *hovered && let Some(switch) = this.project_switch.as_mut() {
+                        switch.at = at;
+                        cx.notify();
+                    }
+                }))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.project_switch = None;
+                    this.switch_project(target, cx);
+                }))
                 .w(px(76.))
                 .px(px(4.))
                 .py(px(8.))
@@ -8057,6 +8115,7 @@ impl Shell {
                         .border_color(content(0.12))
                         .child(crate::theme::floating_surface(crate::theme::RADIUS_LG))
                         .shadow_lg()
+                        .occlude()
                         .children(tiles),
                 )
                 .into_any_element(),
@@ -8073,23 +8132,45 @@ impl Shell {
         self.switch_project(rail_step(at, count, forward), cx);
     }
 
-    /// The projects at the end of the sidebar, as Monocode's: their robots, the name and the keys
-    /// under the pointer, and arrows when they do not all fit.
-    fn project_rail(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if self.projects.len() < 2 || !self.sidebar_items.shown("projects") {
+    /// The projects in the footer, under the sidebar, as Monocode's: five robots at a time, the
+    /// name and the keys under the pointer. The arrows, a swipe or a sideways wheel slide them.
+    fn project_rail(&self, width: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.projects.len() < 2 || width < 120. || !self.sidebar_items.shown("projects") {
             return None;
         }
-        const TILE: f32 = 30.;
-        const ARROW: f32 = 18.;
-        let fits = (((self.sidebar_width - 20. - ARROW * 2.) / TILE).floor() as usize).max(1);
+        const FITS: usize = 5;
+        const GAP: f32 = 4.;
         let count = self.projects.len();
         let current = self.current_project.unwrap_or(0).min(count - 1);
-        let first = rail_window(self.rail_first, current, fits, count);
+        let last = count.saturating_sub(FITS) as f32;
+        let now = Instant::now();
+        let length = if cx.reduce_motion() { 0. } else { RAIL_SLIDE };
+        let mut pos = self.rail_pos.get();
+        let seen = self.rail_seen.replace(Some(current));
+        if seen != Some(current) {
+            let to = rail_window(pos.to.round() as usize, current, FITS, count) as f32;
+            if seen.is_none() {
+                pos.snap(to, now);
+            } else {
+                pos.set(to, now, length, Curve::Expo);
+            }
+        } else if pos.to > last {
+            pos.set(last, now, length, Curve::Expo);
+        }
+        self.rail_pos.set(pos);
+        if !pos.done(now) {
+            self.send_moving.set(true);
+        }
+        let at = pos.at(now);
+        // Padding, two arrows and the gaps beside them.
+        let room = width - 16. - 40. - 2. * GAP;
+        let shown = count.min(FITS) as f32;
+        let tile = (room - GAP * (shown - 1.)) / shown;
+        let step = tile + GAP;
         let arrow = |id: &'static str, glyph: &'static str, enabled: bool| {
             div()
                 .id(id)
-                .w(px(ARROW))
-                .h(px(28.))
+                .size(px(20.))
                 .flex_shrink_0()
                 .rounded(px(crate::theme::RADIUS_SM))
                 .flex()
@@ -8097,24 +8178,31 @@ impl Shell {
                 .justify_center()
                 .opacity(if enabled { 1. } else { 0.3 })
                 .when(enabled, |d| {
-                    d.cursor_pointer().hover(|s| s.bg(content(0.08)))
+                    d.cursor_pointer().hover(|s| s.bg(content(0.1)))
                 })
                 .child(icon(glyph, 12.).text_color(content(0.55)))
         };
-        let tiles = (first..(first + fits).min(count)).map(|index| {
+        let begin = at.floor().max(0.) as usize;
+        let tiles = (begin..(begin + FITS + 1).min(count)).map(|index| {
             let name = self.projects[index].name.clone();
             let chosen = index == current;
+            let x = (index as f32 - at) * step;
+            // A tile on its way out fades as the edge cuts it.
+            let cut = (-x).max(x + tile - room).max(0.) / tile;
             div()
                 .id(("rail-project", index))
-                .w(px(TILE))
-                .h(px(28.))
-                .flex_shrink_0()
-                .rounded(px(crate::theme::RADIUS_MD))
+                .absolute()
+                .top_0()
+                .left(px(x))
+                .w(px(tile))
+                .h(px(20.))
+                .opacity((1. - cut).clamp(0., 1.))
+                .rounded(px(crate::theme::RADIUS_SM))
                 .flex()
                 .items_center()
                 .justify_center()
                 .cursor_pointer()
-                .when(chosen, |d| d.bg(content(0.12)))
+                .when(chosen, |d| d.bg(content(0.1)))
                 .when(!chosen, |d| d.hover(|s| s.bg(content(0.1))))
                 .tooltip(move |_, cx| cx.new(|_| ProjectTip(name.clone())).into())
                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -8122,35 +8210,94 @@ impl Shell {
                         this.switch_project(index, cx);
                     }
                 }))
-                .child(self.project_avatar_for(index, 18.))
+                .child(self.project_avatar_for(index, 15.))
         });
+        let slide = move |this: &mut Self, by: f32, cx: &mut Context<Self>| {
+            let mut pos = this.rail_pos.get();
+            let to = (pos.to.round() + by).clamp(0., last);
+            let length = if cx.reduce_motion() { 0. } else { RAIL_SLIDE };
+            pos.set(to, Instant::now(), length, Curve::Expo);
+            this.rail_pos.set(pos);
+            cx.notify();
+        };
         Some(
             div()
-                .flex_shrink_0()
-                .h(px(40.))
-                .px(px(10.))
+                .absolute()
+                .left_0()
+                .top_0()
+                .bottom_0()
+                .w(px(width))
+                .px(px(8.))
+                .pb(px(2.))
                 .flex()
                 .items_center()
-                .justify_center()
-                .child(
-                    arrow("rail-back", "chevron-left", first > 0).on_click(cx.listener(
-                        move |this, _, _, cx| {
-                            this.rail_first = first.saturating_sub(fits);
-                            cx.notify();
-                        },
-                    )),
+                .gap(px(GAP))
+                .on_scroll_wheel(
+                    cx.listener(move |this, event: &gpui::ScrollWheelEvent, _, cx| {
+                        cx.stop_propagation();
+                        match event.delta {
+                            // A mouse's notch moves one tile.
+                            gpui::ScrollDelta::Lines(lines) => {
+                                let by = rail_axis(lines.x, lines.y);
+                                if by != 0. {
+                                    slide(this, -by.signum(), cx);
+                                }
+                            }
+                            // A swipe follows the fingers, then settles on a whole tile.
+                            gpui::ScrollDelta::Pixels(pixels) => {
+                                let moved = rail_axis(f32::from(pixels.x), f32::from(pixels.y));
+                                let now = Instant::now();
+                                let mut pos = this.rail_pos.get();
+                                pos.snap(rail_swiped(pos.at(now), moved, step, last), now);
+                                this.rail_pos.set(pos);
+                                this.rail_settle(cx);
+                                cx.notify();
+                            }
+                        }
+                    }),
                 )
-                .children(tiles)
                 .child(
-                    arrow("rail-forward", "chevron-right", first + fits < count).on_click(
-                        cx.listener(move |this, _, _, cx| {
-                            this.rail_first = (first + fits).min(count.saturating_sub(fits));
-                            cx.notify();
-                        }),
-                    ),
+                    arrow("rail-back", "chevron-left", pos.to > 0.)
+                        .on_click(cx.listener(move |this, _, _, cx| slide(this, -1., cx))),
+                )
+                .child(
+                    div()
+                        .relative()
+                        .flex_1()
+                        .min_w_0()
+                        .h(px(20.))
+                        .overflow_hidden()
+                        .children(tiles),
+                )
+                .child(
+                    arrow("rail-forward", "chevron-right", pos.to < last)
+                        .on_click(cx.listener(move |this, _, _, cx| slide(this, 1., cx))),
                 )
                 .into_any_element(),
         )
+    }
+
+    /// Once a swipe and its momentum go quiet, the rail slides to the nearest whole tile.
+    fn rail_settle(&mut self, cx: &mut Context<Self>) {
+        self.rail_swipe += 1;
+        let swipe = self.rail_swipe;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(RAIL_QUIET))
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.rail_swipe != swipe {
+                    return;
+                }
+                let now = Instant::now();
+                let mut pos = this.rail_pos.get();
+                let length = if cx.reduce_motion() { 0. } else { RAIL_SLIDE };
+                pos.set(pos.at(now).round(), now, length, Curve::Expo);
+                this.rail_pos.set(pos);
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     fn add_new_project(&mut self, cx: &mut Context<Self>) {
@@ -9332,7 +9479,11 @@ impl Shell {
                 .pb(px(6.))
                 .child(
                     crate::hover_track::list("sidebar-nav")
-                        .row_named(Self::sidebar_nav_row("sidebar-pulls", active), "pulls", active)
+                        .row_named(
+                            Self::sidebar_nav_row("sidebar-pulls", active),
+                            "pulls",
+                            active,
+                        )
                         .on_click(cx.listener(|this, _, _, cx| this.open_pull_requests(cx)))
                         .child(icon("git-pull-request", 16.).text_color(content(if active {
                             0.7
@@ -9494,38 +9645,32 @@ impl Shell {
     fn usage_button(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         div()
             .id("sidebar-usage-page")
-            .h(px(22.))
-            .px(px(6.))
+            .size(px(24.))
             .rounded(px(crate::theme::RADIUS_SM))
             .flex()
             .items_center()
-            .gap(px(6.))
-            .text_size(px(12.))
-            .text_color(content(0.55))
+            .justify_center()
             .cursor_pointer()
-            .hover(|s| s.bg(content(0.08)).text_color(content(0.95)))
+            .hover(|s| s.bg(content(0.08)))
+            .tooltip(message_actions::name_tip(t("Uso")))
             .on_click(cx.listener(|this, _, _, cx| this.toggle_usage_page(cx)))
-            .child(icon("chart-column", 13.).text_color(content(0.55)))
-            .child(t("Uso"))
+            .child(icon("chart-column", 16.).text_color(content(0.6)))
     }
 
     /// Settings stay one click away at the footer's right end.
     fn settings_button(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         div()
             .id("sidebar-settings")
-            .h(px(22.))
-            .px(px(6.))
+            .size(px(24.))
             .rounded(px(crate::theme::RADIUS_SM))
             .flex()
             .items_center()
-            .gap(px(6.))
-            .text_size(px(12.))
-            .text_color(content(0.55))
+            .justify_center()
             .cursor_pointer()
-            .hover(|s| s.bg(content(0.08)).text_color(content(0.95)))
+            .hover(|s| s.bg(content(0.08)))
+            .tooltip(message_actions::name_tip(t("Configurações")))
             .on_click(cx.listener(|this, _, _, cx| this.toggle_appearance(cx)))
-            .child(icon("settings", 13.).text_color(content(0.55)))
-            .child(t("Configurações"))
+            .child(icon("settings", 16.).text_color(content(0.6)))
     }
 
     fn set_peek(&mut self, open: bool, cx: &mut Context<Self>) {
@@ -9864,7 +10009,11 @@ impl Shell {
                             .relative()
                             .size_full()
                             .top(px((1. - switching) * 6.))
-                            .child(items),
+                            // The text itself fades at the top and toward the composer, with no
+                            // colour laid over the glass (a band over a translucent card).
+                            .child(edge_mask(true, 26., 24.))
+                            .child(items)
+                            .child(edge_mask(false, 26., 24.)),
                     )
                     .children(trail)
                     .children(self.find_bar(now, moving, cx))
@@ -9900,20 +10049,6 @@ impl Shell {
                                 ),
                         )
                     }),
-            )
-            // Text fades as it scrolls under the top edge and toward the composer.
-            .child(
-                div()
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .right_0()
-                    .h(px(26.))
-                    .bg(linear_gradient(
-                        180.,
-                        linear_color_stop(pane_fill(), 0.),
-                        linear_color_stop(transparent(), 1.),
-                    )),
             )
             .children({
                 *moving |= self.conversations[index].working();
@@ -11210,11 +11345,41 @@ impl Shell {
         let caret_seen = self.composer_caret_seen.clone();
         let (caret_moved, caret_drawn) = (self.caret_moved.clone(), self.caret_drawn.clone());
         self.caret_blinks.set(typing && selection.is_empty());
+        // The box slides to the height of the text, which the overlay below measures.
+        let (text_height, box_height) = {
+            let now = Instant::now();
+            let mut rises = self.composer_rise.borrow_mut();
+            let (measured, tween) = rises
+                .entry(ix)
+                .or_insert_with(|| (Default::default(), Tween::still(0., now)));
+            let height = measured.get();
+            if height > 0. {
+                let rest = height.clamp(COMPOSER_LINE, COMPOSER_MAX);
+                if tween.to <= 0. || cx.reduce_motion() {
+                    tween.snap(rest, now);
+                } else {
+                    tween.set(rest, now, COMPOSER_RISE, Curve::Expo);
+                }
+            }
+            if !tween.done(now) {
+                self.send_moving.set(true);
+            }
+            let shown = tween.at(now);
+            (
+                measured.clone(),
+                if shown > 0. { shown } else { COMPOSER_LINE },
+            )
+        };
         // The caret and the selection are painted over the laid out text, so the text never moves.
         let overlay = gpui::canvas(
             |_, _, _| {},
             move |bounds, _, window, _| {
                 let line = layout.line_height();
+                if text_height.replace(f32::from(bounds.size.height))
+                    != f32::from(bounds.size.height)
+                {
+                    window.on_next_frame(|window, _| window.refresh());
+                }
                 // Only a caret that moved pulls the text along, so the wheel stays free.
                 let moved = caret_seen.replace(caret_key) != caret_key;
                 if moved {
@@ -11222,7 +11387,8 @@ impl Shell {
                 }
                 if moved && let Some(at) = layout.position_for_index(caret_at) {
                     let top = at.y - bounds.origin.y;
-                    let seen = composer_scroll.bounds().size.height;
+                    // Where the box is heading: while it slides, the text needs no scroll.
+                    let seen = bounds.size.height.min(px(COMPOSER_MAX));
                     let scrolled = -composer_scroll.offset().y;
                     let target = follow_caret(top, line, scrolled, seen);
                     if target != scrolled {
@@ -11377,19 +11543,6 @@ impl Shell {
                 .left_0()
                 .top_0()
                 .size_full(),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .left_0()
-                    .right_0()
-                    .top(px(-24.))
-                    .h(px(24.))
-                    .bg(linear_gradient(
-                        0.,
-                        linear_color_stop(pane_fill(), 0.),
-                        linear_color_stop(transparent(), 1.),
-                    )),
             )
             .when_some(mention, |d, mention| {
                 let selected = mention_selected.min(mention.hits.len() - 1);
@@ -11746,7 +11899,7 @@ impl Shell {
                                 div()
                                     .id("composer-text")
                                     .px(px(8.))
-                                    .max_h(px(190.))
+                                    .h(px(box_height))
                                     .overflow_y_scroll()
                                     .track_scroll(&self.composer_scroll)
                                     .text_size(px(14.))
@@ -11799,73 +11952,78 @@ impl Shell {
                                     // One line of controls, as Monocode's: what shapes the work on the left, the model and
                                     // sending on the right.
                                     .child(
-                                div()
-                                    .id("composer-access")
-                                    .h(px(26.))
-                                    .px(px(8.))
-                                    .border_1()
-                                    .border_color(content(0.1))
-                                    .rounded(px(crate::theme::RADIUS_SM))
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(6.))
-                                    .text_size(px(12.))
-                                    .text_color(access_color)
-                                    .cursor_pointer()
-                                    .hover(|s| s.bg(content(0.07)))
-                                    .child(icon(access_glyph, 14.).text_color(access_color))
-                                    .child(access)
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(|this, _, window, cx| {
-                                            this.keep_typing_focus(window, cx);
-                                            cx.stop_propagation();
-                                        }),
+                                        div()
+                                            .id("composer-access")
+                                            .h(px(26.))
+                                            .px(px(8.))
+                                            .border_1()
+                                            .border_color(content(0.1))
+                                            .rounded(px(crate::theme::RADIUS_SM))
+                                            .flex()
+                                            .items_center()
+                                            .gap(px(6.))
+                                            .text_size(px(12.))
+                                            .text_color(access_color)
+                                            .cursor_pointer()
+                                            .hover(|s| s.bg(content(0.07)))
+                                            .child(icon(access_glyph, 14.).text_color(access_color))
+                                            .child(access)
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _, window, cx| {
+                                                    this.keep_typing_focus(window, cx);
+                                                    cx.stop_propagation();
+                                                }),
+                                            )
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.toggle_composer_menu(ComposerMenu::Access, cx)
+                                            })),
                                     )
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.toggle_composer_menu(ComposerMenu::Access, cx)
-                                    })),
-                            )
                                     .children(ring)
                                     .child(div().flex_1())
                                     .child(
-                                shelf_button("composer-model")
-                                    .relative()
-                                    .h(px(26.))
-                                    .border_1()
-                                    .border_color(content(0.1))
-                                    .max_w(px(300.))
-                                    .child(
-                                        gpui::canvas(
-                                            move |bounds, _, _| trigger_store.set(Some(bounds)),
-                                            |_, _, _, _| {},
-                                        )
-                                        .absolute()
-                                        .size_full(),
+                                        shelf_button("composer-model")
+                                            .relative()
+                                            .h(px(26.))
+                                            .border_1()
+                                            .border_color(content(0.1))
+                                            .max_w(px(300.))
+                                            .child(
+                                                gpui::canvas(
+                                                    move |bounds, _, _| {
+                                                        trigger_store.set(Some(bounds))
+                                                    },
+                                                    |_, _, _, _| {},
+                                                )
+                                                .absolute()
+                                                .size_full(),
+                                            )
+                                            .child(provider_mark(provider, 16.))
+                                            .child(div().min_w_0().truncate().child(model))
+                                            .children(effort.map(|e| {
+                                                div()
+                                                    .flex_shrink_0()
+                                                    .text_color(content(0.4))
+                                                    .child(e)
+                                            }))
+                                            .when(chosen.fast, |d| {
+                                                d.child(
+                                                    theme_icon("zap-fill", 12.)
+                                                        .text_color(gpui::rgb(0xf0c43a)),
+                                                )
+                                            })
+                                            .child(chevron_down())
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _, window, cx| {
+                                                    this.keep_typing_focus(window, cx);
+                                                    cx.stop_propagation();
+                                                }),
+                                            )
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.toggle_composer_menu(ComposerMenu::Effort, cx)
+                                            })),
                                     )
-                                    .child(provider_mark(provider, 16.))
-                                    .child(div().min_w_0().truncate().child(model))
-                                    .children(effort.map(|e| {
-                                        div().flex_shrink_0().text_color(content(0.4)).child(e)
-                                    }))
-                                    .when(chosen.fast, |d| {
-                                        d.child(
-                                            theme_icon("zap-fill", 12.)
-                                                .text_color(gpui::rgb(0xf0c43a)),
-                                        )
-                                    })
-                                    .child(chevron_down())
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(|this, _, window, cx| {
-                                            this.keep_typing_focus(window, cx);
-                                            cx.stop_propagation();
-                                        }),
-                                    )
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.toggle_composer_menu(ComposerMenu::Effort, cx)
-                                    })),
-                            )
                                     .child(
                                         round("composer-mic", "mic")
                                             .when(dictating, |d| d.bg(rgb(0xe0654d)))
@@ -11952,8 +12110,7 @@ impl Shell {
                                         )
                                     }),
                             ),
-                    )
-,
+                    ),
             )
             .into_any_element()
     }
@@ -11966,6 +12123,7 @@ impl Shell {
             .relative()
             .h(px(FOOTER))
             .flex_shrink_0()
+            .children(self.project_rail(left, cx))
             .pl(px(left + 8.))
             .pr(px(10.))
             .flex()
@@ -12049,9 +12207,7 @@ impl Shell {
                     .justify_center()
                     .cursor_pointer()
                     .opacity(if self.usage_refreshing { 0.5 } else { 1. })
-                    .when(!self.usage_refreshing, |d| {
-                        d.hover(|s| s.bg(content(0.1)))
-                    })
+                    .when(!self.usage_refreshing, |d| d.hover(|s| s.bg(content(0.1))))
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(|this, _, _, cx| {
                         if !this.usage_refreshing {
@@ -12168,7 +12324,14 @@ impl Shell {
         let clock = now.duration_since(self.epoch).as_secs_f32();
         let title: AnyElement = if active {
             let phase = live_summary(steps);
-            shimmer(if phase.is_empty() { summary(steps) } else { phase }, clock)
+            shimmer(
+                if phase.is_empty() {
+                    summary(steps)
+                } else {
+                    phase
+                },
+                clock,
+            )
         } else {
             div().truncate().child(summary(steps)).into_any_element()
         };
@@ -12252,12 +12415,17 @@ impl Shell {
         let rows: Vec<AnyElement> = rows.collect();
         if !active {
             let body = div().w_full().flex().flex_col().children(rows);
-            return block.child(framed(body.into_any_element())).into_any_element();
+            return block
+                .child(framed(body.into_any_element()))
+                .into_any_element();
         }
         // At most 280 px or 45% of the view; it follows the newest step while the reader has not
         // scrolled up, and the steps fade at the edges with no colour laid over the glass.
         let body_height = rows.len() as f32 * STEP_ROW;
-        let view = self.view_sizes.get(&conversation).map_or(600., |size| size.1);
+        let view = self
+            .view_sizes
+            .get(&conversation)
+            .map_or(600., |size| size.1);
         let max_height = 280f32.min(view * 0.45).max(96.);
         let (handle, was_at_bottom, offset, max) = {
             let mut scrolls = self.phase_scrolls.borrow_mut();
@@ -12298,22 +12466,21 @@ impl Shell {
             .left_0()
             .size_full()
         };
-        let window_body = 
-            div()
-                .relative()
-                .w_full()
-                .h(px(body_height.min(max_height)))
-                .overflow_hidden()
-                .child(mask(true))
-                .child(
-                    div()
-                        .id(("live-steps", index * 4096 + start))
-                        .size_full()
-                        .overflow_y_scroll()
-                        .track_scroll(&handle)
-                        .children(rows),
-                )
-                .child(mask(false));
+        let window_body = div()
+            .relative()
+            .w_full()
+            .h(px(body_height.min(max_height)))
+            .overflow_hidden()
+            .child(mask(true))
+            .child(
+                div()
+                    .id(("live-steps", index * 4096 + start))
+                    .size_full()
+                    .overflow_y_scroll()
+                    .track_scroll(&handle)
+                    .children(rows),
+            )
+            .child(mask(false));
         block
             .child(framed(window_body.into_any_element()))
             .into_any_element()
@@ -12531,17 +12698,20 @@ impl Shell {
                     })
                 });
             let open = found_inside || self.phase_open.get(&key).copied().unwrap_or(false);
-            let openness = self.phase_moved.borrow().get(&key).copied().filter(|_| !found_inside).map_or(
-                if open { 1. } else { 0. },
-                |at| {
+            let openness = self
+                .phase_moved
+                .borrow()
+                .get(&key)
+                .copied()
+                .filter(|_| !found_inside)
+                .map_or(if open { 1. } else { 0. }, |at| {
                     let since = now.duration_since(at).as_secs_f32();
                     if since < DISCLOSE {
                         *moving = true;
                     }
                     let eased = crate::disclosure::settle(since / DISCLOSE);
                     if open { eased } else { 1. - eased }
-                },
-            );
+                });
             let labelled = if section == 0 {
                 has_header
             } else {
@@ -12654,10 +12824,16 @@ impl Shell {
         }
         // Subagents, as one card (subagent_card.rs), and the pill for the ones in the background.
         let anchored_last = index + 1 == self.conversations[conversation].turns.len()
-            && self.glides.get(&conversation).is_some_and(|glide| glide.anchored);
+            && self
+                .glides
+                .get(&conversation)
+                .is_some_and(|glide| glide.anchored);
         if let Some(start) = steer_block_start.filter(|_| anchored_last) {
             let stretch: Vec<AnyElement> = blocks.drain(start..).collect();
-            let view = self.view_sizes.get(&conversation).map_or(600., |size| size.1);
+            let view = self
+                .view_sizes
+                .get(&conversation)
+                .map_or(600., |size| size.1);
             blocks.push(
                 div()
                     .w_full()
@@ -12719,45 +12895,44 @@ impl Shell {
             })
             .when(!turn.user.is_empty(), |d| {
                 d.child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .items_end()
-                        .gap(px(2.))
-                        .child(
-                            div().flex().justify_end().child(
-                                div()
-                                    .relative()
-                                    .max_w(px(576.))
-                                    .min_w_0()
-                                    .px(px(12.))
-                                    .py(px(8.))
-                                    .text_size(px(14.))
-                                    .line_height(px(20.))
-                                    .text_color(content(1.))
-                                    .child(
-                                        gpui::canvas(
-                                            |_, _, _| {},
-                                            move |bounds, _, window, _| {
-                                                width_cell.set(bounds.size.width);
-                                                let radius = if bounds.size.height <= px(37.) {
-                                                    f32::from(bounds.size.height) * 0.5
-                                                } else {
-                                                    12.
-                                                };
-                                                window.paint_quad(
-                                                    gpui::fill(bounds, accent_wash(0.24))
-                                                        .corner_radii(px(radius)),
-                                                );
-                                            },
-                                        )
-                                        .absolute()
-                                        .top_0()
-                                        .left_0()
-                                        .size_full(),
+                    div().flex().flex_col().items_end().gap(px(2.)).child(
+                        div().flex().justify_end().child(
+                            div()
+                                .relative()
+                                .max_w(px(576.))
+                                .min_w_0()
+                                .px(px(12.))
+                                .py(px(8.))
+                                .text_size(px(14.))
+                                .line_height(px(20.))
+                                .text_color(content(1.))
+                                .child(
+                                    gpui::canvas(
+                                        |_, _, _| {},
+                                        move |bounds, _, window, _| {
+                                            width_cell.set(bounds.size.width);
+                                            let radius = if bounds.size.height <= px(37.) {
+                                                f32::from(bounds.size.height) * 0.5
+                                            } else {
+                                                12.
+                                            };
+                                            window.paint_quad(
+                                                gpui::fill(bounds, accent_wash(0.24))
+                                                    .corner_radii(px(radius)),
+                                            );
+                                        },
                                     )
-// Four lines while folded; Show more stays inside the bubble.
-                                    .child(prompt_frame(prompt_motion, bubble_width, prompt_collapsed, transcript_select::user_text(
+                                    .absolute()
+                                    .top_0()
+                                    .left_0()
+                                    .size_full(),
+                                )
+                                // Four lines while folded; Show more stays inside the bubble.
+                                .child(prompt_frame(
+                                    prompt_motion,
+                                    bubble_width,
+                                    prompt_collapsed,
+                                    transcript_select::user_text(
                                         &self.select,
                                         transcript_select::Reply {
                                             conversation,
@@ -12766,37 +12941,44 @@ impl Shell {
                                         },
                                         turn.user.clone(),
                                         styled_tokens(turn.user.clone()),
-                                    )))
-                        .when(prompt_overflows, |d| {
-                            d.child(div().flex().child(
-                                div()
-                                    .id(("prompt-more", index))
-                                    .mt_1()
-                                    .px_1()
-                                    // Its label lines up with the text; the padding is for the hover.
-                                    .ml(px(-4.))
-                                    .py(px(2.))
-                                    .rounded(px(4.))
-                                    .text_size(px(12.))
-                                    .line_height(px(16.))
-                                    .text_color(content(0.6))
-                                    .cursor_pointer()
-                                    .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
-                                    .child(if prompt_collapsed {
-                                        "Show more"
-                                    } else {
-                                        "Show less"
-                                    })
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        if !this.expanded_prompts.remove(&prompt_key) {
-                                            this.expanded_prompts.insert(prompt_key);
-                                        }
-                                        this.prompt_moved.insert(prompt_key, Instant::now());
-                                        cx.notify();
-                                    }))))
-                        })
-                            ),
-                        )
+                                    ),
+                                ))
+                                .when(prompt_overflows, |d| {
+                                    d.child(
+                                        div().flex().child(
+                                            div()
+                                                .id(("prompt-more", index))
+                                                .mt_1()
+                                                .px_1()
+                                                // Its label lines up with the text; the padding is for the hover.
+                                                .ml(px(-4.))
+                                                .py(px(2.))
+                                                .rounded(px(4.))
+                                                .text_size(px(12.))
+                                                .line_height(px(16.))
+                                                .text_color(content(0.6))
+                                                .cursor_pointer()
+                                                .hover(|s| {
+                                                    s.bg(content(0.08)).text_color(content(1.))
+                                                })
+                                                .child(if prompt_collapsed {
+                                                    "Show more"
+                                                } else {
+                                                    "Show less"
+                                                })
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    if !this.expanded_prompts.remove(&prompt_key) {
+                                                        this.expanded_prompts.insert(prompt_key);
+                                                    }
+                                                    this.prompt_moved
+                                                        .insert(prompt_key, Instant::now());
+                                                    cx.notify();
+                                                })),
+                                        ),
+                                    )
+                                }),
+                        ),
+                    ),
                 )
             })
             .children(blocks)
@@ -13094,6 +13276,7 @@ impl Shell {
             .flex()
             .flex_col()
             .child(body)
+            .children(self.term_drop_zone(cx))
             .into_any_element()
     }
 
@@ -15477,7 +15660,12 @@ fn step_line(step: &data::Step) -> crate::step_lines::Line {
 
 /// What a tool acted on, in the tree: a small mono chip.
 /// A prompt's text: four lines when folded, whole when not, and in between while it slides.
-fn prompt_frame(motion: Option<f32>, width: Pixels, collapsed: bool, text: AnyElement) -> AnyElement {
+fn prompt_frame(
+    motion: Option<f32>,
+    width: Pixels,
+    collapsed: bool,
+    text: AnyElement,
+) -> AnyElement {
     match motion {
         Some(progress) if width > px(0.) => div()
             .overflow_hidden()
@@ -15510,6 +15698,30 @@ struct ProjectSwitch {
 /// Seconds ⌥Tab is held before the row shows, so a tap just goes back.
 const SWITCH_SHOWS_AFTER: f32 = 0.16;
 
+/// One end of a group whose drawing fades out at its top and bottom edges, in px. Paint one before
+/// the group and one after it (Monocode's edge fade).
+fn edge_mask(begin: bool, top: f32, bottom: f32) -> gpui::Canvas<()> {
+    gpui::canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            let scale = window.scale_factor();
+            window.paint_layer(bounds, |window| {
+                window.paint_quad(gpui::fill(bounds, gpui::black()).border_color(
+                    gpui_apple::metal_renderer::edge_fade_marker(
+                        begin,
+                        top * scale,
+                        bottom * scale,
+                    ),
+                ));
+            });
+        },
+    )
+    .absolute()
+    .top_0()
+    .left_0()
+    .size_full()
+}
+
 /// The project after or before `at`, wrapping around.
 fn rail_step(at: usize, count: usize, forward: bool) -> usize {
     if forward {
@@ -15517,6 +15729,20 @@ fn rail_step(at: usize, count: usize, forward: bool) -> usize {
     } else {
         (at + count - 1) % count
     }
+}
+
+/// Seconds the project rail takes to slide, and how quiet a swipe must go before it settles (ms).
+const RAIL_SLIDE: f32 = 0.28;
+const RAIL_QUIET: u64 = 110;
+
+/// The axis a wheel or swipe event mostly moves along: the rail takes either.
+fn rail_axis(x: f32, y: f32) -> f32 {
+    if x.abs() >= y.abs() { x } else { y }
+}
+
+/// Where a swipe of `moved` pixels leaves the rail: fingers to the right show earlier projects.
+fn rail_swiped(at: f32, moved: f32, step: f32, last: f32) -> f32 {
+    (at - moved / step).clamp(0., last)
 }
 
 /// The first project the rail shows: `wanted` where it can be, moved so the current one is in view.
@@ -15561,13 +15787,20 @@ impl Render for ProjectTip {
 /// The system's file panel would not open: said in the footer instead of doing nothing.
 fn panel_failed(this: &gpui::WeakEntity<Shell>, cx: &mut gpui::AsyncApp) {
     let _ = this.update(cx, |this, cx| {
-        this.problem = Some(t("Não foi possível abrir a janela de arquivos. Feche e abra o Sirus.").to_owned());
+        this.problem = Some(
+            t("Não foi possível abrir a janela de arquivos. Feche e abra o Sirus.").to_owned(),
+        );
         cx.notify();
     });
 }
 
 /// How far below the top of the view a sent message comes to rest, with its turn filling the view.
 const ANCHOR_TOP: f32 = 32.;
+/// The composer's text: one line, the tallest it gets before it scrolls, and the seconds its box
+/// takes to slide to a new height.
+const COMPOSER_LINE: f32 = 22.;
+const COMPOSER_MAX: f32 = 190.;
+const COMPOSER_RISE: f32 = 0.16;
 
 /// The first fold key among `phase_open`'s (conversation, turn, key); below it are step indexes.
 const FOLD_KEY: usize = 1 << 40;
@@ -16064,11 +16297,11 @@ impl Render for Shell {
         let more_menu = self.more_menu_view(now, &mut moving, cx);
         let confirm_dialog = self.confirm_view(now, &mut moving, cx);
         let term_plus_menu = self.term_plus_menu_view(now, &mut moving, cx);
-        let title_tab = self.title_tab_view();
-        let bottom_terminal = self.bottom_view();
+        let title_tab = self.title_tab_view(cx);
+        let bottom_terminal = self.bottom_view(cx);
         let attachment_modal = self.attachment_view(now, &mut moving, cx);
         let trail_card = self.trail_card();
-        let project_switch = self.project_switch_view();
+        let project_switch = self.project_switch_view(cx);
         let add_menu = self.add_menu_view(now, &mut moving, cx);
         let environment = self.environment_view(now, &mut moving, cx);
         let incoming_card = {
@@ -16591,7 +16824,11 @@ mod composer_follow_tests {
                 })
                 .unwrap();
             vcx.run_until_parked();
-            offsets.push(window.update(&mut vcx, |view, _, _| view.handle.offset().y).unwrap());
+            offsets.push(
+                window
+                    .update(&mut vcx, |view, _, _| view.handle.offset().y)
+                    .unwrap(),
+            );
         }
         // 13 lines of 22 px in a 100 px window: the last line stays in view.
         assert_eq!(*offsets.last().unwrap(), px(-(13. * 22. - 100.)));
@@ -16622,6 +16859,12 @@ mod rail_tests {
 
     #[test]
     fn the_current_project_stays_in_the_window() {
+        assert_eq!(rail_swiped(2., 39., 39., 5.), 1.);
+        assert_eq!(rail_swiped(2., -78., 39., 5.), 4.);
+        assert_eq!(rail_swiped(0., 39., 39., 5.), 0.);
+        assert_eq!(rail_swiped(5., -39., 39., 5.), 5.);
+        assert_eq!(rail_axis(-3., 1.), -3.);
+        assert_eq!(rail_axis(1., 4.), 4.);
         assert_eq!(rail_window(0, 1, 5, 10), 0);
         assert_eq!(rail_window(0, 7, 5, 10), 3);
         assert_eq!(rail_window(5, 2, 5, 10), 2);

@@ -78,32 +78,6 @@ struct SideChat {
     layout: Rc<RefCell<Option<TextLayout>>>,
 }
 
-/// Puts a passage from the main chat in the composer as a quote and focuses it (the selection
-/// menu's "Perguntar no chat lateral").
-pub fn quote(view: &AnyView, passage: &str, window: &mut Window, cx: &mut App) {
-    let Ok(panel) = view.clone().downcast::<SideChat>() else {
-        return;
-    };
-    let quoted = passage
-        .lines()
-        .map(|line| format!("> {line}"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    panel.update(cx, |panel, cx| {
-        if !panel.text.trim().is_empty() {
-            panel.text.push_str("\n\n");
-        } else {
-            panel.text.clear();
-        }
-        panel.text.push_str(&quoted);
-        panel.text.push_str("\n\n");
-        panel.cursor = panel.text.len();
-        panel.anchor = panel.cursor;
-        window.focus(&panel.focus, cx);
-        cx.notify();
-    });
-}
-
 async fn settle(rx: async_channel::Receiver<Result<Value, Value>>) -> Result<Value, String> {
     match rx.recv().await {
         Ok(Ok(value)) => Ok(value),

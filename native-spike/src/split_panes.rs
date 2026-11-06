@@ -29,6 +29,18 @@ const HEADER: f32 = 34.;
 const GAP: f32 = 4.;
 const DEPTH_LIMIT: usize = 8;
 
+/// A pane can hold a terminal tab: its leaf names the tab under this prefix, never a session.
+/// It never becomes the active pane, which is the one the composer and the shortcuts follow.
+const TERM_LEAF: &str = "term:";
+
+pub(super) fn term_session(id: u64) -> String {
+    format!("{TERM_LEAF}{id}")
+}
+
+pub(super) fn term_id(session: &str) -> Option<u64> {
+    session.strip_prefix(TERM_LEAF)?.parse().ok()
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Edge {
     Left,
@@ -48,6 +60,13 @@ impl Edge {
             Edge::Center => Edge::Center,
         }
     }
+}
+
+/// What a pane's header shows.
+struct PaneFace {
+    title: String,
+    mark: AnyElement,
+    tag: Option<&'static str>,
 }
 
 /// Where a dropped conversation lands: a pane, or the whole area.
@@ -483,7 +502,11 @@ impl Layout {
         next += 1;
         Some(Layout {
             root: insert_node(&base, target, edge, &leaf, split_id),
-            active: leaf_id,
+            active: if term_id(session).is_some() {
+                self.active
+            } else {
+                leaf_id
+            },
             next,
         })
     }
@@ -515,11 +538,18 @@ impl Layout {
         } else {
             self.active
         };
-        Some(Layout {
+        let mut new = Layout {
             root,
             active,
             next: self.next,
-        })
+        };
+        // A terminal does not take over: the nearest conversation does.
+        if term_id(new.active_session()).is_some()
+            && let Some((talk, _)) = new.leaves().into_iter().find(|(_, s)| term_id(s).is_none())
+        {
+            new.active = talk;
+        }
+        Some(new)
     }
 
     /// Closes the panes whose session `live` refuses (the last one stays).
@@ -878,6 +908,9 @@ impl Shell {
     }
 
     fn session_alive(&self, session: &str) -> bool {
+        if let Some(id) = term_id(session) {
+            return self.term_view(id).is_some();
+        }
         self.session_index(session)
             .is_some_and(|ix| self.project_of(ix).is_some())
     }
@@ -1006,6 +1039,17 @@ impl Shell {
         edge: Edge,
         cx: &mut Context<Self>,
     ) {
+        if term_id(session).is_some() {
+            let planned = self
+                .split_base()
+                .and_then(|base| base.dropped(session, target, edge).map(|new| (base, new)));
+            if let Some((base, new)) = planned {
+                let enter = (base.showing(session).is_none()).then_some((new.next - 2, edge));
+                self.split_commit(&base, new, enter, Vec::new(), cx);
+                self.leave_title_tab();
+            }
+            return;
+        }
         let Some(ix) = self.session_index(session) else {
             return;
         };
@@ -1023,7 +1067,7 @@ impl Shell {
         self.open(ix, cx);
     }
 
-    /// "Abrir ao lado", hand off and second opinion: beside the source when a split exists or is
+    /// "Abrir ao lado" and hand off: beside the source when a split exists or is
     /// possible, otherwise as a plain tab.
     pub(super) fn open_beside(&mut self, ix: usize, edge: Edge, cx: &mut Context<Self>) {
         let session = self.conversations[ix].session_id.clone();
@@ -1051,6 +1095,16 @@ impl Shell {
         let session = layout.session_of(leaf).unwrap_or("").to_owned();
         if let Some(ix) = self.session_index(&session) {
             self.ensure_tab(ix);
+        }
+        // Only terminals would be left: the first one shows as its own tab instead.
+        let left = new.leaves();
+        if left.iter().all(|(_, s)| term_id(s).is_some()) {
+            self.split.layout = None;
+            self.split.anim = None;
+            self.show_term_tab(left.first().and_then(|(_, s)| term_id(s)));
+            self.split_save();
+            cx.notify();
+            return;
         }
         let now = Instant::now();
         let rect = self
@@ -1085,6 +1139,9 @@ impl Shell {
         let Some(session) = layout.session_of(leaf).map(str::to_owned) else {
             return;
         };
+        if term_id(&session).is_some() {
+            return;
+        }
         layout.active = leaf;
         self.split_save();
         if let Some(ix) = self.session_index(&session) {
@@ -1139,8 +1196,12 @@ impl Shell {
         if let Some(layout) = &self.split.layout {
             if layout.leaves().iter().any(|(_, s)| !self.session_alive(s)) {
                 let pruned = layout.pruned(&|s| self.session_alive(s));
-                self.split.layout = Some(pruned);
+                let talking = pruned.leaves().iter().any(|(_, s)| term_id(s).is_none());
+                self.split.layout = talking.then_some(pruned);
                 self.split.anim = None;
+                if !talking {
+                    self.split_save();
+                }
             }
         }
         if self
@@ -1176,6 +1237,12 @@ impl Shell {
                     None => base.rects().0,
                 };
                 if let Some((target, edge)) = target_at(&panes, nx, ny, width, height) {
+                    // A terminal never takes a pane's place: its middle splits it too.
+                    let edge = if edge == Edge::Center && term_id(session).is_some() {
+                        Edge::Right
+                    } else {
+                        edge
+                    };
                     let state = base.drop_state(session, target, edge);
                     if state != DropState::Nothing {
                         self.split.hover = Some((target, edge, state));
@@ -1273,28 +1340,7 @@ impl Shell {
         let probe = gpui::canvas(|_, _, _| {}, move |bounds, _, _, _| cell.set(Some(bounds)))
             .absolute()
             .size_full();
-        let mut area = div()
-            .id("split-area")
-            .relative()
-            .flex_1()
-            .min_w_0()
-            .h_full()
-            .flex()
-            .child(probe)
-            .on_drag_move(
-                cx.listener(|this, event: &gpui::DragMoveEvent<ConvDrag>, _, cx| {
-                    let session = event.drag(cx).session.clone();
-                    if this.split_aim(&session, event.event.position, event.bounds) {
-                        cx.notify();
-                    }
-                }),
-            )
-            .on_drop(cx.listener(|this, drag: &ConvDrag, _, cx| {
-                if let Some((target, edge, DropState::Ok)) = this.split.hover.take() {
-                    this.split_drop_at(&drag.session.clone(), target, edge, cx);
-                }
-                cx.notify();
-            }));
+        let mut area = self.split_area(cx).child(probe);
         let Some(layout) = self.split.layout.clone() else {
             let body = self.transcript(now, moving, cx);
             let overlay = self.drop_overlay(hover, &[(1, WHOLE)], true);
@@ -1322,13 +1368,36 @@ impl Shell {
             if pane.rect.w < 0.002 || pane.rect.h < 0.002 {
                 continue;
             }
+            if let Some(view) = term_id(&pane.session).and_then(|id| self.term_view(id)) {
+                let face = PaneFace {
+                    title: view.read(cx).title(),
+                    mark: icon("terminal-square", 14.)
+                        .text_color(content(0.7))
+                        .into_any_element(),
+                    tag: None,
+                };
+                let body = div()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .child(view)
+                    .into_any_element();
+                area = area.child(self.pane_element(&pane, face, false, framed, body, cx));
+                continue;
+            }
             let Some(ix) = self.session_index(&pane.session) else {
                 continue;
             };
             self.ensure_loaded(ix);
             let active = !pane.ghost && pane.id == layout.active();
             let body = self.pane_body(ix, active, now, moving, cx);
-            area = area.child(self.pane_element(&pane, ix, active, framed, body, cx));
+            let conversation = &self.conversations[ix];
+            let face = PaneFace {
+                title: conversation.title.clone(),
+                mark: crate::tab_tile::provider_mark(conversation.provider, 14.).into_any_element(),
+                tag: Some(provider_title(conversation.provider)),
+            };
+            area = area.child(self.pane_element(&pane, face, active, framed, body, cx));
         }
         if self.split.anim.is_none() {
             for divider in layout.rects().1 {
@@ -1337,6 +1406,73 @@ impl Shell {
         }
         let overlay = self.drop_overlay(hover, &rects, false);
         area.children(overlay).into_any_element()
+    }
+
+    /// The area panes and dragged tabs share: it aims a drag and takes the drop.
+    fn split_area(&self, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
+        div()
+            .id("split-area")
+            .relative()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .flex()
+            .on_drag_move(
+                cx.listener(|this, event: &gpui::DragMoveEvent<ConvDrag>, _, cx| {
+                    let session = event.drag(cx).session.clone();
+                    if this.split_aim(&session, event.event.position, event.bounds) {
+                        cx.notify();
+                    }
+                }),
+            )
+            .on_drag_move(cx.listener(
+                |this, event: &gpui::DragMoveEvent<crate::panel_terminal::TermTabDrag>, _, cx| {
+                    if this.split_aim(&term_session(0), event.event.position, event.bounds) {
+                        cx.notify();
+                    }
+                },
+            ))
+            .on_drop(cx.listener(|this, drag: &ConvDrag, _, cx| {
+                if let Some((target, edge, DropState::Ok)) = this.split.hover.take() {
+                    this.split_drop_at(&drag.session.clone(), target, edge, cx);
+                }
+                cx.notify();
+            }))
+            .on_drop(cx.listener(
+                |this, drag: &crate::panel_terminal::TermTabDrag, window, cx| {
+                    if let Some((target, edge, DropState::Ok)) = this.split.hover.take()
+                        && let Some(id) = this.adopt_terminal(drag, window, cx)
+                    {
+                        this.split_drop_at(&term_session(id), target, edge, cx);
+                    }
+                    cx.notify();
+                },
+            ))
+    }
+
+    /// A page shown in the area's place still takes drops, which split over what it covers.
+    pub(super) fn split_over_page(&self, page: AnyElement, cx: &mut Context<Self>) -> AnyElement {
+        let hover = self.split.hover.filter(|_| cx.has_active_drag());
+        let overlay = match &self.split.layout {
+            Some(layout) => self.drop_overlay(hover, &layout.rects().0, false),
+            None => self.drop_overlay(hover, &[(1, WHOLE)], true),
+        };
+        self.split_area(cx)
+            .child(page)
+            .children(overlay)
+            .into_any_element()
+    }
+
+    pub(super) fn split_clear_aim(&mut self) {
+        self.split.hover = None;
+    }
+
+    /// Whether a terminal tab shows in a pane beside a conversation.
+    pub(super) fn split_shows_term(&self, id: u64) -> bool {
+        self.split
+            .layout
+            .as_ref()
+            .is_some_and(|layout| layout.showing(&term_session(id)).is_some())
     }
 
     /// One pane's transcript and composer, built for its own conversation.
@@ -1370,13 +1506,12 @@ impl Shell {
     fn pane_element(
         &self,
         pane: &PaneBox,
-        ix: usize,
+        face: PaneFace,
         active: bool,
         framed: f32,
         body: AnyElement,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let conversation = &self.conversations[ix];
         let id = pane.id;
         let r = pane.rect;
         let frame_color = if active {
@@ -1384,8 +1519,8 @@ impl Shell {
         } else {
             content(0.08 * framed)
         };
-        let title = conversation.title.clone();
-        let session = conversation.session_id.clone();
+        let PaneFace { title, mark, tag } = face;
+        let session = pane.session.clone();
         let header = div()
             .id(("pane-header", id))
             .flex_shrink_0()
@@ -1406,7 +1541,7 @@ impl Shell {
                 },
                 |drag, _, _, cx| cx.new(|_| DragChip(drag.title.clone())),
             )
-            .child(crate::tab_tile::provider_mark(conversation.provider, 14.))
+            .child(mark)
             .child(
                 div()
                     .flex_1()
@@ -1416,13 +1551,13 @@ impl Shell {
                     .text_color(content(if active { 0.92 } else { 0.6 }))
                     .child(title),
             )
-            .child(
+            .children(tag.map(|tag| {
                 div()
                     .flex_shrink_0()
                     .text_size(px(11.))
                     .text_color(content(0.4))
-                    .child(provider_title(conversation.provider)),
-            )
+                    .child(tag)
+            }))
             .child(
                 div()
                     .id(("pane-close", id))
@@ -1614,6 +1749,36 @@ impl Shell {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_terminal_splits_but_never_becomes_the_active_pane() {
+        let single = Layout::single("a");
+        let term = term_session(7);
+        let beside = single
+            .dropped(&term, Target::Pane(single.active()), Edge::Right)
+            .unwrap();
+        assert_eq!(beside.count(), 2);
+        assert_eq!(beside.active_session(), "a");
+        let (talk, _) = beside.leaves()[0];
+        let alone = beside.removed(talk).unwrap();
+        assert_eq!(alone.active_session(), term);
+        let mut three = two();
+        let target = Target::Pane(three.active());
+        three = three.dropped(&term, target, Edge::Bottom).unwrap();
+        let active = three.active();
+        let after = three.removed(active).unwrap();
+        assert!(
+            term_id(after.active_session()).is_none(),
+            "a chat takes over"
+        );
+    }
+
+    #[test]
+    fn a_terminal_leaf_reads_back_its_tab() {
+        assert_eq!(term_id(&term_session(12)), Some(12));
+        assert_eq!(term_id("12"), None);
+        assert_eq!(term_id("term:x"), None);
+    }
 
     fn two() -> Layout {
         Layout::single("a")

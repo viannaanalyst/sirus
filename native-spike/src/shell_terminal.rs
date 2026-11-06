@@ -10,10 +10,14 @@ use gpui::{AnyView, App, Entity, Subscription};
 const CHIP_WIDTH: f32 = 124.;
 const CHIP_GAP: f32 = 4.;
 pub(super) const BOTTOM_HEIGHT: f32 = 280.;
+/// A terminal's key in the deck of pinned tabs, clear of the tabs' ids.
+pub(super) const TERM_CARD: u64 = 1 << 62;
 
 struct TermTab {
     id: u64,
     view: Entity<TerminalGroup>,
+    /// Lives in the deck of pinned tabs instead of the strip.
+    pinned: bool,
 }
 
 pub(super) struct TermState {
@@ -25,6 +29,8 @@ pub(super) struct TermState {
     bottom_open: bool,
     /// The plus button's menu in the title strip: left edge and fade-in.
     plus_menu: Option<(f32, Tween)>,
+    /// The right-click menu of a terminal tab: which tab, where, and its fade-in.
+    chip_menu: Option<(u64, gpui::Point<Pixels>, Tween)>,
     /// The Pull requests page, a tab among the session tabs in every placement (pull_requests_page.rs).
     pub(super) pulls: Option<Entity<PullRequestsPage>>,
     pub(super) pulls_active: bool,
@@ -49,19 +55,27 @@ impl TermState {
             active: None,
             bottom_open: false,
             plus_menu: None,
+            chip_menu: None,
             pulls: None,
             pulls_active: false,
             pulls_tab: None,
             _pulls_events: None,
         }
     }
+    /// Terminal tabs show in any placement: one pulled from the panel stays a tab.
     fn chip_count(&self) -> usize {
-        let terminals = if self.placement == Placement::TitleBar {
-            self.tabs.len()
-        } else {
-            0
-        };
-        terminals
+        self.tabs.iter().filter(|tab| !tab.pinned).count()
+    }
+    pub fn pinned_ids(&self) -> Vec<u64> {
+        self.tabs
+            .iter()
+            .filter(|tab| tab.pinned)
+            .map(|tab| tab.id)
+            .collect()
+    }
+    /// The deck's key of the terminal tab showing, if any.
+    pub fn active_card(&self) -> Option<u64> {
+        self.active.map(|id| TERM_CARD + id)
     }
     pub fn chips_width(&self) -> f32 {
         match self.chip_count() {
@@ -70,8 +84,23 @@ impl TermState {
         }
     }
     pub fn close_menu(&mut self) -> bool {
+        if self.chip_menu.take().is_some() {
+            return true;
+        }
         self.plus_menu.take().is_some()
     }
+}
+
+/// A pinned terminal's card in the deck, the same tile the panel's tabs carry.
+pub(super) fn terminal_tile() -> (Face, AnyElement) {
+    (
+        Face::Fill(rgb(0x3A3A3C).into(), rgb(0x1C1C1E).into()),
+        gpui::svg()
+            .path("terminal-square")
+            .size(px(12.))
+            .text_color(gpui::white())
+            .into_any_element(),
+    )
 }
 
 impl Shell {
@@ -186,11 +215,223 @@ impl Shell {
         if let Some(window) = window {
             view.update(cx, |group, cx| group.focus(window, cx));
         }
-        self.term.tabs.push(TermTab { id, view });
+        self.term.tabs.push(TermTab {
+            id,
+            view,
+            pinned: false,
+        });
         self.term.active = Some(id);
         self.term.pulls_active = false;
         self.term.plus_menu = None;
         cx.notify();
+    }
+
+    /// A terminal dragged out of the panel becomes a title tab; its shell keeps running.
+    pub(super) fn adopt_terminal(
+        &mut self,
+        drag: &crate::panel_terminal::TermTabDrag,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<u64> {
+        let view = crate::panel_terminal::group_from_drag(drag, cx)?;
+        view.update(cx, |group, cx| group.focus(window, cx));
+        let id = self.term.next_id;
+        self.term.next_id += 1;
+        self.term.tabs.push(TermTab {
+            id,
+            view,
+            pinned: false,
+        });
+        self.term.active = Some(id);
+        self.term.pulls_active = false;
+        cx.notify();
+        Some(id)
+    }
+
+    /// Shows a terminal tab in the conversation's place.
+    pub(super) fn show_term_tab(&mut self, id: Option<u64>) {
+        self.term.active = id;
+    }
+
+    /// The group of a terminal tab, for the pane that shows it beside a conversation.
+    pub(super) fn term_view(&self, id: u64) -> Option<Entity<TerminalGroup>> {
+        let tab = self.term.tabs.iter().find(|tab| tab.id == id)?;
+        Some(tab.view.clone())
+    }
+
+    pub(super) fn term_title(&self, id: u64, cx: &App) -> String {
+        self.term_view(id)
+            .map_or_else(String::new, |view| view.read(cx).title())
+    }
+
+    /// What a terminal tab carries when it is dragged: the same drag as a conversation's pane.
+    pub(super) fn term_drag(&self, id: u64, cx: &App) -> split_panes::ConvDrag {
+        split_panes::ConvDrag {
+            session: split_panes::term_session(id),
+            title: self.term_title(id, cx),
+        }
+    }
+
+    /// A title tab dropped on the side panel or the bottom strip goes back into the Terminal
+    /// pane, shells and all, and its tab goes away.
+    pub(super) fn terminal_to_panel(
+        &mut self,
+        id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(group) = self.term_view(id) else {
+            return;
+        };
+        if self.term.placement != Placement::Bottom {
+            if !self.dock_panes.contains(&0) {
+                self.dock_panes.push(0);
+            }
+            self.dock_active = Some(0);
+        }
+        self.ensure_pane_view(0, cx);
+        let Some(view) = self.conversation_view(0) else {
+            return;
+        };
+        if !crate::panel_terminal::adopt_group(&view, &group, window, cx) {
+            return;
+        }
+        self.term.tabs.retain(|tab| tab.id != id);
+        if self.term.active == Some(id) {
+            self.term.active = None;
+        }
+        self.split_clear_aim();
+        cx.notify();
+    }
+
+    /// Over the side panel or the strip while a terminal tab is dragged: the wash that says it
+    /// can land there. It lets everything else through, and takes the drop.
+    pub(super) fn term_drop_zone(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        cx.has_active_drag().then(|| {
+            div()
+                .id("term-drop-zone")
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .drag_over::<split_panes::ConvDrag>(|style, drag, _, _| {
+                    if split_panes::term_id(&drag.session).is_some() {
+                        style.bg(crate::theme::accent_wash(0.16))
+                    } else {
+                        style
+                    }
+                })
+                .on_drop(
+                    cx.listener(|this, drag: &split_panes::ConvDrag, window, cx| {
+                        if let Some(id) = split_panes::term_id(&drag.session) {
+                            this.terminal_to_panel(id, window, cx);
+                        }
+                    }),
+                )
+                .into_any_element()
+        })
+    }
+
+    pub(super) fn open_title_tab(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        // Already beside a conversation: it stays there and takes the keys.
+        self.term.active = (!self.split_shows_term(id)).then_some(id);
+        self.term.pulls_active = false;
+        self.term.plus_menu = None;
+        if let Some(tab) = self.term.tabs.iter().find(|t| t.id == id) {
+            tab.view.update(cx, |group, cx| group.focus(window, cx));
+        }
+        cx.notify();
+    }
+
+    pub(super) fn ask_chip_menu(
+        &mut self,
+        id: u64,
+        at: gpui::Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let length = if cx.reduce_motion() { 0. } else { 0.12 };
+        self.term.chip_menu = Some((
+            id,
+            at,
+            Tween::from_to(0., 1., Instant::now(), length, Curve::Expo),
+        ));
+        cx.notify();
+    }
+
+    /// A terminal tab's right-click menu.
+    fn term_chip_menu_view(
+        &self,
+        now: Instant,
+        moving: &mut bool,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let (id, at, open) = self.term.chip_menu.as_ref()?;
+        let (id, at) = (*id, *at);
+        *moving |= !open.done(now);
+        let shown = open.at(now).clamp(0., 1.);
+        let pinned = self.term.tabs.iter().find(|tab| tab.id == id)?.pinned;
+        let track = crate::hover_track::list("term-chip-menu");
+        let row = |key: &'static str, glyph: &'static str, label: &'static str| {
+            track.row_named(
+                div()
+                    .id(key)
+                    .relative()
+                    .h(px(26.))
+                    .px(px(8.))
+                    .rounded(px(crate::theme::RADIUS_MD))
+                    .flex()
+                    .items_center()
+                    .gap(px(9.))
+                    .text_size(px(13.))
+                    .text_color(content(0.9))
+                    .cursor_pointer()
+                    .child(icon(glyph, 14.).text_color(content(0.65)))
+                    .child(label),
+                key,
+                false,
+            )
+        };
+        Some(
+            div()
+                .id("term-chip-menu")
+                .occlude()
+                .absolute()
+                .left(at.x)
+                .top(at.y + px(2.))
+                .w(px(190.))
+                .p(px(4.))
+                .rounded(px(crate::theme::RADIUS_LG))
+                .border_1()
+                .border_color(content(0.12))
+                .child(crate::theme::floating_surface(crate::theme::RADIUS_MD))
+                .shadow_lg()
+                .opacity(shown)
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(track.pill())
+                .child(
+                    row(
+                        "term-menu-pin",
+                        "pin",
+                        t(if pinned { "Desafixar aba" } else { "Fixar aba" }),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.term.chip_menu = None;
+                        if let Some(tab) = this.term.tabs.iter_mut().find(|tab| tab.id == id) {
+                            tab.pinned = !tab.pinned;
+                        }
+                        cx.notify();
+                    })),
+                )
+                .child(
+                    row("term-menu-close", "tab-close", t("Fechar aba")).on_click(cx.listener(
+                        move |this, _, window, cx| {
+                            this.term.chip_menu = None;
+                            this.close_title_tab(id, window, cx);
+                        },
+                    )),
+                )
+                .into_any_element(),
+        )
     }
 
     /// Closes title tab `id`, asking first when a command runs in any of its shells.
@@ -382,7 +623,7 @@ impl Shell {
     }
 
     /// The tab shown in place of the conversation.
-    pub(super) fn title_tab_view(&self) -> Option<AnyElement> {
+    pub(super) fn title_tab_view(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if let Some(pulls) = self.term.pulls.as_ref().filter(|_| self.term.pulls_active) {
             return Some(
                 div()
@@ -393,22 +634,18 @@ impl Shell {
                     .into_any_element(),
             );
         }
-        if self.term.placement != Placement::TitleBar {
-            return None;
-        }
         let tab = self
             .term
             .tabs
             .iter()
             .find(|t| Some(t.id) == self.term.active)?;
-        Some(
-            div()
-                .flex_1()
-                .min_w_0()
-                .h_full()
-                .child(tab.view.clone())
-                .into_any_element(),
-        )
+        let page = div()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .child(tab.view.clone())
+            .into_any_element();
+        Some(self.split_over_page(page, cx))
     }
 
     /// The plus button of the title strip: in this placement it opens a two-entry menu.
@@ -435,19 +672,20 @@ impl Shell {
         if self.term.chips_width() == 0. {
             return None;
         }
-        let terminals = if self.term.placement == Placement::TitleBar {
-            self.term.tabs.as_slice()
-        } else {
-            &[]
-        };
-        let chips: Vec<AnyElement> = terminals
+        let chips: Vec<AnyElement> = self
+            .term
+            .tabs
             .iter()
+            .filter(|tab| !tab.pinned)
             .map(|tab| {
                 let id = tab.id;
                 let active = self.term.active == Some(id) && !self.term.pulls_active;
                 let title: gpui::SharedString = tab.view.read(cx).title().into();
                 div()
                     .id(("term-chip", id))
+                    .on_drag(self.term_drag(id, cx), |drag, _, _, cx| {
+                        cx.new(|_| split_panes::DragChip::new(drag.title.clone()))
+                    })
                     .group(format!("term-chip-{id}"))
                     .relative()
                     .w(px(CHIP_WIDTH))
@@ -465,6 +703,13 @@ impl Shell {
                     .text_color(content(if active { 1. } else { 0.55 }))
                     .hover(|s| s.bg(content(0.07)))
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            this.ask_chip_menu(id, event.position, cx);
+                        }),
+                    )
                     .child(icon("terminal-square", 12.).text_color(content(0.7)))
                     .child(div().flex_1().min_w_0().truncate().child(title))
                     .child(
@@ -487,13 +732,7 @@ impl Shell {
                             })),
                     )
                     .on_click(cx.listener(move |this, _, window, cx| {
-                        this.term.active = Some(id);
-                        this.term.pulls_active = false;
-                        this.term.plus_menu = None;
-                        if let Some(tab) = this.term.tabs.iter().find(|t| t.id == id) {
-                            tab.view.update(cx, |group, cx| group.focus(window, cx));
-                        }
-                        cx.notify();
+                        this.open_title_tab(id, window, cx);
                     }))
                     .into_any_element()
             })
@@ -511,19 +750,21 @@ impl Shell {
     }
 
     /// The strip under the conversation: the active conversation's Terminal pane.
-    pub(super) fn bottom_view(&self) -> Option<AnyElement> {
+    pub(super) fn bottom_view(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if self.term.placement != Placement::Bottom || !self.term.bottom_open {
             return None;
         }
         let view = self.conversation_view(0)?;
         Some(
             div()
+                .relative()
                 .flex_shrink_0()
                 .w_full()
                 .h(px(BOTTOM_HEIGHT))
                 .border_t_1()
                 .border_color(content(0.08))
                 .child(view)
+                .children(self.term_drop_zone(cx))
                 .into_any_element(),
         )
     }
@@ -535,6 +776,9 @@ impl Shell {
         moving: &mut bool,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
+        if let Some(menu) = self.term_chip_menu_view(now, moving, cx) {
+            return Some(menu);
+        }
         let (x, open) = self.term.plus_menu.as_ref()?;
         if !open.done(now) {
             *moving = true;

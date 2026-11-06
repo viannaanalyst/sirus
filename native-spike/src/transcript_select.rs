@@ -802,6 +802,22 @@ impl Shell {
         true
     }
 
+    /// Puts a selected passage at the end of the composer's draft, on its own paragraph, with the
+    /// caret on a new one below it (Monocode's add_to_chat).
+    fn add_to_chat(&mut self, text: &str) {
+        let draft = self.draft();
+        let separator = if draft.text.is_empty() || draft.text.ends_with("\n\n") {
+            ""
+        } else if draft.text.ends_with('\n') {
+            "\n"
+        } else {
+            "\n\n"
+        };
+        draft.text = format!("{}{separator}{}\n\n", draft.text, text.trim());
+        draft.cursor = draft.text.len();
+        draft.anchor = draft.cursor;
+    }
+
     pub(super) fn select_menu_view(
         &self,
         now: Instant,
@@ -882,25 +898,14 @@ impl Shell {
                     )),
                 )
                 .child(
-                    item(
-                        "selection-side-chat",
-                        "message-square",
-                        "Perguntar no chat lateral",
-                    )
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.select.clear();
-                        this.open_pane(4, cx);
-                        let key = (
-                            4,
-                            this.conversations[this.active_conversation()]
-                                .session_id
-                                .clone(),
-                        );
-                        if let Some(view) = this.pane_views.get(&key) {
-                            crate::panel_sidechat::quote(view, &ask, window, cx);
-                        }
-                        cx.notify();
-                    })),
+                    item("selection-add-chat", "comment-add", "Adicionar ao chat").on_click(
+                        cx.listener(move |this, _, window, cx| {
+                            this.select.clear();
+                            this.add_to_chat(&ask);
+                            this.keep_typing_focus(window, cx);
+                            cx.notify();
+                        }),
+                    ),
                 )
                 .into_any_element(),
         )

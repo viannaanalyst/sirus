@@ -1085,7 +1085,7 @@ fn section(title: &str, items: Vec<AnyElement>, cols: usize) -> AnyElement {
 
 /// A brand's mark in a rounded square: its Simple Icons path in its color (near-black ones follow
 /// the text color), the PNG from its site, or its first letter.
-fn logo(catalog_id: Option<&str>, name: &str, size: f32) -> AnyElement {
+pub(crate) fn logo(catalog_id: Option<&str>, name: &str, size: f32) -> AnyElement {
     let frame = div()
         .size(px(size))
         .flex_shrink_0()

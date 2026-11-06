@@ -59,6 +59,7 @@ mod subagent_team;
 mod syntax;
 mod fonts;
 mod step_lines;
+mod native_notify;
 mod new_tab_field;
 mod tab_label;
 mod tab_tile;
@@ -161,6 +162,8 @@ impl AssetSource for Assets {
             "upload" => include_bytes!("../assets/upload.svg"),
             "server" => include_bytes!("../assets/server.svg"),
             "folder" => include_bytes!("../assets/folder.svg"),
+            "sun" => include_bytes!("../assets/sun.svg"),
+            "moon" => include_bytes!("../assets/moon.svg"),
             "eye" => include_bytes!("../assets/eye.svg"),
             "file-text" => include_bytes!("../assets/file-text.svg"),
             "wrench" => include_bytes!("../assets/wrench.svg"),

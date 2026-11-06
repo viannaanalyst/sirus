@@ -104,6 +104,66 @@ thread_local! {
     static GLYPHS: OnceCell<(FontId, Vec<GlyphId>)> = const { OnceCell::new() };
 }
 
+/// The line of letters along the composer's top edge while the agent works: faint everywhere,
+/// lit and raised around the robot walking over it. `width` hands the line's width to the robot.
+pub fn ledge(color: u32, robot_x: f32, clock: f32, width: std::rc::Rc<std::cell::Cell<f32>>) -> AnyElement {
+    let tint = Hsla::from(Rgba {
+        r: ((color >> 16) & 0xff) as f32 / 255.,
+        g: ((color >> 8) & 0xff) as f32 / 255.,
+        b: (color & 0xff) as f32 / 255.,
+        a: 1.,
+    });
+    gpui::canvas(
+        |_, _, _| {},
+        move |bounds: Bounds<Pixels>, _, window: &mut Window, _: &mut App| {
+            let (left, bottom) = (f32::from(bounds.origin.x), f32::from(bounds.bottom()));
+            width.set(f32::from(bounds.size.width));
+            let (font_id, ids) = GLYPHS.with(|cell| cell.get_or_init(|| glyphs(window)).clone());
+            if ids.is_empty() {
+                return;
+            }
+            let mut x = 10.;
+            while x < f32::from(bounds.size.width) - 8. {
+                let (near, lift) = ledge_cell(x, robot_x, clock);
+                let at = ((near * ids.len() as f32) as usize).min(ids.len() - 1);
+                let _ = window.paint_glyph(
+                    point(px(left + x), px(bottom - 4. - lift)),
+                    font_id,
+                    ids[at],
+                    px(FONT_SIZE),
+                    Hsla {
+                        a: 0.1 + near * 0.8,
+                        ..tint
+                    },
+                );
+                x += LEDGE_STEP;
+            }
+        },
+    )
+    .absolute()
+    .top_0()
+    .left_0()
+    .size_full()
+    .into_any_element()
+}
+
+const LEDGE_STEP: f32 = 6.;
+
+/// How lit a letter of the ledge is, 0 to 1, and how far it rises, from its distance to the robot.
+fn ledge_cell(x: f32, robot_x: f32, clock: f32) -> (f32, f32) {
+    let near = (-(x - (robot_x + 13.)).powi(2) / 2600.).exp();
+    (near, near * 9. + (x * 0.09 + clock * 2.).sin() * 0.5)
+}
+
+/// Where the robot walks along a line `width` wide, there and back at 110 px/s, and its hop.
+pub fn walk(width: f32, clock: f32) -> (f32, f32) {
+    let span = (width - 46.).max(1.);
+    let period = span / 110. * 2.;
+    let phase = (clock % period) / period;
+    let along = if phase < 0.5 { phase * 2. } else { 2. - phase * 2. };
+    (8. + span * along, (clock * 6.8).sin().abs() * 4.)
+}
+
 /// The field, filling its parent. `set` reaches the shell's `State` from the mouse listeners.
 pub fn field<V: 'static>(
     shape: &'static str,
@@ -238,6 +298,24 @@ mod tests {
         state.click(point(px(1.), px(1.)), start);
         assert!(state.moving(start));
         assert!(!state.moving(start + std::time::Duration::from_secs_f32(WAVE_S + 0.1)));
+    }
+
+    #[test]
+    fn the_robot_walks_there_and_back_inside_the_line() {
+        let width = 500.;
+        let period = (width - 46.) / 110. * 2.;
+        for step in 0..40 {
+            let (x, hop) = walk(width, step as f32 * 0.37);
+            assert!((8. ..=width - 38.).contains(&x), "{x}");
+            assert!((0. ..=4.).contains(&hop));
+        }
+        assert!((walk(width, 0.).0 - walk(width, period).0).abs() < 0.01);
+    }
+
+    #[test]
+    fn the_ledge_is_lit_near_the_robot_only() {
+        assert!(ledge_cell(113., 100., 0.).0 > 0.9);
+        assert!(ledge_cell(400., 100., 0.).0 < 0.01);
     }
 
     #[test]

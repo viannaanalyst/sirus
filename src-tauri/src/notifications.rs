@@ -386,7 +386,11 @@ pub fn announce(app: &AppHandle, state: &Arc<AppState>, title: String, body: Str
         });
     }
     #[cfg(not(all(target_os = "macos", feature = "desktop")))]
-    let _ = foreground;
+    {
+        let _ = foreground;
+        let sound = prefs.completion_sound;
+        window_alert(app, &notice, &prefs, sound);
+    }
 }
 
 /// The identity of one snooze reminder (ADR-103): a session returns once per wake.
@@ -482,7 +486,9 @@ pub fn remind(app: &AppHandle, state: &Arc<AppState>, session_id: &str) {
             }
         }
         #[cfg(not(all(target_os = "macos", feature = "desktop")))]
-        let _ = eligible;
+        if eligible {
+            window_alert(&app, &notice, &prefs, choice(&prefs, Kind::Reminder).1);
+        }
     });
 }
 
@@ -591,7 +597,9 @@ pub fn publish(app: &AppHandle, state: &Arc<AppState>, snapshot: &Session) {
                 }
             }
             #[cfg(not(all(target_os = "macos", feature = "desktop")))]
-            let _ = (eligible, sound);
+            if eligible {
+                window_alert(&app, &notice, &prefs, sound);
+            }
         }
     });
 }
@@ -724,6 +732,10 @@ fn announce_pulls(
         if prefs.toasts {
             let _ = app.emit("notification-activity", &notice);
         }
+        #[cfg(not(all(target_os = "macos", feature = "desktop")))]
+        if eligible {
+            window_alert(app, &notice, &prefs, choice(&prefs, Kind::PullRequest).1);
+        }
         #[cfg(all(target_os = "macos", feature = "desktop"))]
         if prefs.system && eligible {
             let app = app.clone();
@@ -755,6 +767,22 @@ pub fn install(app: &AppHandle) {
 /// Final admission happens on the main thread after the OS permission lookup.
 /// Hold native ownership while submitting; a resolved request or removal cannot
 /// race this gate. Explicit tests have no session and do not impersonate work.
+/// The headless host has no notification center of its own: the window that drives it plays the
+/// sound and shows the banner (`native_notify.rs`), by these rules.
+#[cfg(not(all(target_os = "macos", feature = "desktop")))]
+fn window_alert(app: &AppHandle, notice: &Notice, prefs: &Preferences, sound: Sound) {
+    let _ = app.emit(
+        "notification-native",
+        serde_json::json!({
+            "title": notice.title,
+            "body": notice.body,
+            "sound": prefs.sounds.then_some(sound),
+            "system": prefs.system,
+            "foreground": prefs.foreground,
+        }),
+    );
+}
+
 #[cfg(all(target_os = "macos", feature = "desktop"))]
 pub(super) fn deliver_if_current(app: &AppHandle, notice: &Notice, deliver: impl FnOnce()) -> bool {
     let state = app.state::<Arc<AppState>>();

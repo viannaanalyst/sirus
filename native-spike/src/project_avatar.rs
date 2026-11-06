@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::f64::consts::PI;
 use std::sync::Arc;
 
-use gpui::{AnyElement, Hsla, Image, ImageFormat, PathBuilder, Rgba, point, prelude::*, px};
+use gpui::{AnyElement, Hsla, Image, ImageFormat, PathBuilder, point, prelude::*, px};
 use serde_json::Value;
 
 /// A working avatar's hop changes every 200 ms.

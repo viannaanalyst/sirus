@@ -37,6 +37,8 @@ pub enum Commit {
 
 /// What a page's views share: the text being edited and the callbacks each control fires.
 struct Ui<'a, V> {
+    /// The saved shortcuts, for a row's way back to its default.
+    custom: Value,
     ids: usize,
     editing: Option<(&'a str, &'a str)>,
     save: Save<V>,
@@ -110,6 +112,12 @@ enum Ctl {
         width: f32,
         button: Option<&'static str>,
     },
+    /// A shortcut's keys; a click records new ones. `custom` adds the way back to the default.
+    Shortcut {
+        id: &'static str,
+        combo: String,
+        custom: bool,
+    },
     /// A provider's folder button; a click opens its labelled path field, with what was detected.
     Path {
         key: &'static str,
@@ -121,6 +129,7 @@ enum Ctl {
 /// The height of a page's title bar and the left inset it shares with the page's content.
 const TITLE_BAR_HEIGHT: f32 = 52.;
 pub const CONTENT_INSET: f32 = 28.;
+pub const CONTENT_WIDTH: f32 = 1040.;
 
 struct Row {
     title: String,
@@ -128,6 +137,8 @@ struct Row {
     controls: Vec<Ctl>,
     /// A provider's mark at the head of the row.
     provider: Option<&'static str>,
+    /// A connector's logo at the head of the row, by its catalog id.
+    mark: Option<&'static str>,
     /// Not available: the whole row reads as dimmed.
     faded: bool,
 }
@@ -213,12 +224,29 @@ pub fn page<V: 'static>(
     }
     let mut ui = Ui {
         ids: 0,
+        custom: settings["customShortcuts"].clone(),
         editing,
         save,
         edit,
         run,
     };
+    let restore = restorable_keys(page, &shown);
     let mut actions = Vec::new();
+    if !restore.is_empty() && !loading {
+        actions.push(control_view(restore_button(restore), &mut ui, cx));
+    }
+    if page == "Notificações" {
+        actions.push(control_view(
+            Ctl::Button {
+                label: t("Testar notificação"),
+                act: act_run("native_notify_test", json!({})),
+                enabled: true,
+                danger: false,
+            },
+            &mut ui,
+            cx,
+        ));
+    }
     for ctl in shown.actions {
         actions.push(control_view(ctl, &mut ui, cx));
     }
@@ -245,36 +273,112 @@ pub fn page<V: 'static>(
     )
 }
 
+/// The settings a page changes, for its Restaurar padrões. Pages that list things the person added
+/// have nothing to go back to.
+fn restorable_keys(page: &str, shown: &Page) -> Vec<&'static str> {
+    if matches!(page, "Provedores" | "Agent skills" | "Conectores" | "Conexões" | "Git") {
+        return Vec::new();
+    }
+    let mut keys = Vec::new();
+    if page == "Atalhos" {
+        keys.push("customShortcuts");
+    }
+    for group in &shown.groups {
+        for row in &group.rows {
+            for ctl in &row.controls {
+                let acts: Vec<&Act> = match ctl {
+                    Ctl::Switch { change: Some(act), .. } => vec![act],
+                    Ctl::Pick(options) => options.iter().map(|o| &o.change).collect(),
+                    _ => Vec::new(),
+                };
+                for act in acts {
+                    if let Act::Save { key, .. } = act {
+                        if !keys.contains(key) {
+                            keys.push(*key);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    keys
+}
+
+fn restore_button(keys: Vec<&'static str>) -> Ctl {
+    Ctl::Button {
+        label: t("Restaurar padrões"),
+        act: act_run(
+            "native_confirm",
+            json!({
+                "label": t("Restaurar"),
+                "title": t("Restaurar os padrões desta página?"),
+                "message": t("As opções desta página voltam ao padrão do app."),
+                "then": { "kind": "run", "cmd": "native_restore", "args": { "keys": keys } },
+            }),
+        ),
+        enabled: true,
+        danger: false,
+    }
+}
+
+/// Aparência keeps its look in its own file, so its restore has its own command.
+pub fn restore_look_button<V: 'static>(run: Run<V>, cx: &mut Context<V>) -> AnyElement {
+    div()
+        .id("restore-look")
+        .h(px(28.))
+        .px(px(10.))
+        .rounded(px(crate::theme::RADIUS_SM))
+        .border_1()
+        .border_color(content(0.12))
+        .flex()
+        .items_center()
+        .text_size(px(12.5))
+        .text_color(content(0.85))
+        .cursor_pointer()
+        .hover(|style| style.bg(content(0.08)))
+        .on_click(cx.listener(move |this, _, _, cx| {
+            run(this, "native_restore_look", json!({}), cx)
+        }))
+        .child(t("Restaurar padrões"))
+        .into_any_element()
+}
+
 /// The top of a settings page: its title and actions, on a rule that runs the pane's whole width.
 pub fn title_bar(title: impl Into<gpui::SharedString>, actions: Vec<AnyElement>) -> AnyElement {
     div()
         .flex_shrink_0()
         .w_full()
         .h(px(TITLE_BAR_HEIGHT))
-        .pl(px(CONTENT_INSET))
-        .pr(px(16.))
-        .flex()
-        .items_center()
-        .justify_between()
-        .gap(px(16.))
         .border_b_1()
         .border_color(content(0.08))
         .child(
+            // The content's own width, so the actions end where the page's cards end.
             div()
-                .min_w_0()
-                .truncate()
-                .text_size(px(15.))
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(content(1.))
-                .child(title.into()),
-        )
-        .child(
-            div()
+                .w_full()
+                .h_full()
+                .max_w(px(CONTENT_WIDTH))
+                .px(px(CONTENT_INSET))
                 .flex()
                 .items_center()
-                .gap(px(8.))
-                .flex_shrink_0()
-                .children(actions),
+                .justify_between()
+                .gap(px(16.))
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(px(15.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(content(1.))
+                        .child(title.into()),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .flex_shrink_0()
+                        .children(actions),
+                ),
         )
         .into_any_element()
 }
@@ -431,6 +535,7 @@ fn row(title: impl Into<String>, about: impl Into<String>, controls: Vec<Ctl>) -
         about: about.into(),
         controls,
         provider: None,
+        mark: None,
         faded: false,
     }
 }
@@ -656,12 +761,12 @@ fn row_view<V: 'static>(item: Row, ui: &mut Ui<'_, V>, cx: &mut Context<V>) -> A
                 .child(item.title),
         );
     }
-    if !item.about.is_empty() {
+    for line in item.about.lines() {
         text = text.child(
             div()
                 .text_size(px(12.))
                 .text_color(content(0.5))
-                .child(item.about),
+                .child(line.to_owned()),
         );
     }
     div()
@@ -687,6 +792,9 @@ fn row_view<V: 'static>(item: Row, ui: &mut Ui<'_, V>, cx: &mut Context<V>) -> A
                         crate::tab_tile::Face::provider(provider),
                         crate::theme::provider_glyph(provider, 12.),
                     ))
+                })
+                .when_some(item.mark, |d, id| {
+                    d.child(crate::settings_connectors::logo(Some(id), id, 26.))
                 })
                 .child(text),
         )
@@ -785,6 +893,223 @@ fn field_view<V: 'static>(
     }
 }
 
+/// The caps of a shortcut, or the prompt while it records.
+fn shortcut_view<V: 'static>(
+    id: &'static str,
+    combo: String,
+    custom: bool,
+    ui: &mut Ui<'_, V>,
+    cx: &mut Context<V>,
+) -> AnyElement {
+    let (edit, save) = (ui.edit, ui.save);
+    let key = key_of(format!("shortcut:{id}"));
+    let cap = |text: String| {
+        div()
+            .min_w(px(22.))
+            .h(px(22.))
+            .px(px(6.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(5.))
+            .border_1()
+            .border_b_2()
+            .border_color(content(0.12))
+            .bg(content(0.07))
+            .text_size(px(12.))
+            .text_color(content(0.9))
+            .child(text)
+    };
+    if let Some((_, note)) = ui.editing.filter(|(field, _)| *field == key) {
+        let row = div().flex().items_center().gap(px(8.));
+        let row = if note.is_empty() {
+            row
+        } else {
+            row.child(
+                div()
+                    .text_size(px(11.5))
+                    .text_color(gpui::rgb(0xe08a8a))
+                    .child(note.to_owned()),
+            )
+        };
+        return row
+            .child(
+                div()
+                    .h(px(22.))
+                    .px(px(8.))
+                    .flex()
+                    .items_center()
+                    .rounded(px(5.))
+                    .border_1()
+                    .border_color(accent())
+                    .text_size(px(12.))
+                    .text_color(accent())
+                    .child(t("Pressione as teclas…")),
+            )
+            .into_any_element();
+    }
+    let at = next_id(&mut ui.ids);
+    let settings = ui.custom.clone();
+    div()
+        .flex()
+        .items_center()
+        .gap(px(6.))
+        .when(custom, |d| {
+            d.child(
+                div()
+                    .id(("setting-reset", at))
+                    .size(px(22.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(5.))
+                    .cursor_pointer()
+                    .hover(|style| style.bg(content(0.07)))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let mut map = settings.clone();
+                        if let Some(entries) = map.as_object_mut() {
+                            entries.remove(id);
+                        }
+                        save(this, "customShortcuts", map, cx);
+                    }))
+                    .child(crate::theme::icon("undo", 14.)),
+            )
+        })
+        .child(
+            div()
+                .id(("setting", at))
+                .flex()
+                .gap(px(3.))
+                .cursor_pointer()
+                .hover(|style| style.opacity(0.8))
+                .on_click(cx.listener(move |this, _, _, cx| edit(this, key, String::new(), cx)))
+                .children(shortcut_caps(&combo).into_iter().map(cap)),
+        )
+        .into_any_element()
+}
+
+/// A combo's label split into one cap per key: "⌥⌘↩" is three.
+fn shortcut_caps(combo: &str) -> Vec<String> {
+    shortcut_label(combo).chars().map(String::from).collect()
+}
+
+/// The keys a keystroke makes, in the host's form: `meta+alt+shift+k`.
+fn combo_of(keys: &gpui::Keystroke) -> String {
+    let mut parts = Vec::new();
+    if keys.modifiers.platform {
+        parts.push("meta");
+    }
+    if keys.modifiers.alt {
+        parts.push("alt");
+    }
+    if keys.modifiers.shift {
+        parts.push("shift");
+    }
+    parts.push(keys.key.as_str());
+    parts.join("+")
+}
+
+/// Whether the host takes a combo for `id` (its rule in `models.rs`, in short): ⌘ plus a letter,
+/// number or a few signs; not the keys macOS and text fields keep.
+fn shortcut_allowed(id: &str, combo: &str) -> bool {
+    let mut parts: Vec<&str> = combo.split('+').collect();
+    let key = parts.pop().unwrap_or_default();
+    if id == "cycle-effort" && key == "tab" && !parts.is_empty() {
+        return true;
+    }
+    if !parts.contains(&"meta") || parts.iter().any(|m| !["meta", "alt", "shift"].contains(m)) {
+        return false;
+    }
+    if key == "enter" {
+        return parts.len() > 1;
+    }
+    let simple = key.len() == 1
+        && key
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || ",.;/\\[]`'".contains(c));
+    simple
+        && (!["q", "w", "h", "m", "c", "v", "x", "a", "z", "r", "l", "t", "=", "-"]
+            .contains(&key)
+            || combo == "meta+shift+t")
+}
+
+/// The combo a binding answers to now.
+fn effective_combo<'a>(settings: &'a Value, id: &str, fallback: &'a str) -> &'a str {
+    settings["customShortcuts"][id].as_str().unwrap_or(fallback)
+}
+
+/// What a recorded keystroke does to the saved shortcuts: the new map, or why it cannot be.
+pub fn recorded_shortcut(
+    settings: &Value,
+    id: &str,
+    keys: &gpui::Keystroke,
+) -> Result<Value, String> {
+    let combo = combo_of(keys);
+    if !shortcut_allowed(id, &combo) {
+        return Err(t("Use ⌘ com uma letra ou número livre.").to_owned());
+    }
+    // Keys the window answers to that the list above does not show.
+    const UNLISTED: [(&str, &str); 5] = [
+        ("meta+j", "Abrir terminal"),
+        ("meta+shift+j", "Abrir terminal"),
+        ("meta+p", "Buscar arquivos"),
+        ("meta+shift+p", "Paleta de comandos"),
+        ("meta+shift+w", "Fechar outras abas"),
+    ];
+    if let Some((_, label)) = UNLISTED.iter().find(|(known, _)| *known == combo) {
+        return Err(tf("Já usado por {}", &[&t(label)]));
+    }
+    if let Some((_, label, _, _)) = KEYBINDINGS
+        .iter()
+        .find(|(known, _, _, fallback)| *known != id && effective_combo(settings, known, fallback) == combo)
+    {
+        return Err(tf("Já usado por {}", &[&t(label)]));
+    }
+    let mut map = settings["customShortcuts"].clone();
+    if !map.is_object() {
+        map = json!({});
+    }
+    if KEYBINDINGS
+        .iter()
+        .any(|(known, _, _, fallback)| *known == id && *fallback == combo)
+    {
+        if let Some(entries) = map.as_object_mut() {
+            entries.remove(id);
+        }
+    } else {
+        map[id] = json!(combo);
+    }
+    Ok(map)
+}
+
+/// What a pressed key means once shortcuts can move.
+pub enum ShortcutRoute {
+    /// Nothing moved it.
+    Pass,
+    /// Its binding moved away: it does nothing now.
+    Unbound,
+    /// It is a binding's new keys: handle it as the keys the app knows that binding by.
+    As(gpui::Keystroke),
+}
+
+pub fn shortcut_route(settings: &Value, keys: &gpui::Keystroke) -> ShortcutRoute {
+    let Some(custom) = settings["customShortcuts"].as_object().filter(|m| !m.is_empty()) else {
+        return ShortcutRoute::Pass;
+    };
+    let pressed = combo_of(keys);
+    for (id, _, _, fallback) in KEYBINDINGS {
+        match custom.get(*id).and_then(Value::as_str) {
+            Some(combo) if combo == pressed => {
+                return gpui::Keystroke::parse(&fallback.replace("meta", "cmd").replace('+', "-"))
+                    .map_or(ShortcutRoute::Pass, ShortcutRoute::As);
+            }
+            Some(_) if *fallback == pressed => return ShortcutRoute::Unbound,
+            _ => {}
+        }
+    }
+    ShortcutRoute::Pass
+}
+
 /// The folder button of a provider row. While its path is edited, the field with its label: the
 /// field alone once read as the account, and an email saved there hid the CLI.
 fn path_view<V: 'static>(
@@ -836,6 +1161,36 @@ fn path_view<V: 'static>(
         .into_any_element()
 }
 
+const SWITCH_OFF: f32 = 2.;
+const SWITCH_ON: f32 = 20.;
+
+thread_local! {
+    static SWITCHES: std::cell::RefCell<HashMap<usize, (bool, usize)>> =
+        std::cell::RefCell::new(HashMap::new());
+}
+
+/// A switch that just changed gets a new animation id, so its knob slides once; one seen for the
+/// first time, as a page opens, stays put. Its generation stays while the state does, so the slide
+/// keeps its clock across frames.
+fn switch_motion(id: usize, on: bool) -> Option<usize> {
+    SWITCHES.with(|known| {
+        let mut known = known.borrow_mut();
+        match known.get_mut(&id) {
+            None => {
+                known.insert(id, (on, 0));
+                None
+            }
+            Some((state, generation)) => {
+                if *state != on {
+                    *state = on;
+                    *generation += 1;
+                }
+                (*generation > 0).then_some(id * 10_000 + *generation)
+            }
+        }
+    })
+}
+
 fn control_view<V: 'static>(ctl: Ctl, ui: &mut Ui<'_, V>, cx: &mut Context<V>) -> AnyElement {
     let (save, run) = (ui.save, ui.run);
     match ctl {
@@ -849,6 +1204,7 @@ fn control_view<V: 'static>(ctl: Ctl, ui: &mut Ui<'_, V>, cx: &mut Context<V>) -
             text,
             detected,
         } => path_view(key, text, detected, ui, cx),
+        Ctl::Shortcut { id, combo, custom } => shortcut_view(id, combo, custom, ui, cx),
         Ctl::Field {
             key,
             text,
@@ -895,22 +1251,58 @@ fn control_view<V: 'static>(ctl: Ctl, ui: &mut Ui<'_, V>, cx: &mut Context<V>) -
         }
         Ctl::Switch { on, change } => {
             let live = change.is_some();
+            let id = next_id(&mut ui.ids);
+            let group: gpui::SharedString = format!("switch-{id}").into();
+            let knob = div()
+                .id(("switch-knob", id))
+                .absolute()
+                .top(px(2.))
+                .left(px(if on { SWITCH_ON } else { SWITCH_OFF }))
+                .h(px(18.))
+                .w(px(18.))
+                .rounded_full()
+                .bg(gpui::white())
+                .shadow_sm()
+                // While pressed the knob stretches toward where it is going, as on iOS.
+                .when(live, |d| {
+                    d.group_active(group.clone(), move |style| {
+                        let style = style.w(px(23.));
+                        if on {
+                            style.left(px(SWITCH_ON - 5.))
+                        } else {
+                            style
+                        }
+                    })
+                });
+            use gpui::AnimationExt as _;
+            let knob = match switch_motion(id, on) {
+                Some(generation) => knob
+                    .with_animation(
+                        ("switch-slide", generation),
+                        gpui::Animation::new(std::time::Duration::from_millis(240))
+                            .with_easing(gpui::ease_out_quint()),
+                        move |knob, t| {
+                            let (from, to) = if on {
+                                (SWITCH_OFF, SWITCH_ON)
+                            } else {
+                                (SWITCH_ON, SWITCH_OFF)
+                            };
+                            knob.left(px(from + (to - from) * t))
+                        },
+                    )
+                    .into_any_element(),
+                None => knob.into_any_element(),
+            };
             let track = div()
-                .id(("setting", next_id(&mut ui.ids)))
+                .id(("setting", id))
+                .group(group)
+                .relative()
                 .w(px(40.))
                 .h(px(22.))
-                .p(px(2.))
                 .rounded_full()
-                .flex()
-                .items_center()
                 .bg(if on { accent() } else { content(0.16) })
-                .when(on, |d| d.justify_end())
                 .when(!live, |d| d.opacity(0.45))
-                .child(div().size(px(18.)).rounded_full().bg(if on {
-                    on_accent()
-                } else {
-                    content(0.75)
-                }));
+                .child(knob);
             match change {
                 Some(act) => track
                     .cursor_pointer()
@@ -1393,6 +1785,15 @@ fn notifications(s: &Value) -> Vec<Group> {
             about,
             vec![
                 pick(s, inner("notifications", sound), SOUNDS),
+                Ctl::Button {
+                    label: t("Ouvir"),
+                    act: act_run(
+                        "native_sound",
+                        json!({ "sound": current(s, inner("notifications", sound)) }),
+                    ),
+                    enabled: true,
+                    danger: false,
+                },
                 switch_of(s, inner("notifications", on)),
             ],
         )
@@ -1539,11 +1940,16 @@ fn keybindings(s: &Value) -> Vec<Group> {
                 .iter()
                 .filter(|entry| entry.2 == name)
                 .map(|&(id, label, _, combo)| {
-                    let combo = custom
-                        .and_then(|c| c.get(id))
-                        .and_then(Value::as_str)
-                        .unwrap_or(combo);
-                    row(t(label), "", vec![Ctl::Read(shortcut_label(combo))])
+                    let saved = custom.and_then(|c| c.get(id)).and_then(Value::as_str);
+                    row(
+                        t(label),
+                        "",
+                        vec![Ctl::Shortcut {
+                            id,
+                            combo: saved.unwrap_or(combo).to_owned(),
+                            custom: saved.is_some(),
+                        }],
+                    )
                 })
                 .collect();
             group(t(name), rows)
@@ -1683,7 +2089,9 @@ fn github_accounts(d: &HashMap<&'static str, Value>) -> Group {
                 t("Sair"),
                 act_run("native_github_logout", json!({"login": login})),
             ));
-            rows.push(row(login, about, controls));
+            let mut item = row(login, about, controls);
+            item.mark = Some("github");
+            rows.push(item);
         }
         if let Some(code) = device["code"].as_str() {
             rows.push(row(
@@ -2085,16 +2493,26 @@ fn diagnostics_rows(d: &HashMap<&'static str, Value>) -> Vec<Row> {
         .filter(|(_, entry)| !matches!(entry.probe, Probe::Absent))
         .map(|(_, entry)| {
             let copy = cli_diagnostics::copy_text(&entry);
+            // Text in the row's left column: as controls, long lines squeezed it to one letter wide.
+            let path = entry
+                .path
+                .clone()
+                .unwrap_or_else(|| t("Nenhum executável").to_owned());
+            let version = entry.version.clone().unwrap_or_else(|| "—".to_owned());
+            let mut about = format!("{version} · {path}");
+            if matches!(entry.probe, Probe::Failed(_)) {
+                about.push('\n');
+                about.push_str(&cli_diagnostics::probe_text(&entry.probe));
+            }
+            let login = cli_diagnostics::login_text(&entry.login);
+            if login != "—" {
+                about.push('\n');
+                about.push_str(&login);
+            }
             row(
                 entry.name.clone(),
-                entry
-                    .path
-                    .clone()
-                    .unwrap_or_else(|| t("Nenhum executável").to_owned()),
+                about,
                 vec![
-                    Ctl::Read(entry.version.clone().unwrap_or_else(|| "—".to_owned())),
-                    Ctl::Read(cli_diagnostics::probe_text(&entry.probe)),
-                    Ctl::Read(cli_diagnostics::login_text(&entry.login)),
                     Ctl::Button {
                         label: t("Copiar"),
                         act: act_run("native_copy", json!({ "text": copy })),
@@ -2952,6 +3370,7 @@ pub fn appearance_groups<V: 'static>(
 ) -> Vec<AnyElement> {
     let mut ui = Ui {
         ids: 0,
+        custom: settings["customShortcuts"].clone(),
         editing,
         save,
         edit,
@@ -3171,5 +3590,52 @@ mod provider_path_tests {
         assert!(repair_provider_paths(&mut settings));
         assert_eq!(settings["providerPaths"], json!({ "codex": "/bin/codex" }));
         assert!(!repair_provider_paths(&mut settings), "already clean");
+    }
+}
+
+#[cfg(test)]
+mod shortcut_tests {
+    use super::*;
+
+    fn keys(text: &str) -> gpui::Keystroke {
+        gpui::Keystroke::parse(text).unwrap()
+    }
+
+    #[test]
+    fn a_free_combo_is_saved_and_the_default_clears_it() {
+        let settings = json!({});
+        let map = recorded_shortcut(&settings, "palette", &keys("cmd-g")).unwrap();
+        assert_eq!(map["palette"], "meta+g");
+        let settings = json!({ "customShortcuts": map });
+        let map = recorded_shortcut(&settings, "palette", &keys("cmd-k")).unwrap();
+        assert!(map.get("palette").is_none());
+    }
+
+    #[test]
+    fn a_taken_or_reserved_combo_is_refused() {
+        let settings = json!({});
+        assert!(recorded_shortcut(&settings, "palette", &keys("cmd-n")).is_err());
+        assert!(recorded_shortcut(&settings, "palette", &keys("cmd-j")).is_err(), "opens the terminal");
+        assert!(recorded_shortcut(&settings, "palette", &keys("cmd-q")).is_err());
+        assert!(recorded_shortcut(&settings, "palette", &keys("j")).is_err());
+    }
+
+    #[test]
+    fn a_moved_shortcut_answers_on_its_new_keys_only() {
+        let settings = json!({ "customShortcuts": { "palette": "meta+j" } });
+        match shortcut_route(&settings, &keys("cmd-j")) {
+            ShortcutRoute::As(keystroke) => {
+                assert_eq!(keystroke.key, "k");
+                assert!(keystroke.modifiers.platform);
+            }
+            _ => panic!("should route to the palette"),
+        }
+        assert!(matches!(shortcut_route(&settings, &keys("cmd-k")), ShortcutRoute::Unbound));
+        assert!(matches!(shortcut_route(&settings, &keys("cmd-p")), ShortcutRoute::Pass));
+    }
+
+    #[test]
+    fn caps_are_one_per_key() {
+        assert_eq!(shortcut_caps("meta+alt+enter").len(), 3);
     }
 }

@@ -385,10 +385,20 @@ pub fn rail_color() -> Hsla {
     }
     .into()
 }
+/// The one scale icons come in. A size asked for between two steps takes the nearest.
+const ICON_SIZES: [f32; 5] = [12., 14., 16., 18., 24.];
+
+fn icon_size(side: f32) -> f32 {
+    ICON_SIZES
+        .into_iter()
+        .min_by(|a, b| (a - side).abs().total_cmp(&(b - side).abs()))
+        .unwrap_or(side)
+}
+
 pub fn icon(path: &'static str, side: f32) -> Svg {
     svg()
         .path(path)
-        .size(px(side))
+        .size(px(icon_size(side)))
         .text_color(content(0.5))
         .flex_shrink_0()
 }
@@ -511,5 +521,20 @@ mod look_tests {
     fn ink_on_the_accent_follows_its_luminance() {
         apply(palette(&Look::default(), true));
         assert_eq!(on_accent(), gpui::black());
+    }
+}
+
+#[cfg(test)]
+mod icon_size_tests {
+    use super::*;
+
+    #[test]
+    fn every_size_lands_on_the_scale() {
+        assert_eq!(icon_size(9.), 12.);
+        assert_eq!(icon_size(13.), 12.);
+        assert_eq!(icon_size(14.), 14.);
+        assert_eq!(icon_size(15.), 14.);
+        assert_eq!(icon_size(22.), 24.);
+        assert_eq!(icon_size(40.), 24.);
     }
 }

@@ -29,7 +29,9 @@ use gpui::{
     Bounds, ElementInputHandler, EntityInputHandler, StyledText, TextLayout, UTF16Selection,
 };
 use serde_json::{Value, json};
+use std::cell::Cell;
 use std::collections::{HashMap, VecDeque};
+use std::rc::Rc;
 use std::ops::Range;
 
 /// The message queue, steering and the composer keys that go with them.
@@ -743,6 +745,7 @@ fn styled_tokens(text: String) -> StyledText {
 
 /// What a reply from the back end is for.
 enum Waiting {
+    SettingsRestored,
     Older(usize),
     Models(&'static str),
     Worktrees(String),
@@ -915,6 +918,8 @@ pub struct Shell {
     provider_accounts: Value,
     selected_accounts: Value,
     new_tab_fx: crate::new_tab_field::State,
+    /// The composer's width, as the robot walking over it last measured it.
+    runner_width: Rc<Cell<f32>>,
     dock_width: f32,
     resizing_dock: bool,
     /// The add menu: main list, or its goal page.
@@ -1210,6 +1215,7 @@ impl Shell {
             provider_accounts: Value::Null,
             selected_accounts: json!({}),
             new_tab_fx: Default::default(),
+            runner_width: Rc::new(Cell::new(600.)),
             dock_width: 470.,
             resizing_dock: false,
             add_menu: None,
@@ -1443,6 +1449,11 @@ impl Shell {
                             parameterized: m["parameterized"].as_bool().unwrap_or(false),
                         })
                         .collect();
+                    let models = if provider == "claude" {
+                        claude_catalog(models)
+                    } else {
+                        models
+                    };
                     self.models.insert(provider, models);
                 }
                 Some(Waiting::Worktrees(project)) if ok => {
@@ -1502,6 +1513,10 @@ impl Shell {
                     if self.usage_page.open.is_some() {
                         self.usage_load_limits(false, cx);
                     }
+                }
+                Some(Waiting::SettingsRestored) if ok => {
+                    self.settings = value;
+                    self.load_settings_page();
                 }
                 Some(Waiting::SettingsData(key)) if ok => {
                     if key == "connectors" {
@@ -1736,6 +1751,9 @@ impl Shell {
                 "session-updated" => self.session_updated(&payload, cx),
                 "agent-output" => self.agent_output(&payload),
                 "agent-exit" => self.refresh_diff(),
+                "notification-native" => {
+                    crate::native_notify::deliver(&payload, self.window_active)
+                }
                 "subagent-feed" => {
                     self.subagents.feed_event(&payload);
                 }
@@ -2161,6 +2179,38 @@ impl Shell {
     fn run_setting(&mut self, command: &'static str, args: Value, cx: &mut Context<Self>) {
         let text = |key: &str| args[key].as_str().unwrap_or("").to_owned();
         match command {
+            "native_sound" => crate::native_notify::play(&text("sound")),
+            "native_notify_test" => {
+                if let Some(sound) = self.settings["notifications"]["completionSound"].as_str() {
+                    crate::native_notify::play(sound);
+                }
+                crate::native_notify::banner(
+                    "Sirus Native",
+                    crate::i18n::t("Teste de notificação. Seus avisos de atividade aparecerão aqui."),
+                );
+            }
+            // Keys left out come back at their defaults: the host fills them in when it reads.
+            "native_restore" => {
+                let keys: Vec<String> = args["keys"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|key| key.as_str().map(str::to_owned))
+                    .collect();
+                if let Some(settings) = self.settings.as_object_mut() {
+                    for key in &keys {
+                        settings.remove(key);
+                    }
+                }
+                let call = self
+                    .backend
+                    .invoke("save_settings", json!({ "settings": self.settings }));
+                self.waiting.insert(call, Waiting::SettingsRestored);
+                cx.notify();
+            }
+            "native_restore_look" => {
+                self.set_look(|look| *look = Look::default(), cx);
+            }
             "native_confirm" => {
                 let label = text("label");
                 let title = args["title"].as_str().map(str::to_owned);
@@ -4143,8 +4193,50 @@ impl Shell {
         }
     }
 
+    /// While a row of Settings → Atalhos records, the next key is its new shortcut, or a note on
+    /// why it cannot be. Escape stops recording.
+    fn record_shortcut(&mut self, keys: &gpui::Keystroke, cx: &mut Context<Self>) -> bool {
+        let Some(id) = self
+            .setting_edit
+            .as_ref()
+            .and_then(|(field, _)| field.strip_prefix("shortcut:"))
+        else {
+            return false;
+        };
+        if keys.key == "escape" {
+            self.setting_edit = None;
+            cx.notify();
+            return true;
+        }
+        match crate::settings_pages::recorded_shortcut(&self.settings, id, keys) {
+            Ok(custom) => {
+                self.setting_edit = None;
+                self.save_setting("customShortcuts", custom, cx);
+            }
+            Err(problem) => {
+                if let Some((_, note)) = self.setting_edit.as_mut() {
+                    *note = problem;
+                }
+                cx.notify();
+            }
+        }
+        true
+    }
+
     fn key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let keys = &event.keystroke;
+        if self.record_shortcut(&event.keystroke, cx) {
+            cx.stop_propagation();
+            return;
+        }
+        let remapped;
+        let keys = match crate::settings_pages::shortcut_route(&self.settings, &event.keystroke) {
+            crate::settings_pages::ShortcutRoute::Pass => &event.keystroke,
+            crate::settings_pages::ShortcutRoute::Unbound => return,
+            crate::settings_pages::ShortcutRoute::As(keystroke) => {
+                remapped = keystroke;
+                &remapped
+            }
+        };
         let key = keys.key.as_str();
         // The find bar's keys come first: its Esc closes the bar, never stops the agent.
         if self.find_keys(keys, window, cx) {
@@ -8715,7 +8807,10 @@ impl Shell {
                         linear_color_stop(transparent(), 1.),
                     )),
             )
-            .children(self.new_tab_field(index, now, moving, cx))
+            .children({
+                *moving |= self.conversations[index].working();
+                self.new_tab_field(index, now, moving, cx)
+            })
             .children(self.new_tab_greeting(index))
             .child(self.composer(live, cx))
             .children(self.switch_view(now, moving))
@@ -9079,15 +9174,6 @@ impl Shell {
         let mut rows = Vec::new();
         for provider in providers {
             let list = self.models.get(provider).map_or(&[][..], Vec::as_slice);
-            let mut newest: HashMap<String, Vec<u32>> = HashMap::new();
-            for model in list.iter().filter(|m| m.available) {
-                if let Some((line, version)) = model_line(&model.name) {
-                    let slot = newest.entry(line).or_default();
-                    if version > *slot {
-                        *slot = version;
-                    }
-                }
-            }
             let mut group: Vec<ModelRow> = list
                 .iter()
                 .filter(|m| m.available)
@@ -9107,11 +9193,6 @@ impl Shell {
                             || m.name.to_lowercase().starts_with("default")
                         {
                             return None;
-                        }
-                        if let Some((line, version)) = model_line(&m.name) {
-                            if newest.get(&line).is_some_and(|top| *top > version) {
-                                return None;
-                            }
                         }
                     }
                     let name = if m.name.is_empty() {
@@ -9629,17 +9710,15 @@ impl Shell {
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.pick_model(provider, id.clone(), cx)
                             }))
-                            .when(favorites_scope, |d| {
-                                d.child(
+                            .child(
                                     svg()
                                         .path(provider_path(provider))
-                                        .size(px(18.))
+                                        .size(px(16.))
                                         .flex_shrink_0()
                                         .text_color(gpui::Hsla::from(gpui::rgb(provider_brand(
                                             provider,
                                         )))),
-                                )
-                            })
+                            )
                             .child(
                                 div()
                                     .flex_1()
@@ -9941,6 +10020,47 @@ impl Shell {
 
     fn composer_menu_right(&self) -> f32 {
         self.composer_column().1
+    }
+
+    /// While the agent works, the project's robot walks along the composer's top edge over a line
+    /// of letters in its colour. Reduce Motion leaves it out.
+    fn composer_runner(&self, ix: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let conversation = &self.conversations[ix];
+        if !conversation.working() || cx.reduce_motion() {
+            return None;
+        }
+        let project = self.projects.get(self.project_of(ix)?)?;
+        let (_, color) = crate::project_avatar::look_of(&project.name, &project.appearance);
+        let clock = Instant::now().duration_since(self.epoch).as_secs_f32();
+        let (x, hop) = crate::new_tab_field::walk(self.runner_width.get(), clock);
+        Some(
+            div()
+                .absolute()
+                .top(px(-34.))
+                .left_0()
+                .right_0()
+                .h(px(34.))
+                .child(crate::new_tab_field::ledge(
+                    color,
+                    x,
+                    clock,
+                    self.runner_width.clone(),
+                ))
+                .child(
+                    div()
+                        .absolute()
+                        .left(px(x))
+                        .top(px(8. - hop))
+                        .child(crate::project_avatar::project_avatar_state(
+                            &project.name,
+                            &project.appearance,
+                            26.,
+                            crate::project_avatar::AvatarState::Idle,
+                            clock,
+                        )),
+                )
+                .into_any_element(),
+        )
     }
 
     fn composer(&self, live: bool, cx: &mut Context<Self>) -> AnyElement {
@@ -10410,9 +10530,11 @@ impl Shell {
             .when_some(self.handoff_card(ix, cx), |d, card| d.child(card))
             .child(
                 div()
+                    .relative()
                     .rounded(px(crate::theme::RADIUS_LG))
                     .border_1()
                     .border_color(content(0.1))
+                    .children(self.composer_runner(ix, cx))
                     .child(crate::theme::composer_surface(crate::theme::RADIUS_LG - 1.))
                     .flex()
                     .flex_col()
@@ -12445,17 +12567,12 @@ impl Shell {
         } else {
             eased(since / 0.28, Curve::Expo)
         };
-        let nav = div()
-            .id("settings-nav")
-            .w(px(256.))
+        // Back and search stay put: only the page list scrolls, so Back never slides under the
+        // window's traffic lights.
+        let nav_head = div()
             .flex_shrink_0()
-            .h_full()
-            .border_r_1()
-            .border_color(content(0.08))
             .pt(px(TITLE_BAR))
             .px(px(8.))
-            .overflow_y_scroll()
-            .child(crate::hover_track::list("settings-nav").pill())
             .child(crate::hover_track::list("settings-nav").row_named(
                 div()
                     .id("settings-back")
@@ -12494,6 +12611,14 @@ impl Shell {
                     .child(icon("search", 14.).text_color(content(0.45)))
                     .child(t("Buscar configurações")),
             )
+            ;
+        let nav_list = div()
+            .id("settings-nav")
+            .flex_1()
+            .min_h_0()
+            .px(px(8.))
+            .overflow_y_scroll()
+            .child(crate::hover_track::list("settings-nav").pill())
             .children(SETTINGS_NAV.iter().enumerate().map(|(g, (group, items))| {
                 div()
                     .child(
@@ -12549,7 +12674,7 @@ impl Shell {
                             } else {
                                 0.55
                             })))
-                            .child(t(name)),
+                            .child(t(nav_label(name))),
                         name,
                         chosen,
                         )
@@ -12557,7 +12682,13 @@ impl Shell {
             }));
         let (bar, body): (AnyElement, AnyElement) = if self.settings_page == APPEARANCE {
             (
-                crate::settings_pages::title_bar(t("Aparência"), Vec::new()),
+                crate::settings_pages::title_bar(
+                    t("Aparência"),
+                    vec![crate::settings_pages::restore_look_button(
+                        Shell::run_setting,
+                        cx,
+                    )],
+                ),
                 self.appearance_page(cx),
             )
         } else {
@@ -12600,34 +12731,55 @@ impl Shell {
                 // Over glass the app underneath fades out instead, so the desktop shows through.
                 .bg(if pane_fill().a < 0.5 { chrome_wash() } else { pane_opaque() })
                 .flex()
-                .child(nav)
+                .child(
+                    div()
+                        .w(px(self.sidebar_width))
+                        .flex_shrink_0()
+                        .h_full()
+                        .flex()
+                        .flex_col()
+                        .child(nav_head)
+                        .child(nav_list),
+                )
                 .child(
                     div()
                         .flex_1()
                         .min_w_0()
-                        .h_full()
+                        .my(px(6.))
+                        .mr(px(6.))
                         .flex()
                         .flex_col()
+                        .rounded(px(crate::theme::RADIUS_LG))
+                        .border_1()
+                        .border_color(content(0.08))
                         .bg(pane_fill())
+                        .overflow_hidden()
                         .child(div().opacity(page_t).child(bar))
                         .child(
                             div()
-                                .id("settings-main")
                                 .flex_1()
                                 .min_h_0()
-                                .overflow_y_scroll()
+                                .flex()
                                 .child(
                                     div()
-                                        .relative()
-                                        .top(px((1. - page_t) * 22. * self.settings_direction))
-                                        .opacity(page_t)
-                                        .w_full()
-                                        .max_w(px(1040.))
-                                        .pt(px(16.))
-                                        .pb(px(40.))
-                                        .px(px(crate::settings_pages::CONTENT_INSET))
-                                        .child(body),
-                                ),
+                                        .id("settings-main")
+                                        .flex_1()
+                                        .min_w_0()
+                                        .h_full()
+                                        .overflow_y_scroll()
+                                        .child(
+                                            div()
+                                                .relative()
+                                                .top(px((1. - page_t) * 22. * self.settings_direction))
+                                                .opacity(page_t)
+                                                .w_full()
+                                                .max_w(px(crate::settings_pages::CONTENT_WIDTH))
+                                                .pt(px(16.))
+                                                .pb(px(40.))
+                                                .px(px(crate::settings_pages::CONTENT_INSET))
+                                                .child(body),
+                                        ),
+                                )
                         ),
                 )
                 .children(crate::settings_connectors::overlay(
@@ -12740,59 +12892,12 @@ impl Shell {
                 .into_any_element()
         }
         // Theme, as ThemeModePicker: three small windows to choose from.
-        let modes = div().flex().gap(px(12.)).children(
-            [(0usize, t("Sistema")), (2, t("Claro")), (1, t("Escuro"))]
-                .into_iter()
-                .map(|(mode, label)| {
-                    let chosen = look.mode == mode;
-                    let art = |dark: bool| {
-                        let (bg, line) = if dark {
-                            (rgb(0x1a1a1f), rgb(0x3a3a42))
-                        } else {
-                            (rgb(0xf1f1f4), rgb(0xcfcfd6))
-                        };
-                        div()
-                            .flex_1()
-                            .h_full()
-                            .bg(bg)
-                            .p(px(8.))
-                            .flex()
-                            .flex_col()
-                            .gap(px(5.))
-                            .child(div().w(px(38.)).h(px(5.)).rounded_full().bg(line))
-                            .child(div().w(px(24.)).h(px(5.)).rounded_full().bg(line))
-                    };
-                    div()
-                        .id(("mode", mode))
-                        .cursor_pointer()
-                        .on_click(
-                            cx.listener(move |this, _, _, cx| this.set_look(|l| l.mode = mode, cx)),
-                        )
-                        .flex()
-                        .flex_col()
-                        .gap(px(6.))
-                        .child(
-                            div()
-                                .w(px(150.))
-                                .h(px(88.))
-                                .rounded(px(crate::theme::RADIUS_LG))
-                                .border_2()
-                                .border_color(if chosen { accent() } else { content(0.1) })
-                                .overflow_hidden()
-                                .flex()
-                                .map(|d| match mode {
-                                    0 => d.child(art(false)).child(art(true)),
-                                    2 => d.child(art(false)),
-                                    _ => d.child(art(true)),
-                                }),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(13.))
-                                .text_color(content(if chosen { 1. } else { 0.65 }))
-                                .child(label),
-                        )
-                }),
+        let modes = segmented_icons(
+            "theme-mode",
+            &[("monitor", t("Sistema")), ("sun", t("Claro")), ("moon", t("Escuro"))],
+            [0, 2, 1].iter().position(|m| *m == look.mode).unwrap_or(0),
+            cx,
+            |l, ix| l.mode = [0, 2, 1][ix],
         );
         let swatch = |ix: usize| {
             let colors = palette(
@@ -13132,7 +13237,7 @@ impl Shell {
                 )],
             ))
             .child(group(
-                t("Tipografia da interface"),
+                t("Interface"),
                 vec![row(
                     t("Tamanho da interface"),
                     t("Aumenta ou diminui tudo."),
@@ -13479,10 +13584,82 @@ fn error_text(value: &Value) -> String {
 }
 
 /// A model id as a person reads it: `claude-opus-5-5` is Opus 5.5, `gpt-5.5` is GPT-5.5.
+/// What Claude Code's aliases stand for today. Its catalog lists only the aliases, so the versions
+/// come from here; a new Claude Code release can move an alias before this table follows.
+const CLAUDE_ALIASES: [(&str, &str); 4] = [
+    ("fable", "Fable 5.1"),
+    ("opus", "Opus 5.5"),
+    ("sonnet", "Sonnet 5.5"),
+    ("haiku", "Haiku 5.5"),
+];
+
+/// Earlier models Claude Code still takes by full name (`--model`), each with its effort levels.
+const CLAUDE_EARLIER: [(&str, &str, &[&str]); 8] = [
+    ("claude-fable-5", "Fable 5", &["low", "medium", "high", "xhigh", "max"]),
+    ("claude-opus-5", "Opus 5", &["low", "medium", "high", "xhigh", "max"]),
+    ("claude-opus-4-8", "Opus 4.8", &["low", "medium", "high", "xhigh", "max"]),
+    ("claude-opus-4-7", "Opus 4.7", &["low", "medium", "high", "xhigh", "max"]),
+    ("claude-opus-4-6", "Opus 4.6", &["low", "medium", "high", "max"]),
+    ("claude-sonnet-5", "Sonnet 5", &["low", "medium", "high", "xhigh", "max"]),
+    ("claude-sonnet-4-6", "Sonnet 4.6", &["low", "medium", "high", "max"]),
+    ("claude-haiku-4-5", "Haiku 4.5", &[]),
+];
+
+/// Claude's list as the picker shows it: versions on the names, the earlier models added, newest
+/// of each family first. Being listed does not prove the account can use a model.
+fn claude_catalog(mut models: Vec<ModelInfo>) -> Vec<ModelInfo> {
+    for model in &mut models {
+        let family = model.name.to_lowercase();
+        if let Some((_, name)) = CLAUDE_ALIASES.iter().find(|(alias, _)| *alias == family) {
+            model.name = (*name).to_owned();
+        }
+    }
+    for (id, name, efforts) in CLAUDE_EARLIER {
+        if models.iter().all(|m| m.id != id) {
+            models.push(ModelInfo {
+                id: id.to_owned(),
+                name: name.to_owned(),
+                efforts: efforts.iter().map(|e| (*e).to_owned()).collect(),
+                default_effort: None,
+                fast: false,
+                default_fast: false,
+                available: true,
+                parameterized: false,
+            });
+        }
+    }
+    let rank = |name: &str| {
+        let order = ["Fable", "Opus", "Sonnet", "Haiku"];
+        let family = order.iter().position(|f| name.starts_with(f)).unwrap_or(order.len());
+        let version: Vec<u32> = name
+            .split_whitespace()
+            .nth(1)
+            .unwrap_or("0")
+            .split('.')
+            .filter_map(|part| part.parse().ok())
+            .collect();
+        (family, std::cmp::Reverse(version))
+    };
+    models.sort_by_cached_key(|m| rank(&m.name));
+    models
+}
+
+/// A settings page's name in the menu, where the full title does not fit.
+fn nav_label(page: &'static str) -> &'static str {
+    if page == "Comportamento do chat" {
+        "Comportamento"
+    } else {
+        page
+    }
+}
+
 fn model_label(model: Option<&str>, provider: &str) -> String {
     let Some(model) = model.filter(|m| !m.is_empty()) else {
         return model_name(provider).to_owned();
     };
+    if let Some((_, name)) = CLAUDE_ALIASES.iter().find(|(alias, _)| *alias == model) {
+        return (*name).to_owned();
+    }
     let trimmed = model.strip_prefix("claude-").unwrap_or(model);
     if let Some(rest) = trimmed.strip_prefix("gpt") {
         return format!("GPT{rest}");
@@ -14231,5 +14408,90 @@ mod tests {
         );
         assert_eq!(draft_save_delay(edited, edited + DRAFT_SAVE_QUIET), None);
         assert_eq!(draft_save_delay(edited, edited + Duration::from_secs(5)), None);
+    }
+}
+
+/// Tema's control: a segmented row like the page's others, each option with its icon.
+fn segmented_icons(
+    id: &'static str,
+    options: &[(&'static str, &'static str)],
+    chosen: usize,
+    cx: &mut Context<Shell>,
+    apply: fn(&mut Look, usize),
+) -> Div {
+    // Its own row, so the control takes the width of its options, not of the page.
+    div().flex().child(
+    div()
+        .flex()
+        .flex_none()
+        .gap(px(2.))
+        .p(px(3.))
+        .rounded(px(crate::theme::RADIUS_MD))
+        .bg(content(0.06))
+        .children(options.iter().enumerate().map(|(ix, (glyph, label))| {
+            let on = ix == chosen;
+            div()
+                .id((id, ix))
+                .flex()
+                .items_center()
+                .justify_center()
+                .gap(px(7.))
+                .h(px(28.))
+                .w(px(108.))
+                .rounded(px(crate::theme::RADIUS_SM))
+                .text_size(px(13.))
+                .text_color(content(if on { 1. } else { 0.65 }))
+                .when(on, |d| d.bg(content(0.14)))
+                .when(!on, |d| d.hover(|s| s.bg(content(0.06))))
+                .cursor_pointer()
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.set_look(|look| apply(look, ix), cx)
+                }))
+                .child(icon(glyph, 16.).text_color(content(if on { 0.95 } else { 0.6 })))
+                .child(*label)
+        })),
+    )
+}
+
+#[cfg(test)]
+mod claude_catalog_tests {
+    use super::*;
+
+    fn alias(id: &str, name: &str) -> ModelInfo {
+        ModelInfo {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            efforts: Vec::new(),
+            default_effort: None,
+            fast: false,
+            default_fast: false,
+            available: true,
+            parameterized: false,
+        }
+    }
+
+    #[test]
+    fn aliases_get_their_version_and_earlier_models_follow_their_family() {
+        let list = claude_catalog(vec![
+            alias("haiku", "Haiku"),
+            alias("opus", "Opus"),
+            alias("claude-fable-5-1[1m]", "Fable"),
+            alias("sonnet", "Sonnet"),
+        ]);
+        let names: Vec<&str> = list.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "Fable 5.1", "Fable 5", "Opus 5.5", "Opus 5", "Opus 4.8", "Opus 4.7", "Opus 4.6",
+                "Sonnet 5.5", "Sonnet 5", "Sonnet 4.6", "Haiku 5.5", "Haiku 4.5",
+            ]
+        );
+        assert_eq!(list[2].id, "opus", "the alias stays what is sent");
+    }
+
+    #[test]
+    fn a_session_on_an_alias_reads_with_its_version() {
+        assert_eq!(model_label(Some("opus"), "claude"), "Opus 5.5");
+        assert_eq!(model_label(Some("claude-opus-4-8"), "claude"), "Opus 4.8");
     }
 }

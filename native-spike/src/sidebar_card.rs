@@ -14,7 +14,7 @@ use std::rc::Rc;
 
 /// How long the pointer rests on a row before its card opens.
 const DELAY: Duration = Duration::from_millis(500);
-const WIDTH: f32 = 360.;
+const WIDTH: f32 = 280.;
 /// The gap between the row and the card. The card's wrapper starts at the row's edge and holds
 /// the gap, so the pointer crosses it without leaving the card's area.
 const GAP: f32 = 6.;
@@ -251,9 +251,10 @@ impl Shell {
                         .w_full()
                         .flex()
                         .flex_col()
-                        .gap(px(8.))
-                        .p(px(12.))
-                        .rounded(px(crate::theme::RADIUS_LG))
+                        .gap(px(4.))
+                        .px(px(10.))
+                        .py(px(8.))
+                        .rounded(px(crate::theme::RADIUS_MD))
                         .border_1()
                         .border_color(content(0.14))
                         .child(crate::theme::floating_surface(crate::theme::RADIUS_LG))
@@ -262,7 +263,8 @@ impl Shell {
                             div()
                                 .flex()
                                 .items_center()
-                                .gap(px(8.))
+                                .gap(px(6.))
+                                .text_size(px(11.5))
                                 .child(crate::tab_tile::mark_tile(
                                     &crate::tab_tile::TileSize {
                                         w: 16.,
@@ -291,31 +293,18 @@ impl Shell {
                         )
                         .child(
                             div()
-                                .text_size(px(14.))
-                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_size(px(13.))
+                                .font_weight(FontWeight::MEDIUM)
                                 .text_color(content(0.95))
+                                .truncate()
                                 .child(conversation.title.clone()),
                         )
-                        .child(div().h(px(1.)).bg(content(0.14)))
                         .child(
                             div()
-                                .flex()
-                                .items_start()
-                                .gap(px(8.))
-                                .text_size(px(12.))
-                                .child(
-                                    div()
-                                        .flex_shrink_0()
-                                        .text_color(content(0.42))
-                                        .child(t("Pasta")),
-                                )
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .text_color(content(0.7))
-                                        .child(tilde(&folder)),
-                                ),
+                                .text_size(px(11.5))
+                                .text_color(content(0.5))
+                                .truncate()
+                                .child(tilde(&folder)),
                         ),
                 )
                 .into_any_element(),

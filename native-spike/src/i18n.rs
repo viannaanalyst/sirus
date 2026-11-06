@@ -672,7 +672,9 @@ const ENTRIES: &[(&str, &str)] = &[
         "Continuar conversas interrompidas após uma falha",
         "Continue interrupted conversations after a crash",
     ),
+    ("Continuar em {}", "Continue on {}"),
     ("Continuar fila", "Continue queue"),
+    ("Continue de onde parou.", "Continue where you left off."),
     (
         "Controle mensagens durante a resposta, ditado, turnos terminados, revisão e confirmações de segurança.",
         "Control follow-ups, dictation, finished turns, review defaults and safety confirmations.",
@@ -765,12 +767,17 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Descartar alterações?", "Discard changes?"),
     ("Desconhecido", "Unknown"),
     ("Descrição (opcional)", "Description (optional)"),
+    (
+        "Desenhe sobre a imagem para destacar uma área.",
+        "Draw over the image to highlight an area.",
+    ),
     ("Desfazer", "Undo"),
     ("Desfazer alterações", "Undo changes"),
     (
         "Desfazer as mudanças deste turno?",
         "Undo this turn's changes?",
     ),
+    ("Desfazer traço", "Undo stroke"),
     ("Designs e materiais da marca", "Designs and brand assets"),
     (
         "Designs, componentes e variáveis",
@@ -1014,6 +1021,10 @@ const ENTRIES: &[(&str, &str)] = &[
     (
         "Esse computador perdeu o pareamento: pareie de novo.",
         "This computer lost its pairing: pair it again.",
+    ),
+    (
+        "Esta conversa parou por um erro",
+        "This conversation stopped on an error",
     ),
     ("Esta parte entra em seguida.", "This part comes next."),
     (
@@ -1336,6 +1347,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Limites", "Limits"),
     ("Limpar cache", "Clear cache"),
     ("Limpar cookies", "Clear cookies"),
+    ("Limpar desenho", "Clear drawing"),
     ("Limpar worktrees", "Clean up worktrees"),
     (
         "Limpar worktrees concluídos",
@@ -1383,6 +1395,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Mantenha no máximo 20 anexos. Remova um antes de adicionar mais.",
         "Keep at most 20 attachments. Remove one before adding more.",
     ),
+    ("Manter", "Keep"),
     ("Manter agentes prontos", "Keep agents ready"),
     (
         "Manter o Mac acordado para o celular",
@@ -1393,6 +1406,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Keeps the chosen font saved for when this option is off.",
     ),
     ("Marcar como pronto", "Mark as ready"),
+    ("Marcar na imagem", "Mark on the image"),
     (
         "Marcar {} como pronto para revisão?",
         "Mark {} as ready for review?",
@@ -1444,6 +1458,8 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Mostrar arquivos não rastreados", "Show untracked files"),
     ("Mostrar cliques", "Show clicks"),
     ("Mostrar em", "Show on"),
+    ("Mostrar mais {} arquivos", "Show {} more files"),
+    ("Mostrar menos", "Show less"),
     ("Mostrar no Finder", "Show in Finder"),
     (
         "Mostrar o que há de novo depois de atualizar",
@@ -1668,6 +1684,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Não foi possível ler o diff.", "Could not read the diff."),
     ("Não foi possível ler {}.", "Could not read {}."),
+    (
+        "Não foi possível preparar a imagem anotada.",
+        "Could not prepare the annotated image.",
+    ),
     ("Não foi possível verificar", "Could not check"),
     ("Não instalado", "Not installed"),
     ("Não permitir", "Don't allow"),
@@ -1822,6 +1842,10 @@ const ENTRIES: &[(&str, &str)] = &[
     (
         "O link pediu {}, que não está configurado aqui; o seu padrão continua.",
         "The link asked for {}, which is not set up here; your default stays.",
+    ),
+    (
+        "O login desta conta expirou ou foi sobrescrito por outra sessão.",
+        "This account's sign-in expired or was overwritten by another session.",
     ),
     (
         "O login do GitHub não terminou.",
@@ -2285,6 +2309,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Retomar sozinho quando o limite de uso liberar",
         "Resume by itself when a usage limit resets",
     ),
+    ("Revisar", "Review"),
     (
         "Revise o diff e faça commit.",
         "Review the diff and commit.",
@@ -2453,7 +2478,9 @@ const ENTRIES: &[(&str, &str)] = &[
         "Sublinhado de ortografia e correções automáticas do macOS enquanto você escreve uma mensagem, em todas as conversas.",
         "macOS spelling underlines and automatic corrections while you write a message, in every conversation.",
     ),
+    ("Substituindo imagem…", "Replacing image…"),
     ("Substituir", "Replace"),
+    ("Substituir original", "Replace original"),
     (
         "Só aparece nas listas do Sirus. Os agentes continuam usando o mesmo identificador.",
         "Only shown in Sirus lists. Agents keep using the same identifier.",

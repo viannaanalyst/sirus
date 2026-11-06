@@ -83,6 +83,52 @@ pub fn line(label: &str, detail: &str, tool: Option<&str>, target: Option<&str>)
     }
 }
 
+/// `git status --short` reads as `git status`; flags and paths are detail (Monocode's tools.rs).
+pub fn command_label(command: &str) -> String {
+    let mut words = command.split_whitespace();
+    let program = words.next().unwrap_or("");
+    let program = program.rsplit('/').next().unwrap_or(program);
+    match words.next() {
+        Some(sub)
+            if !sub.starts_with('-')
+                && !sub.contains(['/', '.', '=', '\'', '"', '~', '$'])
+                && sub.len() <= 16 =>
+        {
+            format!("{program} {sub}")
+        }
+        _ => program.to_owned(),
+    }
+}
+
+/// The files and folders a command line names, as (last component, is a folder), at most `max`,
+/// in order and without repeats. A word counts when it holds a `/` or starts with `~` or `.`.
+pub fn command_paths(command: &str, max: usize) -> Vec<(String, bool)> {
+    let mut found: Vec<(String, bool)> = Vec::new();
+    for word in command.split_whitespace().skip(1) {
+        let word = word.trim_matches(|c| matches!(c, '\'' | '"' | ';' | '|' | '&' | '(' | ')'));
+        if word.starts_with('-') || word.contains(['=', '*', '$']) || word.len() < 2 {
+            continue;
+        }
+        if !(word.contains('/') || word.starts_with('~') || word.starts_with('.')) {
+            continue;
+        }
+        let name = file_name(word);
+        if name == "." || name == ".." || name == "~" || name.is_empty() {
+            continue;
+        }
+        let folder = word.ends_with('/')
+            || !name.contains('.')
+            || name.starts_with('.') && !name[1..].contains('.');
+        if !found.iter().any(|(n, _)| *n == name) {
+            found.push((name, folder));
+        }
+        if found.len() >= max {
+            break;
+        }
+    }
+    found
+}
+
 /// The row as one string, for the shimmering live row.
 pub fn text(line: &Line) -> String {
     match &line.target {
@@ -95,6 +141,33 @@ pub fn text(line: &Line) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_command_reads_as_its_program_and_subcommand() {
+        assert_eq!(command_label("git status --short"), "git status");
+        assert_eq!(
+            command_label("/opt/homebrew/bin/cloudflared tunnel run"),
+            "cloudflared tunnel"
+        );
+        assert_eq!(command_label("ls ~/Projetos"), "ls");
+        assert_eq!(command_label("cd /tmp && ls"), "cd");
+    }
+
+    #[test]
+    fn a_command_names_its_files_and_folders() {
+        let found = command_paths(
+            "grep -rn x ~/Projetos/sirus-code/src-tauri/src/account_move.rs ./docs/",
+            2,
+        );
+        assert_eq!(
+            found,
+            vec![
+                ("account_move.rs".to_owned(), false),
+                ("docs".to_owned(), true)
+            ]
+        );
+        assert!(command_paths("echo hi && ls", 2).is_empty());
+    }
 
     #[test]
     fn a_tool_call_reads_as_a_verb_with_its_target() {

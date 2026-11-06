@@ -6,7 +6,7 @@ use crate::data::{self, Conversation, Project, Turn};
 use crate::effort_energy;
 use crate::git_sync::{self, IncomingState};
 use crate::i18n::{t, tf};
-use crate::marks::{SPINNER_PERIOD, TILE_RAIL_INDENT, rail, shimmer, spinner_at};
+use crate::marks::{SPINNER_PERIOD, TILE_RAIL_INDENT, TILE_RAIL_X, rail, shimmer, spinner_at};
 use crate::motion::{Curve, DISCLOSE, MENU, REORDER, SIDEBAR, SWITCH, TAB_OPEN, Tween, eased};
 use crate::tab_label::tab_label;
 use crate::tab_tile::{
@@ -30,10 +30,13 @@ use gpui::{
 };
 use serde_json::{Value, json};
 use std::cell::Cell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ops::Range;
 use std::rc::Rc;
 
+/// The card for a turn that ended on an error, with a retry and a move to another account.
+#[path = "account_card.rs"]
+mod account_card;
 /// What the running agents cost the Mac: the footer's gauge and its panel (agent_resources.rs).
 #[path = "agent_resources.rs"]
 mod agent_resources;
@@ -49,6 +52,12 @@ mod conversation_export;
 /// The tasks a reply delegated to other models, under the reply (delegated_tasks.rs).
 #[path = "delegated_tasks.rs"]
 mod delegated_tasks;
+/// The transcript's follow of the end: glides instead of jumping (glide.rs).
+#[path = "glide.rs"]
+mod glide;
+/// The streamed reply revealed at a steady pace (Monocode's wordFade rhythm).
+#[path = "paced.rs"]
+mod paced;
 /// The sidebar's hover card: a conversation's model, work time, title and folder (sidebar_card.rs).
 #[path = "sidebar_card.rs"]
 pub(crate) mod sidebar_card;
@@ -791,6 +800,8 @@ fn styled_tokens(text: String) -> StyledText {
 
 /// What a reply from the back end is for.
 enum Waiting {
+    /// A drawn-on picture coming back from the host, and the draft it replaces.
+    MarkedUp(usize, String),
     SettingsRestored,
     Older(usize),
     Models(&'static str),
@@ -799,6 +810,10 @@ enum Waiting {
     AccountUsage(String),
     AccountCreated(&'static str),
     AccountLogin(&'static str, String),
+    /// `move_session_account` of a failed conversation: its session and approval, to continue after.
+    AccountMoved(String, String),
+    /// `send_prompt` that carries on after a failure.
+    FailureContinue,
     Skills,
     Secrets,
     Agents,
@@ -931,7 +946,7 @@ const SELECTED_MIN: f32 = 112.;
 const SIDEBAR_MIN: f32 = 196.;
 const SIDEBAR_MAX: f32 = 420.;
 const CONV_ROW: f32 = 29.;
-const STEP_ROW: f32 = 26.;
+const STEP_ROW: f32 = 28.;
 
 struct Tab {
     id: u64,
@@ -1059,6 +1074,9 @@ pub struct Shell {
     dock_drawn: f32,
     ignored_text: String,
     composer_layout: std::cell::RefCell<Option<TextLayout>>,
+    /// The composer's text scrolls under this, following the caret as it moves.
+    composer_scroll: gpui::ScrollHandle,
+    composer_caret_seen: Rc<Cell<(usize, usize)>>,
     selecting: bool,
     tick: u32,
     window_active: bool,
@@ -1101,6 +1119,20 @@ pub struct Shell {
     /// Where the terminal lives: the strip, the title tabs (`shell_terminal.rs`).
     term: shell_terminal::TermState,
     lists: HashMap<usize, gpui::ListState>,
+    /// Each conversation's follow of its end (glide.rs).
+    glides: HashMap<usize, glide::Glide>,
+    /// User messages opened past their four-line clamp, by (conversation, turn).
+    expanded_prompts: HashSet<(usize, usize)>,
+    /// Whether each user message wraps past four lines, measured in the list (prompt_lines).
+    prompt_overflow: HashMap<(usize, usize), bool>,
+    /// Each conversation's transcript size from the last layout, read outside the list's own
+    /// layout (reading the list from inside its item processor panics: the list is borrowed).
+    view_sizes: HashMap<usize, (f32, f32)>,
+    /// A streaming reply's paced reveal, by conversation and turn.
+    pacers: std::cell::RefCell<HashMap<(usize, usize), paced::Pacer>>,
+    /// The live steps' bounded window of each turn, scrolled to follow the newest step.
+    phase_scrolls:
+        std::cell::RefCell<HashMap<(usize, usize), (gpui::ScrollHandle, std::cell::Cell<f32>)>>,
     /// The panes beside each other, when there are several (split_panes.rs).
     split: split_panes::State,
     jump: Tween,
@@ -1369,6 +1401,8 @@ impl Shell {
             dock_drawn: 0.,
             ignored_text: String::new(),
             composer_layout: Default::default(),
+            composer_scroll: gpui::ScrollHandle::new(),
+            composer_caret_seen: Default::default(),
             selecting: false,
             tick: 0,
             window_active: true,
@@ -1404,6 +1438,12 @@ impl Shell {
             confirm: None,
             term: shell_terminal::TermState::new(),
             lists: HashMap::new(),
+            glides: HashMap::new(),
+            expanded_prompts: HashSet::new(),
+            prompt_overflow: HashMap::new(),
+            view_sizes: HashMap::new(),
+            pacers: Default::default(),
+            phase_scrolls: Default::default(),
             jump: Tween::still(0., now),
             trail_hover: None,
             usage_accounts: None,
@@ -1681,6 +1721,18 @@ impl Shell {
                     });
                     self.attachments.entry(ix).or_default().extend(added);
                 }
+                Some(Waiting::MarkedUp(..)) if !ok => {
+                    self.viewer.note_markup_failed();
+                    self.problem = Some(error_text(&value));
+                }
+                Some(Waiting::MarkedUp(ix, old)) => self.markup_replaced(ix, &old, &value, cx),
+                Some(Waiting::AccountMoved(session, approval)) if ok => {
+                    self.account_moved(&session, &approval)
+                }
+                Some(Waiting::AccountMoved(..) | Waiting::FailureContinue) if !ok => {
+                    self.problem = Some(error_text(&value))
+                }
+                Some(Waiting::FailureContinue) => {}
                 Some(Waiting::Dictated) if ok => {
                     if let Some(text) = value.as_str().filter(|t| !t.is_empty()) {
                         self.draft().insert(text);
@@ -1847,6 +1899,7 @@ impl Shell {
                     let state = self.list_state(ix, cx);
                     state.reset(count);
                     state.set_follow_mode(gpui::FollowMode::Tail);
+                    self.glides.remove(&ix);
                 }
                 Some(Waiting::FirstRunAgents) => self.first_run_agents_arrived(ok, &value, cx),
                 Some(Waiting::PaletteSearch(needle)) => {
@@ -1950,6 +2003,10 @@ impl Shell {
         self.tabs.clear();
         self.rows.clear();
         self.lists.clear();
+        self.glides.clear();
+        self.pacers.borrow_mut().clear();
+        self.expanded_prompts.clear();
+        self.phase_scrolls.borrow_mut().clear();
         self.history.clear();
         self.history_at = 0;
         self.projects = state["projects"]
@@ -7431,6 +7488,7 @@ impl Shell {
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.trail_hover = None;
                         target.pause_following_tail();
+                        this.glides.entry(conversation).or_default().leave();
                         target.scroll_to(gpui::ListOffset {
                             item_ix: at + 1,
                             offset_in_item: px(0.),
@@ -8964,37 +9022,50 @@ impl Shell {
                 let id = item.id;
                 div()
                     .id(("sidebar-option", at))
-                    .h(px(34.))
-                    .pl(px(8.))
-                    .pr(px(6.))
-                    .rounded(px(crate::theme::RADIUS_MD))
+                    .h(px(28.))
+                    .px(px(8.))
+                    .rounded(px(8.))
                     .flex()
                     .items_center()
-                    .gap(px(9.))
+                    .gap(px(8.))
                     .text_size(px(13.))
                     .text_color(content(0.92))
                     .cursor_pointer()
                     .hover(|s| s.bg(content(0.07)))
                     .child(icon(item.icon, 14.).text_color(content(0.65)))
                     .child(div().flex_1().min_w_0().truncate().child(t(item.label)))
-                    .child(crate::settings_pages::switch_track(
-                        SIDEBAR_SWITCH_ID + at,
-                        on,
-                        true,
-                    ))
+                    // Monocode's menu switch: neutral, never the accent.
+                    .child(
+                        div()
+                            .relative()
+                            .w(px(36.))
+                            .h(px(20.))
+                            .flex_shrink_0()
+                            .rounded_full()
+                            .bg(content(if on { 0.35 } else { 0.15 }))
+                            .child(
+                                div()
+                                    .absolute()
+                                    .top(px(2.))
+                                    .left(px(if on { 18. } else { 2. }))
+                                    .size(px(16.))
+                                    .rounded_full()
+                                    .bg(content(1.)),
+                            ),
+                    )
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.sidebar_items.toggle(id);
                         crate::sidebar_items::save(&this.sidebar_items);
                         cx.notify();
                     }))
             });
-        const WIDTH: f32 = 230.;
+        const WIDTH: f32 = 184.;
         Some(
             div()
                 .id("sidebar-options-menu")
                 .occlude()
                 .absolute()
-                .left(px((f32::from(button.right()) - WIDTH).max(8.)))
+                .left(px(f32::from(button.left()).max(8.)))
                 .top(px(f32::from(button.bottom()) + 4. + (1. - shown) * -6.))
                 .w(px(WIDTH))
                 .p(px(4.))
@@ -9228,7 +9299,11 @@ impl Shell {
         let list_state = self.list_state(index, cx);
         let wanted = 1 + self.conversations[index].turns.len();
         // A drag past the edge scrolls (transcript_select.rs); it keeps the frames coming.
-        *moving |= self.select_autoscroll(&list_state);
+        let dragged = self.select_autoscroll(&list_state);
+        if dragged {
+            self.glides.entry(index).or_default().leave();
+        }
+        *moving |= dragged;
         let listed = list_state.item_count();
         if listed < wanted {
             list_state.splice(listed..listed, wanted - listed);
@@ -9241,13 +9316,35 @@ impl Shell {
             (turns[i].user.as_str(), turns[i].answer.as_str())
         }) {
             list_state.pause_following_tail();
+            self.glides.entry(index).or_default().leave();
             list_state.scroll_to_reveal_item(turn + 1);
         }
         let switching = self.switch.at(now);
         *moving |= !self.switch.done(now);
         let live = running(&self.conversations[index], now);
         // Away from the end, a button brings the latest message back.
-        let away = !list_state.is_following_tail();
+        // Following the end is a glide of ours (glide.rs): the list stays paused and is moved a
+        // little each frame, so a sent message and a growing reply slide instead of jumping.
+        let (current, max) = (
+            -f32::from(list_state.scroll_px_offset_for_scrollbar().y),
+            f32::from(list_state.max_offset_for_scrollbar().y),
+        );
+        let viewport = list_state.viewport_bounds().size;
+        let view_height = f32::from(viewport.height);
+        self.view_sizes
+            .insert(index, (f32::from(viewport.width), view_height));
+        let reduce_motion = cx.reduce_motion();
+        let glide = self.glides.entry(index).or_default();
+        let plan = glide.step(current, max, view_height, now, reduce_motion);
+        if glide.stick {
+            list_state.pause_following_tail();
+        }
+        if plan.scroll > 0. {
+            list_state.scroll_by(px(plan.scroll));
+        }
+        *moving |= plan.moving;
+        let anchored = glide.anchored;
+        let away = !glide.stick;
         self.jump.set(
             if away { 1. } else { 0. },
             now,
@@ -9257,7 +9354,6 @@ impl Shell {
         *moving |= !self.jump.done(now);
         let jump = self.jump.at(now).clamp(0., 1.);
         let trail = self.message_trail(index, &list_state, cx);
-        let jump_target = list_state.clone();
         let items = gpui::list(
             list_state.clone(),
             cx.processor(move |this: &mut Self, item: usize, window, cx| {
@@ -9305,6 +9401,18 @@ impl Shell {
                         })
                         .into_any_element();
                 }
+                // A user message past four wrapped lines collapses (prompt_overflows in turn_body).
+                if let Some(text) = this.conversations[index]
+                    .turns
+                    .get(item - 1)
+                    .map(|turn| turn.user.clone())
+                    .filter(|text| !text.trim().is_empty())
+                {
+                    let view = this.view_sizes.get(&index).map_or(0., |size| size.0);
+                    let column = if view > 0. { view.min(832.) } else { 832. } - 46.;
+                    let over = prompt_lines_over(&text, column.min(576.) - 24., window) > 4;
+                    this.prompt_overflow.insert((index, item - 1), over);
+                }
                 let Some(turn) = this.conversations[index].turns.get(item - 1) else {
                     return div().into_any_element();
                 };
@@ -9320,6 +9428,14 @@ impl Shell {
                     div()
                         .rounded(px(crate::theme::RADIUS_LG))
                         .bg(crate::theme::accent_wash(0.1))
+                        .child(view)
+                        .into_any_element()
+                } else {
+                    view
+                };
+                let view = if last && anchored {
+                    div()
+                        .min_h(px((view_height - 28.).max(0.)))
                         .child(view)
                         .into_any_element()
                 } else {
@@ -9369,24 +9485,18 @@ impl Shell {
                                         .rounded_full()
                                         .border_1()
                                         .border_color(content(0.14))
-                                        .bg(floating_fill())
-                                        .shadow_md()
+                                        .relative()
+                                        .child(crate::theme::floating_surface(16.))
                                         .flex()
                                         .items_center()
                                         .justify_center()
                                         .cursor_pointer()
-                                        .hover(|s| s.bg(content(0.14)))
-                                        .on_click(cx.listener(move |_, _, _, cx| {
-                                            jump_target.set_follow_mode(gpui::FollowMode::Tail);
+                                        .hover(|s| s.bg(content(0.1)))
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.glides.entry(index).or_default().follow(false);
                                             cx.notify();
                                         }))
-                                        .child(
-                                            icon("arrow-up", 15.)
-                                                .text_color(content(0.8))
-                                                .with_transformation(Transformation::rotate(
-                                                    percentage(0.5),
-                                                )),
-                                        ),
+                                        .child(icon("chevron-down", 15.).text_color(content(0.8))),
                                 ),
                         )
                     }),
@@ -10696,11 +10806,27 @@ impl Shell {
         *self.composer_layout.borrow_mut() = Some(layout.clone());
         let selection = draft.selection();
         let caret_at = draft.cursor;
+        let caret_key = (draft.cursor, draft.text.len());
+        let composer_scroll = self.composer_scroll.clone();
+        let caret_seen = self.composer_caret_seen.clone();
         // The caret and the selection are painted over the laid out text, so the text never moves.
         let overlay = gpui::canvas(
             |_, _, _| {},
             move |bounds, _, window, _| {
                 let line = layout.line_height();
+                // Only a caret that moved pulls the text along, so the wheel stays free.
+                if caret_seen.replace(caret_key) != caret_key
+                    && let Some(at) = layout.position_for_index(caret_at)
+                {
+                    let top = at.y - bounds.origin.y;
+                    let seen = composer_scroll.bounds().size.height;
+                    let scrolled = -composer_scroll.offset().y;
+                    let target = follow_caret(top, line, scrolled, seen);
+                    if target != scrolled {
+                        composer_scroll.set_offset(gpui::point(px(0.), -target));
+                        window.on_next_frame(|window, _| window.refresh());
+                    }
+                }
                 let fill = crate::theme::text_selection();
                 if !selection.is_empty() {
                     let mut at = selection.start;
@@ -11110,6 +11236,7 @@ impl Shell {
                         }),
                 )
             })
+            .when_some(self.account_card(ix, cx), |d, card| d.child(card))
             .when_some(queue_card, |d, card| d.child(card))
             .when_some(self.script_notice(ix, cx), |d, card| d.child(card))
             .when_some(self.handoff_card(ix, cx), |d, card| d.child(card))
@@ -11207,6 +11334,7 @@ impl Shell {
                                     .px(px(8.))
                                     .max_h(px(190.))
                                     .overflow_y_scroll()
+                                    .track_scroll(&self.composer_scroll)
                                     .text_size(px(14.))
                                     .line_height(px(22.))
                                     .text_color(content(0.95))
@@ -11512,6 +11640,31 @@ impl Shell {
             .into_any_element()
     }
 
+    /// The part of a streaming reply to draw now (paced.rs); a reply that is not streaming, and
+    /// one that was already whole when it came, is drawn whole.
+    fn paced_answer<'a>(
+        &self,
+        conversation: usize,
+        turn_ix: usize,
+        turn: &'a data::Turn,
+        moving: &mut bool,
+    ) -> &'a str {
+        let key = (conversation, turn_ix);
+        let mut pacers = self.pacers.borrow_mut();
+        if !turn.live && !pacers.contains_key(&key) {
+            return &turn.answer;
+        }
+        let now = Instant::now();
+        let pacer = pacers.entry(key).or_insert_with(|| paced::Pacer::new(now));
+        let (text, more) = pacer.view(&turn.answer, now, turn.live);
+        if more || turn.live {
+            *moving = true;
+        } else {
+            pacers.remove(&key);
+        }
+        text
+    }
+
     fn turn_body(
         &self,
         conversation: usize,
@@ -11635,11 +11788,56 @@ impl Shell {
                 .child(inner)
                 .into_any_element()
         };
-        let step_text = |step: &data::Step| crate::step_lines::text(&step_line(step));
+        let step_text = |step: &data::Step| {
+            if step.kind == "command" && !step.caption.is_empty() {
+                step.caption.clone()
+            } else {
+                crate::step_lines::text(&step_line(step))
+            }
+        };
         if live {
-            // The last few steps as they happen, the one running on a spinner.
-            let start = turn.steps.len().saturating_sub(6);
-            let shown_steps = &turn.steps[start..];
+            // The phase's header and the steps as they happen, the one running on a spinner,
+            // inside a bounded window that follows the newest (Monocode's live phase).
+            let lead = turn
+                .steps
+                .iter()
+                .find(|s| s.kind == "command")
+                .or(turn.steps.first())
+                .map_or("terminal", step_glyph);
+            let _ = lead;
+            // A running group holds its spinner; pointing at it brings the chevron.
+            let roll = self.roll(conversation, index * 2 + 1, now, moving).clamp(0., 1.);
+            let chevron = icon("chevron-right", 14.)
+                .text_color(crate::tab_tile::tile_ink())
+                .with_transformation(Transformation::rotate(percentage(0.25)))
+                .into_any_element();
+            let phase = live_summary(&turn.steps);
+            let title: AnyElement = if phase.is_empty() {
+                shimmer(name.clone(), clock)
+            } else {
+                shimmer(phase, clock)
+            };
+            let header = div()
+                .id(("live-phase", index))
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .text_size(px(14.))
+                .text_color(content(0.5))
+                .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                    this.set_roll(conversation, index * 2 + 1, *hovered, cx)
+                }))
+                .child(push_tile(
+                    &ACTIVITY_TILE,
+                    Face::Neutral,
+                    self.spin(now).into_any_element(),
+                    chevron,
+                    roll,
+                ))
+                .child(title)
+                .into_any_element();
+            rows.push((STEP_ROW, child_row(STEP_ROW, false, header)));
+            let shown_steps = &turn.steps[..];
             for (i, step) in shown_steps.iter().enumerate() {
                 let text: AnyElement = if step.running {
                     shimmer(step_text(step), clock)
@@ -11652,13 +11850,9 @@ impl Shell {
                     .min_w_0()
                     .items_center()
                     .gap(px(7.))
-                    .text_size(px(12.5))
-                    .child(if step.running {
-                        mark_tile(&ACTIVITY_TILE, Face::Neutral, self.spin(now)).into_any_element()
-                    } else {
-                        let (face, mark, _) = activity_face(step_glyph(step));
-                        mark_tile(&ACTIVITY_TILE, face, mark).into_any_element()
-                    })
+                    .text_size(px(14.))
+                    .text_color(content(0.5))
+                    // A step of a group is bare, as in Monocode: only the header has a tile.
                     .child(match &step.image {
                         Some(path) => self
                             .image_row(path, step, format!("image-step-{index}-{i}"), cx)
@@ -11719,23 +11913,33 @@ impl Shell {
                 ))
                 .child(summary(&turn.steps))
                 .into_any_element();
-            rows.push((STEP_ROW + 2., child_row(STEP_ROW + 2., true, inner)));
+            rows.push((STEP_ROW, child_row(STEP_ROW, true, inner)));
             if nested_turn > 0.001 {
                 for (i, step) in turn.steps.iter().enumerate() {
-                    let height = if step.capture { 28. } else { 22. } * nested_turn;
+                    let height = step_height(step) * nested_turn;
                     rows.push((
                         height,
                         div()
+                            .relative()
                             .w_full()
                             .h(px(height))
                             .opacity(nested_turn)
                             .overflow_hidden()
                             .pl(px(TILE_RAIL_INDENT + ACTIVITY_TILE.w + 8.))
+                            .child(
+                                div()
+                                    .absolute()
+                                    .top_0()
+                                    .left(px(TILE_RAIL_INDENT))
+                                    .w(px(TILE_RAIL_X + 10.))
+                                    .h_full()
+                                    .child(rail(i + 1 == turn.steps.len())),
+                            )
                             .flex()
                             .items_center()
                             .gap(px(7.))
-                            .text_size(px(12.5))
-                            .text_color(content(0.45))
+                            .text_size(px(14.))
+                            .text_color(content(0.5))
                             .child(match &step.image {
                                 Some(path) => self
                                     .image_row(path, step, format!("image-step-{index}-{i}"), cx)
@@ -11752,6 +11956,14 @@ impl Shell {
         let has_header =
             live || !turn.steps.is_empty() || !turn.agents.is_empty() || turn.seconds.is_some();
         // Subagents, as one card (subagent_card.rs), and the pill for the ones in the background.
+        let prompt_key = (conversation, index);
+        let prompt_overflows = !turn.user.is_empty()
+            && self
+                .prompt_overflow
+                .get(&prompt_key)
+                .copied()
+                .unwrap_or(false);
+        let prompt_collapsed = prompt_overflows && !self.expanded_prompts.contains(&prompt_key);
         let agents = self.subagent_card(conversation, index, turn, provider, now, moving, cx);
         let pill = self.background_pill(turn);
         div()
@@ -11764,47 +11976,83 @@ impl Shell {
             })
             .when(!turn.user.is_empty(), |d| {
                 d.child(
-                    div().flex().justify_end().child(
-                        div()
-                            .relative()
-                            .max_w(px(576.))
-                            .min_w_0()
-                            .px(px(12.))
-                            .py(px(8.))
-                            .text_size(px(14.))
-                            .line_height(px(20.))
-                            .text_color(content(1.))
-                            .child(
-                                gpui::canvas(
-                                    |_, _, _| {},
-                                    |bounds, _, window, _| {
-                                        let radius = if bounds.size.height <= px(37.) {
-                                            f32::from(bounds.size.height) * 0.5
-                                        } else {
-                                            12.
-                                        };
-                                        window.paint_quad(
-                                            gpui::fill(bounds, accent_wash(0.24))
-                                                .corner_radii(px(radius)),
-                                        );
-                                    },
-                                )
-                                .absolute()
-                                .top_0()
-                                .left_0()
-                                .size_full(),
+                    div()
+                        .flex()
+                        .flex_col()
+                        .items_end()
+                        .gap(px(2.))
+                        .child(
+                            div().flex().justify_end().child(
+                                div()
+                                    .relative()
+                                    .max_w(px(576.))
+                                    .min_w_0()
+                                    .px(px(12.))
+                                    .py(px(8.))
+                                    .text_size(px(14.))
+                                    .line_height(px(20.))
+                                    .text_color(content(1.))
+                                    .child(
+                                        gpui::canvas(
+                                            |_, _, _| {},
+                                            |bounds, _, window, _| {
+                                                let radius = if bounds.size.height <= px(37.) {
+                                                    f32::from(bounds.size.height) * 0.5
+                                                } else {
+                                                    12.
+                                                };
+                                                window.paint_quad(
+                                                    gpui::fill(bounds, accent_wash(0.24))
+                                                        .corner_radii(px(radius)),
+                                                );
+                                            },
+                                        )
+                                        .absolute()
+                                        .top_0()
+                                        .left_0()
+                                        .size_full(),
+                                    )
+                                    // Four lines while folded; Show more stays inside the bubble.
+                                    .child(div().when(prompt_collapsed, |d| {
+                                        d.max_h(px(80.)).overflow_hidden()
+                                    }).child(transcript_select::user_text(
+                                        &self.select,
+                                        transcript_select::Reply {
+                                            conversation,
+                                            turn: index,
+                                            user: true,
+                                        },
+                                        turn.user.clone(),
+                                        styled_tokens(turn.user.clone()),
+                                    )))
+                        .when(prompt_overflows, |d| {
+                            d.child(
+                                div()
+                                    .id(("prompt-more", index))
+                                    .mt_1()
+                                    .px_1()
+                                    .py(px(2.))
+                                    .rounded(px(4.))
+                                    .text_size(px(12.))
+                                    .line_height(px(16.))
+                                    .text_color(content(0.6))
+                                    .cursor_pointer()
+                                    .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+                                    .child(if prompt_collapsed {
+                                        "Show more"
+                                    } else {
+                                        "Show less"
+                                    })
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        if !this.expanded_prompts.remove(&prompt_key) {
+                                            this.expanded_prompts.insert(prompt_key);
+                                        }
+                                        cx.notify();
+                                    })),
                             )
-                            .child(transcript_select::user_text(
-                                &self.select,
-                                transcript_select::Reply {
-                                    conversation,
-                                    turn: index,
-                                    user: true,
-                                },
-                                turn.user.clone(),
-                                styled_tokens(turn.user.clone()),
-                            )),
-                    ),
+                        })
+                            ),
+                        )
                 )
             })
             .when(has_header, |d| match pill {
@@ -11819,14 +12067,80 @@ impl Shell {
                 None => d.child(header),
             })
             .when(body_height > 0., |d| {
+                if !live {
+                    return d.child(
+                        div()
+                            .w_full()
+                            .mt(px(-6.))
+                            .h(px(body_height * openness))
+                            .opacity(openness.clamp(0., 1.))
+                            .overflow_hidden()
+                            .children(body),
+                    );
+                }
+                // The window is at most 280 px or 45% of the view; it scrolls to the newest
+                // step while the reader has not scrolled up, and fades where more is hidden.
+                let view = self.view_sizes.get(&conversation).map_or(600., |size| size.1);
+                let max_height = 280f32.min(view * 0.5).max(96.);
+                let (handle, was_at_bottom, offset, max) = {
+                    let mut scrolls = self.phase_scrolls.borrow_mut();
+                    let entry = scrolls
+                        .entry((conversation, index))
+                        .or_insert_with(|| (gpui::ScrollHandle::new(), std::cell::Cell::new(0.)));
+                    let offset = -f32::from(entry.0.offset().y);
+                    let max = f32::from(entry.0.max_offset().y);
+                    let was_at_bottom = offset >= entry.1.get() - 1.;
+                    entry.1.set(max);
+                    (entry.0.clone(), was_at_bottom, offset, max)
+                };
+                if was_at_bottom {
+                    handle.scroll_to_bottom();
+                }
+                // The steps themselves fade out at the edges (Monocode's live_phase.rs), so no
+                // colour is laid over the glass behind them.
+                let top_fade = if offset > 1. { 24. } else { 0. };
+                let bottom_fade = if max - offset > 1. { 32. } else { 0. };
+                let mask = |begin: bool| {
+                    gpui::canvas(
+                        |_, _, _| {},
+                        move |bounds, _, window, _| {
+                            if top_fade > 0. || bottom_fade > 0. {
+                                let scale = window.scale_factor();
+                                window.paint_layer(bounds, |window| {
+                                    window.paint_quad(gpui::fill(bounds, gpui::black()).border_color(
+                                        gpui_apple::metal_renderer::edge_fade_marker(
+                                            begin,
+                                            top_fade * scale,
+                                            bottom_fade * scale,
+                                        ),
+                                    ));
+                                });
+                            }
+                        },
+                    )
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                };
                 d.child(
                     div()
+                        .relative()
                         .w_full()
                         .mt(px(-6.))
-                        .h(px(body_height * openness))
+                        .h(px(body_height.min(max_height) * openness))
                         .opacity(openness.clamp(0., 1.))
                         .overflow_hidden()
-                        .children(body),
+                        .child(mask(true))
+                        .child(
+                            div()
+                                .id(("live-steps", index))
+                                .size_full()
+                                .overflow_y_scroll()
+                                .track_scroll(&handle)
+                                .children(body),
+                        )
+                        .child(mask(false)),
                 )
             })
             .children(agents)
@@ -11856,7 +12170,8 @@ impl Shell {
                                 },
                             )),
                         };
-                        let body = crate::markdown::render_rich(&turn.answer, &rich);
+                        let shown = self.paced_answer(conversation, index, turn, moving);
+                        let body = crate::markdown::render_rich(shown, &rich);
                         self.wake_reply_assets(cx);
                         body
                     },
@@ -14393,6 +14708,84 @@ fn model_name(provider: &str) -> &'static str {
     }
 }
 
+/// The live phase's header, as Monocode's: "Running 11 commands · Explored the project".
+fn live_summary(steps: &[data::Step]) -> String {
+    let count = |kind: &str| steps.iter().filter(|s| s.kind == kind).count();
+    let (commands, reads, edits) = (count("command"), count("read"), count("edit"));
+    let mut parts = Vec::new();
+    if commands > 0 {
+        let noun = if commands == 1 { "command" } else { "commands" };
+        parts.push(format!("Running {commands} {noun}"));
+    }
+    if reads > 0 {
+        parts.push("Explored the project".to_owned());
+    }
+    if edits > 0 {
+        let noun = if edits == 1 { "file" } else { "files" };
+        parts.push(format!("Edited {edits} {noun}"));
+    }
+    parts.join(" · ")
+}
+
+#[cfg(test)]
+mod live_header_tests {
+    use super::*;
+
+    fn step(kind: &str) -> data::Step {
+        data::Step {
+            kind: kind.into(),
+            label: String::new(),
+            detail: String::new(),
+            running: false,
+            image: None,
+            capture: false,
+            tool: None,
+            target: None,
+            caption: String::new(),
+        }
+    }
+
+    #[test]
+    fn the_live_header_counts_commands_and_reads_as_monocode_does() {
+        let steps: Vec<_> = (0..11)
+            .map(|_| step("command"))
+            .chain([step("read")])
+            .collect();
+        assert_eq!(
+            live_summary(&steps),
+            "Running 11 commands · Explored the project"
+        );
+        assert_eq!(live_summary(&[step("command")]), "Running 1 command");
+        assert_eq!(live_summary(&[]), "");
+    }
+}
+
+/// Wrapped lines of a user message at the bubble's text width, shaped as the bubble draws it.
+fn prompt_lines_over(text: &str, wrap: f32, window: &Window) -> usize {
+    let text = text.trim_end();
+    let run = gpui::TextRun {
+        len: text.len(),
+        font: gpui::font(".SystemUIFont"),
+        color: Default::default(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    window
+        .text_system()
+        .shape_text(
+            SharedString::from(text.to_owned()),
+            px(14.),
+            &[run],
+            Some(px(wrap)),
+            None,
+        )
+        .unwrap_or_default()
+        .iter()
+        .map(|line| line.wrap_boundaries.len() + 1)
+        .sum()
+}
+
 /// "Executou 2 comandos · Leu 3 arquivos", from a finished turn's steps.
 fn summary(steps: &[data::Step]) -> String {
     let count = |kind: &str| steps.iter().filter(|s| s.kind == kind).count();
@@ -14430,6 +14823,18 @@ fn step_line(step: &data::Step) -> crate::step_lines::Line {
 }
 
 /// What a tool acted on, in the tree: a small mono chip.
+/// How far the composer's text should be scrolled so the caret's line shows: unchanged when it
+/// already does, else just enough to bring it in.
+fn follow_caret(top: Pixels, line: Pixels, scrolled: Pixels, seen: Pixels) -> Pixels {
+    if top < scrolled {
+        top
+    } else if top + line > scrolled + seen {
+        top + line - seen
+    } else {
+        scrolled
+    }
+}
+
 fn target_chip(target: String) -> Div {
     div()
         .min_w_0()
@@ -14443,8 +14848,68 @@ fn target_chip(target: String) -> Div {
         .child(target)
 }
 
-/// A finished row of the opened tree: a quiet icon, the verb and what it acted on.
+/// A command's path chip: the file or folder icon and its name.
+fn path_chip(name: String, folder: bool) -> Div {
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(5.))
+        .h(px(22.))
+        .px(px(7.))
+        .rounded(px(6.))
+        .bg(content(0.06))
+        .font_family("Menlo")
+        .text_size(px(11.5))
+        .text_color(content(0.7))
+        .child(crate::file_icons::file_icon(&name, folder, 13.))
+        .child(name)
+}
+
+/// Rows of a command with a caption are taller: a title and its chips (tree "A").
+fn step_height(step: &data::Step) -> f32 {
+    if step.capture {
+        28.
+    } else if step.kind == "command" {
+        30.
+    } else {
+        22.
+    }
+}
+
+/// A finished row of the opened tree: a quiet icon, the verb and what it acted on. A command
+/// reads as what the model said it was for, with its program and the files it names as chips.
 fn step_row(step: &data::Step) -> Div {
+    if step.kind == "command" {
+        let program = crate::step_lines::command_label(&step.detail);
+        let title = if step.caption.is_empty() {
+            None
+        } else {
+            Some(step.caption.clone())
+        };
+        return div()
+            .flex()
+            .flex_1()
+            .min_w_0()
+            .items_center()
+            .gap(px(8.))
+            .when_some(title, |d, title| {
+                d.child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(px(13.))
+                        .text_color(content(0.7))
+                        .child(title),
+                )
+            })
+            .when(!program.is_empty(), |d| d.child(target_chip(program)))
+            .children(
+                crate::step_lines::command_paths(&step.detail, 2)
+                    .into_iter()
+                    .map(|(name, folder)| path_chip(name, folder)),
+            );
+    }
     let line = step_line(step);
     div()
         .flex()
@@ -15270,5 +15735,21 @@ mod claude_catalog_tests {
     fn a_session_on_an_alias_reads_with_its_version() {
         assert_eq!(model_label(Some("opus"), "claude"), "Opus 5.5");
         assert_eq!(model_label(Some("claude-opus-4-8"), "claude"), "Opus 4.8");
+    }
+}
+
+#[cfg(test)]
+mod follow_caret_tests {
+    use super::*;
+
+    #[test]
+    fn the_text_moves_only_as_far_as_the_caret_needs() {
+        let (line, seen) = (px(22.), px(190.));
+        // The caret's line already shows.
+        assert_eq!(follow_caret(px(44.), line, px(0.), seen), px(0.));
+        // Typing past the bottom brings its line in, and no more.
+        assert_eq!(follow_caret(px(198.), line, px(0.), seen), px(30.));
+        // Going back past the top does the same the other way.
+        assert_eq!(follow_caret(px(22.), line, px(100.), seen), px(22.));
     }
 }

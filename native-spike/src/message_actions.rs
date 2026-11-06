@@ -88,7 +88,7 @@ pub(crate) struct State {
     copied: Option<String>,
     notice: Option<(String, String)>,
     undone: Vec<String>,
-    pending: Option<String>,
+    pub(crate) pending: Option<String>,
     pub(crate) more: Option<More>,
 }
 
@@ -742,7 +742,7 @@ impl Shell {
 
     /// Read-only check first (ADR-187): a refusal is shown under the turn, else the confirmation
     /// lists the files. A failed check still asks, as UndoTurnButton does.
-    fn check_undo(
+    pub(super) fn check_undo(
         &mut self,
         key: String,
         session: String,

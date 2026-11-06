@@ -237,3 +237,5 @@ Write an ADR when a change constrains future work, is expensive to reverse, or r
 - [ADR-189: Sirus Native, a GPUI window over the headless host](ADR-189-sirus-native.md) — `native-spike/` builds a separate GPUI app that drives `sirus-host` over the phone protocol, with its own data and Keychain items.
 - [ADR-191: The React and Tauri app is removed; the phone carries its own shared code](ADR-191-react-app-removal.md) — `mobile/src/shared` replaces `../src`, Mermaid and KaTeX are committed in `native-spike/assets/reply-render`, the host serves only `/assets/*`, web push and the `desktop` feature go, and the updater key lives in `native-spike/updater.pub`
 - [ADR-192: The phone is rebuilt around the Mac's conversation, and other conversations announce themselves](ADR-192-phone-rebuild-and-activity-cards.md)
+- [ADR-193: The transcript glides, a failed turn says why, and commands read as their description](ADR-193-glide-failure-card-command-tree.md)
+- [ADR-194: The changes card, drawing on a draft picture, and a tree closer to Monocode](ADR-194-changes-card-picture-markup-tree-steps.md)

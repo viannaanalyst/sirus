@@ -32,6 +32,7 @@ mod fonts;
 mod git_sync;
 mod hover_track;
 mod i18n;
+mod image_markup;
 mod local_git;
 mod markdown;
 mod marks;

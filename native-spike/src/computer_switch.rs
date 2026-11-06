@@ -146,6 +146,7 @@ impl Shell {
         self.parked.clear();
         self.rows.clear();
         self.lists.clear();
+        self.glides.clear();
         self.history.clear();
         self.history_at = 0;
         self.projects.clear();

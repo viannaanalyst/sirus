@@ -124,6 +124,10 @@ pub struct ActivityItem {
     /// What a browser or computer tool acted on, from `tool_target`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
+    /// A command's own description, as the model wrote it for the person ("List the projects"),
+    /// bounded. Shown as the row's title in the window's tree.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub caption: String,
     /// Child rows only: native observation window, never inferred from the parent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_at: Option<i64>,
@@ -355,6 +359,7 @@ impl TurnActivity {
         item.label = short(&item.label, 100);
         // Credentials are masked before anything is kept (ADR-077).
         item.detail = detail(&crate::redact::mask(head(&item.detail, 4096)));
+        item.caption = short(&crate::redact::mask(&item.caption), 120);
         item.output = output(&crate::redact::mask(tail(&item.output, 16_384)));
         item.model = item
             .model
@@ -407,6 +412,9 @@ impl TurnActivity {
             }
             if item.target.is_none() {
                 item.target.clone_from(&old.target);
+            }
+            if item.caption.is_empty() {
+                item.caption.clone_from(&old.caption);
             }
             if item.output.is_empty() {
                 item.output.clone_from(&old.output);
@@ -648,6 +656,7 @@ fn item(
         image_path: None,
         tool: None,
         target: None,
+        caption: String::new(),
         started_at: None,
         ended_at: None,
         steps: vec![],
@@ -1136,7 +1145,7 @@ pub(crate) fn tool_kind(name: &str) -> (ItemKind, &'static str) {
     }
 }
 /// Parent tools, local agent tasks and their children's tool steps. Text and raw tool arguments
-/// are excluded; only a delegation call's model choice is read. The main agent's streamed
+/// are excluded (a command's own one-line description is kept as its `caption`); only a delegation call's model choice is read. The main agent's streamed
 /// thinking feeds the live thought only (ADR-101).
 pub fn claude(v: &Value) -> Vec<ActivityItem> {
     // Child messages carry the delegation call that spawned them; their tools become that child's steps.
@@ -1151,7 +1160,7 @@ pub fn claude(v: &Value) -> Vec<ActivityItem> {
             event["content_block"]["type"].as_str(),
         ) {
             (Some("content_block_start"), Some("thinking")) => {
-                return vec![thought(Thought::Start)]
+                return vec![thought(Thought::Start)];
             }
             (Some("content_block_start"), Some("text")) => return vec![thought(Thought::End)],
             (Some("content_block_delta"), _) if event["delta"]["type"] == "thinking_delta" => {
@@ -1277,6 +1286,12 @@ pub fn claude(v: &Value) -> Vec<ActivityItem> {
                     model,
                 );
                 row.detail = tool_input_detail(&block["input"]).to_owned();
+                if name == "Bash" {
+                    row.caption = short(
+                        block["input"]["description"].as_str().unwrap_or("").trim(),
+                        120,
+                    );
+                }
                 // An MCP tool's own name stands in when its input names nothing, as Codex's does.
                 if row.detail.is_empty() {
                     row.detail = mcp_tool(name).unwrap_or("").to_owned();
@@ -1584,6 +1599,10 @@ mod tests {
         assert_eq!(claude(&read)[0].detail, "src/app.ts");
         let bash = json!({"type":"assistant","message":{"content":[{"type":"tool_use","id":"b","name":"Bash","input":{"command":"npm test\nrm -rf x"}}]}});
         assert_eq!(detail(&claude(&bash)[0].detail), "npm test");
+        // The model's own description of a command is its row's caption, and only a command's.
+        let described = json!({"type":"assistant","message":{"content":[{"type":"tool_use","id":"d","name":"Bash","input":{"command":"ls","description":" List the projects "}}]}});
+        assert_eq!(claude(&described)[0].caption, "List the projects");
+        assert_eq!(claude(&read)[0].caption, "");
         let skill_call = json!({"type":"assistant","message":{"content":[{"type":"tool_use","id":"s","name":"Skill","input":{"skill":"graphify"}}]}});
         assert_eq!(claude(&skill_call)[0].kind, ItemKind::Skill);
         let command = codex(

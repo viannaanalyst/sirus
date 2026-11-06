@@ -13,6 +13,8 @@ use super::*;
 use crate::panel_changes::{diff_line, note};
 use std::collections::{HashMap, HashSet};
 
+/// Files a card shows before "Show more".
+const TURN_REVIEW_SHOWN: usize = 3;
 /// Diff lines drawn for one file; the rest are counted, not drawn.
 const MAX_DIFF_LINES: usize = 1500;
 
@@ -74,6 +76,8 @@ fn count_diff(diff: &str) -> (u64, u64) {
 #[derive(Default)]
 pub(crate) struct State {
     open: HashSet<String>,
+    /// Turns whose card Keep dismissed (the changes stay as they are).
+    dismissed: HashSet<String>,
     picked: HashMap<String, String>,
     full: HashMap<String, Full>,
 }
@@ -86,7 +90,8 @@ enum Full {
 }
 
 impl Shell {
-    /// The summary under a finished turn that changed files, or None when it has none to show.
+    /// The card under a finished turn that changed files, as Monocode's session review: the count
+    /// and totals, Undo, Keep and Review, the first three files and "Show more". Keep dismisses it.
     pub(super) fn turn_review_view(
         &self,
         conversation: usize,
@@ -94,12 +99,15 @@ impl Shell {
         turn: &Turn,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        // A reply still running may change its files; the summary waits for it to finish.
+        // A reply still running may change its files; the card waits for it to finish.
         if turn.live {
             return None;
         }
         let review = turn.review.as_ref()?;
         let key = turn.message_id.clone()?;
+        if self.turn_review.dismissed.contains(&key) {
+            return None;
+        }
         let total = totals(review);
         if total.files == 0 {
             return None;
@@ -115,65 +123,184 @@ impl Shell {
             tf("{} arquivos alterados", &[&total.files])
         };
         let session = self.conversations[conversation].session_id.clone();
-        let message = key.clone();
-        let header = div()
-            .id(("turn-changes", index))
+        let visible = review.files.iter().filter(|file| !file.committed).count();
+        let undoable: Vec<String> = review
+            .undoable()
+            .iter()
+            .map(|file| file.path.clone())
+            .collect();
+        let can_undo = !undoable.is_empty()
+            && !self.conversations[conversation].working()
+            && self.message_actions.pending.is_none();
+
+        let undo = {
+            let (session, message, key) = (session.clone(), key.clone(), key.clone());
+            review_button("turn-review-undo", t("Desfazer"), can_undo).when(can_undo, |d| {
+                d.on_click(cx.listener(move |this, _, _, cx| {
+                    this.check_undo(
+                        key.clone(),
+                        session.clone(),
+                        message.clone(),
+                        undoable.clone(),
+                        cx,
+                    );
+                    cx.notify();
+                }))
+            })
+        };
+        let keep = {
+            let key = key.clone();
+            review_button("turn-review-keep", t("Manter"), true).on_click(cx.listener(
+                move |this, _, _, cx| {
+                    this.turn_review.dismissed.insert(key.clone());
+                    cx.notify();
+                },
+            ))
+        };
+        let review_open = {
+            let (session, message, key) = (session.clone(), key.clone(), key.clone());
+            review_button("turn-review-open", t("Revisar"), true).on_click(cx.listener(
+                move |this, _, _, cx| {
+                    if !this.turn_review.open.contains(&key) {
+                        this.toggle_turn_review(
+                            key.clone(),
+                            session.clone(),
+                            message.clone(),
+                            needs_full,
+                            cx,
+                        );
+                    }
+                },
+            ))
+        };
+        let head = div()
             .flex()
             .items_center()
-            .gap(px(8.))
-            .px(px(8.))
-            .py(px(5.))
-            .rounded(px(crate::theme::RADIUS_MD))
-            .cursor_pointer()
-            .text_size(px(12.))
-            .text_color(content(0.6))
-            .hover(|style| style.bg(content(0.07)).text_color(content(0.9)))
-            .child(icon("git-compare", 13.))
-            .child(label)
-            .child(tally(total.additions, total.deletions))
-            .child(icon(if open { "chevron-up" } else { "chevron-down" }, 12.))
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.toggle_turn_review(
-                    key.clone(),
-                    session.clone(),
-                    message.clone(),
-                    needs_full,
-                    cx,
-                );
-            }));
-        let mut block = div().mt(px(6.)).flex().flex_col().child(header);
-        if open {
-            block = block.child(self.turn_review_files(index, turn, cx));
+            .gap(px(10.))
+            .px(px(12.))
+            .py(px(10.))
+            .child(
+                div()
+                    .size(px(32.))
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(8.))
+                    .bg(content(0.08))
+                    .child(icon("git-compare", 16.).text_color(content(0.55))),
+            )
+            .child(
+                div()
+                    .min_w_0()
+                    .flex_1()
+                    .child(
+                        div()
+                            .truncate()
+                            .text_size(px(12.))
+                            .line_height(px(18.))
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(content(0.8))
+                            .child(label),
+                    )
+                    .child(tally(total.additions, total.deletions)),
+            )
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .gap(px(2.))
+                    .child(undo)
+                    .child(keep)
+                    .child(review_open),
+            );
+
+        let mut card = div()
+            .id(("turn-changes", index))
+            .mt(px(6.))
+            .flex()
+            .flex_col()
+            .rounded(px(crate::theme::RADIUS_LG))
+            .border_1()
+            .border_color(content(0.07))
+            .bg(content(0.03))
+            .overflow_hidden()
+            .child(head);
+        if visible > 0 {
+            card = card.child(self.turn_review_files(index, turn, open, cx));
         }
-        Some(block.into_any_element())
+        if visible > TURN_REVIEW_SHOWN {
+            let hidden = visible - TURN_REVIEW_SHOWN;
+            let more = if open {
+                t("Mostrar menos").to_owned()
+            } else {
+                tf("Mostrar mais {} arquivos", &[&hidden])
+            };
+            let (session, message, key) = (session.clone(), key.clone(), key.clone());
+            card = card.child(
+                div()
+                    .id(("turn-review-more", index))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .w_full()
+                    .h(px(32.))
+                    .px(px(12.))
+                    .border_t_1()
+                    .border_color(content(0.05))
+                    .text_size(px(11.))
+                    .text_color(content(0.45))
+                    .cursor_pointer()
+                    .hover(|style| style.bg(content(0.05)).text_color(content(0.72)))
+                    .child(icon(if open { "chevron-up" } else { "chevron-down" }, 12.))
+                    .child(more)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.toggle_turn_review(
+                            key.clone(),
+                            session.clone(),
+                            message.clone(),
+                            needs_full,
+                            cx,
+                        );
+                    })),
+            );
+        }
+        Some(card.into_any_element())
     }
 
-    /// The files of an open review, and the diff of the one picked.
-    fn turn_review_files(&self, index: usize, turn: &Turn, cx: &mut Context<Self>) -> AnyElement {
+    /// The files of a review: the first few, or all of them when open. Each row opens its diff.
+    fn turn_review_files(
+        &self,
+        index: usize,
+        turn: &Turn,
+        open: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let Some(review) = turn.review.as_ref() else {
             return div().into_any_element();
         };
         let key = turn.message_id.clone().unwrap_or_default();
         let picked = self.turn_review.picked.get(&key).cloned();
+        let limit = if open { usize::MAX } else { TURN_REVIEW_SHOWN };
         let mut column = div()
-            .mt(px(4.))
-            .ml(px(8.))
             .flex()
             .flex_col()
-            .border_l_1()
-            .border_color(content(0.08))
-            .pl(px(6.));
+            .border_t_1()
+            .border_color(content(0.05))
+            .py(px(4.));
         if review.expired {
-            column = column.child(note(
+            column = column.child(div().px(px(12.)).py(px(4.)).child(note(
                 t("Os diffs antigos foram liberados. O resumo e a confirmação foram preservados."),
                 false,
-            ));
+            )));
         }
         for (position, file) in review
             .files
             .iter()
             .filter(|file| !file.committed)
             .enumerate()
+            .take(limit)
         {
             let active = picked.as_deref() == Some(file.path.as_str());
             let path = file.path.clone();
@@ -184,19 +311,19 @@ impl Shell {
                 .flex()
                 .items_center()
                 .gap(px(8.))
-                .px(px(6.))
-                .py(px(3.))
-                .rounded(px(crate::theme::RADIUS_SM))
+                .h(px(30.))
+                .px(px(12.))
                 .cursor_pointer()
                 .text_size(px(12.))
-                .text_color(if active { content(0.92) } else { content(0.7) })
-                .hover(|style| style.bg(content(0.07)))
+                .text_color(if active { content(0.92) } else { content(0.66) })
+                .hover(|style| style.bg(content(0.05)).text_color(content(0.95)))
                 .child(
                     div()
                         .min_w_0()
                         .flex_1()
                         .overflow_hidden()
                         .text_ellipsis()
+                        .font_family("Menlo")
                         .child(file.path.clone()),
                 );
             row = if file.binary {
@@ -344,6 +471,26 @@ impl Shell {
 }
 
 /// `+added −removed` in the diff colors, as the summary and the file rows show them.
+/// A card button: Undo, Keep and Review, as Monocode's session review.
+fn review_button(id: &'static str, label: &str, enabled: bool) -> Stateful<Div> {
+    div()
+        .id(id)
+        .h(px(28.))
+        .px(px(10.))
+        .flex()
+        .items_center()
+        .rounded(px(6.))
+        .text_size(px(11.))
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .text_color(content(if enabled { 0.75 } else { 0.3 }))
+        .bg(content(0.08))
+        .when(enabled, |d| {
+            d.cursor_pointer()
+                .hover(|style| style.bg(content(0.12)).text_color(content(1.)))
+        })
+        .child(label.to_owned())
+}
+
 fn tally(added: u64, removed: u64) -> Div {
     let (add, remove) = diff_colors(0);
     div()

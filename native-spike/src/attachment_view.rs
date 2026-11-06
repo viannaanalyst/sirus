@@ -8,6 +8,7 @@ use crate::attachment_html as html;
 use crate::attachment_pdf;
 use crate::attachment_web as web;
 use crate::file_icons::file_icon;
+use crate::image_markup::{self, Markup};
 use crate::panel_files::source_line;
 use crate::reply_rich::{self, Act, Asset, Want};
 use crate::syntax::LineSpans;
@@ -22,6 +23,10 @@ const MAX_FILE: u64 = 10 * 1024 * 1024;
 const MAX_BATCH: u64 = 40 * 1024 * 1024;
 const HEADER: f32 = 46.;
 const BAR: f32 = 40.;
+/// The side of a picture waiting in the composer.
+const DRAFT_PICTURE: f32 = 64.;
+/// What the pencil draws with (#e5484d, as in the old app).
+const MARKUP_INK: u32 = 0xe5484d;
 
 // ---- State -------------------------------------------------------------------------------
 
@@ -42,9 +47,15 @@ pub(super) struct Files {
     /// drawing a diagram or a formula (one at a time).
     assets_busy: usize,
     drawing: bool,
+    /// The strokes over the draft picture on show (image_markup.rs).
+    markup: Markup,
 }
 
 impl Files {
+    pub(super) fn note_markup_failed(&mut self) {
+        self.markup.busy = false;
+    }
+
     pub(super) fn note(&mut self, reply: &Value) {
         for item in reply.as_array().into_iter().flatten() {
             let info = Info::from_json(item);
@@ -88,6 +99,12 @@ impl Files {
         info.thumb
             .clone()
             .or_else(|| self.thumbs.get(&info.id).cloned())
+            // A picture just sent still has the copy the host gave its draft.
+            .or_else(|| {
+                self.drafts
+                    .get(&info.id)
+                    .and_then(|draft| draft.thumb.clone())
+            })
     }
 }
 
@@ -626,6 +643,7 @@ impl Shell {
     }
 
     fn close_attachment(&mut self, cx: &mut Context<Self>) {
+        self.viewer.markup = Default::default();
         if let Some(open) = self.viewer.open.as_mut().filter(|o| !o.closing) {
             open.closing = true;
             open.t.set(
@@ -683,6 +701,12 @@ impl Shell {
         command: bool,
         cx: &mut Context<Self>,
     ) -> bool {
+        if key == "escape" && self.viewer.markup.active {
+            self.viewer.markup.active = false;
+            self.viewer.markup.drawing = false;
+            cx.notify();
+            return true;
+        }
         let Some(open) = self.viewer.open.as_mut() else {
             return false;
         };
@@ -778,6 +802,7 @@ impl Shell {
             open.info = info;
             open.generation = generation;
         }
+        self.viewer.markup = Default::default();
         self.load_attachment(cx);
         cx.notify();
     }
@@ -1088,7 +1113,10 @@ impl Shell {
                 && !viewer.thumbs.contains_key(&info.id)
                 && !viewer.thumbs_pending.contains(&info.id)
                 && !viewer.thumbs_failed.contains(&info.id)
-                && !viewer.drafts.contains_key(&info.id)
+                && !viewer
+                    .drafts
+                    .get(&info.id)
+                    .is_some_and(|draft| draft.thumb.is_some())
             {
                 wanted.push((owner.to_owned(), info.id.clone()));
             }
@@ -1167,6 +1195,19 @@ impl Shell {
                         thumb: None,
                     });
                     let (open_id, remove_id) = (id.clone(), id.clone());
+                    if info.is_image() {
+                        // A picture shows as itself, with no name or size beside it.
+                        return draft_picture(
+                            i,
+                            self.viewer.thumb_of(&info),
+                            cx.listener(move |this, _, _, cx| this.open_draft(&open_id, cx)),
+                            cx.listener(move |this, _, _, cx| {
+                                this.remove_draft(&remove_id);
+                                cx.notify();
+                            }),
+                        )
+                        .into_any_element();
+                    }
                     chip(("attached", i), &info, true)
                         .when(info.openable(), |d| {
                             d.cursor_pointer().on_click(
@@ -1191,6 +1232,7 @@ impl Shell {
                                 }))
                                 .child(icon("close", 11.).text_color(content(0.6))),
                         )
+                        .into_any_element()
                 }))
                 .into_any_element(),
         )
@@ -1512,6 +1554,7 @@ impl Shell {
     /// The arrows on the sides of the picture and the strip of thumbnails under it.
     fn gallery_frame(&self, inner: AnyElement, open: &Open, cx: &mut Context<Self>) -> AnyElement {
         let many = open.gallery.len() > 1;
+        let arrows = many && !self.viewer.markup.active;
         let at = open.gallery.iter().position(|f| f.id == open.info.id);
         let arrow = |id: &'static str, name: &'static str, left: bool, enabled: bool| {
             div()
@@ -1556,7 +1599,7 @@ impl Shell {
             .flex()
             .flex_col()
             .child(inner)
-            .when(many, |d| {
+            .when(arrows, |d| {
                 d.child(arrow(
                     "gallery-prev",
                     "chevron-left",
@@ -1628,6 +1671,310 @@ impl Shell {
             .into_any_element()
     }
 
+    /// A draft picture: it can be drawn on, and the drawing can take the original's place.
+    fn markup_stage(&self, image: Arc<gpui::Image>, cx: &mut Context<Self>) -> AnyElement {
+        let markup = &self.viewer.markup;
+        let active = markup.active;
+        let has_strokes = !markup.strokes.is_empty();
+        let store = markup.stage.clone();
+        let strokes = markup.strokes.clone();
+        let size = markup.size;
+        let ink = gpui::Hsla::from(gpui::rgb(MARKUP_INK));
+        let drawing = gpui::canvas(
+            move |bounds, _, _| store.set(Some(bounds)),
+            move |bounds, _, window, _| {
+                let Some(size) = size else {
+                    return;
+                };
+                let frame = image_markup::picture_frame(bounds, size);
+                let width = frame.size.width.max(px(1.)) / size.0.max(1) as f32
+                    * image_markup::stroke_width(size);
+                let place = |mark: &image_markup::Mark| {
+                    gpui::point(
+                        frame.origin.x + frame.size.width * mark.0,
+                        frame.origin.y + frame.size.height * mark.1,
+                    )
+                };
+                for stroke in &strokes {
+                    if let [dot] = stroke.as_slice() {
+                        let at = place(dot) - gpui::point(width / 2., width / 2.);
+                        window.paint_quad(
+                            gpui::fill(Bounds::new(at, gpui::size(width, width)), ink)
+                                .corner_radii(width / 2.),
+                        );
+                        continue;
+                    }
+                    let mut path = gpui::PathBuilder::stroke(width);
+                    for (index, mark) in stroke.iter().enumerate() {
+                        if index == 0 {
+                            path.move_to(place(mark));
+                        } else {
+                            path.line_to(place(mark));
+                        }
+                    }
+                    if let Ok(path) = path.build() {
+                        window.paint_path(path, ink);
+                    }
+                }
+            },
+        )
+        .absolute()
+        .size_full();
+        let stage = div()
+            .id("markup-stage")
+            .relative()
+            .size_full()
+            .when(active, |d| d.cursor_crosshair())
+            .child(
+                img(image.clone())
+                    .size_full()
+                    .object_fit(ObjectFit::Contain),
+            )
+            .child(drawing)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                    if this.viewer.markup.active && !this.viewer.markup.busy {
+                        this.viewer.markup.begin(event.position);
+                        cx.stop_propagation();
+                        cx.notify();
+                    }
+                }),
+            )
+            .on_mouse_move(cx.listener(|this, event: &gpui::MouseMoveEvent, _, cx| {
+                let markup = &mut this.viewer.markup;
+                if !markup.drawing {
+                    return;
+                }
+                if event.pressed_button != Some(MouseButton::Left) {
+                    markup.drawing = false;
+                } else if markup.extend(event.position) {
+                    cx.notify();
+                }
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, _| this.viewer.markup.drawing = false),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _, _, _| this.viewer.markup.drawing = false),
+            );
+        let busy = markup.busy;
+        let tool =
+            |id: &'static str, name: &'static str, enabled: bool, on: bool, label: &'static str| {
+                div()
+                    .id(id)
+                    .size(px(30.))
+                    .rounded(px(crate::theme::RADIUS_MD))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .opacity(if enabled { 1. } else { 0.35 })
+                    .when(on, |d| d.bg(accent_wash(0.28)))
+                    .when(enabled, |d| {
+                        d.cursor_pointer().hover(|s| s.bg(content(0.14)))
+                    })
+                    .tooltip(message_actions::name_tip(t(label)))
+                    .child(icon(name, 15.).text_color(if on { accent() } else { content(0.85) }))
+            };
+        let pencil_image = image.clone();
+        let (apply_fill, apply_text) = crate::theme::primary_action(has_strokes && !busy);
+        let bar = div()
+            .flex()
+            .items_center()
+            .gap(px(2.))
+            .p(px(4.))
+            .rounded(px(crate::theme::RADIUS_LG))
+            .border_1()
+            .border_color(content(0.16))
+            .bg(crate::theme::floating_fill())
+            .occlude()
+            .child(
+                tool("markup-pencil", "pencil", !busy, active, "Marcar na imagem").on_click(
+                    cx.listener(move |this, _, _, cx| {
+                        if !this.viewer.markup.busy {
+                            this.viewer.markup.toggle(pencil_image.bytes());
+                            cx.notify();
+                        }
+                    }),
+                ),
+            )
+            .child(
+                tool(
+                    "markup-undo",
+                    "undo",
+                    has_strokes && !busy,
+                    false,
+                    "Desfazer traço",
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    if !this.viewer.markup.busy {
+                        this.viewer.markup.strokes.pop();
+                        cx.notify();
+                    }
+                })),
+            )
+            .child(
+                tool(
+                    "markup-clear",
+                    "trash",
+                    has_strokes && !busy,
+                    false,
+                    "Limpar desenho",
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    if !this.viewer.markup.busy {
+                        this.viewer.markup.strokes.clear();
+                        cx.notify();
+                    }
+                })),
+            )
+            .child(
+                div()
+                    .id("markup-replace")
+                    .ml(px(4.))
+                    .h(px(30.))
+                    .px(px(12.))
+                    .rounded(px(crate::theme::RADIUS_MD))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .bg(apply_fill)
+                    .text_color(apply_text)
+                    .text_size(px(12.5))
+                    .font_weight(FontWeight::MEDIUM)
+                    .when(has_strokes && !busy, |d| d.cursor_pointer())
+                    .on_click(cx.listener(|this, _, _, cx| this.replace_with_markup(cx)))
+                    .child(icon("check", 13.).text_color(apply_text))
+                    .child(t(if busy {
+                        "Substituindo imagem…"
+                    } else {
+                        "Substituir original"
+                    })),
+            );
+        div()
+            .relative()
+            .flex_1()
+            .min_h_0()
+            .p(px(16.))
+            .pb(px(60.))
+            .child(stage)
+            .child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .bottom(px(12.))
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap(px(6.))
+                    .when(active && !has_strokes, |d| {
+                        d.child(
+                            div()
+                                .text_size(px(12.))
+                                .text_color(content(0.7))
+                                .child(t("Desenhe sobre a imagem para destacar uma área.")),
+                        )
+                    })
+                    .child(bar),
+            )
+            .into_any_element()
+    }
+
+    /// Burns the strokes into a new picture off the UI thread and hands it to the host; its reply
+    /// puts the new picture where the original was.
+    fn replace_with_markup(&mut self, cx: &mut Context<Self>) {
+        let Some(open) = self.viewer.open.as_ref() else {
+            return;
+        };
+        let Content::Image(image) = &open.content else {
+            return;
+        };
+        let markup = &self.viewer.markup;
+        if open.sent || markup.busy || markup.strokes.is_empty() {
+            return;
+        }
+        let bytes = image.bytes().to_vec();
+        let strokes = markup.strokes.clone();
+        let old = open.info.id.clone();
+        let name = image_markup::annotated_name(&open.info.name);
+        let owner = open.owner.clone();
+        let Some(ix) = self
+            .attachments
+            .iter()
+            .find(|(_, list)| list.iter().any(|(id, _)| *id == old))
+            .map(|(ix, _)| *ix)
+        else {
+            return;
+        };
+        self.viewer.markup.busy = true;
+        let backend = self.backend.clone();
+        let (tx, rx) = async_channel::bounded(1);
+        std::thread::spawn(move || {
+            let ink = [
+                (MARKUP_INK >> 16) as u8,
+                (MARKUP_INK >> 8) as u8,
+                MARKUP_INK as u8,
+            ];
+            let _ = tx.send_blocking(image_markup::burn(&bytes, &strokes, ink));
+        });
+        cx.spawn(async move |this, cx| {
+            let burned = rx.recv().await.ok().flatten();
+            let _ = this.update(cx, |this, cx| {
+                match burned.filter(|png| check_limits(&[png.len() as u64], 0).is_ok()) {
+                    Some(png) => {
+                        let file = json!({ "name": name, "data": base64(&png) });
+                        let id = backend.invoke(
+                            "paste_prompt_attachments",
+                            json!({ "owner": owner, "files": [file] }),
+                        );
+                        this.waiting.insert(id, Waiting::MarkedUp(ix, old));
+                    }
+                    None => {
+                        this.viewer.markup.busy = false;
+                        this.problem =
+                            Some(t("Não foi possível preparar a imagem anotada.").to_owned());
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// The host has the drawn picture: it takes the original's place and the viewer closes.
+    pub(super) fn markup_replaced(
+        &mut self,
+        ix: usize,
+        old: &str,
+        reply: &Value,
+        cx: &mut Context<Self>,
+    ) {
+        self.viewer.note(reply);
+        let new = reply
+            .as_array()
+            .and_then(|files| files.first())
+            .map(|file| {
+                (
+                    file["id"].as_str().unwrap_or("").to_owned(),
+                    file["name"].as_str().unwrap_or("").to_owned(),
+                )
+            });
+        self.viewer.markup = Default::default();
+        let Some(new) = new else {
+            return;
+        };
+        let list = self.attachments.entry(ix).or_default();
+        match list.iter().position(|(id, _)| id == old) {
+            Some(at) => list.insert(at + 1, new),
+            None => list.push(new),
+        }
+        self.remove_draft(old);
+        self.close_attachment(cx);
+    }
+
     fn attachment_content(&self, _modal_width: f32, cx: &mut Context<Self>) -> AnyElement {
         let Some(open) = self.viewer.open.as_ref() else {
             return div().into_any_element();
@@ -1686,6 +2033,7 @@ impl Shell {
                 )
                 .into_any_element(),
             Content::Text(text) => text_view(text.clone()),
+            Content::Image(image) if !open.sent => self.markup_stage(image.clone(), cx),
             Content::Image(image) => div()
                 .flex_1()
                 .min_h_0()
@@ -2259,6 +2607,55 @@ fn picture_tile(
         .when_some(thumb, |d, thumb| {
             d.child(img(thumb).size_full().object_fit(ObjectFit::Cover))
         })
+}
+
+/// A picture waiting in the composer: only the image, with its cross in the corner.
+fn draft_picture(
+    index: usize,
+    thumb: Option<Arc<gpui::Image>>,
+    open: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
+    remove: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
+) -> Div {
+    div()
+        .relative()
+        .size(px(DRAFT_PICTURE))
+        .flex_shrink_0()
+        .child(
+            div()
+                .id(("attached", index))
+                .size_full()
+                .rounded(px(crate::theme::RADIUS_MD))
+                .overflow_hidden()
+                .border_1()
+                .border_color(content(0.1))
+                .bg(content(0.05))
+                .cursor_pointer()
+                .hover(|s| s.border_color(content(0.28)))
+                .on_click(open)
+                .when_some(thumb, |d, thumb| {
+                    d.child(img(thumb).size_full().object_fit(ObjectFit::Cover))
+                }),
+        )
+        .child(
+            div()
+                .id(("attached-remove", index))
+                .absolute()
+                .top(px(3.))
+                .right(px(3.))
+                .size(px(18.))
+                .rounded_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(gpui::Hsla {
+                    a: 0.62,
+                    ..gpui::black()
+                })
+                .cursor_pointer()
+                .hover(|s| s.bg(gpui::black()))
+                .on_click(remove)
+                .child(icon("close", 10.).text_color(gpui::white())),
+        )
 }
 
 /// A file chip: the type icon (or the image), the name, the size.

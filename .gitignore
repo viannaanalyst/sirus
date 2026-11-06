@@ -43,10 +43,8 @@ previews/
 # project and the retired Pixel skill.
 graphify-out/
 .vscode/
-marketing/video/
 .sirus/skills/pixel-art-sprites/
 .graphifyignore
-research_notes/
 reports/
 
 # Update signing keys never enter the repository (ADR-140). The private key lives outside it,

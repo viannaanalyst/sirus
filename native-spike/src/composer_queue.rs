@@ -839,8 +839,9 @@ impl Shell {
         // One id per send, so a repeated delivery can't start a second turn.
         let id = self.backend.invoke("send_prompt", json!({ "request": { "sessionId": out.session_id, "prompt": out.prompt, "clientRequestId": uuid(), "execution": out.execution, "attachmentIds": attachment_ids, "attachmentOwner": format!("session:{}", out.session_id), "goal": out.goal, "debugging": out.debugging, "team": out.team } }));
         self.waiting.insert(id, Waiting::Session(ix));
-        self.list_state(ix, cx)
-            .set_follow_mode(gpui::FollowMode::Tail);
+        // The sent message glides up to the top of the view (glide.rs).
+        self.list_state(ix, cx).pause_following_tail();
+        self.glides.entry(ix).or_default().follow(true);
         cx.notify();
     }
 
@@ -1468,7 +1469,8 @@ impl Shell {
                 .rounded(px(crate::theme::RADIUS_XL))
                 .border_1()
                 .border_color(content(0.07))
-                .bg(field_fill())
+                .relative()
+                .child(crate::theme::composer_surface(crate::theme::RADIUS_XL))
                 .child(header)
                 .when_some(
                     queue.paused.then_some(queue.reason).flatten(),

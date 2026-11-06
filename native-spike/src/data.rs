@@ -18,6 +18,8 @@ pub struct Step {
     pub tool: Option<String>,
     /// What the tool acted on, when the host names it: an app or a page.
     pub target: Option<String>,
+    /// A command's description as the model wrote it, the title of its row in the tree.
+    pub caption: String,
 }
 
 /// A subagent the turn launched, with its own status.
@@ -98,6 +100,8 @@ pub struct Conversation {
     pub branch: String,
     /// The provider account the session uses, for the message queue's binding.
     pub account: String,
+    /// What the host said when the last turn failed (`lastError`).
+    pub last_error: String,
     pub approval: String,
     pub effort: Option<String>,
     pub fast: bool,
@@ -167,6 +171,7 @@ impl Conversation {
             worktree: String::new(),
             branch: String::new(),
             account: "default".into(),
+            last_error: String::new(),
             approval: "full".into(),
             effort: None,
             fast: false,
@@ -215,6 +220,7 @@ impl Conversation {
             .as_str()
             .unwrap_or("")
             .to_owned();
+        self.last_error = session["lastError"].as_str().unwrap_or("").to_owned();
         self.account = session["providerAccountId"]
             .as_str()
             .unwrap_or("default")
@@ -462,6 +468,7 @@ fn turns_of(messages: &[Value]) -> Vec<Turn> {
                     detail,
                     tool: item["tool"].as_str().map(str::to_owned),
                     target: item["target"].as_str().map(str::to_owned),
+                    caption: item["caption"].as_str().unwrap_or("").to_owned(),
                     running: item["state"].as_str() == Some("running"),
                 });
             }

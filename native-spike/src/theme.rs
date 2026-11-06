@@ -186,7 +186,7 @@ pub const ACCENTS: &[(&str, u32)] = &[
 ];
 
 /// Monocode's `sidebar_opacity` as the owner has it: how much of the desktop the tint hides.
-const SHELL_ALPHA: f32 = 0.77;
+const SHELL_ALPHA: f32 = 0.81;
 
 pub fn palette(look: &Look, system_dark: bool) -> Palette {
     let p = &PRESETS[look.preset];
@@ -198,10 +198,10 @@ pub fn palette(look: &Look, system_dark: bool) -> Palette {
         _ => system_dark,
     };
     let tint = |s: f32, lightness: f32, alpha: f32| hsla(hue, s, lightness, alpha);
-    // Dark glass as Monocode: the window's tint is the only coat, and the conversation's card
-    // adds none, so the desktop shows through it instead of being hidden twice.
+    // Dark glass as Monocode (#060606 at 40% over the window's tint): the conversation sits a step
+    // darker than the chrome around it.
     let pane_alpha = match (look.glass, dark) {
-        (true, true) => 0.,
+        (true, true) => 0.4,
         (true, false) => 0.9,
         (false, _) => 1.,
     };
@@ -216,7 +216,7 @@ pub fn palette(look: &Look, system_dark: bool) -> Palette {
                 p.dark_lightness,
                 if look.glass { SHELL_ALPHA } else { 1. },
             ),
-            pane: tint(saturation, p.dark_lightness * 0.45, pane_alpha),
+            pane: tint(saturation, p.dark_lightness * 0.4, pane_alpha),
             field: tint(saturation * 0.8, (p.dark_lightness + 0.075).max(0.11), 1.),
             floating: tint(saturation * 0.7, (p.dark_lightness + 0.08).max(0.11), 1.),
             accent,
@@ -382,6 +382,10 @@ pub fn floating_surface(radius: f32) -> impl IntoElement {
     // A light film, so a popup reads a step above whatever sits beneath, even over black.
     frosted(radius, content(0.08), floating_fill(), 30.)
 }
+/// The sidebar opened over the workspace: a faint wash over a 24 px frost, as Monocode's.
+pub fn peek_surface(radius: f32) -> impl IntoElement {
+    frosted(radius, content(0.05), floating_fill(), 24.)
+}
 /// The composer: ink at 3% over a 24 px frost (Monocode's `[data-composer-box]`).
 pub fn composer_surface(radius: f32) -> impl IntoElement {
     frosted(radius, content(0.03), field_fill(), 24.)
@@ -494,7 +498,7 @@ mod look_tests {
         assert_eq!(PRESETS[look.preset].name, "Tinta");
         assert_eq!(ACCENTS[look.accent.unwrap()].1, 0xec4899);
         let dark = palette(&look, true);
-        assert_eq!(dark.pane.a, 0.);
+        assert_eq!(dark.pane.a, 0.4);
         assert_eq!(dark.shell.a, SHELL_ALPHA);
         assert_eq!(dark.shell.l, 0.);
     }

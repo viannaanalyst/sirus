@@ -1,8 +1,8 @@
 //! The Arquivos pane, after Sirus's FileTree.tsx and FileView: a 40 px toolbar (new file, new
 //! folder, collapse all, search), a lazy tree of the session's folder with an inline row for
 //! creating an entry, and files opened in this same pane as tabs (the Terminal's tab strip: file
-//! icon, name, close, and a `+` that goes back to the tree to pick another), each with a
-//! breadcrumb, Preview or Source (Markdown only has both) and its own scroll position.
+//! icon, name, close, and a `+` that goes back to the tree to pick another), each with its own
+//! scroll position; Markdown adds Preview or Source above it.
 //!
 //! The search finds files in the whole worktree, not only the folders opened in the tree: the
 //! list comes from `git ls-files` (or a bounded walk) on a background thread, and typing is
@@ -1240,89 +1240,48 @@ impl FilesPanel {
 
     /// project > path parts, each a step; the file's icon leads. Markdown adds the Preview / Source
     /// control on the right.
-    fn breadcrumb(&self, opened: &Opened, cx: &mut Context<Self>) -> AnyElement {
-        let relative = opened
-            .path
-            .strip_prefix(&self.root)
-            .unwrap_or(&opened.path)
-            .trim_start_matches('/');
-        let mut steps: Vec<String> = vec![root_name(&self.root)];
-        steps.extend(
-            relative
-                .split('/')
-                .filter(|part| !part.is_empty())
-                .map(str::to_owned),
-        );
-        let last = steps.len() - 1;
-        let mut trail = div()
-            .min_w_0()
-            .flex()
-            .items_center()
-            .gap(px(4.))
-            .text_size(px(11.5))
-            .child(file_icon(&opened.name, false, 13.));
-        for (index, step) in steps.into_iter().enumerate() {
-            if index > 0 {
-                trail = trail.child(
-                    svg()
-                        .path("chevron-right")
-                        .size(px(10.))
-                        .text_color(content(0.3))
-                        .flex_shrink_0(),
-                );
-            }
-            let color = if index == last {
-                content(0.85)
-            } else {
-                content(0.45)
-            };
-            trail = trail.child(
-                div()
-                    .flex_shrink_0()
-                    .whitespace_nowrap()
-                    .text_color(color)
-                    .child(step),
-            );
+    /// Above a Markdown file: Preview or Source. Other files open with nothing over them.
+    fn view_switch(&self, opened: &Opened, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !is_markdown(&opened.name) {
+            return None;
         }
-        let mut bar = div()
-            .h(px(30.))
-            .w_full()
-            .flex_shrink_0()
-            .px(px(10.))
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap(px(8.))
-            .border_b_1()
-            .border_color(content(0.07))
-            .child(div().min_w_0().overflow_hidden().child(trail));
-        if is_markdown(&opened.name) {
-            bar = bar.child(
-                div()
-                    .flex_shrink_0()
-                    .flex()
-                    .items_center()
-                    .p(px(2.))
-                    .rounded(px(crate::theme::RADIUS_MD))
-                    .border_1()
-                    .border_color(content(0.07))
-                    .child(Self::segment(
-                        "files-preview",
-                        "Preview",
-                        Mode::Preview,
-                        opened.mode,
-                        cx,
-                    ))
-                    .child(Self::segment(
-                        "files-source",
-                        "Source",
-                        Mode::Source,
-                        opened.mode,
-                        cx,
-                    )),
-            );
-        }
-        bar.into_any_element()
+        Some(
+            div()
+                .h(px(30.))
+                .w_full()
+                .flex_shrink_0()
+                .px(px(10.))
+                .flex()
+                .items_center()
+                .justify_end()
+                .border_b_1()
+                .border_color(content(0.07))
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .p(px(2.))
+                        .rounded(px(crate::theme::RADIUS_MD))
+                        .border_1()
+                        .border_color(content(0.07))
+                        .child(Self::segment(
+                            "files-preview",
+                            "Preview",
+                            Mode::Preview,
+                            opened.mode,
+                            cx,
+                        ))
+                        .child(Self::segment(
+                            "files-source",
+                            "Source",
+                            Mode::Source,
+                            opened.mode,
+                            cx,
+                        )),
+                )
+                .into_any_element(),
+        )
     }
 
     fn segment(
@@ -1361,10 +1320,7 @@ impl Render for FilesPanel {
         }
         match self.active.and_then(|ix| self.tabs.get(ix)) {
             Some(opened) => column
-                // An agent's capture is opened from its row, not browsed to: no path bar above it.
-                .when(!tool_images::is_capture(&opened.path), |column| {
-                    column.child(self.breadcrumb(opened, cx))
-                })
+                .children(self.view_switch(opened, cx))
                 .child(self.viewer(opened, cx))
                 .into_any_element(),
             None => {

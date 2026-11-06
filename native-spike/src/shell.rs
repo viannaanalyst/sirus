@@ -1095,6 +1095,11 @@ pub struct Shell {
     composer_layout: std::cell::RefCell<Option<TextLayout>>,
     /// Groups of steps the person opened or closed: (conversation, turn, first step).
     phase_open: HashMap<(usize, usize, usize), bool>,
+    /// The first project the sidebar's rail shows.
+    rail_first: usize,
+    /// Projects, the last used first, and the ⌥Tab switcher while it is held.
+    project_recent: Vec<usize>,
+    project_switch: Option<ProjectSwitch>,
     /// When each prompt last folded or unfolded, and its bubble's width.
     prompt_moved: HashMap<(usize, usize), Instant>,
     prompt_widths: std::cell::RefCell<HashMap<(usize, usize), Rc<Cell<Pixels>>>>,
@@ -1442,6 +1447,9 @@ impl Shell {
             ignored_text: String::new(),
             composer_layout: Default::default(),
             phase_open: HashMap::new(),
+            rail_first: 0,
+            project_recent: Vec::new(),
+            project_switch: None,
             prompt_moved: HashMap::new(),
             prompt_widths: Default::default(),
             phase_moved: Default::default(),
@@ -2857,6 +2865,10 @@ impl Shell {
             self.parked.insert(old, (kept, self.active));
         }
         self.current_project = project;
+        if let Some(project) = project {
+            self.project_recent.retain(|p| *p != project);
+            self.project_recent.insert(0, project);
+        }
         self.sync_pulls_project(cx);
         self.drag = None;
         self.menu = None;
@@ -4773,6 +4785,15 @@ impl Shell {
     }
 
     fn key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        // ⌥Tab goes back to the last project; held, it steps through them (project_switch_view).
+        if event.keystroke.modifiers.alt
+            && !event.keystroke.modifiers.platform
+            && event.keystroke.key == "tab"
+        {
+            self.step_project_switch(event.keystroke.modifiers.shift, cx);
+            cx.stop_propagation();
+            return;
+        }
         if self.first_run_keys(&event.keystroke, cx) {
             cx.stop_propagation();
             return;
@@ -5277,6 +5298,16 @@ impl Shell {
             (true, false, false, "w") if self.term.pulls_active => self.close_pull_requests(cx),
             (true, false, false, "w") => self.close(self.active, cx),
             (true, true, false, "p") => self.toggle_pin(self.active, cx),
+            // With text in the composer these keys still select to the line's ends.
+            (true, true, false, "left" | "right")
+                if self
+                    .drafts
+                    .get(&self.active_conversation())
+                    .is_none_or(|draft| draft.text.is_empty()) =>
+            {
+                self.step_project(key == "right", cx);
+                cx.stop_propagation();
+            }
             (true, false, false, "s") => self.toggle_sidebar(cx),
             (true, false, false, ",") => self.toggle_appearance(cx),
             (true, false, false, "f") => self.open_find(window, cx),
@@ -6581,6 +6612,7 @@ impl Shell {
                         )
                         .child(this.filter_button(cx)),
                 )
+                .children(this.project_rail(cx))
         };
         // A collapsed sidebar slides out over the workspace while the pointer holds it there.
         if open < 0.001 {
@@ -6601,7 +6633,7 @@ impl Shell {
                 .rounded(px(crate::theme::RADIUS_LG))
                 .border_1()
                 .border_color(content(0.1))
-                .child(crate::theme::floating_surface(crate::theme::RADIUS_LG))
+                .child(crate::theme::peek_surface(crate::theme::RADIUS_LG))
                 .shadow_lg()
                 .overflow_hidden()
                 .child(contents("sidebar-list", self, cx, drawn))
@@ -7923,6 +7955,202 @@ impl Shell {
             }
         }
         cx.notify();
+    }
+
+    /// Every project, the current first and then by last use.
+    fn projects_by_use(&self) -> Vec<usize> {
+        let count = self.projects.len();
+        let mut order: Vec<usize> = self.current_project.into_iter().collect();
+        for project in self.project_recent.iter().copied().chain(0..count) {
+            if project < count && !order.contains(&project) {
+                order.push(project);
+            }
+        }
+        order
+    }
+
+    /// ⌥Tab: the first press picks the last project, more presses move along while ⌥ is held.
+    fn step_project_switch(&mut self, back: bool, cx: &mut Context<Self>) {
+        let order = self.projects_by_use();
+        if order.len() < 2 {
+            return;
+        }
+        match self.project_switch.as_mut() {
+            Some(switch) => {
+                switch.at = rail_step(switch.at, switch.order.len(), !back);
+            }
+            None => {
+                self.project_switch = Some(ProjectSwitch {
+                    at: rail_step(0, order.len(), !back),
+                    order,
+                    since: Instant::now(),
+                });
+                // A quick tap never shows the row; a held key does, after this long.
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor()
+                        .timer(Duration::from_secs_f32(SWITCH_SHOWS_AFTER))
+                        .await;
+                    let _ = this.update(cx, |_, cx| cx.notify());
+                })
+                .detach();
+            }
+        }
+        cx.notify();
+    }
+
+    /// ⌥ let go: the project picked is the one to go to.
+    fn finish_project_switch(&mut self, cx: &mut Context<Self>) {
+        if let Some(switch) = self.project_switch.take() {
+            if let Some(project) = switch.order.get(switch.at).copied() {
+                self.switch_project(project, cx);
+            }
+            cx.notify();
+        }
+    }
+
+    /// The row of projects while ⌥Tab is held.
+    fn project_switch_view(&self) -> Option<AnyElement> {
+        let switch = self.project_switch.as_ref()?;
+        if switch.since.elapsed().as_secs_f32() < SWITCH_SHOWS_AFTER {
+            return None;
+        }
+        let tiles = switch.order.iter().enumerate().map(|(at, project)| {
+            div()
+                .w(px(76.))
+                .px(px(4.))
+                .py(px(8.))
+                .rounded(px(crate::theme::RADIUS_MD))
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap(px(6.))
+                .when(at == switch.at, |d| d.bg(content(0.14)))
+                .child(self.project_avatar_for(*project, 24.))
+                .child(
+                    div()
+                        .max_w_full()
+                        .truncate()
+                        .text_size(px(11.))
+                        .text_color(content(if at == switch.at { 1. } else { 0.65 }))
+                        .child(self.projects[*project].name.clone()),
+                )
+        });
+        Some(
+            div()
+                .absolute()
+                .top(px(TITLE_BAR + 40.))
+                .left_0()
+                .right_0()
+                .flex()
+                .justify_center()
+                .child(
+                    div()
+                        .relative()
+                        .max_w(px(self.viewport_width - 80.))
+                        .p(px(6.))
+                        .flex()
+                        .flex_wrap()
+                        .justify_center()
+                        .gap(px(4.))
+                        .rounded(px(crate::theme::RADIUS_LG))
+                        .border_1()
+                        .border_color(content(0.12))
+                        .child(crate::theme::floating_surface(crate::theme::RADIUS_LG))
+                        .shadow_lg()
+                        .children(tiles),
+                )
+                .into_any_element(),
+        )
+    }
+
+    /// The next or previous project, wrapping around (⌘⇧→, ⌘⇧←).
+    fn step_project(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let count = self.projects.len();
+        if count < 2 {
+            return;
+        }
+        let at = self.current_project.unwrap_or(0).min(count - 1);
+        self.switch_project(rail_step(at, count, forward), cx);
+    }
+
+    /// The projects at the end of the sidebar, as Monocode's: their robots, the name and the keys
+    /// under the pointer, and arrows when they do not all fit.
+    fn project_rail(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.projects.len() < 2 || !self.sidebar_items.shown("projects") {
+            return None;
+        }
+        const TILE: f32 = 30.;
+        const ARROW: f32 = 18.;
+        let fits = (((self.sidebar_width - 20. - ARROW * 2.) / TILE).floor() as usize).max(1);
+        let count = self.projects.len();
+        let current = self.current_project.unwrap_or(0).min(count - 1);
+        let first = rail_window(self.rail_first, current, fits, count);
+        let arrow = |id: &'static str, glyph: &'static str, enabled: bool| {
+            div()
+                .id(id)
+                .w(px(ARROW))
+                .h(px(28.))
+                .flex_shrink_0()
+                .rounded(px(crate::theme::RADIUS_SM))
+                .flex()
+                .items_center()
+                .justify_center()
+                .opacity(if enabled { 1. } else { 0.3 })
+                .when(enabled, |d| {
+                    d.cursor_pointer().hover(|s| s.bg(content(0.08)))
+                })
+                .child(icon(glyph, 12.).text_color(content(0.55)))
+        };
+        let tiles = (first..(first + fits).min(count)).map(|index| {
+            let name = self.projects[index].name.clone();
+            let chosen = index == current;
+            div()
+                .id(("rail-project", index))
+                .w(px(TILE))
+                .h(px(28.))
+                .flex_shrink_0()
+                .rounded(px(crate::theme::RADIUS_MD))
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer()
+                .when(chosen, |d| d.bg(content(0.12)))
+                .when(!chosen, |d| d.hover(|s| s.bg(content(0.1))))
+                .tooltip(move |_, cx| cx.new(|_| ProjectTip(name.clone())).into())
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if this.current_project != Some(index) {
+                        this.switch_project(index, cx);
+                    }
+                }))
+                .child(self.project_avatar_for(index, 18.))
+        });
+        Some(
+            div()
+                .flex_shrink_0()
+                .h(px(40.))
+                .px(px(10.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    arrow("rail-back", "chevron-left", first > 0).on_click(cx.listener(
+                        move |this, _, _, cx| {
+                            this.rail_first = first.saturating_sub(fits);
+                            cx.notify();
+                        },
+                    )),
+                )
+                .children(tiles)
+                .child(
+                    arrow("rail-forward", "chevron-right", first + fits < count).on_click(
+                        cx.listener(move |this, _, _, cx| {
+                            this.rail_first = (first + fits).min(count.saturating_sub(fits));
+                            cx.notify();
+                        }),
+                    ),
+                )
+                .into_any_element(),
+        )
     }
 
     fn add_new_project(&mut self, cx: &mut Context<Self>) {
@@ -15272,6 +15500,64 @@ fn caret_lit(since: f32) -> bool {
     since % 1.06 < 0.58
 }
 
+/// The ⌥Tab switcher: the projects as they stood when it opened, and the one picked.
+struct ProjectSwitch {
+    order: Vec<usize>,
+    at: usize,
+    since: Instant,
+}
+
+/// Seconds ⌥Tab is held before the row shows, so a tap just goes back.
+const SWITCH_SHOWS_AFTER: f32 = 0.16;
+
+/// The project after or before `at`, wrapping around.
+fn rail_step(at: usize, count: usize, forward: bool) -> usize {
+    if forward {
+        (at + 1) % count
+    } else {
+        (at + count - 1) % count
+    }
+}
+
+/// The first project the rail shows: `wanted` where it can be, moved so the current one is in view.
+fn rail_window(wanted: usize, current: usize, fits: usize, count: usize) -> usize {
+    let last_start = count.saturating_sub(fits);
+    let wanted = wanted.min(last_start);
+    if current < wanted {
+        current
+    } else if current >= wanted + fits {
+        (current + 1 - fits).min(last_start)
+    } else {
+        wanted
+    }
+}
+
+/// A project's name and the keys that move between projects, over its robot on the rail.
+struct ProjectTip(String);
+
+impl Render for ProjectTip {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px(px(10.))
+            .py(px(5.))
+            .rounded(px(crate::theme::RADIUS_LG))
+            .border_1()
+            .border_color(content(0.14))
+            .bg(floating_fill())
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .text_size(px(12.))
+            .child(
+                div()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(content(0.95))
+                    .child(self.0.clone()),
+            )
+            .child(div().text_color(content(0.55)).child("⌘⇧← / ⌘⇧→"))
+    }
+}
+
 /// The system's file panel would not open: said in the footer instead of doing nothing.
 fn panel_failed(this: &gpui::WeakEntity<Shell>, cx: &mut gpui::AsyncApp) {
     let _ = this.update(cx, |this, cx| {
@@ -15782,6 +16068,7 @@ impl Render for Shell {
         let bottom_terminal = self.bottom_view();
         let attachment_modal = self.attachment_view(now, &mut moving, cx);
         let trail_card = self.trail_card();
+        let project_switch = self.project_switch_view();
         let add_menu = self.add_menu_view(now, &mut moving, cx);
         let environment = self.environment_view(now, &mut moving, cx);
         let incoming_card = {
@@ -15879,6 +16166,11 @@ impl Render for Shell {
             .text_color(content(0.9))
             .on_drop(cx.listener(|this, paths: &gpui::ExternalPaths, _, cx| this.attach_paths(paths.paths().to_vec(), cx)))
             .on_key_down(cx.listener(Self::key))
+            .on_modifiers_changed(cx.listener(|this, event: &gpui::ModifiersChangedEvent, _, cx| {
+                if !event.modifiers.alt {
+                    this.finish_project_switch(cx);
+                }
+            }))
             .on_mouse_move(cx.listener(Self::mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
             .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
@@ -15965,7 +16257,8 @@ impl Render for Shell {
             // Behind a peeking sidebar the window goes out of focus, as in Monocode.
             .children(peek_blur.filter(|t| *t > 0.001).map(|t| {
                 gpui::canvas(|_, _, _| {}, move |bounds, _, window, _| {
-                    window.paint_quad(gpui::fill(bounds, gpui::Hsla { a: 0.14 * t, ..gpui::black() }).border_color(gpui::backdrop_blur_marker(t * 14.)));
+                    // The workspace only dims, as in Monocode: the blur is the panel's own.
+                    window.paint_quad(gpui::fill(bounds, gpui::Hsla { a: 0.4 * t, ..gpui::black() }));
                 })
                 .absolute()
                 .size_full()
@@ -15979,6 +16272,7 @@ impl Render for Shell {
             .children(handoff_popup)
             .children(more_menu)
             .children(trail_card)
+            .children(project_switch)
             .children(attachment_modal)
             .children(confirm_dialog)
             .children(term_plus_menu)
@@ -16313,5 +16607,25 @@ mod caret_tests {
         assert!(caret_lit(0.));
         assert!(!caret_lit(0.7));
         assert!(caret_lit(1.1));
+    }
+}
+
+#[cfg(test)]
+mod rail_tests {
+    use super::*;
+
+    #[test]
+    fn stepping_wraps_around() {
+        assert_eq!(rail_step(2, 3, true), 0);
+        assert_eq!(rail_step(0, 3, false), 2);
+    }
+
+    #[test]
+    fn the_current_project_stays_in_the_window() {
+        assert_eq!(rail_window(0, 1, 5, 10), 0);
+        assert_eq!(rail_window(0, 7, 5, 10), 3);
+        assert_eq!(rail_window(5, 2, 5, 10), 2);
+        assert_eq!(rail_window(8, 9, 5, 10), 5);
+        assert_eq!(rail_window(3, 0, 5, 2), 0);
     }
 }

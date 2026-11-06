@@ -1867,6 +1867,9 @@ fn notifications(s: &Value) -> Vec<Group> {
 const KEYBINDINGS: &[(&str, &str, &str, &str)] = &[
     ("new-session", "Nova sessão", "Sessão", "meta+n"),
     ("palette", "Paleta de comandos", "Aplicativo", "meta+k"),
+    ("projectBack", "Voltar ao último projeto", "Aplicativo", "alt+tab"),
+    ("projectNext", "Próximo projeto", "Aplicativo", "meta+shift+right"),
+    ("projectPrevious", "Projeto anterior", "Aplicativo", "meta+shift+left"),
     ("open-project", "Abrir projeto", "Projeto", "meta+o"),
     ("settings", "Configurações", "Aplicativo", "meta+,"),
     (

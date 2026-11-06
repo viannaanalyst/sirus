@@ -25,8 +25,8 @@ const HEADER: f32 = 46.;
 const BAR: f32 = 40.;
 /// The side of a picture waiting in the composer.
 const DRAFT_PICTURE: f32 = 36.;
-/// The longest side of a sent picture.
-const PHOTO_SIDE: f32 = 120.;
+/// The side of a sent picture, cropped to a square.
+const PHOTO_SIDE: f32 = 96.;
 const PHOTO_RADIUS: f32 = 12.;
 
 // ---- State -------------------------------------------------------------------------------
@@ -2651,11 +2651,10 @@ fn picture_tile(
     thumb: Option<Arc<gpui::Image>>,
     click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
 ) -> Stateful<Div> {
-    let (width, height) = photo_size(thumb.as_ref());
+    // One size for every picture, whatever its shape, so a message's row reads evenly.
     div()
         .id(id)
-        .w(px(width))
-        .h(px(height))
+        .size(px(PHOTO_SIDE))
         .flex_shrink_0()
         .rounded(px(PHOTO_RADIUS))
         .border_1()
@@ -2673,28 +2672,6 @@ fn picture_tile(
                     .object_fit(ObjectFit::Cover),
             )
         })
-}
-
-/// A sent picture's size: its own shape, its longest side at `PHOTO_SIDE`.
-fn photo_size(thumb: Option<&Arc<gpui::Image>>) -> (f32, f32) {
-    thread_local! {
-        static SHAPES: RefCell<HashMap<usize, Option<(u32, u32)>>> = RefCell::new(HashMap::new());
-    }
-    let shape = thumb.and_then(|thumb| {
-        SHAPES.with(|shapes| {
-            *shapes
-                .borrow_mut()
-                .entry(Arc::as_ptr(thumb) as usize)
-                .or_insert_with(|| crate::image_markup::dimensions(thumb.bytes()))
-        })
-    });
-    match shape {
-        Some((w, h)) if w > 0 && h > 0 => {
-            let scale = PHOTO_SIDE / w.max(h) as f32;
-            ((w as f32 * scale).round(), (h as f32 * scale).round())
-        }
-        _ => (PHOTO_SIDE, PHOTO_SIDE),
-    }
 }
 
 /// A picture waiting in the composer: only the image, with its cross just off the corner.

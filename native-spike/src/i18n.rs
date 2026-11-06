@@ -2156,6 +2156,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Produtividade", "Productivity"),
     ("Programação", "Coding"),
     ("Projeto", "Project"),
+    ("Projeto anterior", "Previous project"),
     (
         "Projeto do Supabase (project ref)",
         "Supabase project (project ref)",
@@ -2185,6 +2186,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Provedor padrão", "Default provider"),
     ("Provedores", "Providers"),
     ("Prévia em HTML", "HTML preview"),
+    ("Próximo projeto", "Next project"),
     ("Pular", "Skip"),
     ("Pull request criado", "Pull request created"),
     ("Pull request mesclado.", "Pull request merged."),
@@ -2732,6 +2734,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Voltar", "Back"),
     ("Voltar ao app", "Back to app"),
+    ("Voltar ao último projeto", "Back to the last project"),
     ("Voltou", "Went back"),
     (
         "Vários agentes trabalhando juntos",

@@ -4,7 +4,8 @@
 use super::*;
 use crate::panel_terminal::{TerminalGroup, confirm_close, needs_confirm, running_names};
 use crate::terminal_place::{self, Action, Placement};
-use gpui::{AnyView, App, Entity};
+use crate::pull_requests_page::{PullRequestsPage, PullsEvent};
+use gpui::{AnyView, App, Entity, Subscription};
 
 const CHIP_WIDTH: f32 = 124.;
 const CHIP_GAP: f32 = 4.;
@@ -24,6 +25,10 @@ pub(super) struct TermState {
     bottom_open: bool,
     /// The plus button's menu in the title strip: left edge and fade-in.
     plus_menu: Option<(f32, Tween)>,
+    /// The Pull requests page, a tab of its own in every placement (pull_requests_page.rs).
+    pulls: Option<Entity<PullRequestsPage>>,
+    pulls_active: bool,
+    _pulls_events: Option<Subscription>,
 }
 
 impl TermState {
@@ -35,13 +40,23 @@ impl TermState {
             active: None,
             bottom_open: false,
             plus_menu: None,
+            pulls: None,
+            pulls_active: false,
+            _pulls_events: None,
         }
     }
-    pub fn chips_width(&self) -> f32 {
-        if self.placement == Placement::TitleBar && !self.tabs.is_empty() {
-            self.tabs.len() as f32 * (CHIP_WIDTH + CHIP_GAP) + 6.
+    fn chip_count(&self) -> usize {
+        let terminals = if self.placement == Placement::TitleBar {
+            self.tabs.len()
         } else {
-            0.
+            0
+        };
+        terminals + usize::from(self.pulls.is_some())
+    }
+    pub fn chips_width(&self) -> f32 {
+        match self.chip_count() {
+            0 => 0.,
+            count => count as f32 * (CHIP_WIDTH + CHIP_GAP) + 6.,
         }
     }
     pub fn close_menu(&mut self) -> bool {
@@ -147,6 +162,7 @@ impl Shell {
         }
         self.term.tabs.push(TermTab { id, view });
         self.term.active = Some(id);
+        self.term.pulls_active = false;
         self.term.plus_menu = None;
         cx.notify();
     }
@@ -184,10 +200,54 @@ impl Shell {
 
     pub(super) fn leave_title_tab(&mut self) {
         self.term.active = None;
+        self.term.pulls_active = false;
+    }
+
+    /// Opens the Pull requests page as a title tab, or goes back to it when it is already one.
+    pub(super) fn open_pull_requests(&mut self, cx: &mut Context<Self>) {
+        if self.term.pulls.is_none() {
+            let backend = self.backend.clone();
+            let view = cx.new(|cx| PullRequestsPage::new(backend, cx));
+            self.term._pulls_events = Some(cx.subscribe(
+                &view,
+                |this: &mut Shell, _, event: &PullsEvent, _| match event {
+                    // The reply is a session: it opens as a conversation, like a new one.
+                    PullsEvent::Ask(args) => {
+                        let id = this.backend.invoke("pull_ask_action", args.clone());
+                        this.waiting.insert(id, Waiting::Created);
+                    }
+                },
+            ));
+            self.term.pulls = Some(view);
+        } else if let Some(view) = self.term.pulls.clone() {
+            view.update(cx, |page, cx| page.reload(cx));
+        }
+        self.term.active = None;
+        self.term.pulls_active = true;
+        self.term.plus_menu = None;
+        self.palette_ui = None;
+        cx.notify();
+    }
+
+    fn close_pull_requests(&mut self, cx: &mut Context<Self>) {
+        self.term.pulls = None;
+        self.term._pulls_events = None;
+        self.term.pulls_active = false;
+        cx.notify();
     }
 
     /// The tab shown in place of the conversation.
     pub(super) fn title_tab_view(&self) -> Option<AnyElement> {
+        if let Some(pulls) = self.term.pulls.as_ref().filter(|_| self.term.pulls_active) {
+            return Some(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .child(pulls.clone())
+                    .into_any_element(),
+            );
+        }
         if self.term.placement != Placement::TitleBar {
             return None;
         }
@@ -226,13 +286,16 @@ impl Shell {
         if self.term.chips_width() == 0. {
             return None;
         }
-        let chips: Vec<AnyElement> = self
-            .term
-            .tabs
+        let terminals = if self.term.placement == Placement::TitleBar {
+            self.term.tabs.as_slice()
+        } else {
+            &[]
+        };
+        let mut chips: Vec<AnyElement> = terminals
             .iter()
             .map(|tab| {
                 let id = tab.id;
-                let active = self.term.active == Some(id);
+                let active = self.term.active == Some(id) && !self.term.pulls_active;
                 let title: gpui::SharedString = tab.view.read(cx).title().into();
                 div()
                     .id(("term-chip", id))
@@ -276,6 +339,7 @@ impl Shell {
                     )
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.term.active = Some(id);
+                        this.term.pulls_active = false;
                         this.term.plus_menu = None;
                         if let Some(tab) = this.term.tabs.iter().find(|t| t.id == id) {
                             tab.view.update(cx, |group, cx| group.focus(window, cx));
@@ -285,6 +349,9 @@ impl Shell {
                     .into_any_element()
             })
             .collect();
+        if self.term.pulls.is_some() {
+            chips.insert(0, self.pulls_chip(cx));
+        }
         Some(
             div()
                 .absolute()
@@ -295,6 +362,63 @@ impl Shell {
                 .children(chips)
                 .into_any_element(),
         )
+    }
+
+    /// The Pull requests tab, drawn like a terminal's.
+    fn pulls_chip(&self, cx: &mut Context<Self>) -> AnyElement {
+        let active = self.term.pulls_active;
+        div()
+            .id("pulls-chip")
+            .relative()
+            .w(px(CHIP_WIDTH))
+            .flex_shrink_0()
+            .h(px(PLATE))
+            .pl(px(8.))
+            .pr(px(26.))
+            .rounded(px(crate::theme::RADIUS_MD))
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .text_size(px(12.5))
+            .cursor_pointer()
+            .bg(content(if active { 0.1 } else { 0.04 }))
+            .text_color(content(if active { 1. } else { 0.55 }))
+            .hover(|s| s.bg(content(0.07)))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(icon("git-pull-request", 12.).text_color(content(0.7)))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .child(t("Pull requests")),
+            )
+            .child(
+                div()
+                    .id("pulls-chip-close")
+                    .absolute()
+                    .right(px(3.))
+                    .top(px(3.5))
+                    .size(px(20.))
+                    .rounded(px(crate::theme::RADIUS_SM))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .hover(|s| s.bg(content(0.07)))
+                    .child(icon("close", 12.))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.close_pull_requests(cx);
+                    })),
+            )
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.term.active = None;
+                this.term.pulls_active = true;
+                this.term.plus_menu = None;
+                cx.notify();
+            }))
+            .into_any_element()
     }
 
     /// The strip under the conversation: the active conversation's Terminal pane.
@@ -366,6 +490,7 @@ impl Shell {
                         |this, _, _, cx| {
                             this.term.plus_menu = None;
                             this.term.active = None;
+                            this.term.pulls_active = false;
                             this.new_conversation(None, cx);
                             cx.notify();
                         },

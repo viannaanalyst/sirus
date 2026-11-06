@@ -49,6 +49,9 @@ The Tauri and React window has the features people use, but scrolling long conve
 - **Notifications.** The headless host has no bundle for the notification center, so it emits `notification-native` and the window plays the sound and shows the banner (`native_notify.rs`). Clicking a banner opens the app but not the conversation.
 - **Models.** Claude Code's catalog lists only aliases, so `claude_catalog` in `shell.rs` names them with their versions and adds the earlier models the CLI takes by full name. The versions live in a table a new CLI release can outdate, and being listed does not prove the account can use a model.
 - **Working composer.** While the agent works, the project's robot walks along the composer's top edge over a line of letters in its colour (`new_tab_field::ledge`); Reduce Motion leaves it out.
+- **Pull requests.** `pull_requests_page.rs` is a tab in the title bar, reached from the footer and the palette: list, detail, merge, close, comments, checks and diff through `pull_request_action`. Create PR lives in the Changes panel. Pins, unread marks, review threads and the watch list are not ported.
+- **First run.** `first_run.rs` shows four steps over the letters robot on the first launch of an install with no projects, remembered in `native-first-run.json`; Settings → Geral replays it.
+- **Global search.** ⌘⇧F and the palette search every conversation through `transcript_action`, from 3 characters (`global_search.rs`).
 - **Not in Native yet.** Several computers (it needs a TLS client, a second connection and routing of commands that stay on this Mac) and so importing a moved conversation; the pull requests page; updating the app. The simulator (`simulator.rs`) has no agent tools, as in Sirus Code.
 
 ## Remote access: other devices reach this Mac through a second listener

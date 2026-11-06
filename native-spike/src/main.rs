@@ -46,6 +46,7 @@ mod project_avatar;
 mod project_files;
 mod project_scripts;
 mod project_scripts_view;
+mod pull_requests_page;
 mod provider_masks;
 mod reply_render;
 mod reply_rich;
@@ -159,6 +160,9 @@ impl AssetSource for Assets {
             "settings" => include_bytes!("../assets/settings.svg"),
             "laptop" => include_bytes!("../assets/laptop.svg"),
             "branch" => include_bytes!("../assets/branch.svg"),
+            "git-pull-request" => include_bytes!("../assets/git-pull-request.svg"),
+            "git-merge" => include_bytes!("../assets/git-merge.svg"),
+            "circle-dot" => include_bytes!("../assets/circle-dot.svg"),
             "upload" => include_bytes!("../assets/upload.svg"),
             "server" => include_bytes!("../assets/server.svg"),
             "folder" => include_bytes!("../assets/folder.svg"),
@@ -183,6 +187,7 @@ impl AssetSource for Assets {
             "tool-branch" => include_bytes!("../assets/tool-branch.svg"),
             "claude.svg" => include_bytes!("../assets/claude.svg"),
             "codex-glyph.svg" => include_bytes!("../assets/codex-glyph.svg"),
+            "codex.svg" => include_bytes!("../assets/codex.svg"),
             "opencode.svg" => include_bytes!("../assets/opencode.svg"),
             "prompt.svg" => include_bytes!("../assets/prompt.svg"),
             other => match file_icons::asset(other).or_else(|| panel_browser::asset(other)) {

@@ -39,6 +39,11 @@ impl State {
     }
 
     fn click(&mut self, at: Point<Pixels>, now: Instant) {
+        self.pulse(at, now);
+    }
+
+    /// Sends a wave out from `at`, as a click does: the first run's steps use it to change scene.
+    pub fn pulse(&mut self, at: Point<Pixels>, now: Instant) {
         self.waves.push((at, now));
         if self.waves.len() > 4 {
             self.waves.remove(0);
@@ -59,16 +64,25 @@ fn grain(column: i32, row: i32) -> f32 {
 }
 
 /// How much of the robot a point shows: 0 outside it and in its eyes, more toward its middle.
-fn figure(shape: &str, x: f32, y: f32) -> f32 {
+/// `gaze` shifts the eyes toward the pointer, in the robot's 64-unit space.
+fn figure(shape: &str, x: f32, y: f32, gaze: (f32, f32)) -> f32 {
     if !crate::project_avatar::shape_contains(shape, x, y) {
         return 0.;
     }
-    let eye = |cx: f32| ((x - cx) / 5.).powi(2) + ((y - 31.) / 7.).powi(2) < 1.;
+    let eye = |cx: f32| ((x - cx - gaze.0) / 5.).powi(2) + ((y - 31. - gaze.1) / 7.).powi(2) < 1.;
     if eye(23.) || eye(41.) {
         return 0.05;
     }
     let from_middle = ((x - 32.).powi(2) + (y - 32.).powi(2)).sqrt() / 32.;
     0.4 + 0.5 * (1. - from_middle).max(0.)
+}
+
+/// How far the eyes shift for a pointer at (`mx`, `my`) in a field `width` by `height`: up to
+/// about 3.5 units sideways and 2.5 up or down.
+fn gaze_toward(mx: f32, my: f32, width: f32, height: f32) -> (f32, f32) {
+    let across = ((mx - width / 2.) / width.max(1.)).clamp(-0.5, 0.5);
+    let down = ((my - height / 2.) / height.max(1.)).clamp(-0.5, 0.5);
+    (across * 7., down * 5.)
 }
 
 /// The value a cell is drawn with, 0 to about 1.
@@ -173,6 +187,19 @@ pub fn field<V: 'static>(
     view: gpui::WeakEntity<V>,
     still: bool,
 ) -> AnyElement {
+    field_with(shape, color, state, set, view, still, false)
+}
+
+/// The same field; with `gaze` the robot's eyes follow the pointer too (the first run's).
+pub fn field_with<V: 'static>(
+    shape: &'static str,
+    color: u32,
+    state: &State,
+    set: fn(&mut V) -> &mut State,
+    view: gpui::WeakEntity<V>,
+    still: bool,
+    gaze: bool,
+) -> AnyElement {
     let mouse = if still { None } else { state.mouse };
     let waves = if still { Vec::new() } else { state.waves.clone() };
     let tint = Rgba {
@@ -226,6 +253,10 @@ pub fn field<V: 'static>(
                 })
                 .collect();
             let pointer = mouse.map(|m| (f32::from(m.x) - left, f32::from(m.y) - top));
+            let look = match pointer {
+                Some((mx, my)) if gaze => gaze_toward(mx, my, width, height),
+                _ => (0., 0.),
+            };
             let columns = (width / CELL_W).ceil() as i32;
             let rows = (height / CELL_H).ceil() as i32;
             for row in 0..rows {
@@ -235,6 +266,7 @@ pub fn field<V: 'static>(
                         shape,
                         32. + (x - width / 2.) / scale,
                         32. + (y - height * 0.46) / scale,
+                        look,
                     );
                     let wave: f32 = ring
                         .iter()
@@ -259,7 +291,7 @@ pub fn field<V: 'static>(
                         ids[at],
                         px(FONT_SIZE),
                         Hsla {
-                            a: (value * 0.6).min(0.55),
+                            a: if gaze { (value * 0.9).min(0.8) } else { (value * 0.6).min(0.55) },
                             ..shade
                         },
                     );
@@ -286,9 +318,31 @@ mod tests {
 
     #[test]
     fn the_robot_shows_with_its_eyes_empty_and_nothing_outside_it() {
-        assert!(figure("round", 32., 50.) > 0.3);
-        assert!(figure("round", 23., 31.) < 0.1);
-        assert_eq!(figure("round", 1., 1.), 0.);
+        assert!(figure("round", 32., 50., (0., 0.)) > 0.3);
+        assert!(figure("round", 23., 31., (0., 0.)) < 0.1);
+        assert_eq!(figure("round", 1., 1., (0., 0.)), 0.);
+    }
+
+    #[test]
+    fn the_eyes_follow_the_pointer() {
+        // Looking right moves the left eye's hole to the right: its old middle fills in.
+        assert!(figure("round", 23., 31., (5.5, 0.)) > 0.3);
+        assert!(figure("round", 28.5, 31., (5.5, 0.)) < 0.1);
+        let (x, y) = gaze_toward(1000., 800., 1000., 800.);
+        assert!((x - 3.5).abs() < 0.01 && (y - 2.5).abs() < 0.01);
+        assert_eq!(gaze_toward(500., 400., 1000., 800.), (0., 0.));
+        assert!(gaze_toward(9000., -9000., 1000., 800.).0 <= 3.5);
+    }
+
+    #[test]
+    fn a_pulse_starts_a_wave_and_keeps_the_latest_four() {
+        let mut state = State::default();
+        let start = Instant::now();
+        for _ in 0..6 {
+            state.pulse(point(px(1.), px(1.)), start);
+        }
+        assert_eq!(state.waves.len(), 4);
+        assert!(state.moving(start));
     }
 
     #[test]

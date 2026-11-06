@@ -49,6 +49,7 @@ pub fn new(context: PanelContext, cx: &mut App) -> AnyView {
             commit,
             committing: false,
             _commit_events: commit_events,
+            pr: PullRequestForm::new(cx),
         };
         panel.refresh(cx);
         panel
@@ -146,6 +147,65 @@ struct ChangesPanel {
     commit: Entity<TextField>,
     committing: bool,
     _commit_events: Subscription,
+    /// The Criar PR form of the footer, as the Environment panel's.
+    pr: PullRequestForm,
+}
+
+/// Criar PR: the title, the description and the draft toggle, and what the last try gave.
+struct PullRequestForm {
+    open: bool,
+    title: Entity<TextField>,
+    body: Entity<TextField>,
+    draft: bool,
+    creating: bool,
+    /// The last try: a message, whether it failed, and the new pull request's address.
+    result: Option<(String, bool, Option<String>)>,
+    _events: Vec<Subscription>,
+}
+
+impl PullRequestForm {
+    fn new(cx: &mut Context<ChangesPanel>) -> Self {
+        let title = cx.new(|cx| TextField::new(t("Título do pull request"), cx));
+        let body = cx.new(|cx| TextField::new(t("Descrição (opcional)"), cx));
+        let events = vec![
+            cx.subscribe(&title, |this: &mut ChangesPanel, _, event: &TextFieldEvent, cx| {
+                match event {
+                    TextFieldEvent::Submit => this.create_pull_request(cx),
+                    TextFieldEvent::Changed => cx.notify(),
+                    TextFieldEvent::Cancel => {}
+                }
+            }),
+            cx.subscribe(&body, |this: &mut ChangesPanel, _, event: &TextFieldEvent, cx| {
+                match event {
+                    TextFieldEvent::Submit => this.create_pull_request(cx),
+                    TextFieldEvent::Changed => cx.notify(),
+                    TextFieldEvent::Cancel => {}
+                }
+            }),
+        ];
+        Self {
+            open: false,
+            title,
+            body,
+            draft: false,
+            creating: false,
+            result: None,
+            _events: events,
+        }
+    }
+}
+
+/// The address `pull_request_action` returns for a created pull request.
+fn created_url(reply: &Value) -> Option<String> {
+    (reply["type"] == "created")
+        .then(|| reply["url"].as_str().map(str::to_owned))
+        .flatten()
+}
+
+/// What `pull_request_action` takes to push the session's branch and open a pull request.
+fn create_action(session_id: &str, title: &str, body: &str, draft: bool) -> Value {
+    json!({ "action": { "type": "create", "sessionId": session_id, "title": title.trim(),
+        "body": body.trim(), "draft": draft, "confirm": true } })
 }
 
 impl ChangesPanel {
@@ -309,6 +369,175 @@ impl ChangesPanel {
         })
         .detach();
         cx.notify();
+    }
+
+    /// Pushes the branch and opens the pull request; the host does both in one command.
+    fn create_pull_request(&mut self, cx: &mut Context<Self>) {
+        let title = self.pr.title.read(cx).text().trim().to_owned();
+        if title.is_empty() || self.pr.creating {
+            return;
+        }
+        let body = self.pr.body.read(cx).text().to_owned();
+        self.pr.creating = true;
+        self.pr.result = None;
+        let rx = self.backend.request(
+            "pull_request_action",
+            create_action(&self.session_id, &title, &body, self.pr.draft),
+        );
+        cx.spawn(async move |this, cx| {
+            let reply = settle(rx).await;
+            let _ = this.update(cx, |this, cx| {
+                this.pr.creating = false;
+                match reply.map(|value| created_url(&value)) {
+                    Ok(Some(url)) => {
+                        this.pr.result = Some((t("Pull request criado").into(), false, Some(url)));
+                        this.pr.open = false;
+                        this.pr.draft = false;
+                        this.pr.title.update(cx, |field, cx| field.set_text("", cx));
+                        this.pr.body.update(cx, |field, cx| field.set_text("", cx));
+                    }
+                    Ok(None) => {
+                        this.pr.result =
+                            Some((t("Resposta inesperada do GitHub.").into(), true, None))
+                    }
+                    Err(error) => this.pr.result = Some((error, true, None)),
+                }
+                this.refresh(cx);
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// The Criar PR row under the commit field: a button, then its form.
+    fn pull_request_row(&self, cx: &mut Context<Self>) -> AnyElement {
+        let small = |id: &'static str, label: &'static str, main: bool, enabled: bool| {
+            let base = div()
+                .id(id)
+                .h(px(26.))
+                .px(px(10.))
+                .rounded(px(crate::theme::RADIUS_MD))
+                .flex()
+                .items_center()
+                .flex_shrink_0()
+                .text_size(px(12.))
+                .child(label);
+            let base = if main {
+                base.bg(accent()).text_color(on_accent())
+            } else {
+                base.bg(content(0.07)).text_color(content(0.85))
+            };
+            if enabled {
+                base.cursor_pointer().hover(|style| style.opacity(0.9))
+            } else {
+                base.opacity(0.4)
+            }
+        };
+        let mut row = div().flex().flex_col().gap(px(6.)).px(px(8.)).pb(px(8.));
+        if let Some((text, failed, url)) = &self.pr.result {
+            let mut line = div().flex().items_center().gap(px(8.)).child(
+                div()
+                    .min_w_0()
+                    .text_size(px(12.))
+                    .text_color(if *failed { rgb(0xe08a8a).into() } else { content(0.6) })
+                    .child(text.clone()),
+            );
+            if let Some(url) = url.clone().and_then(|url| crate::markdown::web_url(&url)) {
+                line = line.child(
+                    div()
+                        .id("pr-open")
+                        .text_size(px(12.))
+                        .text_color(accent())
+                        .cursor_pointer()
+                        .on_click(move |_, _, cx| cx.open_url(&url))
+                        .child(t("Abrir PR")),
+                );
+            }
+            row = row.child(line);
+        }
+        if !self.pr.open {
+            return row
+                .child(
+                    div().flex().child(
+                        small("pr-create", t("Criar PR"), false, true).on_click(cx.listener(
+                            |this, _, _, cx| {
+                                this.pr.open = true;
+                                this.pr.result = None;
+                                this.pr.title.update(cx, |field, cx| field.focus(cx));
+                                cx.notify();
+                            },
+                        )),
+                    ),
+                )
+                .into_any_element();
+        }
+        let typed = !self.pr.title.read(cx).text().trim().is_empty();
+        let enabled = typed && !self.pr.creating;
+        let toggle = div()
+            .id("pr-draft")
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .text_size(px(12.))
+            .text_color(content(0.7))
+            .cursor_pointer()
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.pr.draft = !this.pr.draft;
+                cx.notify();
+            }))
+            .child(
+                div()
+                    .size(px(14.))
+                    .rounded(px(3.))
+                    .border_1()
+                    .border_color(content(0.3))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .when(self.pr.draft, |d| {
+                        d.bg(accent())
+                            .border_color(accent())
+                            .child(svg().path("check").size(px(12.)).text_color(on_accent()))
+                    }),
+            )
+            .child(t("Abrir como rascunho"));
+        row.child(self.pr.title.clone())
+            .child(self.pr.body.clone())
+            .child(toggle)
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(content(0.4))
+                    .child(t("Envia este branch e abre o pull request para o branch padrão.")),
+            )
+            .child(
+                div()
+                    .flex()
+                    .justify_end()
+                    .gap(px(6.))
+                    .child(
+                        small("pr-cancel", t("Cancelar"), false, !self.pr.creating).on_click(
+                            cx.listener(|this, _, _, cx| {
+                                if !this.pr.creating {
+                                    this.pr.open = false;
+                                    cx.notify();
+                                }
+                            }),
+                        ),
+                    )
+                    .child(
+                        small(
+                            "pr-submit",
+                            if self.pr.creating { t("Criando…") } else { t("Criar PR") },
+                            true,
+                            enabled,
+                        )
+                        .when(enabled, |b| {
+                            b.on_click(cx.listener(|this, _, _, cx| this.create_pull_request(cx)))
+                        }),
+                    ),
+            )
+            .into_any_element()
     }
 
     /// Reads the workspace's status and the line counts; both are fresh when this returns.
@@ -715,6 +944,9 @@ impl ChangesPanel {
                     .child(div().flex_1().min_w_0().child(self.commit.clone()))
                     .child(button),
             )
+            .when(snapshot.branch.is_some(), |footer| {
+                footer.child(self.pull_request_row(cx))
+            })
             .into_any_element()
     }
 
@@ -1349,4 +1581,28 @@ fn commit_row(commit: &Commit, head: bool, first: bool, last: bool) -> AnyElemen
                 ),
         )
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn create_action_trims_and_confirms() {
+        let action = create_action("s1", "  Fix login ", "\nbody\n", true);
+        assert_eq!(action["action"]["type"], "create");
+        assert_eq!(action["action"]["sessionId"], "s1");
+        assert_eq!(action["action"]["title"], "Fix login");
+        assert_eq!(action["action"]["body"], "body");
+        assert_eq!(action["action"]["draft"], true);
+        assert_eq!(action["action"]["confirm"], true);
+    }
+
+    #[test]
+    fn created_url_needs_the_created_reply() {
+        let created = json!({ "type": "created", "url": "https://github.com/o/r/pull/3" });
+        assert_eq!(created_url(&created).as_deref(), Some("https://github.com/o/r/pull/3"));
+        assert_eq!(created_url(&json!({ "type": "done" })), None);
+        assert_eq!(created_url(&json!({ "type": "created" })), None);
+    }
 }

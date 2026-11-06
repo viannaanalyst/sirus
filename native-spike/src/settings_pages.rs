@@ -1514,10 +1514,28 @@ fn general(s: &Value) -> Vec<Group> {
         group(t("Preferências padrão"), core),
         group(t("Organização da sidebar"), sidebar),
         group(t("Inicialização"), switches(s, startup_rows)),
-        group(t("Aplicativo"), switches(s, application_rows)),
+        group(t("Aplicativo"), {
+            let mut rows = switches(s, application_rows);
+            rows.push(first_run_row());
+            rows
+        }),
         group(t("Terminal"), vec![terminal_placement_row()]),
         group(t("Painel Ambiente"), switches(s, environment_rows)),
     ]
+}
+
+/// Plays the first run again (first_run.rs).
+fn first_run_row() -> Row {
+    row(
+        t("Boas-vindas"),
+        t("Mostra de novo a primeira entrada: seus agentes, um projeto e o visual do Sirus."),
+        vec![Ctl::Button {
+            label: t("Ver boas-vindas de novo"),
+            act: act_run("native_first_run", json!({})),
+            enabled: true,
+            danger: false,
+        }],
+    )
 }
 
 /// Where the terminal opens. Kept in its own file, not in the host's settings, so it is a

@@ -61,6 +61,12 @@ pub(crate) mod sidebar_card;
 /// ⌘F: the find bar over the open conversation (transcript_find.rs).
 #[path = "transcript_find.rs"]
 pub(crate) mod transcript_find;
+/// The first run: a full-window welcome over the letters robot (first_run.rs).
+#[path = "first_run.rs"]
+pub(crate) mod first_run;
+/// All-conversation search: ⌘⇧F and the palette's message results (global_search.rs).
+#[path = "global_search.rs"]
+pub(crate) mod global_search;
 /// Selecting the text of replies and user messages (transcript_select.rs).
 #[path = "transcript_select.rs"]
 pub(crate) mod transcript_select;
@@ -105,7 +111,7 @@ const PANES: [(&str, &str, &str); 6] = [
 ];
 /// The Simulator is built but hidden for now: the owner doesn't need it yet.
 const VISIBLE_PANES: usize = 5;
-const COMMANDS: [&str; 15] = [
+const COMMANDS: [&str; 16] = [
     "Nova conversa",
     "Abrir ou fechar a sidebar",
     "Abrir ou fechar o painel lateral",
@@ -121,6 +127,7 @@ const COMMANDS: [&str; 15] = [
     "Ver uso do provedor",
     "Trocar de projeto",
     "Abrir Uso",
+    "Abrir Pull Requests",
 ];
 
 /// One line of the palette and what choosing it does.
@@ -650,6 +657,23 @@ fn provider_path(provider: &str) -> &'static str {
     }
 }
 
+/// A provider's mark in its own colours, as Monocode's `provider_icon`: Codex's is a gradient, so
+/// it is an image; the rest are one colour.
+fn provider_mark(provider: &str, side: f32) -> AnyElement {
+    if provider == "codex" {
+        return gpui::img("codex.svg")
+            .size(px(side))
+            .flex_shrink_0()
+            .into_any_element();
+    }
+    svg()
+        .path(provider_path(provider))
+        .size(px(side))
+        .flex_shrink_0()
+        .text_color(gpui::Hsla::from(gpui::rgb(provider_brand(provider))))
+        .into_any_element()
+}
+
 fn provider_brand(provider: &str) -> u32 {
     match provider {
         "claude" => 0xd87957,
@@ -777,6 +801,10 @@ enum Waiting {
     ScriptsSaved(usize),
     ScriptAction,
     Transcript(usize),
+    /// `transcript_action` search for the palette's text (global_search.rs).
+    PaletteSearch(String),
+    /// `detect_agents` for the first run's agents step (first_run.rs).
+    FirstRunAgents,
     Created,
     Session(usize),
     /// A queued request sent to the host: its session and queue item.
@@ -799,6 +827,9 @@ enum GitResult {
 struct PaletteState {
     /// The top bar's lupa: this project's files, `>` for commands. Otherwise ⌘K's palette.
     files: bool,
+    /// ⌘⇧F: only message results, from every conversation (global_search.rs).
+    all: bool,
+    search: global_search::Search,
     query: String,
     selected: usize,
     open: Tween,
@@ -1092,6 +1123,7 @@ pub struct Shell {
     epoch: Instant,
     frames: VecDeque<Instant>,
     show_stats: bool,
+    first_run: first_run::State,
 }
 
 impl Shell {
@@ -1356,6 +1388,7 @@ impl Shell {
             epoch: now,
             frames: VecDeque::new(),
             show_stats: false,
+            first_run: Default::default(),
         };
         shell.tabs.push(Tab {
             id: 1,
@@ -1721,6 +1754,10 @@ impl Shell {
                     state.reset(count);
                     state.set_follow_mode(gpui::FollowMode::Tail);
                 }
+                Some(Waiting::FirstRunAgents) => self.first_run_agents_arrived(ok, &value, cx),
+                Some(Waiting::PaletteSearch(needle)) => {
+                    self.palette_search_arrived(needle, ok, &value, cx)
+                }
                 Some(Waiting::Created) if ok => {
                     let ix = self.add_session(&value);
                     self.conversations[ix].loaded = true;
@@ -1925,6 +1962,7 @@ impl Shell {
         self.refresh_skills();
         self.refresh_files();
         self.refresh_diff();
+        self.first_run_check(cx);
         cx.notify();
     }
 
@@ -2306,6 +2344,7 @@ impl Shell {
                 save_look(&self.look);
             }
             "cli_diagnostics" => self.refresh_cli_diagnostics(),
+            "native_first_run" => self.first_run_start(cx),
             "native_copy" => {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(text("text")));
             }
@@ -2819,7 +2858,6 @@ impl Shell {
         let t = open.at(now).clamp(0., 1.);
         let provider = self.conversations[self.active_conversation()].provider;
         let value = &self.usage_value;
-        let brand: gpui::Hsla = gpui::rgb(provider_brand(provider)).into();
         let updated = value["updatedAt"].as_i64().map(|at| {
             let minutes = (chrono::Utc::now().timestamp_millis() - at) / 60_000;
             if minutes < 1 {
@@ -3041,10 +3079,7 @@ impl Shell {
                                     .items_center()
                                     .justify_center()
                                     .child(
-                                        svg()
-                                            .path(provider_path(provider))
-                                            .size(px(18.))
-                                            .text_color(brand),
+                                        provider_mark(provider, 18.),
                                     ),
                             )
                             .child(
@@ -4224,6 +4259,10 @@ impl Shell {
     }
 
     fn key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.first_run_keys(&event.keystroke, cx) {
+            cx.stop_propagation();
+            return;
+        }
         if self.record_shortcut(&event.keystroke, cx) {
             cx.stop_propagation();
             return;
@@ -4618,6 +4657,7 @@ impl Shell {
                 "backspace" => {
                     state.query.pop();
                     state.selected = 0;
+                    self.palette_query_changed(cx);
                 }
                 "enter" => {
                     let (q, at) = (state.query.clone(), state.selected);
@@ -4625,6 +4665,9 @@ impl Shell {
                     if let Some(hit) = hit {
                         self.run_hit(hit, cx);
                     }
+                }
+                _ if keys.modifiers.platform && keys.modifiers.shift && key == "f" => {
+                    self.toggle_global_search(cx)
                 }
                 _ if keys.modifiers.platform && (key == "k" || key == "p") => {
                     self.palette_ui = None
@@ -4724,7 +4767,9 @@ impl Shell {
             (true, true, false, "w") => self.close_where(self.active, |_, _| true, cx),
             (true, false, false, "[") => self.navigate(false, cx),
             (true, false, false, "]") => self.navigate(true, cx),
-            (true, true, false, "f") => {
+            (true, true, false, "f") => self.toggle_global_search(cx),
+            // The frame-time overlay; not listed in Settings → Atalhos.
+            (false, true, true, "f") => {
                 self.show_stats = !self.show_stats;
                 cx.notify();
             }
@@ -4855,6 +4900,7 @@ impl Shell {
                         Some(query) => query.push_str(&text),
                         None => self.draft().insert(&text),
                     }
+                    self.palette_query_changed(cx);
                 }
                 cx.stop_propagation();
                 cx.notify();
@@ -6251,10 +6297,7 @@ impl Shell {
                         cx.notify();
                     }))
                     .child(
-                        svg()
-                            .path(provider_path(provider))
-                            .size(px(15.))
-                            .text_color(gpui::Hsla::from(gpui::rgb(provider_brand(provider)))),
+                        provider_mark(provider, 15.),
                     )
                     .child(div().flex_1().child(provider_title(provider)))
                     .when(!filter.hidden_providers.contains(&provider), |d| {
@@ -8436,6 +8479,25 @@ impl Shell {
             .child(t("Uso"))
     }
 
+    /// The Pull requests page, a tab in the title bar, beside Uso.
+    fn pulls_button(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+        div()
+            .id("sidebar-pulls")
+            .h(px(22.))
+            .px(px(6.))
+            .rounded(px(crate::theme::RADIUS_SM))
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .text_size(px(12.))
+            .text_color(content(0.55))
+            .cursor_pointer()
+            .hover(|s| s.bg(content(0.08)).text_color(content(0.95)))
+            .on_click(cx.listener(|this, _, _, cx| this.open_pull_requests(cx)))
+            .child(icon("git-pull-request", 13.).text_color(content(0.55)))
+            .child(t("Pull requests"))
+    }
+
     /// Settings stay one click away at the footer's right end.
     fn settings_button(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         div()
@@ -9666,14 +9728,7 @@ impl Shell {
         ];
         for (index, provider) in tabs.iter().enumerate() {
             let active = scope == *provider;
-            let mark = svg()
-                .path(provider_path(provider))
-                .size(px(if active { 16. } else { 15. }))
-                .text_color(if active {
-                    gpui::Hsla::from(gpui::rgb(provider_brand(provider)))
-                } else {
-                    content(0.45)
-                })
+            let mark = provider_mark(provider, if active { 16. } else { 15. })
                 .into_any_element();
             rail_tabs
                 .push(tab(index + 1, active, mark, (*provider).to_owned(), cx).into_any_element());
@@ -9711,13 +9766,7 @@ impl Shell {
                                 this.pick_model(provider, id.clone(), cx)
                             }))
                             .child(
-                                    svg()
-                                        .path(provider_path(provider))
-                                        .size(px(16.))
-                                        .flex_shrink_0()
-                                        .text_color(gpui::Hsla::from(gpui::rgb(provider_brand(
-                                            provider,
-                                        )))),
+                                    provider_mark(provider, 16.),
                             )
                             .child(
                                 div()
@@ -10792,13 +10841,7 @@ impl Shell {
                                         .size_full(),
                                     )
                                     .child(
-                                        svg()
-                                            .path(provider_path(provider))
-                                            .size(px(16.))
-                                            .flex_shrink_0()
-                                            .text_color(gpui::Hsla::from(gpui::rgb(
-                                                provider_brand(provider),
-                                            ))),
+                                        provider_mark(provider, 16.),
                                     )
                                     .child(div().min_w_0().truncate().child(model))
                                     .children(effort.map(|e| {
@@ -10916,6 +10959,7 @@ impl Shell {
             })
             .child(div().flex_1())
             .when_some(self.resources_gauge(cx), |d, gauge| d.child(gauge))
+            .child(self.pulls_button(cx))
             .child(self.usage_button(cx))
             .child(self.settings_button(cx))
             .into_any_element()
@@ -11530,6 +11574,8 @@ impl Shell {
         } else {
             Some(PaletteState {
                 files,
+                all: false,
+                search: Default::default(),
                 query: String::new(),
                 selected: 0,
                 open: Tween::from_to(
@@ -11583,24 +11629,23 @@ impl Shell {
             hits.truncate(9);
             return hits;
         }
+        if self.palette_ui.as_ref().is_some_and(|p| p.all) {
+            return self.palette_message_hits(query.trim(), &[]);
+        }
         for (ix, c) in self.conversations.iter().enumerate() {
             if needle.is_empty() || c.title.to_lowercase().contains(&needle) {
                 hits.push(PaletteHit::Chat(ix));
             }
         }
-        if !needle.is_empty() {
-            for (ix, c) in self.conversations.iter().enumerate() {
-                let found = c.turns.iter().find_map(|t| {
-                    let text = [t.user.as_str(), t.answer.as_str()]
-                        .into_iter()
-                        .find(|text| text.to_lowercase().contains(&needle))?;
-                    Some(text.chars().take(90).collect::<String>())
-                });
-                if let Some(snippet) = found {
-                    hits.push(PaletteHit::Message(ix, snippet));
-                }
-            }
-        }
+        // Words inside messages come from the host's search (global_search.rs), from 3 characters.
+        let listed: Vec<usize> = hits
+            .iter()
+            .filter_map(|hit| match hit {
+                PaletteHit::Chat(ix) => Some(*ix),
+                _ => None,
+            })
+            .collect();
+        hits.extend(self.palette_message_hits(query.trim(), &listed));
         if !needle.is_empty() {
             for (ix, project) in self.projects.iter().enumerate() {
                 if project.name.contains(&needle) {
@@ -11640,6 +11685,7 @@ impl Shell {
                 self.open_project_sub(ProjectSub::Projects, cx);
             }
             PaletteHit::Command(14) => self.toggle_usage_page(cx),
+            PaletteHit::Command(15) => self.open_pull_requests(cx),
             PaletteHit::Command(pane) => self.open_pane(pane - 5, cx),
         }
         cx.notify();
@@ -11812,7 +11858,7 @@ impl Shell {
                     .py(px(18.))
                     .text_size(px(13.))
                     .text_color(content(0.45))
-                    .child(t("Nada encontrado."))
+                    .child(self.palette_note())
                     .into_any_element(),
             );
         }
@@ -11865,6 +11911,8 @@ impl Shell {
                                     &state.query,
                                     if state.files {
                                         t("Buscar arquivos pelo nome…  (> para comandos)")
+                                    } else if state.all {
+                                        t("Buscar em todas as conversas")
                                     } else {
                                         t("Buscar conversas, mensagens ou comandos")
                                     },
@@ -13021,6 +13069,8 @@ impl Shell {
                             Some(_) => None,
                             None => Some(PaletteState {
                                 files: false,
+                                all: false,
+                                search: Default::default(),
                                 query: String::new(),
                                 selected: 0,
                                 open: Tween::from_to(
@@ -13955,6 +14005,9 @@ impl EntityInputHandler for Shell {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.first_run.active() {
+            return;
+        }
         let marked = self.marked.take();
         self.mention_selected = 0;
         self.mention_dismissed = None;
@@ -13971,6 +14024,7 @@ impl EntityInputHandler for Shell {
             }
             draft.insert(text);
         }
+        self.palette_query_changed(cx);
         cx.notify();
     }
     fn replace_and_mark_text_in_range(
@@ -13981,6 +14035,9 @@ impl EntityInputHandler for Shell {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.first_run.active() {
+            return;
+        }
         let marked = self.marked.take();
         let start_utf16;
         if let Some(query) = self.query_target() {
@@ -14000,6 +14057,7 @@ impl EntityInputHandler for Shell {
         }
         self.marked =
             (!new_text.is_empty()).then(|| start_utf16..start_utf16 + data::utf16_len(new_text));
+        self.palette_query_changed(cx);
         cx.notify();
     }
     fn bounds_for_range(
@@ -14108,6 +14166,7 @@ impl Render for Shell {
                 || self.peek.is_some()
                 || self.project_menu.is_some()
                 || self.confirm.is_some()
+                || self.first_run.active()
                 || self.viewer.visible(),
         );
         let composer_menu = self.composer_menu_view(now, &mut moving, cx);
@@ -14198,6 +14257,7 @@ impl Render for Shell {
         .absolute()
         .size_0();
         let palette_view = self.palette_view(now, &mut moving, cx);
+        let first_run = self.first_run_view(now, &mut moving, cx);
         if !self.dock.done(now) || !self.dock_max.done(now) {
             moving = true;
         }
@@ -14337,6 +14397,7 @@ impl Render for Shell {
             .children(panel)
             .children(usage_page)
             .children(palette_view)
+            .children(first_run)
             .children(stats)
     }
 }

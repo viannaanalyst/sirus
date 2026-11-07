@@ -664,6 +664,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Consumo na barra lateral", "Usage in the sidebar"),
     ("Conta", "Account"),
+    ("Conta do Terminal", "Terminal account"),
     ("Conta padrão", "Default account"),
     ("Contas do GitHub", "GitHub accounts"),
     ("Contas do {}", "{} accounts"),

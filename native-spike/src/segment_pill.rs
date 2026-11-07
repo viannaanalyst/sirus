@@ -11,6 +11,10 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 const SLIDE: f32 = 0.22;
+const BAR_WIDTH: f32 = 2.5;
+const BAR_HEIGHT: f32 = 18.;
+/// A list's selection, as quick as its hover (hover_track.rs).
+const ROW_SLIDE: f32 = 0.13;
 
 #[derive(Clone, Copy)]
 struct Thumb {
@@ -38,8 +42,16 @@ impl Thumb {
         self.h.snap(rest[3], now);
     }
 
+    /// The same for rows of a list, which move up and down.
+    fn head_down(&mut self, rest: [f32; 4], now: Instant, length: f32) {
+        self.y.set(rest[1], now, length, Curve::Expo);
+        self.h.set(rest[3], now, length, Curve::Expo);
+        self.x.snap(rest[0], now);
+        self.w.snap(rest[2], now);
+    }
+
     fn done(&self, now: Instant) -> bool {
-        self.x.done(now) && self.w.done(now)
+        self.x.done(now) && self.w.done(now) && self.y.done(now) && self.h.done(now)
     }
 }
 
@@ -55,6 +67,62 @@ pub fn probe(key: &'static str, ix: usize) -> impl IntoElement {
             PLACES.with(|places| places.borrow_mut().insert((key, ix), bounds));
         },
         |_, _, _, _| {},
+    )
+    .absolute()
+    .top_0()
+    .left_0()
+    .size_full()
+}
+
+/// Forgets a thumb, so the next time it shows it starts in place instead of sliding in.
+pub fn forget(key: &'static str) {
+    THUMBS.with(|thumbs| thumbs.borrow_mut().remove(key));
+}
+
+/// A list's selection: a fill across the row and a short bar at its edge, gliding together
+/// between rows. The same `probe`, on each `.relative()` row.
+pub fn row_thumb(key: &'static str, chosen: usize, color: Hsla, bar: Hsla) -> impl IntoElement {
+    canvas(
+        |_, _: &mut Window, _: &mut App| {},
+        move |bounds, _, window: &mut Window, cx: &mut App| {
+            let Some(target) = PLACES.with(|places| places.borrow().get(&(key, chosen)).copied())
+            else {
+                return;
+            };
+            let rest = [
+                f32::from(target.origin.x - bounds.origin.x),
+                f32::from(target.origin.y - bounds.origin.y),
+                f32::from(target.size.width),
+                f32::from(target.size.height),
+            ];
+            let now = Instant::now();
+            let length = if cx.reduce_motion() { 0. } else { ROW_SLIDE };
+            let thumb = THUMBS.with(|thumbs| {
+                let mut thumbs = thumbs.borrow_mut();
+                let thumb = thumbs.entry(key).or_insert_with(|| Thumb::at(rest, now));
+                thumb.head_down(rest, now, length);
+                *thumb
+            });
+            if !thumb.done(now) {
+                window.request_animation_frame();
+            }
+            let (y, h) = (thumb.y.at(now), thumb.h.at(now));
+            let origin = bounds.origin + point(px(thumb.x.at(now)), px(y));
+            window.paint_quad(fill(
+                Bounds::new(origin, size(px(thumb.w.at(now)), px(h))),
+                color,
+            ));
+            window.paint_quad(
+                fill(
+                    Bounds::new(
+                        origin + point(px(0.), px((h - BAR_HEIGHT) / 2.)),
+                        size(px(BAR_WIDTH), px(BAR_HEIGHT)),
+                    ),
+                    bar,
+                )
+                .corner_radii(px(BAR_WIDTH / 2.)),
+            );
+        },
     )
     .absolute()
     .top_0()

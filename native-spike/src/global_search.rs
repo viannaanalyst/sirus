@@ -125,6 +125,7 @@ impl Shell {
         if self.palette_ui.as_ref().is_some_and(|p| p.all) {
             self.palette_ui = None;
         } else {
+            crate::segment_pill::forget("palette");
             self.palette_ui = Some(PaletteState {
                 files: false,
                 all: true,

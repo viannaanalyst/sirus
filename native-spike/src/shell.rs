@@ -2957,7 +2957,7 @@ impl Shell {
     }
 
     fn accounts_of(&self, provider: &str) -> Vec<(String, String)> {
-        let mut list = vec![("default".to_owned(), t("Conta padrão").to_owned())];
+        let mut list = vec![("default".to_owned(), t("Conta do Terminal").to_owned())];
         for account in self.provider_accounts.as_array().into_iter().flatten() {
             if account["provider"].as_str() == Some(provider) {
                 list.push((
@@ -12355,7 +12355,7 @@ impl Shell {
 
     /// The bar under the window, like the title bar: the model's usage and the actions.
     /// Sample numbers; they come from the provider in part 2.
-    fn footer(&self, left: f32, cx: &mut Context<Self>) -> AnyElement {
+    fn footer(&self, left: f32, agents: Option<AnyElement>, cx: &mut Context<Self>) -> AnyElement {
         let provider = self.conversations[self.active_conversation()].provider;
         div()
             .relative()
@@ -12468,6 +12468,7 @@ impl Shell {
                         .child(problem),
                 )
             })
+            .children(agents)
             .child(div().flex_1())
             .when_some(self.update_notice(cx), |d, notice| d.child(notice))
             .when_some(self.resources_gauge(cx), |d, gauge| d.child(gauge))
@@ -13557,6 +13558,7 @@ impl Shell {
         self.environment = None;
         self.appearance = None;
         self.refresh_files();
+        crate::segment_pill::forget("palette");
         let same = self.palette_ui.as_ref().is_some_and(|p| p.files == files);
         self.palette_ui = if same {
             None
@@ -13833,7 +13835,8 @@ impl Shell {
             }
             let chosen = ix == selected;
             if chosen {
-                selected_row = if ix == 0 { 0 } else { rows.len() };
+                // The list's first child is the selection's thumb.
+                selected_row = if ix == 0 { 0 } else { rows.len() + 1 };
             }
             let hit = hit.clone();
             let two_lines = state.files && matches!(hit, PaletteHit::File(..));
@@ -13864,18 +13867,7 @@ impl Shell {
                     .text_size(px(13.5))
                     .text_color(content(if chosen { 1. } else { 0.86 }))
                     .cursor_pointer()
-                    .when(chosen, |d| {
-                        d.bg(content(0.09)).child(
-                            div()
-                                .absolute()
-                                .left_0()
-                                .top(px((height - 18.) / 2.))
-                                .w(px(2.5))
-                                .h(px(18.))
-                                .rounded_full()
-                                .bg(accent()),
-                        )
-                    })
+                    .child(crate::segment_pill::probe("palette", ix))
                     .on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
                         let Some(state) = this.palette_ui.as_mut() else {
                             return;
@@ -14064,6 +14056,14 @@ impl Shell {
                                 .border_color(content(0.07))
                                 .overflow_y_scroll()
                                 .track_scroll(&state.scroll)
+                                .when(!hits.is_empty(), |d| {
+                                    d.child(crate::segment_pill::row_thumb(
+                                        "palette",
+                                        selected,
+                                        content(0.09),
+                                        accent(),
+                                    ))
+                                })
                                 .children(rows),
                         )
                         .child(
@@ -16784,19 +16784,20 @@ impl Render for Shell {
         let chat_background = crate::chat_background::layer(&self.settings, empty_chat, window, cx);
         let menu = self.menu_view(now, &mut moving, cx);
         let open = self.sidebar.at(now);
-        let footer = self.footer(self.sidebar_width * open, cx);
         let peeking = self.peek.is_some() && !docked;
-        let agents_pill = self.agents_pill_view(
+        let (agents_pill, footer_agents) = self.agents_pill_view(
             if peeking {
                 PEEK_INSET + self.sidebar_width
             } else {
                 (self.sidebar_width * open).max(200.)
             },
             FOOTER + 6. + if peeking { PEEK_INSET } else { 0. },
+            open < 0.5 && !peeking,
             now,
             &mut moving,
             cx,
         );
+        let footer = self.footer(self.sidebar_width * open, footer_agents, cx);
         let panel = self.appearance_view(now, &mut moving, cx);
         self.usage_settle(now);
         let usage_page = self.usage_page_view(now, &mut moving, window, cx);

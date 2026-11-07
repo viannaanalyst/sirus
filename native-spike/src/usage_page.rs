@@ -1236,8 +1236,13 @@ impl Shell {
             if disabled.iter().any(|d| d == provider) {
                 continue;
             }
-            let accounts = self.accounts_of(provider);
+            let mut accounts = self.accounts_of(provider);
             let several = accounts.len() > 1;
+            // New conversations' account comes first.
+            let chosen = self.selected_accounts[provider]
+                .as_str()
+                .unwrap_or("default");
+            accounts.sort_by_key(|(account, _)| account != chosen);
             for (account, label) in accounts {
                 cards.push(Card {
                     provider,
@@ -2119,7 +2124,20 @@ impl Shell {
                         .text_color(content(0.95))
                         .child(card.name),
                 );
-            if card.several {
+            // What the account is for; its address is beside it. A named account that isn't
+            // the default has only that address.
+            let is_default = self.selected_accounts[provider]
+                .as_str()
+                .unwrap_or("default")
+                == card.account;
+            let tag = if is_default {
+                Some(t("Conta padrão").to_owned())
+            } else if card.account == "default" {
+                Some(card.label.clone())
+            } else {
+                card.email.is_none().then(|| card.label.clone())
+            };
+            if let Some(tag) = tag.filter(|_| card.several) {
                 head = head.child(
                     div()
                         .px(px(7.))
@@ -2128,7 +2146,7 @@ impl Shell {
                         .bg(content(0.08))
                         .text_size(px(11.))
                         .text_color(content(0.7))
-                        .child(card.label.clone()),
+                        .child(tag),
                 );
             }
             if let Some(email) = &card.email {

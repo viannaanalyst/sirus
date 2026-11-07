@@ -5,6 +5,7 @@ use super::*;
 use crate::theme::Sinks as _;
 use gpui::{Transformation, radians};
 use std::cell::Cell;
+use std::rc::Rc;
 
 const OPEN: f32 = 0.18;
 const LIST_WIDTH: f32 = 236.;
@@ -17,6 +18,8 @@ pub(super) struct AgentsPill {
     open: Option<Tween>,
     /// The pill's fade-in, kept from when it last had something to show.
     appear: Cell<Option<Tween>>,
+    /// Where the pill sits in the footer, for the list above it.
+    slot: Rc<Cell<Option<Bounds<Pixels>>>>,
 }
 
 /// A project with an agent at work: the conversation a click opens and how long it has run.
@@ -77,15 +80,19 @@ impl Shell {
         cx.notify();
     }
 
-    /// `column` is the width to center in, over `bottom` points from the window's foot.
+    /// `column` is the width to center in, over `bottom` points from the window's foot. With
+    /// the sidebar closed nothing but the composer is under that spot, so the pill goes in the
+    /// footer's row instead (`in_footer`), and only its list floats. Gives (what floats, the
+    /// pill for the footer).
     pub(super) fn agents_pill_view(
         &mut self,
         column: f32,
         bottom: f32,
+        in_footer: bool,
         now: Instant,
         moving: &mut bool,
         cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
+    ) -> (Option<AnyElement>, Option<AnyElement>) {
         // The settings have their own column, where the rail isn't.
         let places = if self.appearance.is_some() || self.usage_page_open() {
             Vec::new()
@@ -95,7 +102,7 @@ impl Shell {
         if places.is_empty() {
             self.agents.open = None;
             self.agents.appear.set(None);
-            return None;
+            return (None, None);
         }
         let length = if cx.reduce_motion() { 0. } else { OPEN };
         let appear = self
@@ -119,22 +126,25 @@ impl Shell {
             div()
                 .flex_shrink_0()
                 .when(at > 0, |d| d.ml(px(-6.)))
-                .child(self.project_avatar_for(place.project, 17.))
+                .child(self.project_avatar_for(place.project, if in_footer { 14. } else { 17. }))
         });
+        let slot = self.agents.slot.clone();
         let pill = div()
             .id("agents-pill")
-            .h(px(30.))
+            .relative()
+            .flex_shrink_0()
+            .h(px(if in_footer { 22. } else { 30. }))
             .pl(px(8.))
             .pr(px(9.))
             .rounded_full()
             .border_1()
             .border_color(content(0.12))
             .bg(crate::theme::floating_fill())
-            .shadow_lg()
+            .when(!in_footer, |d| d.shadow_lg())
             .flex()
             .items_center()
             .gap(px(7.))
-            .text_size(px(12.5))
+            .text_size(px(if in_footer { 11.5 } else { 12.5 }))
             .text_color(content(0.92))
             .whitespace_nowrap()
             .opacity(appear.at(now).clamp(0., 1.))
@@ -146,6 +156,13 @@ impl Shell {
             })
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(|this, _, _, cx| this.toggle_agents_list(cx)))
+            .child(
+                gpui::canvas(move |bounds, _, _| slot.set(Some(bounds)), |_, _, _, _| {})
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full(),
+            )
             .child(div().flex().items_center().children(stack))
             .child(tf("{} trabalhando", &[&count]))
             .child(
@@ -229,7 +246,19 @@ impl Shell {
                     cx.listener(|this, _, _, cx| this.toggle_agents_list(cx)),
                 )
         });
-        Some(
+        let (left, column) = match self.agents.slot.get().filter(|_| in_footer) {
+            Some(slot) => {
+                let width = LIST_WIDTH + 16.;
+                ((f32::from(slot.center().x) - width / 2.).max(0.), width)
+            }
+            None => (0., column),
+        };
+        let (footer_pill, floating_pill) = if in_footer {
+            (Some(pill.into_any_element()), None)
+        } else {
+            (None, Some(pill))
+        };
+        let floats = (list.is_some() || floating_pill.is_some()).then(|| {
             div()
                 .absolute()
                 .top_0()
@@ -239,17 +268,18 @@ impl Shell {
                 .child(
                     div()
                         .absolute()
-                        .left_0()
+                        .left(px(left))
                         .bottom(px(bottom))
                         .w(px(column))
                         .flex()
                         .flex_col()
                         .items_center()
                         .children(list)
-                        .child(pill),
+                        .children(floating_pill),
                 )
-                .into_any_element(),
-        )
+                .into_any_element()
+        });
+        (floats, footer_pill)
     }
 }
 

@@ -1003,12 +1003,30 @@ pub async fn connector_action(
     crate::commands::native_task(move || Ok(statuses(&state))).await
 }
 
-fn open_browser(_app: &AppHandle, _url: &str) -> Result<()> {
-    // The redirect comes back to this machine's loopback, which a phone cannot reach.
-    Err(Error::new(
-        "connector",
-        "Sign in to connectors from the Mac app; a token works here.",
-    ))
+/// Opens the sign-in page in the person's default browser. A server has none to open, and its
+/// redirect comes back to its own loopback, which a phone cannot reach: a token works there.
+fn open_browser(_app: &AppHandle, url: &str) -> Result<()> {
+    if !url.starts_with("https://") {
+        return Err(Error::new(
+            "connector",
+            "The sign-in page is not an https address.",
+        ));
+    }
+    if !cfg!(target_os = "macos") {
+        return Err(Error::new(
+            "connector",
+            "Sign in to connectors from the Mac app; a token works here.",
+        ));
+    }
+    let opened = std::process::Command::new("/usr/bin/open")
+        .arg(url)
+        .status()
+        .map_err(|error| Error::new("connector", format!("Cannot open the browser: {error}")))?;
+    if opened.success() {
+        Ok(())
+    } else {
+        Err(Error::new("connector", "Cannot open the browser."))
+    }
 }
 
 // ---- What a session receives ----

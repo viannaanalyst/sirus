@@ -11752,6 +11752,15 @@ impl Shell {
                 .top_0()
                 .size_full(),
             )
+            // The robot walks on top of the whole stack, over a queued instruction or a card.
+            .children(self.composer_runner(ix, cx).map(|runner| {
+                div()
+                    .absolute()
+                    .top_0()
+                    .left(px(23.))
+                    .right(px(23.))
+                    .child(runner)
+            }))
             .when_some(mention, |d, mention| {
                 let selected = mention_selected.min(mention.hits.len() - 1);
                 d.child(
@@ -12023,7 +12032,6 @@ impl Shell {
                     .rounded(px(crate::theme::RADIUS_LG))
                     .border_1()
                     .border_color(content(0.1))
-                    .children(self.composer_runner(ix, cx))
                     .children(
                         self.press_notice(Press::StopAgent, cx)
                             .filter(|_| conversation.working())
@@ -17095,12 +17103,13 @@ impl Render for Shell {
             .children(resources_popup)
             .children(context_popup)
             .children(sidebar_card)
-            .children(activity_cards)
             .children(add_menu)
             .children(environment)
             .children(incoming_card)
             .children(panel)
             .children(usage_page)
+            // Over Settings and Usage too, whose pages would cover them.
+            .children(activity_cards)
             .children(palette_view)
             .children(first_run)
             .children(stats)

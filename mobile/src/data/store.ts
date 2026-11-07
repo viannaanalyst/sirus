@@ -243,7 +243,7 @@ export const useSirus = create<SirusState>()((set, get) => {
 
     addComputer: async (computer) => {
       // Paired again at another address (its public one): the old address and token stay for
-      // app updates, which the build fetches from the tailnet address.
+      // app updates, which the build fetches from the old address.
       const before = get().computers.find((item) => item.id === computer.id);
       const previous = before && before.baseUrl !== computer.baseUrl ? { baseUrl: before.baseUrl, token: before.token } : before?.previous;
       const next = previous ? { ...computer, previous } : computer;

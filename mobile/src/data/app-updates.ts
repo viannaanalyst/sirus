@@ -15,7 +15,7 @@ export async function checkForAppUpdate(interactive = false): Promise<"none" | "
   const url = (Constants.expoConfig?.updates as { url?: string } | undefined)?.url;
   if (!url) return "unavailable";
   const origin = new URL(url).origin;
-  // A computer paired again at its public address keeps its tailnet address for this.
+  // A computer paired again at its public address keeps its old address for this.
   const token = useSirus.getState().computers
     .flatMap((item) => [item, ...(item.previous ? [item.previous] : [])])
     .find((item) => new URL(item.baseUrl).origin === origin)?.token;

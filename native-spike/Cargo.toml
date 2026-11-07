@@ -24,7 +24,7 @@ async-channel = "2"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 tungstenite = { version = "0.26", default-features = false, features = ["handshake"] }
 # Other computers (ADR-133): the wss:// socket and the HTTPS pairing run on rustls with ring and the
-# system's roots (a Tailscale HTTPS name); tungstenite gets the stream, so it needs no TLS feature.
+# system's roots; tungstenite gets the stream, so it needs no TLS feature.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-native-certs = "0.8"
 # Attachment viewer: base64 payloads from the host, and the page rasters of PDFs.

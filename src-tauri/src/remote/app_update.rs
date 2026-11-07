@@ -126,15 +126,15 @@ mod tests {
         let root = std::env::temp_dir().join(format!("sirus-app-update-{}", std::process::id()));
         let dir = update_dir(&root, "ios", "1").unwrap();
         publish(&dir);
-        let manifest = manifest(&dir, "https://mac.example.ts.net/", "ios", "1", None).unwrap();
+        let manifest = manifest(&dir, "https://mac.example.com/", "ios", "1", None).unwrap();
         assert_eq!(
             manifest["launchAsset"]["url"],
-            "https://mac.example.ts.net/api/app-update/file/ios/1/bundle.hbc"
+            "https://mac.example.com/api/app-update/file/ios/1/bundle.hbc"
         );
         assert!(manifest["launchAsset"].get("path").is_none());
         assert_eq!(
             manifest["assets"][0]["url"],
-            "https://mac.example.ts.net/api/app-update/file/ios/1/assets/abc"
+            "https://mac.example.com/api/app-update/file/ios/1/assets/abc"
         );
         assert!(super::manifest(
             &dir,

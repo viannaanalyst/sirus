@@ -509,7 +509,7 @@ fn build(page: &str, s: &Value, d: &HashMap<&'static str, Value>) -> Page {
         "Conexões" => page_of(
             t("Conexões"),
             t(
-                "Use o Sirus pelo celular ou por outro computador. O trabalho continua rodando neste Mac; o outro aparelho só controla, pela sua rede privada da Tailscale.",
+                "Use o Sirus pelo iPhone. O trabalho continua rodando neste Mac; o telefone só controla.",
             ),
             computers_groups(d)
                 .into_iter()
@@ -3211,7 +3211,7 @@ fn computers_groups(d: &HashMap<&'static str, Value>) -> Vec<Group> {
     };
     rows.push(row(
         t("Adicionar um computador"),
-        t("O endereço HTTPS dele na Tailscale, como https://nome.rede.ts.net"),
+        t("O endereço HTTPS dele, como https://seu-computador.exemplo.com"),
         vec![field(crate::shell::computer_ui::ADDRESS, 280.)],
     ));
     rows.push(row(
@@ -3236,19 +3236,17 @@ fn computers_groups(d: &HashMap<&'static str, Value>) -> Vec<Group> {
 fn connections(d: &HashMap<&'static str, Value>) -> Vec<Group> {
     let r = get_data(d, "remote");
     let enabled = yes(&r["enabled"]);
-    let address = r["urls"]
-        .as_array()
-        .and_then(|urls| urls.first())
-        .and_then(Value::as_str);
-    let https = &r["https"];
-    let https_url = https["url"].as_str();
-    let https_setup = https["setupUrl"].as_str();
+    // The public route first: it works from anywhere, with no private network on the phone.
+    let address = r["publicUrl"].as_str().or_else(|| {
+        r["urls"]
+            .as_array()
+            .and_then(|urls| urls.first())
+            .and_then(Value::as_str)
+    });
 
     let mut access = vec![row(
         t("Permitir outros aparelhos"),
-        t(
-            "Só aparelhos na sua rede Tailscale alcançam este Mac, e cada um precisa de um QR code desta página.",
-        ),
+        t("Cada aparelho precisa de um QR code deste Mac para entrar."),
         vec![Ctl::Switch {
             on: enabled,
             change: Some(remote_act(
@@ -3271,7 +3269,7 @@ fn connections(d: &HashMap<&'static str, Value>) -> Vec<Group> {
         match address {
             Some(url) => access.push(row(
                 t("Endereço"),
-                t("Onde seus aparelhos encontram este Mac na Tailscale."),
+                t("Onde seus aparelhos encontram este Mac."),
                 vec![
                     Ctl::Read(url.to_string()),
                     Ctl::Button {
@@ -3283,8 +3281,8 @@ fn connections(d: &HashMap<&'static str, Value>) -> Vec<Group> {
                 ],
             )),
             None => access.push(row(
-                t("A Tailscale não está conectada"),
-                t("Instale a Tailscale neste Mac e no celular e entre com a mesma conta. É grátis para uso pessoal."),
+                t("Sem endereço para este Mac"),
+                t("Configure o endereço público deste Mac para conectar aparelhos."),
                 vec![Ctl::Button {
                     label: t("Verificar de novo"),
                     act: remote_act(json!({"type": "status"})),
@@ -3293,60 +3291,11 @@ fn connections(d: &HashMap<&'static str, Value>) -> Vec<Group> {
                 }],
             )),
         }
-        if yes(&https["available"]) {
-            access.push(if https_url.is_some() {
-                row(
-                    t("Endereço seguro (HTTPS)"),
-                    t("Ligado. Os novos QR codes abrem o endereço seguro; aparelhos pareados antes precisam de um novo código por lá."),
-                    vec![
-                        Ctl::Read(https_url.unwrap_or_default().to_string()),
-                        Ctl::Button {
-                            label: t("Desativar"),
-                            act: remote_act(json!({"type": "disableHttps"})),
-                            enabled: true,
-                            danger: true,
-                        },
-                    ],
-                )
-            } else {
-                row(
-                    t("Endereço seguro (HTTPS)"),
-                    t("Necessário para instalar o Sirus como app no celular e receber alertas. A Tailscale fornece o certificado."),
-                    vec![Ctl::Button {
-                        label: t("Ativar HTTPS"),
-                        act: remote_act(json!({"type": "enableHttps"})),
-                        enabled: true,
-                        danger: false,
-                    }],
-                )
-            });
-        }
-        if https_setup.is_some() && https_url.is_none() {
-            access.push(row(
-                t("Permita HTTPS na sua tailnet"),
-                t("Uma permissão única na sua conta da Tailscale. Abra a página, confirme e volte para verificar de novo."),
-                vec![
-                    Ctl::Button {
-                        label: t("Abrir página"),
-                        act: remote_act(json!({"type": "openHttpsSetup"})),
-                        enabled: true,
-                        danger: false,
-                    },
-                    Ctl::Button {
-                        label: t("Verificar de novo"),
-                        act: remote_act(json!({"type": "enableHttps"})),
-                        enabled: true,
-                        danger: false,
-                    },
-                ],
-            ));
-        }
     }
     let mut out = vec![group(t("Acesso remoto"), access)];
     let error = get_data(d, "remote_error")
         .as_str()
-        .or_else(|| r["error"].as_str())
-        .or_else(|| https["error"].as_str().filter(|_| https_setup.is_none()));
+        .or_else(|| r["error"].as_str());
     if let Some(text) = error {
         out.push(note(text));
     }
@@ -3355,10 +3304,8 @@ fn connections(d: &HashMap<&'static str, Value>) -> Vec<Group> {
         out.push(group(
             t("Conectar um aparelho"),
             vec![row(
-                t("Celular ou outro computador"),
-                t(
-                    "Mostra um código de uso único para conectar o app do Sirus no iPhone ou um navegador da sua Tailscale.",
-                ),
+                "iPhone",
+                t("Mostra um QR de uso único para conectar o app do Sirus no iPhone."),
                 vec![Ctl::Button {
                     label: t("Conectar um aparelho"),
                     act: act_run("native_pair_open", json!({})),
@@ -3488,9 +3435,6 @@ pub fn commit(settings: &Value, key: &str, text: &str) -> Option<Commit> {
     }
     // The Connectors page keeps its own search, dialog fields and rename in its module.
     if crate::settings_connectors::commit(key, text) {
-        return None;
-    }
-    if crate::settings_pair::commit(key, text) {
         return None;
     }
     if crate::shell::computer_ui::is_field(key) {

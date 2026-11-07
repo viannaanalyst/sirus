@@ -21,7 +21,7 @@ export function socketUrl(location: Pick<Location, "protocol" | "host">): string
   return `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/api/socket`;
 }
 
-/** The socket of the Sirus at an origin such as `https://sirus-vps.tailnet.ts.net` (ADR-132). */
+/** The socket of the Sirus at an origin such as `https://vps.example.com` (ADR-132). */
 export function socketUrlFor(baseUrl: string): string {
   const url = new URL(baseUrl);
   return socketUrl({ protocol: url.protocol, host: url.host });

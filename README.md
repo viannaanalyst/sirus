@@ -16,7 +16,7 @@ Sirus is a window written in Rust with [GPUI](https://www.gpui.rs) (Metal), on t
 - **Terminal, files and browser.** A side panel next to the conversation has a terminal, a file viewer and editor, the changes and a browser the agents can drive.
 - **Pull requests and usage.** A Pull requests page, and each provider's quota and cost at a glance.
 - **Connectors.** Remote MCP servers (Supabase, Linear, Notion…), with the sign-in handled by the app.
-- **iPhone and other devices.** Pair an iPhone with a QR code and follow or steer your sessions over your Tailscale network. The host also runs headless as `sirus-host`.
+- **iPhone and other devices.** Pair an iPhone with a QR code and follow or steer your sessions from anywhere. The host also runs headless as `sirus-host`.
 - **Local data.** There is no Sirus account and no required cloud. State lives in one SQLite database in the app's data folder. Each CLI keeps its own sign-in.
 - **English and Portuguese** interface.
 
@@ -58,7 +58,7 @@ open Sirus.app
 
 ## iPhone app
 
-The iPhone app lives in [`mobile/`](mobile/). It talks to your Mac (or a server running `sirus-host`) directly over Tailscale; nothing goes through a server of ours. Pair it from Settings → Conexões in Sirus.
+The iPhone app lives in [`mobile/`](mobile/). It talks to your Mac (or a server running `sirus-host`) through your own Cloudflare Tunnel; nothing goes through a server of ours. Pair it from Settings → Conexões in Sirus.
 
 ## Documentation
 

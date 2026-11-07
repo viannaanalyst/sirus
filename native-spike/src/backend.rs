@@ -20,9 +20,6 @@ const PORT: u16 = 7811;
 /// The listener for other devices, on only while Settings → Conexões allows it. Sirus uses
 /// 7710, so the two never clash on one Mac.
 const REMOTE_PORT: u16 = 7711;
-/// `tailscale serve` takes one handler per HTTPS port and Sirus holds 443, so this app
-/// serves its secure address on 8443 and turning either off leaves the other alone.
-const HTTPS_PORT: u16 = 8443;
 static HOST_PID: AtomicI32 = AtomicI32::new(0);
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -667,8 +664,6 @@ fn ensure_host(dir: &Path) -> Result<(), String> {
             &PORT.to_string(),
             "--port",
             &REMOTE_PORT.to_string(),
-            "--https-port",
-            &HTTPS_PORT.to_string(),
             "--label",
             "Sirus",
             "--data-dir",

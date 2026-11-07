@@ -1,7 +1,7 @@
 //! Remote access (ADR-080): the app can serve its own interface to the person's
 //! other devices. Off by default. When on, a small HTTP server listens on one
-//! port, answers only loopback and Tailscale peers (100.64.0.0/10,
-//! fd7a:115c:a1e0::/48), and serves the bundled UI plus one WebSocket.
+//! port, answers only loopback (other devices arrive through a tunnel such as `cloudflared`,
+//! ADR-155), and serves the bundled UI plus one WebSocket.
 //!
 //! A device joins with a one-time pairing code (five minutes, single use) and
 //! receives its own token; only the token's SHA-256 is kept, in `remote.json`.
@@ -12,11 +12,9 @@
 //! dictation, computer use) or that manage remote access itself are refused.
 //! Events are forwarded by name as the device subscribes to them.
 //!
-//! One phone app can talk to several of the owner's computers (ADR-132): a page served
-//! by another Sirus on the same tailnet may pair here cross-origin. Its `https://*.ts.net`
-//! origin is recorded with the device it paired, and only recorded origins reach the API
-//! and the socket (with CORS); the device token stays mandatory everywhere. The Sirus
-//! desktop app pairs the same way from its own page (`tauri://localhost`, ADR-133).
+//! The Sirus desktop app pairs cross-origin from its own page (`tauri://localhost`, ADR-133):
+//! that origin is recorded with the device it paired, and only recorded origins reach the API
+//! and the socket (with CORS); the device token stays mandatory everywhere.
 
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -44,7 +42,6 @@ use crate::error::{Error, Result};
 mod app_update;
 /// The headless host's side of remote access (ADR-131).
 pub mod host;
-mod tailscale;
 
 pub const DEFAULT_PORT: u16 = 7710;
 /// Emitted when a device pairs or connects, so Settings → Connections refreshes.
@@ -136,32 +133,18 @@ pub struct DeviceInfo {
     last_seen: Option<DateTime<Utc>>,
 }
 
-/// `tailscale serve` in front of the port, for HTTPS (ADR-082).
-#[derive(Debug, Clone, Default, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Https {
-    /// Tailscale's command-line tool is installed.
-    available: bool,
-    /// `https://<mac>.<tailnet>.ts.net` while it serves this port.
-    url: Option<String>,
-    /// The tailnet must allow HTTPS first; this admin page does it.
-    setup_url: Option<String>,
-    error: Option<String>,
-    #[serde(skip)]
-    host: Option<String>,
-}
-
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Status {
     enabled: bool,
     running: bool,
     port: u16,
-    /// `http://<tailscale address>:<port>` for each Tailscale address of this Mac.
+    /// The addresses this computer advertises (`--url`).
     urls: Vec<String>,
+    /// The public route's address, when one is set (`remote-public.json`).
+    public_url: Option<String>,
     devices: Vec<DeviceInfo>,
     error: Option<String>,
-    https: Https,
     keep_awake: bool,
     /// The Mac is being kept awake right now (it is, while on power).
     awake: bool,
@@ -199,10 +182,6 @@ pub enum Action {
         device_id: String,
         name: String,
     },
-    EnableHttps,
-    DisableHttps,
-    /// Opens Tailscale's page that allows HTTPS on the tailnet.
-    OpenHttpsSetup,
     SetKeepAwake {
         enabled: bool,
     },
@@ -227,7 +206,6 @@ struct Remote {
     error: parking_lot::Mutex<Option<String>>,
     /// Ids of devices whose access was just removed; their sockets close.
     revoked: broadcast::Sender<String>,
-    https: parking_lot::Mutex<Https>,
     /// `caffeinate -s` while the Mac should stay awake for paired devices.
     awake: parking_lot::Mutex<Option<std::process::Child>>,
     /// Where the server listens and what it serves; the desktop keeps the defaults.
@@ -246,9 +224,6 @@ struct Listen {
     /// Sirus Native (ADR-189): the window's own connection listens here on loopback, always on,
     /// and `enabled` in `remote.json` only controls the listener for other devices.
     local_port: Option<u16>,
-    /// The HTTPS port `tailscale serve` uses for this app (443 when `None`). A second Sirus on
-    /// this Mac takes another one, since `tailscale serve` keeps one handler per port.
-    https_port: Option<u16>,
     /// Appended to this computer's name for the phone's list ("<Mac> (Sirus Native)").
     label: Option<String>,
 }
@@ -286,7 +261,6 @@ pub fn init(app: AppHandle, data_dir: &Path) {
         server: parking_lot::Mutex::new(None),
         error: parking_lot::Mutex::new(None),
         revoked: broadcast::channel(16).0,
-        https: parking_lot::Mutex::new(Https::default()),
         awake: parking_lot::Mutex::new(None),
         listen: parking_lot::Mutex::new(Listen::default()),
     });
@@ -294,7 +268,6 @@ pub fn init(app: AppHandle, data_dir: &Path) {
     sync_awake(&remote);
     if enabled {
         crate::runtime::async_runtime::spawn(async move {
-            refresh_https(&remote).await;
             start(app, remote).await;
         });
     }
@@ -364,28 +337,7 @@ pub async fn remote_action(app: AppHandle, action: Action) -> Result<Status> {
     match action {
         Action::Status => {
             sync_awake(&remote);
-            refresh_https(&remote).await;
         }
-        Action::EnableHttps => {
-            let port = port(&remote.config.lock());
-            let outcome = tailscale::enable(port, https_port(&remote)).await;
-            refresh_https(&remote).await;
-            let mut https = remote.https.lock();
-            match outcome {
-                tailscale::Enable::Done => {}
-                tailscale::Enable::NeedsSetup(url) => {
-                    https.setup_url = url;
-                    https.error = Some("HTTPS is not allowed on this tailnet yet.".into());
-                }
-                tailscale::Enable::Failed(message) => https.error = Some(message),
-            }
-        }
-        Action::DisableHttps => {
-            tailscale::disable(https_port(&remote)).await;
-            refresh_https(&remote).await;
-        }
-        // The host prints the setup page instead (`sirus-host serve`).
-        Action::OpenHttpsSetup => {}
         Action::SetEnabled { enabled } => {
             remote.config.lock().enabled = enabled;
             save(&remote)?;
@@ -496,7 +448,7 @@ pub async fn remote_pair() -> Result<Pairing> {
     if bases.is_empty() && route.is_none() {
         return Err(Error::new(
             "remote",
-            "Tailscale is not connected on this Mac. Open Tailscale and sign in, then try again.",
+            "This computer has no address yet. Set its public route in remote-public.json.",
         ));
     }
     let code = pairing_code();
@@ -595,32 +547,6 @@ fn qr_svg(text: &str) -> Result<String> {
         .build())
 }
 
-/// Re-reads whether `tailscale serve` fronts the port and under which name.
-async fn refresh_https(remote: &Remote) {
-    let port = port(&remote.config.lock());
-    let available = tailscale::cli().is_some();
-    let (host, serving) = if available {
-        tokio::join!(tailscale::dns_name(), tailscale::serving(port))
-    } else {
-        (None, false)
-    };
-    let mut https = remote.https.lock();
-    https.available = available;
-    https.host = host.clone();
-    let https_port = https_port(remote);
-    https.url = host.filter(|_| serving).map(|host| {
-        if https_port == 443 {
-            format!("https://{host}")
-        } else {
-            format!("https://{host}:{https_port}")
-        }
-    });
-    if https.url.is_some() {
-        https.setup_url = None;
-        https.error = None;
-    }
-}
-
 fn status(remote: &Remote) -> Status {
     let config = remote.config.lock().clone();
     let window = window_token_hash(remote);
@@ -629,6 +555,7 @@ fn status(remote: &Remote) -> Status {
         running: remote.server.lock().is_some(),
         port: port(&config),
         urls: base_urls(remote),
+        public_url: public_route(&remote.path).map(|route| route.url),
         devices: config
             .devices
             .into_iter()
@@ -641,14 +568,9 @@ fn status(remote: &Remote) -> Status {
             })
             .collect(),
         error: remote.error.lock().clone(),
-        https: remote.https.lock().clone(),
         keep_awake: config.keep_awake,
         awake: remote.awake.lock().is_some(),
     }
-}
-
-fn https_port(remote: &Remote) -> u16 {
-    remote.listen.lock().https_port.unwrap_or(443)
 }
 
 fn port(config: &Config) -> u16 {
@@ -661,28 +583,12 @@ fn base_urls(remote: &Remote) -> Vec<String> {
     if let Some(url) = listen.url {
         return vec![url];
     }
-    #[allow(unused_mut)]
-    let mut addresses = match listen.bind {
-        // A host bound to one address is reached there (or through `tailscale serve`).
-        Some(IpAddr::V4(ip)) if !ip.is_unspecified() && !ip.is_loopback() => vec![ip],
-        Some(IpAddr::V4(ip)) if ip.is_loopback() => Vec::new(),
-        _ => tailscale_addresses(),
-    };
-    // Development builds can pair over loopback to test without Tailscale.
+    // Development builds can pair over loopback to test without a public route.
     #[cfg(debug_assertions)]
-    if addresses.is_empty() && std::env::var("SIRUS_REMOTE_LOOPBACK").as_deref() == Ok("1") {
-        addresses.push(Ipv4Addr::LOCALHOST);
+    if std::env::var("SIRUS_REMOTE_LOOPBACK").as_deref() == Ok("1") {
+        return vec![format!("http://{}:{port}", Ipv4Addr::LOCALHOST)];
     }
-    // The HTTPS name comes first: only it can install as an app with alerts.
-    let secure = remote.https.lock().url.clone();
-    secure
-        .into_iter()
-        .chain(
-            addresses
-                .into_iter()
-                .map(|ip| format!("http://{ip}:{port}")),
-        )
-        .collect()
+    Vec::new()
 }
 
 fn save(remote: &Remote) -> Result<()> {
@@ -822,8 +728,8 @@ struct Shared {
     shutdown: watch::Receiver<bool>,
 }
 
-/// Only loopback and Tailscale peers, and no cross-site requests except from the pages of
-/// the owner's other computers on this tailnet (ADR-132), which get CORS answers.
+/// Only loopback, and no cross-site requests except from the desktop app's page (ADR-133),
+/// which gets CORS answers.
 async fn guard(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     request: Request,
@@ -834,8 +740,7 @@ async fn guard(
     }
     let remote = REMOTE.get();
     let https_host = remote.and_then(|remote| own_https_host(remote));
-    let https_authority = remote.and_then(|remote| own_https_authority(remote));
-    if same_origin(request.headers(), https_authority.as_deref()) {
+    if same_origin(request.headers(), https_host.as_deref()) {
         return next.run(request).await;
     }
     let Some(origin) = request
@@ -847,12 +752,7 @@ async fn guard(
         return StatusCode::FORBIDDEN.into_response();
     };
     let allowed = remote.is_some_and(|remote| {
-        cross_origin_allowed(
-            &origin,
-            request.uri().path(),
-            https_host.as_deref(),
-            &remote.config.lock().devices,
-        )
+        cross_origin_allowed(&origin, request.uri().path(), &remote.config.lock().devices)
     });
     let Some(origin) = HeaderValue::from_str(&origin).ok().filter(|_| allowed) else {
         return StatusCode::FORBIDDEN.into_response();
@@ -882,38 +782,11 @@ async fn guard(
     response
 }
 
-/// This computer's HTTPS name: from `tailscale serve`, else the host's advertised URL.
+/// This computer's HTTPS name, from the host's advertised URL.
 fn own_https_host(remote: &Remote) -> Option<String> {
-    remote.https.lock().host.clone().or_else(|| {
-        let url = remote.listen.lock().url.clone()?;
-        let host = url.strip_prefix("https://")?.trim_end_matches('/');
-        (!host.contains(['/', ':', '@'])).then(|| host.to_ascii_lowercase())
-    })
-}
-
-/// The HTTPS name with its port when `tailscale serve` uses one other than 443.
-fn own_https_authority(remote: &Remote) -> Option<String> {
-    let host = own_https_host(remote)?;
-    Some(match remote.listen.lock().https_port {
-        Some(port) if port != 443 => format!("{host}:{port}"),
-        _ => host,
-    })
-}
-
-/// The host of an `https://<name>.ts.net` origin (no port, path or user), lowercased.
-fn tailnet_origin_host(origin: &str) -> Option<String> {
-    let host = origin.strip_prefix("https://")?.to_ascii_lowercase();
-    let valid = host.len() <= 253
-        && host.ends_with(".ts.net")
-        && host.split('.').count() >= 4
-        && host.split('.').all(|label| {
-            !label.is_empty()
-                && !label.starts_with('-')
-                && label
-                    .chars()
-                    .all(|character| character.is_ascii_alphanumeric() || character == '-')
-        });
-    valid.then_some(host)
+    let url = remote.listen.lock().url.clone()?;
+    let host = url.strip_prefix("https://")?.trim_end_matches('/');
+    (!host.contains(['/', ':', '@'])).then(|| host.to_ascii_lowercase())
 }
 
 /// The desktop app's own page (ADR-133), which Tauri serves as `tauri://localhost` on macOS and
@@ -932,33 +805,12 @@ fn desktop_app_origin(origin: &str) -> Option<String> {
         .then_some(origin)
 }
 
-/// Whether a page on another origin may make this request (ADR-132, ADR-133). The origin must
-/// be an HTTPS name on this computer's tailnet (any `*.ts.net` when this computer's name is not
-/// known), or the Sirus desktop app's own page. Pairing and the health check are open to such
-/// pages, since they need the code or say nothing private; everything else only to origins
-/// recorded with a paired device.
-fn cross_origin_allowed(
-    origin: &str,
-    path: &str,
-    own_host: Option<&str>,
-    devices: &[Device],
-) -> bool {
-    let origin = if let Some(app) = desktop_app_origin(origin) {
-        app
-    } else {
-        let Some(host) = tailnet_origin_host(origin) else {
-            return false;
-        };
-        if let Some(tailnet) = own_host
-            .map(str::to_ascii_lowercase)
-            .filter(|own| own.ends_with(".ts.net"))
-            .and_then(|own| own.split_once('.').map(|(_, tailnet)| tailnet.to_string()))
-        {
-            if !host.ends_with(&format!(".{tailnet}")) {
-                return false;
-            }
-        }
-        format!("https://{host}")
+/// Whether a page on another origin may make this request (ADR-133): only the Sirus desktop
+/// app's own page. Pairing and the health check are open to it, since they need the code or
+/// say nothing private; everything else only to origins recorded with a paired device.
+fn cross_origin_allowed(origin: &str, path: &str, devices: &[Device]) -> bool {
+    let Some(origin) = desktop_app_origin(origin) else {
+        return false;
     };
     if matches!(path, "/api/pair" | "/api/health") {
         return true;
@@ -968,17 +820,13 @@ fn cross_origin_allowed(
         .any(|device| device.origins.contains(&origin))
 }
 
-/// The origin a request came from when it is not this computer's own page: another
-/// computer's tailnet page or the desktop app.
+/// The origin a request came from when it is not this computer's own page: the desktop app.
 fn foreign_origin(remote: &Remote, headers: &HeaderMap) -> Option<String> {
-    let own = own_https_authority(remote);
+    let own = own_https_host(remote);
     if same_origin(headers, own.as_deref()) {
         return None;
     }
-    let origin = headers.get(header::ORIGIN)?.to_str().ok()?;
-    tailnet_origin_host(origin)
-        .map(|host| format!("https://{host}"))
-        .or_else(|| desktop_app_origin(origin))
+    desktop_app_origin(headers.get(header::ORIGIN)?.to_str().ok()?)
 }
 
 /// This computer for the phone's list of computers (ADR-132): a stable id, its name, and
@@ -1019,25 +867,15 @@ async fn health(AxumState(shared): AxumState<Shared>) -> Response {
 
 fn allowed_peer(ip: IpAddr) -> bool {
     match ip {
-        IpAddr::V4(ip) => ip.is_loopback() || is_tailscale_v4(ip),
-        IpAddr::V6(ip) => {
-            if let Some(mapped) = ip.to_ipv4_mapped() {
-                return allowed_peer(IpAddr::V4(mapped));
-            }
-            let segments = ip.segments();
-            ip.is_loopback()
-                || (segments[0] == 0xfd7a && segments[1] == 0x115c && segments[2] == 0xa1e0)
-        }
+        IpAddr::V4(ip) => ip.is_loopback(),
+        IpAddr::V6(ip) => ip
+            .to_ipv4_mapped()
+            .map_or(ip.is_loopback(), |mapped| mapped.is_loopback()),
     }
 }
 
-fn is_tailscale_v4(ip: Ipv4Addr) -> bool {
-    let [a, b, ..] = ip.octets();
-    a == 100 && (64..128).contains(&b)
-}
-
 /// A browser sends `Origin` on cross-site requests and WebSocket handshakes; it must name
-/// this host, or this Mac's HTTPS name when `tailscale serve` forwards the request.
+/// this host, or the name it advertises when a tunnel forwards the request.
 fn same_origin(headers: &HeaderMap, https_host: Option<&str>) -> bool {
     let Some(origin) = headers.get(header::ORIGIN) else {
         return true;
@@ -1081,7 +919,7 @@ async fn app_update_manifest(AxumState(shared): AxumState<Shared>, headers: Head
     else {
         return StatusCode::BAD_REQUEST.into_response();
     };
-    let Some(host) = own_https_authority(&shared.remote)
+    let Some(host) = own_https_host(&shared.remote)
         .or_else(|| value("host").filter(|host| !host.contains(['/', '@'])))
     else {
         return StatusCode::BAD_REQUEST.into_response();
@@ -1668,39 +1506,6 @@ fn hash(value: &str) -> String {
         .collect()
 }
 
-#[cfg(unix)]
-fn tailscale_addresses() -> Vec<Ipv4Addr> {
-    let mut found = Vec::new();
-    let mut head: *mut libc::ifaddrs = std::ptr::null_mut();
-    // SAFETY: getifaddrs fills `head` with a list that stays valid until freeifaddrs,
-    // and every node is only read while it is.
-    unsafe {
-        if libc::getifaddrs(&mut head) != 0 {
-            return found;
-        }
-        let mut cursor = head;
-        while !cursor.is_null() {
-            let entry = &*cursor;
-            if !entry.ifa_addr.is_null() && i32::from((*entry.ifa_addr).sa_family) == libc::AF_INET
-            {
-                let address = &*(entry.ifa_addr as *const libc::sockaddr_in);
-                let ip = Ipv4Addr::from(u32::from_be(address.sin_addr.s_addr));
-                if is_tailscale_v4(ip) && !found.contains(&ip) {
-                    found.push(ip);
-                }
-            }
-            cursor = entry.ifa_next;
-        }
-        libc::freeifaddrs(head);
-    }
-    found
-}
-
-#[cfg(not(unix))]
-fn tailscale_addresses() -> Vec<Ipv4Addr> {
-    Vec::new()
-}
-
 #[cfg(test)]
 mod tests {
     #[test]
@@ -1786,7 +1591,6 @@ mod tests {
             server: parking_lot::Mutex::new(None),
             error: parking_lot::Mutex::new(None),
             revoked: broadcast::channel(4).0,
-            https: parking_lot::Mutex::new(Https::default()),
             awake: parking_lot::Mutex::new(None),
             listen: parking_lot::Mutex::new(Listen::default()),
         }
@@ -1801,25 +1605,16 @@ mod tests {
     }
 
     #[test]
-    fn peers_are_loopback_or_tailscale() {
-        for allowed in [
-            "127.0.0.1",
-            "100.64.0.1",
-            "100.101.102.103",
-            "100.127.255.254",
-            "::1",
-            "fd7a:115c:a1e0::1",
-            "::ffff:100.100.1.1",
-        ] {
+    fn only_loopback_peers_are_answered() {
+        for allowed in ["127.0.0.1", "::1", "::ffff:127.0.0.1"] {
             assert!(allowed_peer(allowed.parse().unwrap()), "{allowed}");
         }
         for refused in [
             "192.168.1.10",
             "10.0.0.2",
-            "100.63.255.255",
-            "100.128.0.1",
+            "100.101.102.103",
             "8.8.8.8",
-            "fd7a:115c:a1e1::1",
+            "fd7a:115c:a1e0::1",
             "::ffff:192.168.1.1",
         ] {
             assert!(!allowed_peer(refused.parse().unwrap()), "{refused}");
@@ -1841,13 +1636,13 @@ mod tests {
             HeaderValue::from_static("https://evil.example"),
         );
         assert!(!same_origin(&headers, None));
-        // `tailscale serve` forwards with the Mac's HTTPS name as the origin.
+        // A tunnel forwards with the computer's advertised name as the origin.
         headers.insert(
             header::ORIGIN,
-            HeaderValue::from_static("https://mac.tail6e87c3.ts.net"),
+            HeaderValue::from_static("https://mac.example.com"),
         );
-        assert!(same_origin(&headers, Some("mac.tail6e87c3.ts.net")));
-        assert!(!same_origin(&headers, Some("other.tail6e87c3.ts.net")));
+        assert!(same_origin(&headers, Some("mac.example.com")));
+        assert!(!same_origin(&headers, Some("other.example.com")));
         headers.insert(
             header::ORIGIN,
             HeaderValue::from_static("https://evil.example"),
@@ -1857,81 +1652,7 @@ mod tests {
     }
 
     #[test]
-    fn other_computers_on_the_tailnet_may_pair_then_only_their_recorded_origin() {
-        let own = Some("macbook.tail6e87c3.ts.net");
-        let vps = "https://sirus-vps.tail6e87c3.ts.net";
-        // Pairing and the health check are open to a page on the same tailnet.
-        assert!(cross_origin_allowed(vps, "/api/pair", own, &[]));
-        assert!(cross_origin_allowed(vps, "/api/health", own, &[]));
-        // Without a device paired from that page, the API stays closed.
-        assert!(!cross_origin_allowed(vps, "/api/socket", own, &[]));
-        // Other tailnets, plain HTTP, ports, paths and other domains never pass.
-        for refused in [
-            "https://sirus-vps.tail000000.ts.net",
-            "http://sirus-vps.tail6e87c3.ts.net",
-            "https://sirus-vps.tail6e87c3.ts.net:8443",
-            "https://sirus-vps.tail6e87c3.ts.net/x",
-            "https://evil.example",
-            "https://ts.net",
-            "https://tail6e87c3.ts.net",
-            "https://a..tail6e87c3.ts.net",
-            "null",
-        ] {
-            assert!(
-                !cross_origin_allowed(refused, "/api/pair", own, &[]),
-                "{refused}"
-            );
-        }
-        // Not knowing its own name, a computer accepts any tailnet name for pairing.
-        assert!(cross_origin_allowed(
-            "https://sirus-vps.tail000000.ts.net",
-            "/api/pair",
-            None,
-            &[]
-        ));
-
-        let dir = tempfile::tempdir().unwrap();
-        let remote = remote(dir.path());
-        offer(&remote, "482913", PAIR_TTL);
-        let (id, _) = redeem(&remote, "482913", "iPhone", Some(vps.into())).unwrap();
-        let devices = remote.config.lock().devices.clone();
-        assert!(cross_origin_allowed(vps, "/api/socket", own, &devices));
-        assert!(cross_origin_allowed(
-            "https://SIRUS-VPS.tail6e87c3.ts.net",
-            "/api/socket",
-            own,
-            &devices
-        ));
-        assert!(!cross_origin_allowed(
-            "https://other.tail6e87c3.ts.net",
-            "/api/socket",
-            own,
-            &devices
-        ));
-        // The socket binds the token to the page it paired from.
-        assert!(device_allows(&remote, &id, Some(vps)));
-        assert!(device_allows(&remote, &id, None));
-        assert!(!device_allows(
-            &remote,
-            &id,
-            Some("https://other.tail6e87c3.ts.net")
-        ));
-        offer(&remote, "123456", PAIR_TTL);
-        let (home, _) = redeem(&remote, "123456", "Home", None).unwrap();
-        assert!(!device_allows(&remote, &home, Some(vps)));
-        // Revoking the device closes its origin again.
-        remote
-            .config
-            .lock()
-            .devices
-            .retain(|device| device.id != id);
-        let devices = remote.config.lock().devices.clone();
-        assert!(!cross_origin_allowed(vps, "/api/socket", own, &devices));
-    }
-
-    #[test]
     fn the_desktop_app_may_pair_then_only_with_its_own_token() {
-        let own = Some("sirus-vps.tail6e87c3.ts.net");
         let app = "tauri://localhost";
         // Pairing and the health check are open to the desktop app's page.
         for origin in [
@@ -1940,16 +1661,10 @@ mod tests {
             "https://tauri.localhost",
             "TAURI://localhost",
         ] {
+            assert!(cross_origin_allowed(origin, "/api/pair", &[]), "{origin}");
+            assert!(cross_origin_allowed(origin, "/api/health", &[]), "{origin}");
             assert!(
-                cross_origin_allowed(origin, "/api/pair", own, &[]),
-                "{origin}"
-            );
-            assert!(
-                cross_origin_allowed(origin, "/api/health", own, &[]),
-                "{origin}"
-            );
-            assert!(
-                !cross_origin_allowed(origin, "/api/socket", own, &[]),
+                !cross_origin_allowed(origin, "/api/socket", &[]),
                 "{origin}"
             );
         }
@@ -1963,17 +1678,14 @@ mod tests {
             "https://tauri.localhost:8443",
         ] {
             assert!(
-                !cross_origin_allowed(refused, "/api/pair", own, &[]),
+                !cross_origin_allowed(refused, "/api/pair", &[]),
                 "{refused}"
             );
         }
         let dir = tempfile::tempdir().unwrap();
         let remote = remote(dir.path());
         let mut headers = HeaderMap::new();
-        headers.insert(
-            header::HOST,
-            HeaderValue::from_static("sirus-vps.tail6e87c3.ts.net"),
-        );
+        headers.insert(header::HOST, HeaderValue::from_static("vps.example.com"));
         headers.insert(
             header::ORIGIN,
             HeaderValue::from_static("tauri://localhost"),
@@ -1985,13 +1697,13 @@ mod tests {
         offer(&remote, "482913", PAIR_TTL);
         let (id, _) = redeem(&remote, "482913", "Mac", foreign_origin(&remote, &headers)).unwrap();
         let devices = remote.config.lock().devices.clone();
-        assert!(cross_origin_allowed(app, "/api/socket", own, &devices));
+        assert!(cross_origin_allowed(app, "/api/socket", &devices));
         // The socket binds the desktop's token to the desktop's page, and the phone's to its own.
         assert!(device_allows(&remote, &id, Some(app)));
         assert!(!device_allows(
             &remote,
             &id,
-            Some("https://other.tail6e87c3.ts.net")
+            Some("https://other.example.com")
         ));
         offer(&remote, "123456", PAIR_TTL);
         let (phone, _) = redeem(&remote, "123456", "iPhone", None).unwrap();
@@ -2003,36 +1715,34 @@ mod tests {
             .devices
             .retain(|device| device.id != id);
         let devices = remote.config.lock().devices.clone();
-        assert!(!cross_origin_allowed(app, "/api/socket", own, &devices));
+        assert!(!cross_origin_allowed(app, "/api/socket", &devices));
     }
 
     #[test]
     fn foreign_origins_are_told_from_this_computers_own_page() {
         let dir = tempfile::tempdir().unwrap();
-        let remote = remote(dir.path());
-        remote.https.lock().host = Some("mac.tail6e87c3.ts.net".into());
-        let mut headers = HeaderMap::new();
-        assert_eq!(foreign_origin(&remote, &headers), None);
-        headers.insert(
-            header::ORIGIN,
-            HeaderValue::from_static("https://mac.tail6e87c3.ts.net"),
-        );
-        assert_eq!(foreign_origin(&remote, &headers), None);
-        headers.insert(
-            header::ORIGIN,
-            HeaderValue::from_static("https://Sirus-VPS.tail6e87c3.ts.net"),
-        );
-        assert_eq!(
-            foreign_origin(&remote, &headers).as_deref(),
-            Some("https://sirus-vps.tail6e87c3.ts.net")
-        );
-        // A host advertising its URL knows its own name without `tailscale serve`.
-        let dir = tempfile::tempdir().unwrap();
         let host = super::tests::remote(dir.path());
-        host.listen.lock().url = Some("https://sirus-vps.tail6e87c3.ts.net/".into());
+        host.listen.lock().url = Some("https://vps.example.com/".into());
+        assert_eq!(own_https_host(&host).as_deref(), Some("vps.example.com"));
+        let mut headers = HeaderMap::new();
+        assert_eq!(foreign_origin(&host, &headers), None);
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("https://vps.example.com"),
+        );
+        assert_eq!(foreign_origin(&host, &headers), None);
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("https://other.example.com"),
+        );
+        assert_eq!(foreign_origin(&host, &headers), None);
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("tauri://localhost"),
+        );
         assert_eq!(
-            own_https_host(&host).as_deref(),
-            Some("sirus-vps.tail6e87c3.ts.net")
+            foreign_origin(&host, &headers).as_deref(),
+            Some("tauri://localhost")
         );
         // The identity is stable once made.
         let first = host_identity(&host);
@@ -2169,28 +1879,11 @@ mod tests {
         // Without a window listener nothing is hidden.
         remote.listen.lock().local_port = None;
         assert_eq!(status(&remote).devices.len(), 2);
-        // `tailscale serve` on another port: the page origin carries it.
-        remote.listen.lock().https_port = Some(8443);
-        remote.https.lock().host = Some("mac.tail6e87c3.ts.net".into());
-        assert_eq!(
-            own_https_authority(&remote).as_deref(),
-            Some("mac.tail6e87c3.ts.net:8443")
-        );
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            header::ORIGIN,
-            "https://mac.tail6e87c3.ts.net:8443".parse().unwrap(),
-        );
-        assert!(same_origin(
-            &headers,
-            own_https_authority(&remote).as_deref()
-        ));
-        assert!(!same_origin(&headers, Some("mac.tail6e87c3.ts.net")));
     }
 
     #[test]
     fn pairing_links_become_qr_codes() {
-        let svg = qr_svg("http://100.80.1.2:7710/?pair=abcdefghijklmnopqrstuv").unwrap();
+        let svg = qr_svg("https://host.example.com/?pair=abcdefghijklmnopqrstuv").unwrap();
         assert!(svg.starts_with("<?xml") || svg.starts_with("<svg"));
         assert!(svg.contains("#000000"));
     }

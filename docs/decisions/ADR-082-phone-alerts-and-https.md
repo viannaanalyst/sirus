@@ -1,6 +1,6 @@
 # ADR-082: Phone alerts and HTTPS
 
-**Status:** Accepted
+**Status:** Accepted Its HTTPS through `tailscale serve` was removed by ADR-198.
 
 ## Context
 

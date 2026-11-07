@@ -47,7 +47,7 @@ const OPEN = 1;
 
 const MAX_DELAY = 30_000;
 
-const UNREACHABLE = "Cannot reach the Mac. Check that Sirus is open and Tailscale is on.";
+const UNREACHABLE = "Cannot reach the Mac. Check that Sirus is open.";
 
 const LOST = "The connection to the Mac was lost.";
 

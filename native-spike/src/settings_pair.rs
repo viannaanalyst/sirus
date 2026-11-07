@@ -10,7 +10,7 @@
 
 use crate::i18n::{t, tf};
 use crate::motion::{Curve, eased};
-use crate::settings_pages::{Edit, Run};
+use crate::settings_pages::Run;
 use crate::theme::Sinks as _;
 use crate::theme::{accent, content, floating_fill, on_accent};
 use chrono::{DateTime, Utc};
@@ -27,26 +27,11 @@ use std::time::{Duration, Instant};
 const DIALOG_TIME: f32 = 0.18;
 /// How often the host's device list is read while the popup is open.
 const POLL_EVERY: u64 = 2;
-/// The text field of the device's name.
-const NAME: &str = "pair-name";
-/// A text edit that goes nowhere: parks typing when another control is used.
-const IDLE: &str = "pair-idle";
-/// Names offered for the device that joined, from `connections.suggest.*`.
-const SUGGESTIONS: [&str; 3] = ["iPhone pessoal", "iPhone do trabalho", "iPad"];
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Way {
-    App,
-    Browser,
-}
 
 struct Pairing {
     code: String,
     /// What the QR code holds: the app link when there is a public route, else the first address.
     link: String,
-    /// The address a browser opens.
-    address: String,
-    public_route: bool,
     expires: DateTime<Utc>,
     /// The QR code's modules, row by row, and its width.
     modules: Vec<bool>,
@@ -56,14 +41,11 @@ struct Pairing {
 struct Dialog {
     generation: u32,
     closing: bool,
-    way: Way,
     pairing: Option<Pairing>,
     busy: bool,
     error: Option<String>,
     /// The device that used the code: its id and the name shown.
-    joined: Option<(String, String)>,
-    /// The name typed for it.
-    name: String,
+    joined: bool,
     copied: Option<Instant>,
     /// Devices known when the code was made; a new one is the device that joined.
     known: Vec<String>,
@@ -91,25 +73,6 @@ pub fn asset(path: &str) -> Option<Cow<'static, [u8]>> {
 /// True while the popup is up and wants Escape.
 pub fn wants_keys() -> bool {
     state().is_some()
-}
-
-/// A finished text edit of this popup. True when the key was one of its own.
-pub fn commit(key: &str, text: &str) -> bool {
-    match key {
-        NAME => {
-            if let Some(dialog) = state().as_mut() {
-                dialog.name = text.trim().chars().take(60).collect();
-            }
-            true
-        }
-        IDLE => true,
-        _ => false,
-    }
-}
-
-/// Whether Enter in this field also finishes the popup.
-pub fn enter_saves(key: &str) -> bool {
-    key == NAME
 }
 
 fn message(error: &Value) -> String {
@@ -142,8 +105,6 @@ fn parse(value: &Value) -> Option<Pairing> {
         .collect();
     Some(Pairing {
         code,
-        address: urls.first().map(|url| url.to_string()).unwrap_or_default(),
-        public_route: app.is_some(),
         link,
         expires,
         modules,
@@ -219,12 +180,10 @@ pub fn open<V: 'static>(
     *state() = Some(Dialog {
         generation,
         closing: false,
-        way: Way::App,
         pairing: None,
         busy: true,
         error: None,
-        joined: None,
-        name: String::new(),
+        joined: false,
         copied: None,
         known,
         request: 0,
@@ -301,7 +260,7 @@ fn watch<V: 'static>(
                 let Some(dialog) = now.as_mut().filter(|d| d.generation == generation) else {
                     return;
                 };
-                if dialog.joined.is_some() || dialog.pairing.is_none() {
+                if dialog.joined || dialog.pairing.is_none() {
                     return;
                 }
                 let found = status["devices"]
@@ -315,10 +274,8 @@ fn watch<V: 'static>(
                     });
                 if let Some(device) = found {
                     let id = device["id"].as_str().unwrap_or_default().to_string();
-                    let name = device["name"].as_str().unwrap_or_default().to_string();
                     dialog.known.push(id.clone());
-                    dialog.name = name.clone();
-                    dialog.joined = Some((id, name));
+                    dialog.joined = true;
                     drop(now);
                     // The page's list shows it too.
                     run(
@@ -360,34 +317,12 @@ pub fn close<V: 'static>(cx: &mut Context<V>) {
     .detach();
 }
 
-/// Saves the name typed for the device that joined, when it changed.
-fn save_name<V: 'static>(view: &mut V, run: Run<V>, cx: &mut Context<V>) {
-    let rename = {
-        let now = state();
-        now.as_ref().and_then(|d| {
-            let (id, shown) = d.joined.as_ref()?;
-            (!d.name.is_empty() && d.name != *shown).then(|| (id.clone(), d.name.clone()))
-        })
-    };
-    if let Some((id, name)) = rename {
-        run(
-            view,
-            "remote_action",
-            json!({"action": {"type": "rename", "deviceId": id, "name": name}}),
-            cx,
-        );
-    }
-}
-
 /// The popup's own commands, from its buttons.
 #[allow(clippy::too_many_arguments)]
 pub fn command<V: 'static>(
-    view: &mut V,
     command: &str,
-    args: &Value,
     backend: &crate::backend::Backend,
     run: Run<V>,
-    edit: Edit<V>,
     known: Vec<String>,
     cx: &mut Context<V>,
 ) {
@@ -395,26 +330,13 @@ pub fn command<V: 'static>(
         "native_pair_open" => open(backend, run, known, cx),
         "native_pair_new" => request(backend, cx),
         "native_pair_close" => close(cx),
-        "native_pair_way" => {
-            if let Some(dialog) = state().as_mut() {
-                dialog.way = if args["way"] == "browser" {
-                    Way::Browser
-                } else {
-                    Way::App
-                };
-            }
-            cx.notify();
-        }
         "native_pair_copy" => {
             let text = {
                 let mut now = state();
                 now.as_mut().and_then(|dialog| {
                     let text = {
                         let pairing = dialog.pairing.as_ref()?;
-                        match args["what"].as_str() {
-                            Some("address") => pairing.address.clone(),
-                            _ => pairing.link.clone(),
-                        }
+                        pairing.link.clone()
                     };
                     dialog.copied = Some(Instant::now());
                     Some(text)
@@ -432,25 +354,7 @@ pub fn command<V: 'static>(
             })
             .detach();
         }
-        "native_pair_suggest" => {
-            if let Some(dialog) = state().as_mut() {
-                dialog.name = args["name"].as_str().unwrap_or_default().to_string();
-            }
-            edit(view, IDLE, String::new(), cx);
-            cx.notify();
-        }
-        "native_pair_another" => {
-            save_name(view, run, cx);
-            if let Some(dialog) = state().as_mut() {
-                dialog.joined = None;
-                dialog.name.clear();
-            }
-            request(backend, cx);
-            edit(view, IDLE, String::new(), cx);
-        }
         "native_pair_done" => {
-            save_name(view, run, cx);
-            edit(view, IDLE, String::new(), cx);
             close(cx);
         }
         _ => {}
@@ -458,20 +362,17 @@ pub fn command<V: 'static>(
 }
 
 /// Escape closes the popup; Enter finishes naming. True when the key was used.
-pub fn key<V: 'static>(view: &mut V, key: &str, run: Run<V>, cx: &mut Context<V>) -> bool {
+pub fn key<V: 'static>(key: &str, cx: &mut Context<V>) -> bool {
     let (open, joined) = {
         let now = state();
         match now.as_ref() {
-            Some(dialog) => (!dialog.closing, dialog.joined.is_some()),
+            Some(dialog) => (!dialog.closing, dialog.joined),
             None => (false, false),
         }
     };
     match key {
         "escape" if open => close(cx),
-        "enter" if open && joined => {
-            save_name(view, run, cx);
-            close(cx);
-        }
+        "enter" if open && joined => close(cx),
         _ => return false,
     }
     true
@@ -606,7 +507,6 @@ fn button<V: 'static>(
     enabled: bool,
     command: &'static str,
     args: Value,
-    typing: Option<String>,
     run: Run<V>,
     cx: &mut Context<V>,
 ) -> AnyElement {
@@ -638,9 +538,6 @@ fn button<V: 'static>(
         .hover(|s| s.opacity(0.88))
         .on_click(cx.listener(move |this, _, _, cx| {
             // The shell routes commands to `command` above.
-            if let Some(text) = &typing {
-                commit(NAME, text);
-            }
             run(this, command, args.clone(), cx);
         }))
         .into_any_element()
@@ -649,10 +546,8 @@ fn button<V: 'static>(
 /// The popup, over Settings → Conexões.
 pub fn overlay<V: 'static>(
     page: &str,
-    editing: Option<(&str, &str)>,
     room: (f32, f32),
     run: Run<V>,
-    edit: Edit<V>,
     cx: &mut Context<V>,
 ) -> Option<AnyElement> {
     if page != "Conexões" {
@@ -664,30 +559,22 @@ pub fn overlay<V: 'static>(
     let generation = dialog.generation;
     let pairing = dialog.pairing.as_ref();
     let left = pairing.and_then(seconds_left);
-    let view = if dialog.joined.is_some() {
+    let view = if dialog.joined {
         "linked"
     } else if pairing.is_some() && left.is_none() {
         "expired"
     } else {
         "live"
     };
-    let way = dialog.way;
     let code = pairing.map_or("······".to_string(), |p| p.code.clone());
-    let address = pairing.map(|p| p.address.clone()).unwrap_or_default();
-    let typing: Option<String> = editing
-        .filter(|(key, _)| *key == NAME)
-        .map(|(_, text)| text.to_string());
     let copied = dialog
         .copied
         .is_some_and(|at| at.elapsed() < Duration::from_millis(1500));
 
     let (title, about) = match view {
         "linked" => (
-            tf(
-                "{} conectado",
-                &[&dialog.joined.as_ref().map_or("", |(_, name)| name.as_str())],
-            ),
-            t("Dê um nome para reconhecer este aparelho na lista."),
+            t("iPhone conectado").to_string(),
+            t("Já pode usar o Sirus pelo telefone."),
         ),
         "expired" => (
             t("Este código expirou").to_string(),
@@ -697,12 +584,7 @@ pub fn overlay<V: 'static>(
         ),
         _ => (
             t("Conectar um aparelho").to_string(),
-            match way {
-                Way::App => t("Leia com a câmera do iPhone ou digite o código no app do Sirus."),
-                Way::Browser => t(
-                    "Abra o endereço no navegador de outro aparelho da sua Tailscale e digite o código.",
-                ),
-            },
+            t("Leia com a câmera do iPhone ou escaneie pelo app do Sirus."),
         ),
     };
 
@@ -715,183 +597,44 @@ pub fn overlay<V: 'static>(
     let mut body = div().flex().flex_col().gap(px(14.)).px(px(20.)).pb(px(20.));
     match view {
         "live" => {
-            let segment = |id: &'static str,
-                           ix: usize,
-                           label: &'static str,
-                           icon: &'static str,
-                           value: Way| {
-                let on = way == value;
+            body = body.child({
+                // The code fits the window, so the whole dialog stays on screen.
+                let side = qr_side(room);
                 div()
-                    .id(id)
-                    .relative()
-                    .h(px(28.))
-                    .px(px(12.))
-                    .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .text_size(px(12.5))
-                    .text_color(content(if on { 0.95 } else { 0.55 }))
-                    .cursor_pointer()
-                    .sinks()
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        run(
-                            this,
-                            "native_pair_way",
-                            json!({"way": if value == Way::App { "app" } else { "browser" }}),
-                            cx,
-                        );
-                    }))
-                    .child(crate::segment_pill::probe("pair-way", ix))
-                    .child(svg().path(icon).size(px(13.)).text_color(content(if on {
-                        0.9
-                    } else {
-                        0.5
-                    })))
-                    .child(label)
-            };
-            body = body.child(
-                div()
-                    .relative()
-                    .self_center()
-                    .p(px(2.))
-                    .rounded(px(crate::theme::RADIUS_MD))
-                    .bg(content(0.05))
-                    .flex()
-                    .gap(px(2.))
-                    .child(crate::segment_pill::pill(
-                        "pair-way",
-                        usize::from(way == Way::Browser),
-                        content(0.1),
-                        crate::theme::RADIUS_SM,
-                    ))
-                    .child(segment(
-                        "pair-way-app",
-                        0,
-                        t("App do iPhone"),
-                        "smartphone",
-                        Way::App,
-                    ))
-                    .child(segment(
-                        "pair-way-browser",
-                        1,
-                        t("Navegador"),
-                        "globe",
-                        Way::Browser,
-                    )),
-            );
-            let note = |text: &'static str| {
-                div()
-                    .w_full()
-                    .text_center()
-                    .text_size(px(11.5))
-                    .line_height(px(16.))
-                    .text_color(content(0.48))
-                    .child(text)
-            };
-            body = body.child(match way {
-                Way::App => {
-                    // The code fits the window, so the whole dialog stays on screen.
-                    let side = qr_side(room);
-                    div()
-                        .flex()
-                        .flex_col()
-                        .items_center()
-                        .gap(px(14.))
-                        .child(match pairing {
-                            Some(p) => qr(p, side),
-                            None => div()
-                                .size(px(side))
-                                .flex_shrink_0()
-                                .rounded(px(22.))
-                                .bg(content(0.06))
-                                .into_any_element(),
-                        })
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .items_center()
-                                .gap(px(2.))
-                                .child(
-                                    div()
-                                        .text_size(px(11.5))
-                                        .text_color(content(0.5))
-                                        .child(t("Ou digite no app")),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(28.))
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .text_color(content(0.96))
-                                        .child(spaced.clone()),
-                                ),
-                        )
-                        .child(note(if pairing.is_some_and(|p| p.public_route) {
-                            t("Funciona de qualquer lugar pelo endereço público deste Mac, sem Tailscale")
-                        } else {
-                            t("Tailscale no iPhone, com a mesma conta deste Mac")
-                        }))
-                        .into_any_element()
-                }
-                Way::Browser => div()
                     .flex()
                     .flex_col()
+                    .items_center()
                     .gap(px(14.))
+                    .child(match pairing {
+                        Some(p) => qr(p, side),
+                        None => div()
+                            .size(px(side))
+                            .flex_shrink_0()
+                            .rounded(px(22.))
+                            .bg(content(0.06))
+                            .into_any_element(),
+                    })
                     .child(
                         div()
                             .flex()
+                            .flex_col()
                             .items_center()
-                            .gap(px(8.))
-                            .pl(px(10.))
-                            .pr(px(4.))
-                            .py(px(4.))
-                            .rounded(px(crate::theme::RADIUS_MD))
-                            .bg(content(0.05))
+                            .gap(px(2.))
                             .child(
                                 div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .truncate()
-                                    .text_size(px(12.5))
-                                    .text_color(content(0.9))
-                                    .child(address.clone()),
+                                    .text_size(px(11.5))
+                                    .text_color(content(0.5))
+                                    .child(t("Ou digite no app")),
                             )
-                            .child(button(
-                                "pair-copy-address",
-                                None,
-                                Some(if copied { "check" } else { "copy" }),
-                                false,
-                                pairing.is_some(),
-                                "native_pair_copy",
-                                json!({"what": "address"}),
-                                None,
-                                run,
-                                cx,
-                            )),
+                            .child(
+                                div()
+                                    .text_size(px(28.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(content(0.96))
+                                    .child(spaced.clone()),
+                            ),
                     )
-                    .child(div().w_full().flex().justify_center().gap(px(6.)).children(
-                        code.chars().enumerate().map(|(i, digit)| {
-                            div()
-                                .ml(px(if i == 3 { 8. } else { 0. }))
-                                .flex_1()
-                                .min_w_0()
-                                .max_w(px(40.))
-                                .h(px(52.))
-                                .rounded(px(crate::theme::RADIUS_MD))
-                                .bg(content(0.07))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .text_size(px(24.))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(content(0.95))
-                                .child(digit.to_string())
-                        }),
-                    ))
-                    .child(note(t(
-                        "Só aparelhos da sua Tailscale chegam a este endereço.",
-                    )))
-                    .into_any_element(),
+                    .into_any_element()
             });
             if let Some(error) = &dialog.error {
                 body = body.child(
@@ -925,7 +668,7 @@ pub fn overlay<V: 'static>(
                     .flex_wrap()
                     .justify_center()
                     .gap(px(8.))
-                    .when(way == Way::App && pairing.is_some(), |d| {
+                    .when(pairing.is_some(), |d| {
                         d.child(button(
                             "pair-copy-link",
                             Some(if copied {
@@ -938,7 +681,6 @@ pub fn overlay<V: 'static>(
                             true,
                             "native_pair_copy",
                             json!({"what": "link"}),
-                            None,
                             run,
                             cx,
                         ))
@@ -951,109 +693,32 @@ pub fn overlay<V: 'static>(
                         !dialog.busy,
                         "native_pair_new",
                         json!({}),
-                        None,
                         run,
                         cx,
                     )),
             );
         }
         "linked" => {
-            let typed = typing.clone();
-            let shown = typed.clone().unwrap_or_else(|| dialog.name.clone());
-            let editing_now = typed.is_some();
-            let start = shown.clone();
-            body = body
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(6.))
-                        .child(
-                            div()
-                                .text_size(px(12.5))
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(content(0.9))
-                                .child(t("Nome")),
-                        )
-                        .child(
-                            div()
-                                .id("pair-name")
-                                .h(px(32.))
-                                .px(px(10.))
-                                .rounded(px(crate::theme::RADIUS_MD))
-                                .border_1()
-                                .border_color(if editing_now { accent() } else { content(0.14) })
-                                .flex()
-                                .items_center()
-                                .gap(px(1.))
-                                .text_size(px(13.))
-                                .text_color(content(0.95))
-                                .cursor_text()
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    edit(this, NAME, start.clone(), cx);
-                                }))
-                                .child(shown)
-                                .when(editing_now, |d| {
-                                    d.child(div().w(px(1.5)).h(px(14.)).bg(accent()))
-                                }),
-                        ),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_wrap()
-                        .gap(px(6.))
-                        .children(SUGGESTIONS.iter().map(|name| {
-                            let label = t(name);
-                            div()
-                                .id(*name)
-                                .h(px(26.))
-                                .px(px(10.))
-                                .rounded_full()
-                                .bg(content(0.07))
-                                .flex()
-                                .items_center()
-                                .text_size(px(12.))
-                                .text_color(content(0.75))
-                                .cursor_pointer()
-                                .hover(|s| s.bg(content(0.12)))
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    run(this, "native_pair_suggest", json!({"name": label}), cx);
-                                }))
-                                .child(label)
-                        })),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .justify_end()
-                        .gap(px(8.))
-                        .child(button(
-                            "pair-another",
-                            Some(t("Conectar outro")),
-                            None,
-                            false,
-                            true,
-                            "native_pair_another",
-                            json!({}),
-                            typing.clone(),
-                            run,
-                            cx,
-                        ))
-                        .child(button(
-                            "pair-done",
-                            Some(t("Concluir")),
-                            None,
-                            true,
-                            !dialog.name.is_empty()
-                                || typing.as_ref().is_some_and(|t| !t.trim().is_empty()),
-                            "native_pair_done",
-                            json!({}),
-                            typing.clone(),
-                            run,
-                            cx,
-                        )),
-                );
+            body = body.child(
+                div()
+                    .id("pair-done")
+                    .h(px(32.))
+                    .w_full()
+                    .rounded(px(crate::theme::RADIUS_MD))
+                    .bg(accent())
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_size(px(13.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(on_accent())
+                    .cursor_pointer()
+                    .sinks()
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        run(this, "native_pair_done", json!({}), cx);
+                    }))
+                    .child(t("Concluir")),
+            );
         }
         _ => {
             body = body.child(
@@ -1069,7 +734,6 @@ pub fn overlay<V: 'static>(
                         true,
                         "native_pair_close",
                         json!({}),
-                        None,
                         run,
                         cx,
                     ))
@@ -1081,7 +745,6 @@ pub fn overlay<V: 'static>(
                         !dialog.busy,
                         "native_pair_new",
                         json!({}),
-                        None,
                         run,
                         cx,
                     )),
@@ -1123,6 +786,23 @@ pub fn overlay<V: 'static>(
         .bg(floating_fill())
         .shadow_lg()
         .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .when(view == "linked", |d| {
+            d.child(
+                div().w_full().pt(px(22.)).flex().justify_center().child(
+                    div()
+                        .size(px(44.))
+                        .rounded_full()
+                        .bg(Hsla {
+                            a: 0.14,
+                            ..rgb(0x34d399).into()
+                        })
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(svg().path("check").size(px(22.)).text_color(rgb(0x34d399))),
+                ),
+            )
+        })
         .child(header)
         .child(body)
         .with_animation(
@@ -1175,7 +855,7 @@ mod tests {
     fn sample(expires: &str) -> Value {
         json!({
             "code": "123456",
-            "urls": ["http://100.97.103.5:7711/?pair=123456"],
+            "urls": ["https://host.example.com/?pair=123456"],
             "expiresAt": expires,
             "qrSvg": "<svg/>",
         })
@@ -1186,9 +866,6 @@ mod tests {
         let soon = (Utc::now() + chrono::Duration::minutes(5)).to_rfc3339();
         let pairing = parse(&sample(&soon)).unwrap();
         assert_eq!(pairing.code, "123456");
-        assert_eq!(pairing.address, "http://100.97.103.5:7711/?pair=123456");
-        assert_eq!(pairing.link, pairing.address);
-        assert!(!pairing.public_route);
         assert_eq!(pairing.modules.len(), pairing.width * pairing.width);
         // Finder squares: the corner module is dark and the quiet cell beside the first is light.
         assert!(pairing.modules[0] && !pairing.modules[7]);
@@ -1200,9 +877,8 @@ mod tests {
     #[test]
     fn an_app_link_is_what_the_qr_holds_and_old_codes_have_no_time_left() {
         let mut value = sample("2020-01-01T00:00:00Z");
-        value["appUrl"] = json!("sirus://pair?address=https%3A%2F%2Fmac.ts.net&code=123456");
+        value["appUrl"] = json!("sirus://pair?address=https%3A%2F%2Fhost.example.com&code=123456");
         let pairing = parse(&value).unwrap();
-        assert!(pairing.public_route);
         assert!(pairing.link.starts_with("sirus://pair"));
         assert!(seconds_left(&pairing).is_none());
         // No address and no link: nothing to show.

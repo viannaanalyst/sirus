@@ -1,5 +1,5 @@
 //! The TLS side of other computers (ADR-133): an HTTPS pairing request and the `wss://` socket,
-//! both on rustls with ring and the system's roots (a Tailscale HTTPS name has a public
+//! both on rustls with ring and the system's roots (an HTTPS name has a public
 //! certificate). `tungstenite` is handed the finished stream, so it needs no TLS feature.
 use crate::i18n::t;
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
@@ -18,7 +18,7 @@ pub struct Address {
 }
 
 impl Address {
-    /// Accepts `https://name.ts.net`, `name.ts.net` or `name.ts.net:8443`, with or without a
+    /// Accepts `https://name.example.com`, `name.example.com` or `name.example.com:8443`, with or without a
     /// trailing path. Plain `http://` is refused: the token never travels unencrypted.
     pub fn parse(input: &str) -> Result<Address, String> {
         let text = input.trim();
@@ -177,12 +177,12 @@ mod tests {
 
     #[test]
     fn addresses_are_normalised_and_http_is_refused() {
-        let a = Address::parse(" https://VPS.tail1.ts.net/ ").unwrap();
-        assert_eq!((a.host.as_str(), a.port), ("vps.tail1.ts.net", 443));
-        assert_eq!(a.display(), "https://vps.tail1.ts.net");
-        let b = Address::parse("vps.ts.net:8443").unwrap();
-        assert_eq!(b.display(), "https://vps.ts.net:8443");
-        assert!(Address::parse("http://vps.ts.net").is_err());
+        let a = Address::parse(" https://VPS.example.com/ ").unwrap();
+        assert_eq!((a.host.as_str(), a.port), ("vps.example.com", 443));
+        assert_eq!(a.display(), "https://vps.example.com");
+        let b = Address::parse("vps.example.com:8443").unwrap();
+        assert_eq!(b.display(), "https://vps.example.com:8443");
+        assert!(Address::parse("http://vps.example.com").is_err());
         assert!(Address::parse("").is_err());
         assert!(Address::parse("https://bad host").is_err());
         assert!(Address::parse("host:0").is_err());

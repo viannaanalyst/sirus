@@ -1,5 +1,5 @@
 //! `sirus-host` (ADR-131): Sirus without a window: the back end the Mac window and the phone
-//! talk to, or a server reached over Tailscale. It loads the state, runs the agents and serves
+//! talk to, or a server reached through a tunnel. It loads the state, runs the agents and serves
 //! remote access (`remote.rs`); the command table is generated from `commands.list`
 //! (`build.rs`), so every command takes the same code path.
 
@@ -22,7 +22,7 @@ sirus-host: Sirus without a window (ADR-131)
 
 Usage:
   sirus-host serve [--data-dir DIR] [--bind ADDR] [--port PORT] [--assets-dir DIR] [--url URL]
-                   [--local-port PORT] [--https-port PORT] [--label NAME]
+                   [--local-port PORT] [--label NAME]
   sirus-host pair [--data-dir DIR]      one-time six-digit code and QR for a new device
   sirus-host devices [--data-dir DIR]   paired devices
   sirus-host revoke <device-id> [--data-dir DIR]
@@ -30,18 +30,14 @@ Usage:
 Options:
   --data-dir DIR  state folder (default $SIRUS_DATA_DIR, else $XDG_DATA_HOME/sirus-code,
                   else ~/.local/share/sirus-code)
-  --bind ADDR     address to listen on (default: this machine's Tailscale address,
-                  else 127.0.0.1; 0.0.0.0 only when asked)
+  --bind ADDR     address to listen on (default 127.0.0.1, for a tunnel in front of it)
   --port PORT     default 7710
   --assets-dir DIR  the Mermaid and KaTeX files the Sirus window loads, served at /assets/;
                   default $SIRUS_ASSETS_DIR, else `reply-render/` next to the binary'
-  --url URL       address to show in pairing links (e.g. http://host.tailnet.ts.net:7710)
+  --url URL       address to show in pairing links (e.g. https://vps.example.com)
   --local-port P  a window's own listener on 127.0.0.1:P, always on (Sirus Native, ADR-189).
                   --port is then the listener for other devices, on only while Settings →
-                  Connections allows it (`remote.json`), on every address but Tailscale
-                  peers only
-  --https-port P  the `tailscale serve` HTTPS port (default 443; Sirus Native uses 8443 so a
-                  Sirus on the same Mac keeps 443)
+                  Connections allows it (`remote.json`), on loopback
   --label NAME    appended to this computer's name on the phone's list
 ";
 
@@ -95,7 +91,6 @@ struct Cli {
     assets_dir: Option<PathBuf>,
     url: Option<String>,
     local_port: Option<u16>,
-    https_port: Option<u16>,
     label: Option<String>,
 }
 
@@ -109,7 +104,6 @@ fn parse(arguments: &[String]) -> Result<Cli, String> {
         assets_dir: None,
         url: None,
         local_port: None,
-        https_port: None,
         label: None,
     };
     let mut iter = arguments.iter();
@@ -143,15 +137,6 @@ fn parse(arguments: &[String]) -> Result<Cli, String> {
                         .ok()
                         .filter(|port| *port > 0)
                         .ok_or_else(|| "--local-port takes a number from 1 to 65535".to_string())?,
-                )
-            }
-            "--https-port" => {
-                cli.https_port = Some(
-                    value("--https-port")?
-                        .parse()
-                        .ok()
-                        .filter(|port| [443, 8443, 10000].contains(port))
-                        .ok_or_else(|| "--https-port is 443, 8443 or 10000".to_string())?,
                 )
             }
             "--label" => {
@@ -297,25 +282,16 @@ fn serve(cli: &Cli) -> i32 {
             return 1;
         }
     };
-    // Never every address by default: the tailnet address, or loopback for `tailscale serve`.
-    // With a window's own listener, the one for other devices listens on every address like the
-    // Mac app does and refuses all but loopback and Tailscale peers.
-    let windowed = cli.local_port.is_some();
-    let bind = cli.bind.unwrap_or_else(|| {
-        if windowed {
-            return IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED);
-        }
-        remote_host::tailnet_address()
-            .map(IpAddr::V4)
-            .unwrap_or(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST))
-    });
+    // Loopback unless asked: other devices arrive through a tunnel on this machine.
+    let bind = cli
+        .bind
+        .unwrap_or(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
     let options = remote_host::Options {
         bind,
         port: cli.port,
         url: cli.url.clone(),
         assets_dir: assets,
         local_port: cli.local_port,
-        https_port: cli.https_port,
         label: cli.label.clone(),
     };
     let code = crate::runtime::async_runtime::block_on(async {
@@ -348,7 +324,7 @@ fn serve(cli: &Cli) -> i32 {
                 println!("  open {url}");
             }
             if urls.is_empty() {
-                println!("  (no address to show: pass --url, or put `tailscale serve` in front)");
+                println!("  (no address to show: pass --url, or set remote-public.json)");
             }
         }
         println!("Data: {}", dir.display());
@@ -576,14 +552,14 @@ mod tests {
     #[test]
     fn the_cli_reads_its_options() {
         let cli = parse(&words(
-            "serve --bind 100.64.1.2 --port 7800 --data-dir /srv/sirus --assets-dir /srv/assets --url https://vps.example.ts.net/",
+            "serve --bind 127.0.0.2 --port 7800 --data-dir /srv/sirus --assets-dir /srv/assets --url https://vps.example.com/",
         ))
         .unwrap();
         assert_eq!(cli.command, "serve");
-        assert_eq!(cli.bind, Some("100.64.1.2".parse().unwrap()));
+        assert_eq!(cli.bind, Some("127.0.0.2".parse().unwrap()));
         assert_eq!(cli.port, 7800);
         assert_eq!(cli.data_dir, Some(PathBuf::from("/srv/sirus")));
-        assert_eq!(cli.url.as_deref(), Some("https://vps.example.ts.net"));
+        assert_eq!(cli.url.as_deref(), Some("https://vps.example.com"));
         let revoke = parse(&words("revoke abc")).unwrap();
         assert_eq!(revoke.positional, ["abc"]);
         for bad in [

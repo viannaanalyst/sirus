@@ -39,7 +39,7 @@ For isolated validation, set an absolute `SIRUS_DATA_DIR` for a launched host. N
 
 ## Headless host (Linux server)
 
-`sirus-host` also runs without a window on a Linux server and serves the phone app. On the server (Rust, a C compiler, Git, the provider CLIs logged in as the same user, and Tailscale up):
+`sirus-host` also runs without a window on a Linux server and serves the phone app. On the server (Rust, a C compiler, Git, the provider CLIs logged in as the same user, and `cloudflared` pointing at `127.0.0.1:7710`, ADR-155):
 
 ```bash
 cd src-tauri
@@ -48,7 +48,7 @@ cargo build --release --no-default-features --features host --bin sirus-host
 ./target/release/sirus-host pair            # in another shell: code + QR for the phone
 ```
 
-`serve` listens on the machine's Tailscale address by default (`--bind` to choose; it never listens on every address unless told to with `0.0.0.0`), port 7710 (`--port`). State lives in `~/.local/share/sirus-code` (`--data-dir`, or `SIRUS_DATA_DIR`). The host has no web app: a browser gets a short plain-text reply, and only `/assets/*` (the Mermaid and KaTeX files, `--assets-dir`) is served. `sirus-host devices` lists paired devices and `sirus-host revoke <id>` removes one. For HTTPS, run `tailscale serve --bg 7710` with `--bind 127.0.0.1`; the host shows the `https://<machine>.<tailnet>.ts.net` link (`tailscale set --operator=$USER` lets a non-root user manage it). Provider CLIs are found on `PATH`, `~/.local/bin`, `~/.npm-global/bin`, `$NPM_CONFIG_PREFIX/bin` and nvm's Node versions. From a Mac, `cargo zigbuild --no-default-features --features host --bin sirus-host --target aarch64-unknown-linux-gnu` cross-builds the Linux binary.
+`serve` listens on loopback, port 7710 (`--port`), and answers only loopback peers; other devices arrive through the tunnel. `remote-public.json` in the data folder names the public address for pairing links. State lives in `~/.local/share/sirus-code` (`--data-dir`, or `SIRUS_DATA_DIR`). The host has no web app: a browser gets a short plain-text reply, and only `/assets/*` (the Mermaid and KaTeX files, `--assets-dir`) is served. `sirus-host devices` lists paired devices and `sirus-host revoke <id>` removes one. Provider CLIs are found on `PATH`, `~/.local/bin`, `~/.npm-global/bin`, `$NPM_CONFIG_PREFIX/bin` and nvm's Node versions. From a Mac, `cargo zigbuild --no-default-features --features host --bin sirus-host --target aarch64-unknown-linux-gnu` cross-builds the Linux binary.
 
 A systemd user unit is enough to keep it running:
 
@@ -89,7 +89,7 @@ xcodebuild -workspace ios/Sirus.xcworkspace -scheme Sirus -configuration Release
 npm run publish:update               # JavaScript-only changes reach the installed app from this Mac
 ```
 
-`mobile/.env.local` (untracked) holds `SIRUS_UPDATE_URL`, the Mac's `https://….ts.net/api/app-update/manifest`. Bump `RUNTIME_VERSION` in `mobile/app.config.ts` when native code changes. The LaunchAgent `com.siruscode.renew-iphone` runs `mobile/scripts/renew-iphone.sh` to renew the 7-day signature over Wi-Fi. The first time, enable Developer Mode on the iPhone and trust the developer under Settings → General → VPN & Device Management.
+`mobile/.env.local` (untracked) holds `SIRUS_UPDATE_URL`, the Mac's `https://…/api/app-update/manifest`. Bump `RUNTIME_VERSION` in `mobile/app.config.ts` when native code changes. The LaunchAgent `com.siruscode.renew-iphone` runs `mobile/scripts/renew-iphone.sh` to renew the 7-day signature over Wi-Fi. The first time, enable Developer Mode on the iPhone and trust the developer under Settings → General → VPN & Device Management.
 
 `npx tsc --noEmit` and `npm test` (Node's test runner over `tests/`) check it. The protocol code it shares with the Mac lives in `mobile/src/shared` and is imported as `@sirus/…` ([ADR-191](../decisions/ADR-191-react-app-removal.md)); a protocol change updates it by hand.
 

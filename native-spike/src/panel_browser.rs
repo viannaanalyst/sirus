@@ -54,6 +54,8 @@ const GUTTER: f64 = 12.;
 /// panel's resize grip needs ground of its own.
 const GRIP_ROOM: f64 = 6.;
 const NOTICE: Duration = Duration::from_millis(1800);
+/// A press and its click on a menu's button, as one gesture.
+const MENU_PRESS: Duration = Duration::from_millis(800);
 /// The address's tools, most used first: the narrower the panel, the fewer stay in it, and the
 /// rest wait in the `⋯` menu.
 const PICK_RANK: usize = 0;
@@ -437,6 +439,7 @@ pub struct Browser {
     last_active: Option<String>,
     menu: Option<Menu>,
     menu_since: Instant,
+    menu_pressed_shut: Option<(Menu, Instant)>,
     /// The page as it looked when a menu opened: the web view hides under menus, this stays.
     frozen: Option<std::sync::Arc<gpui::Image>>,
     notice: Option<(String, Instant)>,
@@ -564,6 +567,7 @@ impl Browser {
             last_active: None,
             menu: None,
             menu_since: Instant::now(),
+            menu_pressed_shut: None,
             frozen: None,
             notice: None,
             annotating: false,
@@ -1274,6 +1278,15 @@ impl Browser {
     // ---- The person's actions ----
 
     fn open_menu(&mut self, menu: Option<Menu>, cx: &mut Context<Self>) {
+        // The press on this menu's own button already closed it (the scrim sees the press first
+        // and the button the click): that press must not open it again.
+        if self
+            .menu_pressed_shut
+            .take()
+            .is_some_and(|(shut, at)| Some(shut) == menu && at.elapsed() < MENU_PRESS)
+        {
+            return;
+        }
         self.menu = if self.menu == menu { None } else { menu };
         self.menu_since = Instant::now();
         let web = self.shared.web.borrow().clone();
@@ -4268,7 +4281,11 @@ impl Render for Browser {
                         .size_full()
                         .on_mouse_down(
                             MouseButton::Left,
-                            cx.listener(|this, _, _, cx| this.close_menu(cx)),
+                            cx.listener(|this, _, _, cx| {
+                                this.menu_pressed_shut =
+                                    this.menu.clone().map(|menu| (menu, Instant::now()));
+                                this.close_menu(cx);
+                            }),
                         )
                         .child(
                             div()

@@ -129,6 +129,8 @@ impl Shell {
                 .child(self.project_avatar_for(place.project, if in_footer { 14. } else { 17. }))
         });
         let slot = self.agents.slot.clone();
+        // Frosted, so it takes the color of the sidebar under it.
+        let radius = if in_footer { 11. } else { 15. };
         let pill = div()
             .id("agents-pill")
             .relative()
@@ -136,10 +138,10 @@ impl Shell {
             .h(px(if in_footer { 22. } else { 30. }))
             .pl(px(8.))
             .pr(px(9.))
-            .rounded_full()
+            .rounded(px(radius))
             .border_1()
             .border_color(content(0.12))
-            .bg(crate::theme::floating_fill())
+            .child(crate::theme::floating_surface(radius))
             .when(!in_footer, |d| d.shadow_lg())
             .flex()
             .items_center()
@@ -150,10 +152,7 @@ impl Shell {
             .opacity(appear.at(now).clamp(0., 1.))
             .cursor_pointer()
             .sinks()
-            .hover(|s| {
-                s.bg(crate::theme::floating_fill())
-                    .border_color(content(0.22))
-            })
+            .hover(|s| s.border_color(content(0.22)))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(|this, _, _, cx| this.toggle_agents_list(cx)))
             .child(

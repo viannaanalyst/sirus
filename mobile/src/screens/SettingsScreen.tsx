@@ -135,7 +135,7 @@ export function SettingsComputersScreen() {
     <ListSection>
       {computers.map((computer, index) => <ComputerRow key={computer.id} computerId={computer.id} separated={index > 0} onPress={() => navigation.navigate("SettingsComputer", { computerId: computer.id })} />)}
     </ListSection>
-    <Note>Um Mac ou um servidor com o Sirus, alcançado pela sua rede Tailscale. As conversas de todos aparecem juntas no início.</Note>
+    <Note>Um Mac ou um servidor com o Sirus. As conversas de todos aparecem juntas no início.</Note>
   </Page>;
 }
 

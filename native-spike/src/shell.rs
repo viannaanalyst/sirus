@@ -2742,12 +2742,9 @@ impl Shell {
                     .filter_map(|d| d["id"].as_str().map(str::to_owned))
                     .collect();
                 crate::settings_pair::command(
-                    self,
                     name,
-                    &args,
                     &self.backend.clone(),
                     Shell::run_setting,
-                    Shell::edit_setting,
                     known,
                     cx,
                 );
@@ -4993,14 +4990,7 @@ impl Shell {
                         .setting_edit
                         .as_ref()
                         .is_some_and(|(field, _)| crate::settings_connectors::enter_saves(field));
-                    let names = self
-                        .setting_edit
-                        .as_ref()
-                        .is_some_and(|(field, _)| crate::settings_pair::enter_saves(field));
                     self.commit_setting_edit(cx);
-                    if names {
-                        crate::settings_pair::key(self, key, Shell::run_setting, cx);
-                    }
                     if saves {
                         let list = self.settings["connectors"].clone();
                         crate::settings_connectors::key(
@@ -5047,7 +5037,7 @@ impl Shell {
             && self.settings_page == "Conexões"
             && matches!(key, "enter" | "escape")
             && crate::settings_pair::wants_keys()
-            && crate::settings_pair::key(self, key, Shell::run_setting, cx)
+            && crate::settings_pair::key(key, cx)
         {
             cx.stop_propagation();
             cx.notify();
@@ -15039,10 +15029,8 @@ impl Shell {
                 ))
                 .children(crate::settings_pair::overlay(
                     self.settings_page,
-                    self.setting_edit.as_ref().map(|(k, v)| (*k, v.as_str())),
                     (self.viewport_width, self.viewport_height),
                     Shell::run_setting,
-                    Shell::edit_setting,
                     cx,
                 ))
                 .into_any_element(),
@@ -16737,6 +16725,13 @@ impl Render for Shell {
         }
         if let Some(field) = crate::settings_connectors::take_autofocus() {
             self.setting_edit = Some(field);
+        }
+        // A field whose page closed must not keep the typing, or the composer stops taking it.
+        if self.appearance.is_none() {
+            self.setting_edit = None;
+        }
+        if self.environment.is_none() {
+            self.commit_message = None;
         }
         if let Some(kind) = self
             .dock_active

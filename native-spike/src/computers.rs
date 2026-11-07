@@ -283,17 +283,25 @@ pub mod tests {
     #[test]
     fn one_computer_per_address_with_distinct_ids() {
         let mut list = Vec::new();
-        let a = upsert(&mut list, "vps", &Address::parse("vps.ts.net").unwrap());
+        let a = upsert(
+            &mut list,
+            "vps",
+            &Address::parse("vps.example.com").unwrap(),
+        );
         let again = upsert(
             &mut list,
             "vps2",
-            &Address::parse("https://vps.ts.net").unwrap(),
+            &Address::parse("https://vps.example.com").unwrap(),
         );
         assert_eq!(
             (a.id.as_str(), list.len(), again.name.as_str()),
-            ("pc-vps-ts-net", 1, "vps2")
+            ("pc-vps-example-com", 1, "vps2")
         );
-        let other_port = upsert(&mut list, "x", &Address::parse("vps.ts.net:8443").unwrap());
+        let other_port = upsert(
+            &mut list,
+            "x",
+            &Address::parse("vps.example.com:8443").unwrap(),
+        );
         assert_ne!(other_port.id, a.id);
         assert_eq!(list.len(), 2);
     }

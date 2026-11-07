@@ -8,7 +8,7 @@ import type { ExpoConfig } from "expo/config";
 
 /**
  * Updates come from the owner's own computer (ADR-135 addendum), never from Expo's servers:
- * `SIRUS_UPDATE_URL` is that computer's `https://…ts.net/api/app-update/manifest`, set when
+ * `SIRUS_UPDATE_URL` is that computer's `https://…/api/app-update/manifest`, set when
  * building. The app swaps the empty `Authorization` for its device token at launch. Bump
  * `RUNTIME_VERSION` whenever native code changes, so an update never runs on the wrong build.
  */
@@ -38,7 +38,7 @@ const config: ExpoConfig = {
     supportsTablet: false,
     infoPlist: {
       NSAppTransportSecurity: { NSAllowsArbitraryLoads: true },
-      NSLocalNetworkUsageDescription: "O Sirus conecta aos seus computadores pela sua rede Tailscale.",
+      NSLocalNetworkUsageDescription: "O Sirus conecta aos seus computadores.",
       NSMicrophoneUsageDescription: "O Sirus usa o microfone para ditar mensagens aos agentes.",
       NSSpeechRecognitionUsageDescription: "O Sirus transcreve o que você fala para escrever mensagens aos agentes.",
       ITSAppUsesNonExemptEncryption: false,
@@ -47,6 +47,7 @@ const config: ExpoConfig = {
   plugins: [
     "expo-secure-store",
     "expo-web-browser",
+    ["expo-camera", { cameraPermission: "O Sirus usa a câmera para ler o QR de conexão do seu Mac.", microphonePermission: false, recordAudioAndroid: false }],
     ["expo-speech-recognition", {
       microphonePermission: "O Sirus usa o microfone para ditar mensagens aos agentes.",
       speechRecognitionPermission: "O Sirus transcreve o que você fala para escrever mensagens aos agentes.",

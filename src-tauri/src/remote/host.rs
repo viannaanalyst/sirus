@@ -1,6 +1,6 @@
 //! Remote access for the headless host (ADR-131). `sirus-host serve` always serves:
-//! it listens on one chosen address (the tailnet address by default, never every
-//! address unless asked), serves the built UI from a folder, and answers the
+//! it listens on loopback by default, for a tunnel such as `cloudflared` in front of it
+//! (ADR-155), serves the built UI from a folder, and answers the
 //! `sirus-host pair | devices | revoke` commands over a private control socket in
 //! the data folder (`host.sock`, `0600`). Pairing codes, device tokens, the peer
 //! filter and the Origin check are the Mac app's own (`remote.rs`).
@@ -21,8 +21,6 @@ pub struct Options {
     /// Sirus Native (ADR-189): the window's own listener on this loopback port, always on.
     /// `port` is then the listener for other devices, on only while `remote.json` says so.
     pub local_port: Option<u16>,
-    /// The `tailscale serve` HTTPS port (443 when `None`).
-    pub https_port: Option<u16>,
     /// Added to this computer's name on the phone's list.
     pub label: Option<String>,
 }
@@ -59,14 +57,12 @@ pub async fn start_host(app: AppHandle, data_dir: &Path, options: Options) -> Re
         server: parking_lot::Mutex::new(None),
         error: parking_lot::Mutex::new(None),
         revoked: broadcast::channel(16).0,
-        https: parking_lot::Mutex::new(Https::default()),
         awake: parking_lot::Mutex::new(None),
         listen: parking_lot::Mutex::new(Listen {
             bind: Some(options.bind),
             url: options.url,
             assets_dir: options.assets_dir,
             local_port: options.local_port,
-            https_port: options.https_port,
             label: options.label,
         }),
     });
@@ -74,7 +70,6 @@ pub async fn start_host(app: AppHandle, data_dir: &Path, options: Options) -> Re
         return Err(Error::new("remote", "Remote access is already running."));
     }
     save(&remote)?;
-    refresh_https(&remote).await;
     if windowed {
         start_kind(app.clone(), remote.clone(), Kind::Window).await;
         if let Some(error) = remote.error.lock().clone() {
@@ -97,16 +92,6 @@ pub async fn start_host(app: AppHandle, data_dir: &Path, options: Options) -> Re
         return Err(Error::new("remote", error));
     }
     Ok(base_urls(&remote))
-}
-
-/// This machine's first Tailscale address: where the host listens by default.
-pub fn tailnet_address() -> Option<Ipv4Addr> {
-    tailscale_addresses().into_iter().next()
-}
-
-/// `tailscale serve` state, for the startup banner.
-pub fn https_url() -> Option<String> {
-    REMOTE.get()?.https.lock().url.clone()
 }
 
 /// A file under `/assets/` in `dir`; nothing outside the folder is ever read.
@@ -301,7 +286,6 @@ pub fn revoke_saved(data_dir: &Path, device_id: &str) -> Result<bool> {
         server: parking_lot::Mutex::new(None),
         error: parking_lot::Mutex::new(None),
         revoked: broadcast::channel(1).0,
-        https: parking_lot::Mutex::new(Https::default()),
         awake: parking_lot::Mutex::new(None),
         listen: parking_lot::Mutex::new(Listen::default()),
     };
@@ -392,7 +376,6 @@ mod tests {
             server: parking_lot::Mutex::new(None),
             error: parking_lot::Mutex::new(None),
             revoked: broadcast::channel(1).0,
-            https: parking_lot::Mutex::new(Https::default()),
             awake: parking_lot::Mutex::new(None),
             listen: parking_lot::Mutex::new(Listen::default()),
         };
@@ -411,7 +394,7 @@ mod tests {
     }
 
     #[test]
-    fn a_bound_host_advertises_its_own_address() {
+    fn a_host_advertises_only_the_address_it_was_given() {
         let dir = tempfile::tempdir().unwrap();
         let remote = Remote {
             path: dir.path().join("remote.json"),
@@ -420,18 +403,17 @@ mod tests {
             server: parking_lot::Mutex::new(None),
             error: parking_lot::Mutex::new(None),
             revoked: broadcast::channel(1).0,
-            https: parking_lot::Mutex::new(Https::default()),
             awake: parking_lot::Mutex::new(None),
             listen: parking_lot::Mutex::new(Listen {
-                bind: Some("100.90.1.2".parse().unwrap()),
+                bind: Some("127.0.0.1".parse().unwrap()),
                 url: None,
                 assets_dir: None,
                 ..Listen::default()
             }),
         };
-        assert_eq!(base_urls(&remote), ["http://100.90.1.2:7710"]);
-        remote.listen.lock().url = Some("http://vps.tail.ts.net:7710".into());
-        assert_eq!(base_urls(&remote), ["http://vps.tail.ts.net:7710"]);
-        assert!(qr_text("http://100.90.1.2:7710/?pair=123456").is_some());
+        assert!(base_urls(&remote).is_empty());
+        remote.listen.lock().url = Some("https://vps.example.com".into());
+        assert_eq!(base_urls(&remote), ["https://vps.example.com"]);
+        assert!(qr_text("https://vps.example.com/?pair=123456").is_some());
     }
 }

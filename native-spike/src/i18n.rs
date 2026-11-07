@@ -132,10 +132,6 @@ const ENTRIES: &[(&str, &str)] = &[
         "60 fps is smoother and makes larger files. The page is captured as fast as it allows.",
     ),
     (
-        "A Tailscale não está conectada",
-        "Tailscale is not connected",
-    ),
-    (
         "A busca atingiu seu limite. Algumas skills podem não aparecer.",
         "The search reached its limit. Some skills may not appear.",
     ),
@@ -210,10 +206,6 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Abas de conversa", "Conversation tabs"),
     ("Aberto", "Open"),
     ("Abertos", "Open"),
-    (
-        "Abra o endereço no navegador de outro aparelho da sua Tailscale e digite o código.",
-        "Open the address in a browser on another device of your tailnet and type the code.",
-    ),
     ("Abra os arquivos do projeto.", "Open the project files."),
     ("Abra um app ou qualquer site.", "Open an app or any site."),
     ("Abra um projeto", "Open a project"),
@@ -266,7 +258,6 @@ const ENTRIES: &[(&str, &str)] = &[
         "Abrir pull requests e issues",
         "Open pull requests and issues",
     ),
-    ("Abrir página", "Open page"),
     ("Abrir terminal", "Open Terminal"),
     ("Abrir um painel", "Open a panel"),
     ("Abriu", "Opened"),
@@ -374,7 +365,6 @@ const ENTRIES: &[(&str, &str)] = &[
         "Applied when you send, then retained for your next manual turns.",
     ),
     ("Aplicativo", "App"),
-    ("App do iPhone", "iPhone app"),
     ("Aprova o que for seguro.", "Approves what is safe."),
     ("Aprovar", "Approve"),
     ("Aprovar por mim", "Auto-review"),
@@ -415,7 +405,6 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Atalho global de captura", "Global snap shortcut"),
     ("Atalhos", "Keybindings"),
     ("Ativa", "Active"),
-    ("Ativar HTTPS", "Turn on HTTPS"),
     ("Ativar modo debug", "Turn debug mode on"),
     ("Atividade", "Activity"),
     ("Atividade recente", "Recent activity"),
@@ -517,6 +506,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Buscou", "Searched"),
     ("Cache limpo", "Cache cleared"),
     (
+        "Cada aparelho precisa de um QR code deste Mac para entrar.",
+        "Each device needs a QR code from this Mac to get in.",
+    ),
+    (
         "Cada arquivo deve ter até 10 MiB.",
         "Each file must be at most 10 MiB.",
     ),
@@ -552,7 +545,6 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Carregar mensagens anteriores", "Load earlier messages"),
     ("Carregou ferramentas", "Loaded tools"),
     ("Carvão", "Charcoal"),
-    ("Celular ou outro computador", "Phone or another computer"),
     ("Chat lateral", "Side chat"),
     ("Chave conectada · {}", "Key connected · {}"),
     ("Checkout atual", "Current checkout"),
@@ -630,7 +622,6 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Conectando à tela…", "Connecting to the screen…"),
     ("Conectando…", "Connecting…"),
     ("Conectar", "Connect"),
-    ("Conectar outro", "Connect another"),
     ("Conectar um aparelho", "Connect a device"),
     ("Conectar {}", "Connect {}"),
     (
@@ -641,6 +632,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Conexões", "Connections"),
     ("Configurações", "Settings"),
     ("Configurações do projeto", "Project settings"),
+    (
+        "Configure o endereço público deste Mac para conectar aparelhos.",
+        "Set up this Mac's public address to connect devices.",
+    ),
     ("Confirmar", "Confirm"),
     ("Confirmar ao excluir", "Confirm deleting"),
     (
@@ -768,7 +763,6 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Depois do turno", "After the turn"),
     ("Desafixar", "Unpin"),
     ("Desafixar aba", "Unpin tab"),
-    ("Desativar", "Turn off"),
     ("Descartada", "Dismissed"),
     ("Descartar", "Discard"),
     ("Descartar alterações?", "Discard changes?"),
@@ -800,10 +794,6 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Diagnóstico das CLIs", "CLI diagnostics"),
     ("Digite ao menos 3 letras.", "Type at least 3 letters."),
     (
-        "Digite no navegador da Tailscale ou no app do Sirus. Ele vale por pouco tempo.",
-        "Enter it in the Tailscale browser or in the Sirus app. It is valid for a short time.",
-    ),
-    (
         "Digite o valor e aperte Enter",
         "Type the value and press Enter",
     ),
@@ -833,10 +823,6 @@ const ENTRIES: &[(&str, &str)] = &[
     (
         "Dê um nome e um comando à ação.",
         "Give the action a name and a command.",
-    ),
-    (
-        "Dê um nome para reconhecer este aparelho na lista.",
-        "Give it a name to tell it apart in the list.",
     ),
     ("Economia do cache", "Cache savings"),
     ("Editar", "Edit"),
@@ -908,7 +894,6 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Endereço da prévia", "Preview address"),
     ("Endereço do QR code", "QR code address"),
     ("Endereço inválido.", "Invalid address."),
-    ("Endereço seguro (HTTPS)", "Secure address (HTTPS)"),
     ("Entendi", "Got it"),
     ("Enter durante o ditado", "Enter while dictating"),
     ("Entrada", "Input"),
@@ -1175,10 +1160,6 @@ const ENTRIES: &[(&str, &str)] = &[
         "Força do fundo quando a conversa já tem mensagens. De 0 a 100%.",
         "Background strength once the conversation has messages. From 0 to 100%.",
     ),
-    (
-        "Funciona de qualquer lugar pelo endereço público deste Mac, sem Tailscale",
-        "Works from anywhere through this Mac's public address, no Tailscale needed",
-    ),
     ("Funcionalidades experimentais", "Experimental features"),
     ("Fundo do chat", "Chat background"),
     ("Geral", "General"),
@@ -1273,10 +1254,6 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Instalação", "Installation"),
     (
-        "Instale a Tailscale neste Mac e no celular e entre com a mesma conta. É grátis para uso pessoal.",
-        "Install Tailscale on this Mac and on your phone and sign in with the same account. It is free for personal use.",
-    ),
-    (
         "Instale o GitHub CLI (gh) para listar pull requests.",
         "Install the GitHub CLI (gh) to list pull requests.",
     ),
@@ -1317,14 +1294,18 @@ const ENTRIES: &[(&str, &str)] = &[
         "Já existe um branch com esse nome.",
         "A branch with this name already exists.",
     ),
+    (
+        "Já pode usar o Sirus pelo telefone.",
+        "You can use Sirus from your phone now.",
+    ),
     ("Já usado por {}", "Already used by {}"),
     (
         "Leia antes de enviar. Nada foi enviado.",
         "Read it before you send. Nothing was sent.",
     ),
     (
-        "Leia com a câmera do iPhone ou digite o código no app do Sirus.",
-        "Scan with the iPhone camera, or type the code in the Sirus app.",
+        "Leia com a câmera do iPhone ou escaneie pelo app do Sirus.",
+        "Scan with the iPhone camera or from the Sirus app.",
     ),
     ("Leitura de cache", "Cache read"),
     ("Lendo o histórico…", "Reading the history…"),
@@ -1455,12 +1436,12 @@ const ENTRIES: &[(&str, &str)] = &[
         "Shows the first-run welcome again: your agents, a project and how Sirus looks.",
     ),
     (
-        "Mostra um anel de consumo de até dois provedores no rodapé da barra lateral.",
-        "Show a usage ring for up to two providers at the bottom of the sidebar.",
+        "Mostra um QR de uso único para conectar o app do Sirus no iPhone.",
+        "Shows a one-time QR to connect the Sirus iPhone app.",
     ),
     (
-        "Mostra um código de uso único para conectar o app do Sirus no iPhone ou um navegador da sua Tailscale.",
-        "Show a one-time code to connect the Sirus iPhone app or a browser on your tailnet.",
+        "Mostra um anel de consumo de até dois provedores no rodapé da barra lateral.",
+        "Show a usage ring for up to two providers at the bottom of the sidebar.",
     ),
     ("Mostrar / ocultar barra lateral", "Toggle Sidebar"),
     ("Mostrar arquivos não rastreados", "Show untracked files"),
@@ -1524,10 +1505,6 @@ const ENTRIES: &[(&str, &str)] = &[
     (
         "Necessária para capturar a janela de outro app.",
         "Needed to capture another app's window.",
-    ),
-    (
-        "Necessário para instalar o Sirus como app no celular e receber alertas. A Tailscale fornece o certificado.",
-        "Needed to install Sirus as an app on the phone and to receive alerts. Tailscale provides the certificate.",
     ),
     ("Negar", "Deny"),
     ("Nenhum", "None"),
@@ -1813,8 +1790,8 @@ const ENTRIES: &[(&str, &str)] = &[
     ("O código tem seis dígitos.", "The code has six digits."),
     ("O diff foi truncado.", "The diff was truncated."),
     (
-        "O endereço HTTPS dele na Tailscale, como https://nome.rede.ts.net",
-        "Its HTTPS address on Tailscale, such as https://name.network.ts.net",
+        "O endereço HTTPS dele, como https://seu-computador.exemplo.com",
+        "Its HTTPS address, such as https://your-computer.example.com",
     ),
     (
         "O endereço de qualquer servidor MCP remoto (HTTP).",
@@ -1942,8 +1919,8 @@ const ENTRIES: &[(&str, &str)] = &[
         "Where web links in replies, your messages and terminals open. ⌘, Ctrl, Option or middle click always opens the system browser.",
     ),
     (
-        "Onde seus aparelhos encontram este Mac na Tailscale.",
-        "Where your devices find this Mac on Tailscale.",
+        "Onde seus aparelhos encontram este Mac.",
+        "Where your devices find this Mac.",
     ),
     ("Onde vale", "Where it applies"),
     ("Ontem", "Yesterday"),
@@ -2084,10 +2061,6 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Pergunte sobre a conversa", "Ask about the conversation"),
     ("Permissões do macOS", "macOS permissions"),
     ("Permissões padrão", "Default permissions"),
-    (
-        "Permita HTTPS na sua tailnet",
-        "Allow HTTPS on your tailnet",
-    ),
     (
         "Permite que agentes usem o navegador do app. Desligado, novos agentes não recebem as ferramentas dele e os que estão rodando são recusados; seu painel de navegador não muda.",
         "Allow agents to use the in-app browser. Off, new agents do not get its tools and running ones are refused; your own browser pane is unaffected.",
@@ -2442,6 +2415,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Sem descrição informada.", "No description provided."),
     ("Sem descrição.", "No description."),
     ("Sem diferenças para mostrar.", "No differences to show."),
+    ("Sem endereço para este Mac", "No address for this Mac"),
     ("Sem esforço", "None"),
     ("Sem limites informados.", "No limits reported."),
     ("Sem login", "Not signed in"),
@@ -2507,14 +2481,6 @@ const ENTRIES: &[(&str, &str)] = &[
         "Only shown in Sirus lists. Agents keep using the same identifier.",
     ),
     (
-        "Só aparelhos da sua Tailscale chegam a este endereço.",
-        "Only devices on your tailnet reach this address.",
-    ),
-    (
-        "Só aparelhos na sua rede Tailscale alcançam este Mac, e cada um precisa de um QR code desta página.",
-        "Only devices on your Tailscale network can reach this Mac, and each one needs a QR code from this page.",
-    ),
-    (
         "Só conversas do Codex e do Claude Code podem ser compactadas.",
         "Only Codex and Claude Code conversations can be compacted.",
     ),
@@ -2528,10 +2494,6 @@ const ENTRIES: &[(&str, &str)] = &[
         "Only in empty sessions, or in every conversation.",
     ),
     ("Só vazias", "Empty only"),
-    (
-        "Tailscale no iPhone, com a mesma conta deste Mac",
-        "Tailscale on the iPhone, with the same account as this Mac",
-    ),
     ("Tamanho da fonte da interface", "UI font size"),
     ("Tamanho da fonte de código", "Code font size"),
     ("Tamanho da fonte do terminal", "Terminal font size"),
@@ -2643,10 +2605,6 @@ const ENTRIES: &[(&str, &str)] = &[
         "Uma imagem atrás dos painéis de conversa. Ela fica neste Mac.",
         "An image behind the conversation panels. It stays on this Mac.",
     ),
-    (
-        "Uma permissão única na sua conta da Tailscale. Abra a página, confirme e volte para verificar de novo.",
-        "A one-time switch in your Tailscale account. Open the page, confirm, then come back and check again.",
-    ),
     ("Uma predefinição de cores.", "A color preset."),
     (
         "Uma página que o agente abre ou navega aparece num player pequeno sobre a conversa. Ela fica oculta enquanto o painel do navegador mostra a sessão.",
@@ -2673,8 +2631,8 @@ const ENTRIES: &[(&str, &str)] = &[
         "Use PDF, DOCX, XLSX, PPTX or CSV. Convert older DOC/XLS/PPT files first.",
     ),
     (
-        "Use o Sirus pelo celular ou por outro computador. O trabalho continua rodando neste Mac; o outro aparelho só controla, pela sua rede privada da Tailscale.",
-        "Use Sirus from your phone or another computer. The work still runs on this Mac; the other device only drives it, over your private Tailscale network.",
+        "Use o Sirus pelo iPhone. O trabalho continua rodando neste Mac; o telefone só controla.",
+        "Use Sirus from your iPhone. The work still runs on this Mac; the phone only controls it.",
     ),
     (
         "Use um endereço http(s) localhost com porta.",
@@ -2787,8 +2745,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("há {} dias", "{} days ago"),
     ("há {} h", "{} h ago"),
     ("há {} min", "{} min ago"),
-    ("iPhone do trabalho", "Work iPhone"),
-    ("iPhone pessoal", "Personal iPhone"),
+    ("iPhone conectado", "iPhone connected"),
     ("liberado", "allowed"),
     (
         "o motor de aparelhos não respondeu.",
@@ -2816,7 +2773,6 @@ const ENTRIES: &[(&str, &str)] = &[
     ("{} assumiu", "{} took over"),
     ("{} commit novo em {}", "{} new commit on {}"),
     ("{} commits novos em {}", "{} new commits on {}"),
-    ("{} conectado", "{} connected"),
     ("{} de {}", "{} of {}"),
     ("{} de {} concluídos", "{} of {} done"),
     (

@@ -11,7 +11,7 @@ import { LaunchOverlay } from "./components/LaunchOverlay";
 import { NotificationBanners } from "./components/NotificationBanners";
 import { navigationRef, syncBannerScreen } from "./data/navigation-ref";
 import { checkForAppUpdate } from "./data/app-updates";
-import { accessFromLink, pairComputer } from "./data/computers";
+import { pairComputer, pairingFromLink } from "./data/computers";
 import { AppearancePreferencesProvider } from "./features/settings/appearance/AppearancePreferencesProvider";
 import { useMobileNavigationTheme } from "./lib/useMobileNavigationTheme";
 import { createV5StackNavigator } from "./native/createV5StackNavigator";
@@ -74,10 +74,9 @@ export default function App() {
   useEffect(() => {
     const pair = (url: string | null | undefined) => {
       if (!url?.startsWith("sirus://pair")) return;
-      const query = new URL(url.replace("sirus://", "https://sirus.invalid/")).searchParams;
-      const address = query.get("address"), code = query.get("code");
-      if (!address || !code) return;
-      void pairComputer(address, code, accessFromLink(query)).then((computer) => useSirus.getState().addComputer(computer), (reason: unknown) => Alert.alert("Não foi possível conectar", reason instanceof Error ? reason.message : String(reason)));
+      const found = pairingFromLink(url);
+      if (!found) return;
+      void pairComputer(found.address, found.code, found.access).then((computer) => useSirus.getState().addComputer(computer), (reason: unknown) => Alert.alert("Não foi possível conectar", reason instanceof Error ? reason.message : String(reason)));
     };
     void Linking.getInitialURL().then(pair);
     const subscription = Linking.addEventListener("url", (event) => pair(event.url));

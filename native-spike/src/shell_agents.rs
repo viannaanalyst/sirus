@@ -129,8 +129,8 @@ impl Shell {
                 .child(self.project_avatar_for(place.project, if in_footer { 14. } else { 17. }))
         });
         let slot = self.agents.slot.clone();
-        // Frosted, so it takes the color of the sidebar under it.
-        let radius = if in_footer { 11. } else { 15. };
+        // Frosted, so it takes the color of the sidebar under it. Its corners are a session tab's.
+        let radius = crate::theme::RADIUS_MD;
         let pill = div()
             .id("agents-pill")
             .relative()

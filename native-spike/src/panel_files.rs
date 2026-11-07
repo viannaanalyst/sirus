@@ -46,6 +46,13 @@ pub fn show_file(view: &AnyView, path: String, cx: &mut App) {
     }
 }
 
+/// Shows the folder `path` in the Files pane behind `view`: the tree in front, opened down to it.
+pub fn show_folder(view: &AnyView, path: String, cx: &mut App) {
+    if let Ok(panel) = view.clone().downcast::<FilesPanel>() {
+        panel.update(cx, |panel, cx| panel.reveal_folder(path, cx));
+    }
+}
+
 pub fn new(context: PanelContext, cx: &mut App) -> AnyView {
     cx.new(|cx| {
         let search = cx.new(|cx| TextField::new(t("Buscar arquivos"), cx));
@@ -241,6 +248,31 @@ impl FilesPanel {
             }
         } else {
             self.open_file(path, cx);
+        }
+        cx.notify();
+    }
+
+    fn reveal_folder(&mut self, path: String, cx: &mut Context<Self>) {
+        if self.search_open {
+            self.close_search(cx);
+        }
+        self.active = None;
+        self.root_open = true;
+        let inside = std::path::Path::new(&path)
+            .strip_prefix(&self.root)
+            .map(|rest| rest.components().count())
+            .unwrap_or(0);
+        self.selected = (inside > 0).then(|| (path.clone(), true));
+        let mut folder = std::path::Path::new(&path);
+        for _ in 0..inside {
+            let dir = folder.to_string_lossy().into_owned();
+            if self.open.insert(dir.clone()) {
+                self.list(dir, cx);
+            }
+            let Some(parent) = folder.parent() else {
+                break;
+            };
+            folder = parent;
         }
         cx.notify();
     }

@@ -1,0 +1,292 @@
+//! The files and folders named in a conversation's chips. A chip opens in the Files pane only when
+//! it names something real inside the conversation's folder, so nothing looks clickable for
+//! nothing. A name with a path is checked on disk; a bare name is looked up in the folder's file
+//! list, refreshed in the background (`due` and `store`).
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::path::{Component, Path, PathBuf};
+use std::rc::Rc;
+use std::time::{Duration, Instant};
+
+/// How old a folder's file list may get before the next frame asks for it again.
+const STALE: Duration = Duration::from_secs(15);
+
+/// What a chip opens: an absolute path inside the conversation's folder.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Target {
+    pub path: String,
+    pub folder: bool,
+}
+
+/// A folder's files and folders by their last component, as paths relative to it.
+#[derive(Default, PartialEq)]
+pub struct Index {
+    files: HashMap<String, Vec<String>>,
+    folders: HashMap<String, Vec<String>>,
+}
+
+impl Index {
+    pub fn build(paths: Vec<String>) -> Self {
+        let mut index = Self::default();
+        for path in paths {
+            let mut parent = Path::new(&path).parent();
+            while let Some(folder) = parent.filter(|p| !p.as_os_str().is_empty()) {
+                if let (Some(name), Some(whole)) =
+                    (folder.file_name().and_then(|n| n.to_str()), folder.to_str())
+                {
+                    let known = index.folders.entry(name.to_owned()).or_default();
+                    if !known.iter().any(|k| k == whole) {
+                        known.push(whole.to_owned());
+                    }
+                }
+                parent = folder.parent();
+            }
+            let name = path.rsplit('/').next().unwrap_or(&path).to_owned();
+            index.files.entry(name).or_default().push(path);
+        }
+        index
+    }
+
+    /// The shallowest path ending in `tail`, whole components only; a tie goes to the first by name.
+    fn find(list: Option<&Vec<String>>, tail: &str) -> Option<String> {
+        list?
+            .iter()
+            .filter(|path| {
+                path.as_str() == tail
+                    || path
+                        .strip_suffix(tail)
+                        .is_some_and(|head| head.ends_with('/'))
+            })
+            .min_by_key(|path| (path.matches('/').count(), path.as_str()))
+            .cloned()
+    }
+
+    fn lookup(&self, tail: &str) -> Option<(String, bool)> {
+        let tail = tail.trim_end_matches('/');
+        let name = tail.rsplit('/').next().unwrap_or(tail);
+        Self::find(self.files.get(name), tail)
+            .map(|path| (path, false))
+            .or_else(|| Self::find(self.folders.get(name), tail).map(|path| (path, true)))
+    }
+}
+
+/// `src/a.rs:12:4` names `src/a.rs`.
+fn without_position(word: &str) -> &str {
+    let mut word = word;
+    for _ in 0..2 {
+        match word.rsplit_once(':') {
+            Some((head, tail))
+                if !head.is_empty()
+                    && !tail.is_empty()
+                    && tail.bytes().all(|b| b.is_ascii_digit()) =>
+            {
+                word = head;
+            }
+            _ => break,
+        }
+    }
+    word
+}
+
+/// `root/a/../b` as `root/b`, without touching the disk.
+fn tidy(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for part in path.components() {
+        match part {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// What `word` names inside `root`. `kind` tells whether a path is a folder, or `None` when it
+/// isn't there. A path outside `root` opens nothing: the host wouldn't read it.
+fn resolve(
+    root: &str,
+    word: &str,
+    home: Option<&str>,
+    index: Option<&Index>,
+    kind: impl Fn(&Path) -> Option<bool>,
+) -> Option<Target> {
+    let word = without_position(word.trim());
+    if root.is_empty() || word.is_empty() || word.chars().any(char::is_whitespace) {
+        return None;
+    }
+    let root = Path::new(root);
+    let home_relative = word.strip_prefix("~/");
+    let elsewhere = word.starts_with('/') || home_relative.is_some();
+    let written = match home_relative {
+        Some(rest) => PathBuf::from(home?).join(rest),
+        None => root.join(word),
+    };
+    let written = tidy(&written);
+    if written.starts_with(root)
+        && let Some(folder) = kind(&written)
+    {
+        return Some(Target {
+            path: written.to_string_lossy().into_owned(),
+            folder,
+        });
+    }
+    if elsewhere {
+        return None;
+    }
+    let tail = word.trim_start_matches("./").trim_start_matches("../");
+    let (found, folder) = index?.lookup(tail)?;
+    Some(Target {
+        path: root.join(found).to_string_lossy().into_owned(),
+        folder,
+    })
+}
+
+struct Known {
+    index: Option<Rc<Index>>,
+    asked: Instant,
+}
+
+thread_local! {
+    static KNOWN: RefCell<HashMap<String, Known>> = RefCell::new(HashMap::new());
+    static LOCAL: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+/// A window on another computer: its folders aren't on this disk, so no chip opens.
+pub fn set_local(local: bool) {
+    LOCAL.set(local);
+}
+
+/// What a chip's `word` opens for a conversation in `root`, on this Mac.
+pub fn target(root: &str, word: &str) -> Option<Target> {
+    if !LOCAL.get() {
+        return None;
+    }
+    let index = KNOWN.with_borrow(|known| known.get(root).and_then(|k| k.index.clone()));
+    let home = std::env::var("HOME").ok();
+    resolve(root, word, home.as_deref(), index.as_deref(), |path| {
+        std::fs::metadata(path).ok().map(|meta| meta.is_dir())
+    })
+}
+
+/// True when `root`'s file list should be read again; it counts as asked from here on.
+pub fn due(root: &str, now: Instant) -> bool {
+    KNOWN.with_borrow_mut(|known| match known.get_mut(root) {
+        Some(entry) if now.duration_since(entry.asked) < STALE => false,
+        Some(entry) => {
+            entry.asked = now;
+            true
+        }
+        None => {
+            known.insert(
+                root.to_owned(),
+                Known {
+                    index: None,
+                    asked: now,
+                },
+            );
+            true
+        }
+    })
+}
+
+/// Keeps a folder's new file list. True when it changed, so the chips are drawn again.
+pub fn store(root: &str, index: Index) -> bool {
+    KNOWN.with_borrow_mut(|known| {
+        let Some(entry) = known.get_mut(root) else {
+            return false;
+        };
+        if entry.index.as_deref() == Some(&index) {
+            return false;
+        }
+        entry.index = Some(Rc::new(index));
+        true
+    })
+}
+
+/// A click that didn't travel: dragging across a chip selects its text instead of opening it.
+pub fn plain_click(event: &gpui::ClickEvent) -> bool {
+    match event {
+        gpui::ClickEvent::Mouse(click) => {
+            let moved = click.up.position - click.down.position;
+            f32::from(moved.x).abs() < 4. && f32::from(moved.y).abs() < 4.
+        }
+        _ => true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn found(word: &str, index: &Index) -> Option<Target> {
+        resolve(
+            "/work/app",
+            word,
+            Some("/Users/me"),
+            Some(index),
+            |path| match path.to_str() {
+                Some("/work/app/.env.example") => Some(false),
+                Some("/work/app/src") | Some("/work/app") => Some(true),
+                _ => None,
+            },
+        )
+    }
+
+    fn file(path: &str) -> Option<Target> {
+        Some(Target {
+            path: path.to_owned(),
+            folder: false,
+        })
+    }
+
+    fn folder(path: &str) -> Option<Target> {
+        Some(Target {
+            path: path.to_owned(),
+            folder: true,
+        })
+    }
+
+    #[test]
+    fn a_path_is_checked_on_disk_and_stays_inside_the_folder() {
+        let index = Index::default();
+        assert_eq!(
+            found(".env.example", &index),
+            file("/work/app/.env.example")
+        );
+        assert_eq!(
+            found("./.env.example:12:4", &index),
+            file("/work/app/.env.example")
+        );
+        assert_eq!(found("/work/app/src", &index), folder("/work/app/src"));
+        assert_eq!(found("/work/app", &index), folder("/work/app"));
+        assert_eq!(found("/work/other/.env.example", &index), None);
+        assert_eq!(found("../../etc/hosts", &index), None);
+        assert_eq!(found("~/notes.md", &index), None);
+        assert_eq!(found("self.dock", &index), None);
+        assert_eq!(found("not a path.rs", &index), None);
+    }
+
+    #[test]
+    fn a_bare_name_is_looked_up_shallowest_first() {
+        let index = Index::build(vec![
+            "web/deep/src/mod.rs".into(),
+            "core/mod.rs".into(),
+            "web/HandsPraying.es.js".into(),
+        ]);
+        assert_eq!(found("mod.rs", &index), file("/work/app/core/mod.rs"));
+        assert_eq!(
+            found("src/mod.rs", &index),
+            file("/work/app/web/deep/src/mod.rs")
+        );
+        assert_eq!(
+            found("HandsPraying.es.js", &index),
+            file("/work/app/web/HandsPraying.es.js")
+        );
+        // Whole components only.
+        assert_eq!(found("Praying.es.js", &index), None);
+        assert_eq!(found("deep", &index), folder("/work/app/web/deep"));
+        assert_eq!(found("web/deep/", &index), folder("/work/app/web/deep"));
+    }
+}

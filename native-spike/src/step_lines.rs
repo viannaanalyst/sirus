@@ -100,10 +100,10 @@ pub fn command_label(command: &str) -> String {
     }
 }
 
-/// The files and folders a command line names, as (last component, is a folder), at most `max`,
-/// in order and without repeats. A word counts when it holds a `/` or starts with `~` or `.`.
-pub fn command_paths(command: &str, max: usize) -> Vec<(String, bool)> {
-    let mut found: Vec<(String, bool)> = Vec::new();
+/// The files and folders a command line names, as (last component, is a folder, the word as
+/// written), at most `max`, in order and without repeats. A word counts when it holds a `/` or starts with `~` or `.`.
+pub fn command_paths(command: &str, max: usize) -> Vec<(String, bool, String)> {
+    let mut found: Vec<(String, bool, String)> = Vec::new();
     for word in command.split_whitespace().skip(1) {
         let word = word.trim_matches(|c| matches!(c, '\'' | '"' | ';' | '|' | '&' | '(' | ')'));
         if word.starts_with('-') || word.contains(['=', '*', '$']) || word.len() < 2 {
@@ -119,8 +119,8 @@ pub fn command_paths(command: &str, max: usize) -> Vec<(String, bool)> {
         let folder = word.ends_with('/')
             || !name.contains('.')
             || name.starts_with('.') && !name[1..].contains('.');
-        if !found.iter().any(|(n, _)| *n == name) {
-            found.push((name, folder));
+        if !found.iter().any(|(n, _, _)| *n == name) {
+            found.push((name, folder, word.to_owned()));
         }
         if found.len() >= max {
             break;
@@ -162,8 +162,12 @@ mod tests {
         assert_eq!(
             found,
             vec![
-                ("account_move.rs".to_owned(), false),
-                ("docs".to_owned(), true)
+                (
+                    "account_move.rs".to_owned(),
+                    false,
+                    "~/Projetos/sirus-code/src-tauri/src/account_move.rs".to_owned()
+                ),
+                ("docs".to_owned(), true, "./docs/".to_owned())
             ]
         );
         assert!(command_paths("echo hi && ls", 2).is_empty());

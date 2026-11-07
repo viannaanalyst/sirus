@@ -384,6 +384,8 @@ pub enum Act {
     Html { source: String },
     /// An HTML file the reply links to; the host reads it.
     HtmlFile { session: String, link: String },
+    /// A file or folder named in the reply, for the Files pane.
+    OpenPath(crate::file_chips::Target),
 }
 
 // ---- The page of a preview ---------------------------------------------------------------

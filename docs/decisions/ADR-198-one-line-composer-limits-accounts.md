@@ -73,5 +73,9 @@ A conversation stays on the account that started it, so one on the default accou
 - **Connector sign-in.** The host opens the sign-in page in the default browser on the Mac; it had kept the phone's refusal since the Tauri window left. Result cards draw over Settings and Usage, whose pages hid them.
 - **The robot over the composer.** It walks on top of the whole stack, so a queued instruction or a card sits under it.
 - **Renaming a row.** The text starts at the left and only an overflow keeps its end in view. ⌘A selects the name, which the next key replaces, and ⌘C, ⌘X and ⌘V work in the field.
+- **Panels per project.** Each project keeps its own side panel and bottom terminal (open, panes, maximized); a project not yet opened in this session starts with them closed. The width stays shared.
+- **Chips open files.** A file or folder chip in a reply or a step opens in the Files pane when it names something real inside the conversation's folder; anything else stays plain (`file_chips.rs`). A bare name goes to the shallowest match in the folder's file list.
+- **Menu switches and the agents pill.** The sidebar menu's switches are Settings' switch in the accent color; the agents pill has a session tab's corners. The Environment popup's rows slide open and shut.
+- **Phone camera pin.** `expo-camera` stays at 58.0.12: 58.0.13 and 58.0.14 ship a prebuilt framework that needs a newer `ExpoModulesCore` and crash at launch.
 - **Turn actions.** The `⋯` menu is gone. A reply's row reads Copy, Handoff, Side chat, Fork, with Undo after them. Try again left it: it now sits under the sent message, only on the last turn and only after a failure.
 - **Edge fades.** The transcript's fades are now an alpha mask around the list. The gradients drawn in the conversation's color showed as dark bands once the conversation became translucent black.

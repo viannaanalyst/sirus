@@ -144,6 +144,7 @@ impl Shell {
         self.conversations.clear();
         self.tabs.clear();
         self.parked.clear();
+        self.dock_places.clear();
         self.rows.clear();
         self.lists.clear();
         self.glides.clear();
@@ -288,6 +289,7 @@ impl Shell {
             .or_else(|| self.project_of(tabs[0].0));
         self.tabs.clear();
         self.parked.clear();
+        self.dock_places.clear();
         self.current_project = project;
         for (ix, pinned) in &tabs {
             let owner = self.project_of(*ix);

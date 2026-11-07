@@ -32,7 +32,7 @@ pub(super) struct TermState {
     active: Option<u64>,
     /// The tab each project action last ran in, in the title bar's placement.
     action_tabs: HashMap<String, u64>,
-    bottom_open: bool,
+    pub(super) bottom_open: bool,
     /// The plus button's menu in the title strip: left edge and fade-in.
     plus_menu: Option<(f32, Tween)>,
     /// The right-click menu of a terminal tab: which tab, where, and its fade-in.

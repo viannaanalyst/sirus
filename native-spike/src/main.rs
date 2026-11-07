@@ -26,6 +26,7 @@ mod connector_marks;
 mod data;
 mod disclosure;
 mod effort_energy;
+mod file_chips;
 mod file_editor;
 mod file_icons;
 mod folder_icon_data;

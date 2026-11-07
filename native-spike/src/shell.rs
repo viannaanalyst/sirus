@@ -618,6 +618,8 @@ const SCOPES: [(&str, &str); 4] = [
     ("Arquivos", "file-text"),
     ("Projetos", "folder"),
 ];
+/// Where the sidebar menu's switches start among the ids of `switch_track`, past Settings' own.
+const SIDEBAR_SWITCHES: usize = 900_000;
 /// How many rows a filter lists of one kind.
 const PALETTE_ROWS_FULL: usize = 40;
 
@@ -1091,6 +1093,8 @@ pub struct Shell {
     agent_versions: HashMap<&'static str, String>,
     /// Which row of Ambiente is open.
     env_open: Option<&'static str>,
+    /// How far each row of the Environment popup has slid open.
+    env_folds: std::cell::RefCell<HashMap<&'static str, Tween>>,
     env_branches: Vec<String>,
     /// The name typed under "Criar branch…", when that row is open.
     branch_draft: Option<String>,
@@ -1272,6 +1276,8 @@ pub struct Shell {
     dock_max: Tween,
     dock_panes: Vec<usize>,
     dock_active: Option<usize>,
+    /// The panels of the projects not on screen.
+    dock_places: HashMap<usize, DockPlace>,
     chooser_since: Instant,
     look: Look,
     /// The send button's morph (send_morph.rs) and whether it wants another frame.
@@ -1495,6 +1501,7 @@ impl Shell {
             native_tx,
             agent_versions: HashMap::new(),
             env_open: None,
+            env_folds: Default::default(),
             env_branches: Vec::new(),
             branch_draft: None,
             branch_error: None,
@@ -1620,6 +1627,7 @@ impl Shell {
             dock_max: Tween::still(0., now),
             dock_panes: Vec::new(),
             dock_active: None,
+            dock_places: HashMap::new(),
             chooser_since: now,
             look: load_look(),
             send_morph: Default::default(),
@@ -2205,6 +2213,7 @@ impl Shell {
         recent.sort_by(|a, b| activity[*b].cmp(&activity[*a]));
         recent.truncate(4);
         self.parked.clear();
+        self.dock_places.clear();
         self.current_project = recent.first().and_then(|ix| self.project_of(*ix));
         for ix in &recent {
             let project = self.project_of(*ix);
@@ -2843,6 +2852,9 @@ impl Shell {
             let kept: Vec<Tab> = leaving.into_iter().filter(|t| !t.closing).collect();
             self.parked.insert(old, (kept, self.active));
         }
+        let shown = self.dock_place();
+        let place = swap_dock_place(&mut self.dock_places, self.current_project, shown, project);
+        self.show_dock_place(place, now);
         self.current_project = project;
         if let Some(project) = project {
             self.project_recent.retain(|p| *p != project);
@@ -2869,6 +2881,30 @@ impl Shell {
             {
                 self.ensure_loaded(ix);
             }
+        }
+    }
+
+    /// The side panel and bottom terminal as they are on screen.
+    fn dock_place(&self) -> DockPlace {
+        DockPlace {
+            open: self.dock_open,
+            filling: self.dock_max.to > 0.5,
+            panes: self.dock_panes.clone(),
+            active: self.dock_active,
+            bottom: self.term.bottom_open,
+        }
+    }
+
+    /// Puts a project's panels back at once, as the rest of its window comes back.
+    fn show_dock_place(&mut self, place: DockPlace, now: Instant) {
+        self.dock_open = place.open;
+        self.dock = Tween::still(if place.open { 1. } else { 0. }, now);
+        self.dock_max = Tween::still(if place.filling { 1. } else { 0. }, now);
+        self.dock_panes = place.panes;
+        self.dock_active = place.active;
+        self.term.bottom_open = place.bottom;
+        if place.open && place.active.is_none() {
+            self.chooser_since = now;
         }
     }
 
@@ -8596,6 +8632,7 @@ impl Shell {
                 None => self.current_project = None,
             }
         }
+        self.dock_places.remove(&ix);
         for conversation in std::mem::take(&mut self.projects[ix].conversations) {
             self.leave_conversation(conversation, cx);
         }
@@ -9828,24 +9865,14 @@ impl Shell {
                     .cursor_pointer()
                     .child(icon(item.icon, 14.).text_color(content(0.65)))
                     .child(div().flex_1().min_w_0().truncate().child(t(item.label)))
-                    // The menu switch: neutral, never the accent.
                     .child(
                         div()
-                            .relative()
-                            .w(px(36.))
-                            .h(px(20.))
                             .flex_shrink_0()
-                            .rounded_full()
-                            .bg(content(if on { 0.35 } else { 0.15 }))
-                            .child(
-                                div()
-                                    .absolute()
-                                    .top(px(2.))
-                                    .left(px(if on { 18. } else { 2. }))
-                                    .size(px(16.))
-                                    .rounded_full()
-                                    .bg(content(1.)),
-                            ),
+                            .child(crate::settings_pages::switch_track(
+                                SIDEBAR_SWITCHES + at,
+                                on,
+                                true,
+                            )),
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.sidebar_items.toggle(id);
@@ -12694,6 +12721,7 @@ impl Shell {
                     .into_any_element()
             }
         };
+        let root = self.conversations[conversation].worktree.clone();
         let rows = steps.iter().enumerate().map(|(i, step)| {
             let inner: AnyElement = match &step.image {
                 Some(path) => self
@@ -12711,7 +12739,8 @@ impl Shell {
                         .child(shimmer(text, clock))
                         .into_any_element()
                 }
-                None => step_row(step).into_any_element(),
+                None => step_row(step, &root, format!("step-chip-{index}-{}", start + i), cx)
+                    .into_any_element(),
             };
             div()
                 .relative()
@@ -13438,6 +13467,53 @@ impl Shell {
             crate::panel_files::show_file(view, path, cx);
         }
         cx.notify();
+    }
+
+    /// Opens a file or folder named in a chip: the Files pane comes up showing it.
+    pub(crate) fn open_chip(&mut self, target: crate::file_chips::Target, cx: &mut Context<Self>) {
+        self.open_pane(1, cx);
+        let session = self.conversations[self.active_conversation()]
+            .session_id
+            .clone();
+        if let Some(view) = self.pane_views.get(&(1, session)) {
+            if target.folder {
+                crate::panel_files::show_folder(view, target.path, cx);
+            } else {
+                crate::panel_files::show_file(view, target.path, cx);
+            }
+        }
+        cx.notify();
+    }
+
+    /// Reads again, in the background, the file list of the folders of the open tabs.
+    fn refresh_chip_files(&mut self, now: Instant, cx: &mut Context<Self>) {
+        let local = !self.on_remote();
+        crate::file_chips::set_local(local);
+        if !local {
+            return;
+        }
+        for tab in &self.tabs {
+            let Some(conversation) = self.conversations.get(tab.conversation) else {
+                continue;
+            };
+            let root = conversation.worktree.clone();
+            if root.is_empty() || !crate::file_chips::due(&root, now) {
+                continue;
+            }
+            let rx = crate::project_files::run_blocking({
+                let root = root.clone();
+                move || crate::file_chips::Index::build(crate::project_files::list(&root))
+            });
+            cx.spawn(async move |this, cx| {
+                let Ok(index) = rx.recv().await else {
+                    return;
+                };
+                if crate::file_chips::store(&root, index) {
+                    let _ = this.update(cx, |_, cx| cx.notify());
+                }
+            })
+            .detach();
+        }
     }
 
     fn open_pane(&mut self, kind: usize, cx: &mut Context<Self>) {
@@ -14293,8 +14369,8 @@ impl Shell {
                     cx.notify();
                 }))
         };
-        let sub = |children: Vec<AnyElement>| {
-            div()
+        let sub = |fold: f32, children: Vec<AnyElement>| {
+            let body = div()
                 .mx(px(2.))
                 .mb(px(3.))
                 .p(px(3.))
@@ -14302,7 +14378,36 @@ impl Shell {
                 .bg(content(0.03))
                 .flex()
                 .flex_col()
-                .children(children)
+                .children(children);
+            if fold >= 0.999 {
+                body
+            } else {
+                // What the card has inside its padding and border.
+                div()
+                    .w_full()
+                    .overflow_hidden()
+                    .opacity(fold)
+                    .child(crate::disclosure::Disclosure::new(body, px(238.), fold))
+            }
+        };
+        // A row slides open and shut however `env_open` changed.
+        let glide = if cx.reduce_motion() {
+            0.
+        } else {
+            crate::disclosure::REVEAL
+        };
+        let fold_of = |row: &'static str, moving: &mut bool| {
+            let mut folds = self.env_folds.borrow_mut();
+            let fold = folds.entry(row).or_insert(Tween::still(0., now));
+            let to = if self.env_open == Some(row) { 1. } else { 0. };
+            if fold.to != to {
+                fold.set(to, now, glide, Curve::Expo);
+            }
+            if !fold.done(now) {
+                *moving = true;
+            }
+            let shown = fold.at(now).clamp(0., 1.);
+            (shown > 0.001).then_some(shown)
         };
         let small = |id: &'static str, label: &'static str, main: bool| {
             div()
@@ -14320,7 +14425,6 @@ impl Shell {
                 .hover(|s| s.opacity(0.88))
                 .child(label)
         };
-        let open_row = self.env_open;
         let mut rows: Vec<AnyElement> = vec![
             div()
                 .h(px(22.))
@@ -14359,7 +14463,7 @@ impl Shell {
             )
             .into_any_element(),
         ];
-        if open_row == Some("branch") {
+        if let Some(fold) = fold_of("branch", moving) {
             let current = conversation.branch.clone();
             let project_id = self
                 .project_of(ix)
@@ -14451,7 +14555,7 @@ impl Shell {
                     cx.listener(|this, _, _, cx| this.submit_branch(cx)),
                 ));
             }
-            rows.push(sub(list).into_any_element());
+            rows.push(sub(fold, list).into_any_element());
         }
         rows.push(
             expand(
@@ -14463,56 +14567,59 @@ impl Shell {
             )
             .into_any_element(),
         );
-        if open_row == Some("commit") {
+        if let Some(fold) = fold_of("commit", moving) {
             let session_push = session.clone();
             let message = self.commit_message.clone().unwrap_or_default();
             rows.push(
-                sub(vec![
-                    div()
-                        .h(px(24.))
-                        .mb(px(3.))
-                        .px(px(6.))
-                        .rounded(px(crate::theme::RADIUS_SM))
-                        .border_1()
-                        .border_color(content(0.12))
-                        .flex()
-                        .items_center()
-                        .gap(px(1.))
-                        .text_size(px(12.))
-                        .when(message.is_empty(), |d| {
-                            d.child(div().w(px(1.5)).h(px(13.)).bg(accent())).child(
-                                div()
-                                    .text_color(content(0.4))
-                                    .child(t("Mensagem do commit")),
+                sub(
+                    fold,
+                    vec![
+                        div()
+                            .h(px(24.))
+                            .mb(px(3.))
+                            .px(px(6.))
+                            .rounded(px(crate::theme::RADIUS_SM))
+                            .border_1()
+                            .border_color(content(0.12))
+                            .flex()
+                            .items_center()
+                            .gap(px(1.))
+                            .text_size(px(12.))
+                            .when(message.is_empty(), |d| {
+                                d.child(div().w(px(1.5)).h(px(13.)).bg(accent())).child(
+                                    div()
+                                        .text_color(content(0.4))
+                                        .child(t("Mensagem do commit")),
+                                )
+                            })
+                            .when(!message.is_empty(), |d| {
+                                d.child(
+                                    div()
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_color(content(0.95))
+                                        .child(message.clone()),
+                                )
+                                .child(div().w(px(1.5)).h(px(13.)).bg(accent()))
+                            })
+                            .into_any_element(),
+                        div()
+                            .flex()
+                            .gap(px(3.))
+                            .child(
+                                small("env-commit", "Commit", true)
+                                    .on_click(cx.listener(|this, _, _, cx| this.commit_now(cx))),
                             )
-                        })
-                        .when(!message.is_empty(), |d| {
-                            d.child(
-                                div()
-                                    .min_w_0()
-                                    .truncate()
-                                    .text_color(content(0.95))
-                                    .child(message.clone()),
-                            )
-                            .child(div().w(px(1.5)).h(px(13.)).bg(accent()))
-                        })
-                        .into_any_element(),
-                    div()
-                        .flex()
-                        .gap(px(3.))
-                        .child(
-                            small("env-commit", "Commit", true)
-                                .on_click(cx.listener(|this, _, _, cx| this.commit_now(cx))),
-                        )
-                        .child(small("env-push", "Push", false).on_click(cx.listener(
-                            move |this, _, _, cx| {
-                                this.backend
-                                    .invoke("git_push", json!({ "sessionId": session_push }));
-                                cx.notify();
-                            },
-                        )))
-                        .into_any_element(),
-                ])
+                            .child(small("env-push", "Push", false).on_click(cx.listener(
+                                move |this, _, _, cx| {
+                                    this.backend
+                                        .invoke("git_push", json!({ "sessionId": session_push }));
+                                    cx.notify();
+                                },
+                            )))
+                            .into_any_element(),
+                    ],
+                )
                 .into_any_element(),
             );
         }
@@ -14530,7 +14637,7 @@ impl Shell {
             )
             .into_any_element(),
         );
-        if open_row == Some("servers") {
+        if let Some(fold) = fold_of("servers", moving) {
             let list: Vec<AnyElement> = if self.env_servers.is_empty() {
                 vec![
                     div()
@@ -14559,7 +14666,7 @@ impl Shell {
                         .into_any_element()
                 }).collect()
             };
-            rows.push(sub(list).into_any_element());
+            rows.push(sub(fold, list).into_any_element());
         }
         rows.push(
             div()
@@ -14572,7 +14679,7 @@ impl Shell {
         rows.push(
             expand("repo", "folder", &self.active_project(), String::new(), cx).into_any_element(),
         );
-        if open_row == Some("repo") {
+        if let Some(fold) = fold_of("repo", moving) {
             let mut list: Vec<AnyElement> = self.env_editors.iter().enumerate().map(|(i, (id, name))| {
                 let (editor, editor_session) = (id.clone(), session.clone());
                 div().id(("env-editor", i)).h(px(26.)).px(px(6.)).rounded(px(crate::theme::RADIUS_SM)).flex().items_center().gap(px(7.)).text_size(px(12.)).text_color(content(0.8)).cursor_pointer().hover(|s| s.bg(content(0.07)))
@@ -14611,7 +14718,7 @@ impl Shell {
                     .child(t("Copiar caminho"))
                     .into_any_element(),
             );
-            rows.push(sub(list).into_any_element());
+            rows.push(sub(fold, list).into_any_element());
         }
         Some(
             div()
@@ -16251,6 +16358,31 @@ fn dock_fit(width: f32, room: f32) -> f32 {
     width.min((room - CONVERSATION_MIN).max(DOCK_FLOOR))
 }
 
+/// One project's side panel and bottom terminal. A project never opened here has them closed.
+#[derive(Clone, Default, PartialEq, Debug)]
+struct DockPlace {
+    open: bool,
+    filling: bool,
+    panes: Vec<usize>,
+    active: Option<usize>,
+    bottom: bool,
+}
+
+/// Keeps what the project being left had showing and hands back what the next one had.
+fn swap_dock_place(
+    places: &mut HashMap<usize, DockPlace>,
+    leaving: Option<usize>,
+    shown: DockPlace,
+    entering: Option<usize>,
+) -> DockPlace {
+    if let Some(leaving) = leaving {
+        places.insert(leaving, shown);
+    }
+    entering
+        .and_then(|project| places.remove(&project))
+        .unwrap_or_default()
+}
+
 /// A key that acts only when pressed twice, so a stray press does nothing.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Press {
@@ -16451,6 +16583,28 @@ fn target_chip(target: String) -> Div {
         .child(target)
 }
 
+/// A chip naming something the Files pane can show opens it, without starting a selection.
+fn chip_opens(
+    chip: Div,
+    id: String,
+    target: Option<crate::file_chips::Target>,
+    cx: &mut Context<Shell>,
+) -> AnyElement {
+    match target {
+        None => chip.into_any_element(),
+        Some(target) => chip
+            .id(SharedString::from(id))
+            .cursor_pointer()
+            .hover(|s| s.bg(content(0.12)).text_color(content(0.9)))
+            .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+                if crate::file_chips::plain_click(event) {
+                    this.open_chip(target.clone(), cx);
+                }
+            }))
+            .into_any_element(),
+    }
+}
+
 /// A command's path chip: the file or folder icon and its name.
 fn path_chip(name: String, folder: bool) -> Div {
     div()
@@ -16471,7 +16625,7 @@ fn path_chip(name: String, folder: bool) -> Div {
 
 /// A finished row of the opened tree: a quiet icon, the verb and what it acted on. A command
 /// reads as what the model said it was for, with its program and the files it names as chips.
-fn step_row(step: &data::Step) -> Div {
+fn step_row(step: &data::Step, root: &str, id: String, cx: &mut Context<Shell>) -> Div {
     if step.kind == "command" {
         let program = crate::step_lines::command_label(&step.detail);
         let title = if step.caption.is_empty() {
@@ -16499,10 +16653,27 @@ fn step_row(step: &data::Step) -> Div {
             .children(
                 crate::step_lines::command_paths(&step.detail, 2)
                     .into_iter()
-                    .map(|(name, folder)| path_chip(name, folder)),
+                    .enumerate()
+                    .map(|(at, (name, folder, word))| {
+                        let target = crate::file_chips::target(root, &word);
+                        // The disk knows better than the name whether this is a folder.
+                        let folder = target.as_ref().map_or(folder, |t| t.folder);
+                        chip_opens(path_chip(name, folder), format!("{id}-{at}"), target, cx)
+                    })
+                    .collect::<Vec<_>>(),
             );
     }
     let line = step_line(step);
+    // A read or an edit keeps the whole path in its detail; the row shows the last part.
+    let opens = matches!(step.kind.as_str(), "read" | "edit")
+        .then(|| {
+            crate::file_chips::target(root, &step.detail).or_else(|| {
+                line.target
+                    .as_deref()
+                    .and_then(|target| crate::file_chips::target(root, target))
+            })
+        })
+        .flatten();
     div()
         .flex()
         .flex_1()
@@ -16513,7 +16684,9 @@ fn step_row(step: &data::Step) -> Div {
         .when(!line.verb.is_empty(), |d| {
             d.child(div().flex_shrink_0().child(crate::i18n::t(line.verb)))
         })
-        .when_some(line.target, |d, target| d.child(target_chip(target)))
+        .when_some(line.target, |d, shown| {
+            d.child(chip_opens(target_chip(shown), id, opens, cx))
+        })
 }
 
 fn step_glyph(step: &data::Step) -> &'static str {
@@ -16834,6 +17007,7 @@ impl Render for Shell {
         {
             self.ensure_pane_view(kind, cx);
         }
+        self.refresh_chip_files(now, cx);
         let mut moving = !self.palette_t.done(now);
         self.system_dark = matches!(
             window.appearance(),
@@ -17485,6 +17659,57 @@ mod composer_follow_tests {
         }
         // 13 lines of 22 px in a 100 px window: the last line stays in view.
         assert_eq!(*offsets.last().unwrap(), px(-(13. * 22. - 100.)));
+    }
+}
+
+#[cfg(test)]
+mod dock_place_tests {
+    use super::*;
+
+    fn browser() -> DockPlace {
+        DockPlace {
+            open: true,
+            filling: true,
+            panes: vec![3],
+            active: Some(3),
+            bottom: false,
+        }
+    }
+
+    #[test]
+    fn each_project_keeps_its_own_panels() {
+        let mut places = HashMap::new();
+        // Leaving the first project with its browser open: the second one has nothing open.
+        let second = swap_dock_place(&mut places, Some(0), browser(), Some(1));
+        assert_eq!(second, DockPlace::default());
+        // The second project opens a bottom terminal, and the first comes back as it was.
+        let terminal = DockPlace {
+            bottom: true,
+            ..DockPlace::default()
+        };
+        assert_eq!(
+            swap_dock_place(&mut places, Some(1), terminal.clone(), Some(0)),
+            browser()
+        );
+        assert_eq!(
+            swap_dock_place(&mut places, Some(0), browser(), Some(1)),
+            terminal
+        );
+    }
+
+    #[test]
+    fn a_window_outside_any_project_keeps_nothing() {
+        let mut places = HashMap::new();
+        assert_eq!(
+            swap_dock_place(&mut places, None, browser(), Some(1)),
+            DockPlace::default()
+        );
+        assert!(places.is_empty());
+        assert_eq!(
+            swap_dock_place(&mut places, Some(1), browser(), None),
+            DockPlace::default()
+        );
+        assert_eq!(places.get(&1), Some(&browser()));
     }
 }
 

@@ -180,7 +180,10 @@ fn parsed(text: &str) -> Vec<Block> {
 }
 
 pub fn render(text: &str) -> AnyElement {
-    draw(parsed(text), None)
+    let outer = RICH.take();
+    let drawn = draw(parsed(text), None);
+    RICH.set(outer);
+    drawn
 }
 
 /// A reply with its rich pieces: linked images and videos, diagrams, formulas and HTML previews.
@@ -190,7 +193,10 @@ pub fn render_rich(text: &str, rich: &Rich) -> AnyElement {
     if rich.streaming && rich::ends_in_open_fence(text) {
         demote_last(&mut blocks);
     }
-    draw(blocks, Some(rich))
+    let outer = RICH.replace(Some(rich.clone()));
+    let drawn = draw(blocks, Some(rich));
+    RICH.set(outer);
+    drawn
 }
 
 /// The last block, if it is a diagram or an HTML page, back to the code the reply is writing.
@@ -545,6 +551,8 @@ fn search_fill(flags: u8) -> Option<gpui::Hsla> {
 
 thread_local! {
     static FIND: std::cell::RefCell<Option<(String, bool)>> = const { std::cell::RefCell::new(None) };
+    /// The reply being drawn, for the file chips in its text.
+    static RICH: std::cell::RefCell<Option<Rich>> = const { std::cell::RefCell::new(None) };
 }
 
 /// What ⌘F marks in the text drawn next: the query, and whether this is the current turn.
@@ -715,7 +723,15 @@ fn flowing(inl: Inline) -> AnyElement {
                         .child(piece)
                         .into_any_element();
                 }
+                let opens = is_file_chip(&shared)
+                    .then(|| RICH.with_borrow(Clone::clone))
+                    .flatten()
+                    .and_then(|rich| {
+                        let target = crate::file_chips::target(&rich.cwd, &shared)?;
+                        Some((rich.act, target))
+                    });
                 div()
+                    .relative()
                     .flex()
                     .flex_shrink_0()
                     .max_w_full()
@@ -733,6 +749,25 @@ fn flowing(inl: Inline) -> AnyElement {
                         d.child(crate::file_icons::file_icon(&shared, false, 14.))
                     })
                     .child(piece)
+                    // Over the text, whose wrapper keeps the I-beam, and under no one's press: a
+                    // drag from here still selects.
+                    .when_some(opens, |d, (act, target)| {
+                        let act_on = rich::Act::OpenPath(target);
+                        d.child(
+                            div()
+                                .id(SharedString::from(format!("file-chip-{at}-{shared}")))
+                                .absolute()
+                                .inset_0()
+                                .rounded(px(6.))
+                                .cursor_pointer()
+                                .hover(|s| s.bg(content(0.06)))
+                                .on_click(move |event, window, cx| {
+                                    if crate::file_chips::plain_click(event) {
+                                        act(&act_on, window, cx);
+                                    }
+                                }),
+                        )
+                    })
                     .into_any_element()
             });
         div()

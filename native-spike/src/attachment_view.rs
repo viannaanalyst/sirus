@@ -1080,6 +1080,7 @@ impl Shell {
                 );
             }
             Act::Html { source } => self.open_preview(source, cx),
+            Act::OpenPath(target) => self.open_chip(target, cx),
             Act::HtmlFile { session, link } => {
                 let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
                 let path =

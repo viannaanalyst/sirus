@@ -14,7 +14,7 @@ cargo build --release
 open Sirus.app
 ```
 
-`/Applications/Sirus.app` replaces `/Applications/Sirus Native.app` (an in-app update does that swap itself). `bundle.sh` signs with the local identity "Sirus Code Local Signing", so macOS keeps "Always allow" between builds.
+`/Applications/Sirus.app` replaces `/Applications/Sirus Native.app` (an in-app update does that swap itself). `bundle.sh` signs with this Mac's Apple Development identity, so the Keychain ties its items to the team and no new build asks for the password; "Sirus Code Local Signing" remains the fallback, and with it every build asks again, because the Keychain then ties an item to that build's exact hash.
 
 `bundle.sh` also copies `assets/reply-render` to `Contents/Resources/reply-render` (about 6 MB): the committed Mermaid and KaTeX files that the hidden page of `src/reply_render.rs` loads to draw diagrams and formulas, served by the host at `/assets/` (`--assets-dir`). Nothing is built at bundle time; `assets/reply-render/build/build.sh` updates them, and a test checks that every file they reach is there. Other devices reach this Mac only while Settings → Conexões allows it (port 7711, HTTPS on 8443).
 

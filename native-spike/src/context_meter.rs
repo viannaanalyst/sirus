@@ -539,8 +539,9 @@ impl Shell {
             && compact_before_send(conversation, now_ms())
     }
 
-    /// The chip beside send, in a heavy conversation idle past its cache: "Compactar" with the
-    /// tokens it holds; a click turns it to "Manter", which keeps the history for that message.
+    /// The chip beside send, in a heavy conversation idle past its cache: the other choice to
+    /// "Compactar e enviar". "Manter 735K" keeps the history for that message and then reads
+    /// "Mantendo 735K", whose click goes back to compacting.
     pub(super) fn compact_chip(&self, live: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
         let conversation = &self.conversations[self.active_conversation()];
         if live || conversation.team || !compact_before_send(conversation, now_ms()) {
@@ -575,11 +576,10 @@ impl Shell {
                     this.context.keep = if keeping { None } else { Some(session.clone()) };
                     cx.notify();
                 }))
-                .child(if keeping {
-                    t("Manter").to_owned()
-                } else {
-                    format!("{} {tokens}", t("Compactar"))
-                })
+                .child(format!(
+                    "{} {tokens}",
+                    t(if keeping { "Mantendo" } else { "Manter" })
+                ))
                 .into_any_element(),
         )
     }

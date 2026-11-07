@@ -1,7 +1,7 @@
 #!/bin/sh
 # Wraps the release binary, the Sirus host and the Mermaid and KaTeX files as "Sirus.app" (app id
 # com.siruscode.native, kept from "Sirus Native" so its data and macOS permissions stay), signed
-# with the local identity. The version is the one in Cargo.toml.
+# with the identity chosen below. The version is the one in Cargo.toml.
 # assets/reply-render holds the committed libraries the window's hidden page loads to draw
 # diagrams and formulas in replies (reply_render.rs); nothing is built here, no npm or dist/.
 set -e
@@ -40,7 +40,11 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <key>NSSpeechRecognitionUsageDescription</key><string>O Sirus transcreve o ditado no composer.</string>
 </dict></plist>
 PLIST
-# A stable identity, so macOS remembers "Always allow" for the Keychain across builds.
-codesign --force -s "Sirus Code Local Signing" "$APP/Contents/MacOS/sirus-host" 2>/dev/null || true
-codesign --force -s "Sirus Code Local Signing" "$APP" 2>/dev/null || codesign --force -s - "$APP" 2>/dev/null
+# The Apple Development identity when this Mac has one: the Keychain ties an item to its team, so
+# no later build asks for the password. A self-signed identity ties it to this build's exact hash,
+# and every new build asks again; it remains the fallback for a Mac without the certificate.
+IDENTITY="$(security find-identity -v -p codesigning | sed -n 's/.*"\(Apple Development:[^"]*\)".*/\1/p' | head -1)"
+IDENTITY="${IDENTITY:-Sirus Code Local Signing}"
+codesign --force -s "$IDENTITY" "$APP/Contents/MacOS/sirus-host" 2>/dev/null || true
+codesign --force -s "$IDENTITY" "$APP" 2>/dev/null || codesign --force -s - "$APP" 2>/dev/null
 echo "$PWD/$APP"

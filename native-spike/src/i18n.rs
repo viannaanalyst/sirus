@@ -50,6 +50,23 @@ pub fn t(portuguese: &'static str) -> &'static str {
     table().get(portuguese).copied().unwrap_or(portuguese)
 }
 
+/// A whole message from the host, which speaks English, in the app's language: its Portuguese when
+/// `ENTRIES` has that sentence, otherwise the message as it came.
+pub fn from_host(message: &str) -> String {
+    static REVERSE: OnceLock<HashMap<&'static str, &'static str>> = OnceLock::new();
+    if is_en() {
+        return message.to_owned();
+    }
+    let reverse = REVERSE.get_or_init(|| {
+        let mut reverse = HashMap::new();
+        for (portuguese, english) in ENTRIES {
+            reverse.entry(*english).or_insert(*portuguese);
+        }
+        reverse
+    });
+    reverse.get(message).copied().unwrap_or(message).to_owned()
+}
+
 /// A translated template with its values filled in. Each `{}` takes the next value; `{0}`, `{1}`
 /// take the one at that position, so English can reorder them.
 pub fn tf(template: &'static str, values: &[&dyn Display]) -> String {
@@ -132,12 +149,45 @@ const ENTRIES: &[(&str, &str)] = &[
         "60 fps is smoother and makes larger files. The page is captured as fast as it allows.",
     ),
     (
+        "A CLI do GitHub (gh) não está instalada.",
+        "GitHub CLI (gh) is not installed.",
+    ),
+    (
+        "A CLI do GitHub (gh) não está instalada. Instale-a e execute `gh auth login`.",
+        "GitHub CLI (gh) is not installed. Install it and run `gh auth login`.",
+    ),
+    (
+        "A CLI do GitHub não está conectada. Execute `gh auth login` em um terminal.",
+        "GitHub CLI is not signed in. Run `gh auth login` in a terminal.",
+    ),
+    (
+        "A CLI do GitHub não foi iniciada.",
+        "GitHub CLI did not start.",
+    ),
+    (
+        "A CLI do GitHub não forneceu um código de login. Tente novamente.",
+        "GitHub CLI did not give a sign-in code. Try again.",
+    ),
+    (
+        "A CLI do provedor não está instalada.",
+        "Provider CLI is not installed.",
+    ),
+    ("A URL não é permitida", "URL is not allowed"),
+    (
         "A busca atingiu seu limite. Algumas skills podem não aparecer.",
         "The search reached its limit. Some skills may not appear.",
     ),
     (
         "A cada 5 minutos, avança o checkout do projeto quando ele está no branch padrão do origin, sem mudanças locais e sem conversa rodando nele. Nunca faz merge, rebase nem mexe numa árvore com mudanças.",
         "Every 5 minutes, fast-forwards the project checkout when it is on origin's default branch with no local changes and no conversation running in it. It never merges, rebases or touches a tree with changes.",
+    ),
+    (
+        "A captura do anexo foi substituída.",
+        "Attachment snapshot was replaced.",
+    ),
+    (
+        "A compactação automática aceita um número de 100000 a 1000000, ou fica vazia.",
+        "Auto-compact takes a number from 100000 to 1000000, or stays empty.",
     ),
     (
         "A conexão com o computador caiu.",
@@ -147,10 +197,54 @@ const ENTRIES: &[(&str, &str)] = &[
         "A conexão com o motor caiu: {}",
         "The connection to the engine dropped: {}",
     ),
+    (
+        "A conta da CLI mudou; atualize o uso novamente.",
+        "CLI account changed; refresh usage again.",
+    ),
+    (
+        "A conta padrão não pode ser removida aqui.",
+        "The default account cannot be removed here.",
+    ),
+    (
+        "A conta padrão não pode ser renomeada aqui.",
+        "The default account cannot be renamed here.",
+    ),
+    (
+        "A conversa ainda está em andamento.",
+        "The conversation is still working.",
+    ),
     ("A conversa continua.", "The conversation continues."),
+    (
+        "A conversa está sendo compactada. Envie a mensagem quando terminar.",
+        "The conversation is being compacted. Send the message after it finishes.",
+    ),
+    (
+        "A conversa mudou enquanto era movida; tente de novo.",
+        "The conversation changed while it was moving; try again.",
+    ),
+    (
+        "A conversa principal deste chat lateral foi removida.",
+        "The main session of this side chat was removed.",
+    ),
+    (
+        "A conversa é grande demais para exportar.",
+        "The conversation is too large to export.",
+    ),
+    (
+        "A criação de espaço de trabalho não está disponível nesta plataforma.",
+        "Workspace creation is unavailable on this platform.",
+    ),
+    (
+        "A descrição é longa demais.",
+        "The description is too long.",
+    ),
     (
         "A fila aceita até 8 pedidos de 64 KiB cada. Confira também se a troca de modelo terminou.",
         "The queue holds up to 8 requests of 64 KiB each. Also check that any model change has finished.",
+    ),
+    (
+        "A fila de respostas nativas está indisponível",
+        "Native response queue is unavailable",
     ),
     (
         "A fila pausou após uma falha. Confira a conversa antes de continuar.",
@@ -168,7 +262,33 @@ const ENTRIES: &[(&str, &str)] = &[
         "A galeria é feita de componentes React da janela web; esta janela nativa não a renderiza.",
         "The gallery is made of React components from the web window; this native window does not render it.",
     ),
+    (
+        "A geração do processo nativo não existe mais",
+        "Native process generation no longer exists",
+    ),
+    ("A gravação é longa demais.", "The recording is too long."),
+    (
+        "A imagem deve ter no máximo 10 MiB.",
+        "The image must be at most 10 MiB.",
+    ),
+    (
+        "A imagem deve ter no máximo 30 MiB.",
+        "The image must be at most 30 MiB.",
+    ),
+    ("A imagem está vazia.", "The image is empty."),
+    (
+        "A imagem não está mais neste Mac.",
+        "The image is no longer on this Mac.",
+    ),
+    (
+        "A imagem é maior que 25 MB.",
+        "The image is larger than 25 MB.",
+    ),
     ("A instalação falhou: {}", "Install failed: {}"),
+    (
+        "A instrução e os arquivos são longos demais.",
+        "The instruction and its files are too long.",
+    ),
     (
         "A lista está incompleta: há mais arquivos do que o limite.",
         "The list is incomplete: there are more files than the limit.",
@@ -182,17 +302,130 @@ const ENTRIES: &[(&str, &str)] = &[
         "The merge uses \"{}\" and lands in {}. This changes the repository on GitHub.",
     ),
     (
+        "A operação do Git excedeu os limites de tempo ou de saída, ou não pôde ser executada. Atualize antes de tentar de novo.",
+        "Git operation exceeded its time/output limits or could not run. Refresh before retrying.",
+    ),
+    (
+        "A operação nativa não pôde ser concluída.",
+        "Native operation could not complete.",
+    ),
+    (
+        "A pasta desta conversa está ausente e não pode ser restaurada.",
+        "This session's folder is missing and cannot be restored.",
+    ),
+    (
+        "A pergunta exige uma resposta não vazia de no máximo 8 KiB",
+        "Question requires one non-empty answer of at most 8 KiB",
+    ),
+    (
+        "A permissão de reconhecimento de voz expirou.",
+        "Speech recognition permission timed out.",
+    ),
+    (
+        "A permissão de reconhecimento de voz foi negada. Ative-a em Ajustes do Sistema → Privacidade e Segurança → Reconhecimento de Voz.",
+        "Speech recognition permission was denied. Enable it in System Settings → Privacy & Security → Speech Recognition.",
+    ),
+    (
+        "A permissão do microfone expirou.",
+        "Microphone permission timed out.",
+    ),
+    (
+        "A permissão do microfone foi negada. Ative-a em Ajustes do Sistema → Privacidade e Segurança → Microfone.",
+        "Microphone permission was denied. Enable it in System Settings → Privacy & Security → Microphone.",
+    ),
+    (
         "A personalização do Dock não está disponível neste host.",
         "Dock customization is not available on this host.",
+    ),
+    (
+        "A preparação do Git mudou. Atualize antes de continuar.",
+        "Git preparation changed. Refresh before continuing.",
+    ),
+    (
+        "A página de login do serviço não é segura.",
+        "The service's sign-in page is not secure.",
+    ),
+    (
+        "A página de login não é um endereço https.",
+        "The sign-in page is not an https address.",
     ),
     ("A página diz", "The page says"),
     ("A página pede confirmação", "The page asks you to confirm"),
     ("A página pede um valor", "The page asks for a value"),
+    ("A raiz do Git está indisponível", "Git root is unavailable"),
+    (
+        "A responsabilidade pelo título do commit mudou",
+        "Commit title ownership changed",
+    ),
+    (
+        "A resposta do registro de provedores excede o limite seguro.",
+        "Provider registry response exceeds the safe limit.",
+    ),
+    (
+        "A resposta do registro de provedores não é um JSON válido.",
+        "Provider registry response is not valid JSON.",
+    ),
+    (
+        "A resposta nativa expirou; interrompa este turno antes de tentar de novo",
+        "Native response timed out; stop this turn before retrying",
+    ),
+    (
+        "A resposta não corresponde à solicitação nativa pendente",
+        "Response does not match the native pending request",
+    ),
+    (
+        "A resposta não é uma opção nativa oferecida",
+        "Answer is not a native offered option",
+    ),
+    (
+        "A resposta terminou antes de a mensagem entrar na fila.",
+        "The reply ended before the message was queued.",
+    ),
+    (
+        "A resposta terminou antes de interromper a tarefa.",
+        "The reply ended before stopping the task.",
+    ),
+    (
+        "A resposta terminou antes de mover o subagente.",
+        "The reply ended before moving the subagent.",
+    ),
+    (
+        "A resposta terminou antes de receber a instrução.",
+        "The reply ended before taking the instruction.",
+    ),
+    (
+        "A saída do login excedeu o limite seguro.",
+        "Sign-in output exceeded its safe limit.",
+    ),
     (
         "A senha é removida do Chaveiro. Isso não pode ser desfeito.",
         "The password is removed from the Keychain. This cannot be undone.",
     ),
+    (
+        "A solicitação de título de commit não pertence a esta conversa",
+        "Commit title request does not belong to this session",
+    ),
+    (
+        "A solicitação do Codex já foi respondida ou não está mais pendente",
+        "Codex request already answered or no longer pending",
+    ),
+    (
+        "A solicitação está desatualizada, não pertence a esta conversa ou já foi respondida",
+        "Request is stale, foreign or already answered",
+    ),
+    (
+        "A tarefa da equipe usa um modelo indisponível.",
+        "Team task uses a model that is unavailable.",
+    ),
+    (
+        "A tarefa da equipe usa um provedor indisponível.",
+        "Team task uses a provider that is unavailable.",
+    ),
     ("A tela não conectou: {}", "The screen did not connect: {}"),
+    (
+        "A thread do Codex não corresponde a esta conversa, projeto, espaço de trabalho ou modelo",
+        "Codex thread does not match this session, project, workspace or model",
+    ),
     (
         "A versão nova é baixada e instalada e espera você reiniciar. Se você não reiniciar, ela entra na próxima vez que abrir o app.",
         "A new version is downloaded and installed, then waits for you to restart. If you don't, it starts the next time you open the app.",
@@ -307,12 +540,36 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Aguardando o navegador…", "Waiting for the browser…"),
     ("Aguardando resposta", "Waiting for an answer"),
     (
+        "Aguarde a resposta terminar e envie /compact.",
+        "Wait for the reply to finish, then send /compact.",
+    ),
+    (
+        "Aguarde o agente terminar antes de desfazer alterações.",
+        "Wait for the agent to finish before undoing changes.",
+    ),
+    (
+        "Aguarde o agente terminar antes de executar um script do projeto.",
+        "Wait for the agent to finish before running a project script.",
+    ),
+    (
+        "Aguarde todas as tarefas terminarem antes de mesclar.",
+        "Wait until every task finishes before merging.",
+    ),
+    (
+        "Aguarde todas as tarefas terminarem antes de resolver.",
+        "Wait until every task finishes before resolving.",
+    ),
+    (
         "Ainda não há o que compactar: esta conversa não começou.",
         "There is nothing to compact yet: this conversation has not started.",
     ),
     (
         "Ajusta o espaçamento sem mudar o tamanho do texto.",
         "Adjusts spacing without changing the text size.",
+    ),
+    (
+        "Alertas de pull request inválidos.",
+        "Invalid pull request alerts.",
     ),
     ("Alguém", "Someone"),
     ("Alterar arquivos", "Change files"),
@@ -335,6 +592,13 @@ const ENTRIES: &[(&str, &str)] = &[
         "Product analytics, flags and errors",
     ),
     ("Anexar janela", "Attach window"),
+    ("Anexo de imagem inválido.", "Invalid image attachment."),
+    ("Anexo duplicado.", "Duplicate attachment."),
+    ("Anexo indisponível.", "Attachment is unavailable."),
+    (
+        "Anexo indisponível. Anexe-o novamente.",
+        "Attachment is unavailable. Attach it again.",
+    ),
     ("Animações da interface", "Interface animations"),
     ("Anotação anexada", "Annotation attached"),
     (
@@ -372,6 +636,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Aprovou", "Approved"),
     ("Areia", "Sand"),
     (
+        "Armazenamento da conta indisponível",
+        "Account storage unavailable",
+    ),
+    (
         "Arquivo binário: não dá para mostrar o conteúdo aqui.",
         "Binary file: its content cannot be shown here.",
     ),
@@ -394,6 +662,54 @@ const ENTRIES: &[(&str, &str)] = &[
         "Drag to pick your color.",
     ),
     (
+        "As alterações ainda contêm marcadores de conflito.",
+        "The changes still contain conflict markers.",
+    ),
+    (
+        "As alterações do agente auxiliar não puderam ser salvas, então o worktree dele foi mantido.",
+        "A helper's changes could not be saved, so its worktree was kept.",
+    ),
+    (
+        "As alterações do agente excedem o limite de mesclagem de 8 MiB.",
+        "The worker's changes exceed the 8 MiB merge limit.",
+    ),
+    (
+        "As alterações não se aplicam de forma limpa.",
+        "The changes do not apply cleanly.",
+    ),
+    (
+        "As alterações preparadas mudaram ou não são mais elegíveis para gerar o título do commit",
+        "Prepared changes changed or are no longer eligible for commit title generation",
+    ),
+    (
+        "As combinações de atalho devem ser únicas.",
+        "Shortcut combinations must be unique.",
+    ),
+    (
+        "As dimensões da imagem excedem o limite seguro.",
+        "Image dimensions exceed the safe limit.",
+    ),
+    (
+        "As gravações rodam a 30 ou 60 quadros por segundo.",
+        "Recordings run at 30 or 60 frames per second.",
+    ),
+    (
+        "As instruções devem ter de 1 a 65.536 bytes de texto.",
+        "Instructions must have 1 to 65,536 bytes of text.",
+    ),
+    (
+        "As leituras do GitHub foram pausadas após o limite de requisições",
+        "GitHub reads are paused after a rate limit",
+    ),
+    (
+        "As notas de atualização não são válidas.",
+        "Update notes are not valid.",
+    ),
+    (
+        "As notas excedem o limite de 16.384 caracteres",
+        "Notes exceed the 16,384 character limit",
+    ),
+    (
         "As opções desta página voltam ao padrão do app.",
         "This page's options go back to the app's defaults.",
     ),
@@ -401,11 +717,43 @@ const ENTRIES: &[(&str, &str)] = &[
         "As regras do repositório impedem a mesclagem.",
         "The repository rules block the merge.",
     ),
+    (
+        "As respostas devem ter de 1 a 65.536 bytes de texto.",
+        "Replies must have 1 to 65,536 bytes of text.",
+    ),
+    (
+        "As skills invocadas excedem o limite de 64 KiB por turno.",
+        "Invoked skills exceed the 64 KiB turn limit.",
+    ),
+    (
+        "As tarefas da equipe só podem ser editadas ou removidas.",
+        "Team tasks can only be edited or removed.",
+    ),
     ("Atalho", "Shortcut"),
     ("Atalho global de captura", "Global snap shortcut"),
     ("Atalhos", "Keybindings"),
     ("Ativa", "Active"),
     ("Ativar modo debug", "Turn debug mode on"),
+    (
+        "Ative este modelo em Configurações antes de transferir.",
+        "Enable this model in Settings before handing off.",
+    ),
+    (
+        "Ative este provedor e modelo em Configurações antes de bifurcar.",
+        "Enable this provider and model in Settings before forking.",
+    ),
+    (
+        "Ative este provedor em Configurações antes de abrir um chat lateral.",
+        "Enable this provider in Settings before opening a side chat.",
+    ),
+    (
+        "Ative este provedor em Configurações antes de transferir.",
+        "Enable this provider in Settings before handing off.",
+    ),
+    (
+        "Ative o acesso remoto primeiro.",
+        "Turn on remote access first.",
+    ),
     ("Atividade", "Activity"),
     ("Atividade recente", "Recent activity"),
     ("Ativos {}", "Active {}"),
@@ -431,6 +779,14 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Atualizar skills", "Refresh skills"),
     ("Atualização pronta · Reiniciar", "Update ready · Restart"),
     ("Atualizações", "Updates"),
+    (
+        "Atualizações do provedor exigem confirmação.",
+        "Provider updates require confirmation.",
+    ),
+    (
+        "Atualize o catálogo de modelos antes de alterar as opções de execução.",
+        "Refresh the model catalog before changing execution options.",
+    ),
     (
         "Aumenta ou diminui tudo.",
         "Makes everything larger or smaller.",
@@ -469,6 +825,8 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Bloco", "Block"),
     ("Bloquear", "Lock"),
     ("Boas-vindas", "Welcome"),
+    ("Branch do Git inválido", "Invalid Git branch"),
+    ("Branch não encontrado", "Branch not found"),
     ("Branco", "White"),
     ("Brasa", "Ember"),
     (
@@ -508,6 +866,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Buscou", "Searched"),
     ("Cache limpo", "Cache cleared"),
     (
+        "Cada anexo deve ter no máximo 10 MiB.",
+        "Each attachment must be at most 10 MiB.",
+    ),
+    (
         "Cada aparelho precisa de um QR code deste Mac para entrar.",
         "Each device needs a QR code from this Mac to get in.",
     ),
@@ -524,7 +886,19 @@ const ENTRIES: &[(&str, &str)] = &[
         "Each question carries what the main session is doing right now. It starts read-only and uses the same workspace.",
     ),
     ("Cada script tem até 8 KiB.", "Each script is up to 8 KiB."),
+    (
+        "Cada tarefa da equipe precisa de 1 a 8 caminhos.",
+        "Each team task needs 1 to 8 paths.",
+    ),
     ("Caminho", "Path"),
+    (
+        "Caminho Git do espaço de trabalho inválido",
+        "Invalid workspace Git path",
+    ),
+    (
+        "Caminho do executável do provedor inválido.",
+        "Invalid provider executable path.",
+    ),
     (
         "Caminho do executável. Vazio usa o detectado.",
         "Executable path. Empty uses the detected one.",
@@ -533,6 +907,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Cancelar geração do título", "Cancel title generation"),
     ("Captura", "Screenshot"),
     ("Captura da tela", "Screenshot"),
+    ("Captura de anexo inválida.", "Invalid attachment snapshot."),
     ("Captura de janela", "Window snap"),
     ("Captura salva em {}", "Screenshot saved to {}"),
     ("Capturar a página", "Capture the page"),
@@ -581,11 +956,16 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Comando", "Command"),
     ("Comandos", "Commands"),
+    (
+        "Combinação de atalho não suportada.",
+        "Unsupported shortcut combination.",
+    ),
     ("Comece uma nova página", "Start a new page"),
     ("Comentar", "Comment"),
     ("Comentou", "Commented"),
     ("Comentário enviado.", "Comment sent."),
     ("Começar", "Get started"),
+    ("Commit do Git inválido", "Invalid Git commit"),
     ("Commit e Push", "Commit and Push"),
     ("Commit inválido.", "Invalid commit."),
     ("Commit não encontrado.", "Commit not found."),
@@ -622,6 +1002,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "Conclua o login no navegador.",
         "Complete sign-in in your browser.",
     ),
+    (
+        "Conclua, mescle ou descarte a equipe atual antes de planejar outra.",
+        "Finish, merge or discard the current team before planning another.",
+    ),
     ("Concluir", "Done"),
     ("Concluída", "Done"),
     ("Concluídas", "Done"),
@@ -640,6 +1024,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Conecte Supabase, Linear, Notion e outros serviços uma vez; Claude, Codex, OpenCode e os outros agentes ACP passam a usá-los.",
         "Connect Supabase, Linear, Notion and other services once; Claude, Codex, OpenCode and the other ACP agents then use them.",
     ),
+    ("Conector não encontrado.", "Connector not found."),
     ("Conectores", "Connectors"),
     ("Conexões", "Connections"),
     ("Configurações", "Settings"),
@@ -664,6 +1049,14 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Confirmar push", "Confirm push"),
     ("Confirmações de segurança", "Safety confirmations"),
+    (
+        "Confirme primeiro a desfazer das alterações deste turno.",
+        "Confirm undoing this turn's changes first.",
+    ),
+    (
+        "Confirme primeiro esta alteração no GitHub.",
+        "Confirm this GitHub change first.",
+    ),
     ("Confortável", "Comfortable"),
     ("Conjunto da equipe", "Team pool"),
     (
@@ -677,6 +1070,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Contas do GitHub", "GitHub accounts"),
     ("Contas do {}", "{} accounts"),
     ("Contexto compactado", "Context compacted"),
+    (
+        "Contexto do título do commit indisponível",
+        "Commit title context unavailable",
+    ),
     ("Contexto não compactado", "Context not compacted"),
     ("Conteúdo não exibido", "Content not shown"),
     ("Continuar", "Continue"),
@@ -693,6 +1090,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Conversa", "Conversation"),
     ("Conversas", "Chats"),
+    (
+        "Conversas do Ask sobre um pull request ficam neste computador.",
+        "Ask conversations about a pull request stay on this computer.",
+    ),
     ("Conversas e contatos", "Conversations and contacts"),
     (
         "Conversas novas recebem os conectores daqui. Os conectores de um projeto só chegam às conversas dele. Grok, Antigravity, Droid e Pi ainda não aceitam conectores.",
@@ -724,6 +1125,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Criar PR", "Create PR"),
     ("Criar branch…", "Create branch…"),
     ("Criar merge commit", "Create a merge commit"),
+    (
+        "Criar um branch exige confirmação.",
+        "Creating a branch requires confirmation.",
+    ),
     (
         "Criar, publicar e gerenciar sites",
         "Create, deploy and manage sites",
@@ -800,6 +1205,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Desligado", "Off"),
     ("Desligar", "Turn off"),
     ("Despreparar", "Unstage"),
+    (
+        "Destino do espaço de trabalho inválido.",
+        "Invalid workspace destination.",
+    ),
     ("Detectado: {}", "Detected: {}"),
     ("Detectar novamente", "Detect again"),
     ("Diagnóstico", "Diagnostics"),
@@ -810,9 +1219,17 @@ const ENTRIES: &[(&str, &str)] = &[
         "Type the value and press Enter",
     ),
     ("Digite um endereço", "Type an address"),
+    (
+        "Digite um valor de até 16 KB.",
+        "Enter a value up to 16 KB.",
+    ),
     ("Digitou", "Typed"),
     ("Diminuir zoom", "Zoom out"),
     ("Diretório automático", "Automatic directory"),
+    (
+        "Diretório de perfil da conta inseguro.",
+        "Unsafe account profile directory.",
+    ),
     ("Diretório de trabalho", "Working directory behavior"),
     ("Diretório personalizado", "Custom directory"),
     (
@@ -832,6 +1249,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Documentação atualizada de bibliotecas",
         "Up-to-date library documentation",
     ),
+    ("Dê um nome ao dispositivo.", "Give the device a name."),
     (
         "Dê um nome e um comando à ação.",
         "Give the action a name and a command.",
@@ -914,6 +1332,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "Entrada indisponível por enquanto.",
         "Input is not available yet.",
     ),
+    (
+        "Entrada secreta não é compatível; use a CLI do provedor",
+        "Secret input is not supported; use the provider CLI",
+    ),
     ("Entrada sem cache", "Uncached input"),
     ("Entrar", "Sign in"),
     ("Entrar de novo", "Sign in again"),
@@ -922,8 +1344,16 @@ const ENTRIES: &[(&str, &str)] = &[
         "Sign-in is only available in the Mac app: it opens the browser.",
     ),
     (
+        "Entre na conta padrão usando a própria CLI do provedor.",
+        "Sign in to the default account using the provider's own CLI.",
+    ),
+    (
         "Entre no GitHub CLI em Configurações → Git.",
         "Sign in to the GitHub CLI in Settings → Git.",
+    ),
+    (
+        "Entre nos conectores pelo app do Mac; um token funciona aqui.",
+        "Sign in to connectors from the Mac app; a token works here.",
     ),
     (
         "Envia este branch e abre o pull request para o branch padrão.",
@@ -951,8 +1381,24 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Equipe", "Team"),
     (
+        "Escolha Sistema, Claro ou Escuro; a translucidez é uma preferência de material.",
+        "Choose System, Light or Dark; translucency is a material preference.",
+    ),
+    (
         "Escolha como o Sirus avisa quando o trabalho termina ou precisa da sua atenção.",
         "Choose how Sirus alerts you when work finishes or needs your attention.",
+    ),
+    (
+        "Escolha menos domínios para uma única importação.",
+        "Pick fewer domains for one import.",
+    ),
+    (
+        "Escolha no máximo dois provedores com uso para a barra lateral.",
+        "Choose at most two providers with usage for the sidebar.",
+    ),
+    (
+        "Escolha o escopo do usuário ou do projeto.",
+        "Choose the user or project scope.",
     ),
     (
         "Escolha o provedor das novas sessões. As sessões atuais mantêm seu provedor.",
@@ -975,11 +1421,43 @@ const ENTRIES: &[(&str, &str)] = &[
         "Choose defaults for new sessions, navigation and the Environment panel.",
     ),
     (
+        "Escolha pelo menos um domínio para importar.",
+        "Pick at least one domain to import.",
+    ),
+    (
+        "Escolha pelo menos um provedor.",
+        "Choose at least one provider.",
+    ),
+    (
         "Escolha se uma mensagem enviada enquanto o agente trabalha espera na fila ou instrui a resposta atual (Codex e Claude). ⌘Enter faz o contrário só naquela mensagem.",
         "Choose whether a message sent while the agent works waits in the queue or steers the current reply (Codex and Claude). ⌘Enter does the opposite for one message.",
     ),
     ("Escolha um aparelho", "Choose a device"),
+    (
+        "Escolha um horário no futuro, em até um ano.",
+        "Choose a time in the future, within a year.",
+    ),
     ("Escolha um item", "Pick an item"),
+    (
+        "Escolha um modelo para esta conversa: o Ask executa o Codex no modo de planejamento.",
+        "Pick a model for this conversation: Ask runs Codex in planning mode.",
+    ),
+    (
+        "Escolha um projeto para o escopo do projeto.",
+        "Choose a project for the project scope.",
+    ),
+    (
+        "Escolha uma das cores ou um valor #rrggbb.",
+        "Choose one of the colours or a #rrggbb value.",
+    ),
+    (
+        "Escolha uma pasta para salvar.",
+        "Choose a folder to save into.",
+    ),
+    (
+        "Escolha uma resposta concluída do assistente nesta conversa.",
+        "Choose a finished assistant response from this session.",
+    ),
     ("Escolher imagem", "Choose image"),
     ("Escolher outra pasta…", "Choose another folder…"),
     ("Escolher pasta", "Choose folder"),
@@ -998,12 +1476,20 @@ const ENTRIES: &[(&str, &str)] = &[
         "Escreva um prompt no composer e depois copie o link.",
         "Write a prompt in the composer, then copy its link.",
     ),
+    (
+        "Escreva uma mensagem de até 4.000 caracteres.",
+        "Write a message of up to 4,000 characters.",
+    ),
     ("Escrita de cache", "Cache write"),
     ("Escuro", "Dark"),
     ("Esforço e velocidade", "Effort and speed"),
     (
         "Esforço gerenciado pelo provedor; esta CLI/modelo não expõe ajuste manual.",
         "Provider-managed effort; this CLI/model exposes no manual adjustment.",
+    ),
+    (
+        "Espaço de trabalho temporário do título do commit indisponível",
+        "Commit title temporary workspace unavailable",
     ),
     ("Espaçosa", "Spacious"),
     ("Esperando o primeiro passo…", "Waiting for its first step…"),
@@ -1017,12 +1503,52 @@ const ENTRIES: &[(&str, &str)] = &[
         "That GitHub account is not signed in.",
     ),
     (
+        "Essa conta não está conectada. Entre nela em Configurações → Provedores primeiro.",
+        "That account is not signed in. Sign in to it in Settings → Providers first.",
+    ),
+    (
+        "Essa imagem tem detalhes demais para um logo.",
+        "That image is too detailed for a logo.",
+    ),
+    (
+        "Essa solicitação não está mais aguardando.",
+        "That request is no longer waiting.",
+    ),
+    (
         "Esse computador não reconhece mais este Mac.",
         "That computer no longer recognises this Mac.",
     ),
     (
         "Esse computador perdeu o pareamento: pareie de novo.",
         "This computer lost its pairing: pair it again.",
+    ),
+    (
+        "Esse dispositivo não está mais pareado.",
+        "That device is no longer paired.",
+    ),
+    (
+        "Esse perfil do navegador não está disponível.",
+        "That browser profile is not available.",
+    ),
+    (
+        "Esse processo já terminou.",
+        "That process has already ended.",
+    ),
+    (
+        "Esse processo não pertence a esta conversa, então ele continua em execução.",
+        "That process does not belong to this conversation, so it is left running.",
+    ),
+    (
+        "Esse provedor só roda com um acesso mais amplo do que esta conversa permite; escolha outro provedor ou altere o modo de acesso.",
+        "That provider only runs with broader access than this conversation allows; pick another provider or change the access mode.",
+    ),
+    (
+        "Esse servidor não está mais em execução.",
+        "That server is no longer running.",
+    ),
+    (
+        "Esses arquivos não fazem parte deste turno.",
+        "Those files are not part of this turn.",
     ),
     (
         "Esta conta atingiu o limite de uso.",
@@ -1033,8 +1559,48 @@ const ENTRIES: &[(&str, &str)] = &[
         "This account reached its usage limit. It returns at {}.",
     ),
     (
+        "Esta conta de provedor é desconhecida ou não é compatível.",
+        "This provider account is unknown or unsupported.",
+    ),
+    (
+        "Esta conversa já está sendo movida para outra conta.",
+        "This conversation is already moving to another account.",
+    ),
+    (
+        "Esta conversa já usa essa conta.",
+        "This conversation already uses that account.",
+    ),
+    (
+        "Esta conversa não está acompanhando um pull request.",
+        "This session is not watching a pull request.",
+    ),
+    (
+        "Esta conversa não está mais em execução.",
+        "This conversation is no longer running.",
+    ),
+    (
+        "Esta conversa não faz parte deste pull request.",
+        "This conversation is not part of this pull request.",
+    ),
+    (
+        "Esta conversa não tem uma origem do GitHub de um projeto salvo.",
+        "This session has no GitHub origin of a saved project.",
+    ),
+    (
         "Esta conversa parou por um erro",
         "This conversation stopped on an error",
+    ),
+    (
+        "Esta equipe não está em execução.",
+        "This team is not running.",
+    ),
+    (
+        "Esta imagem é grande demais para mostrar aqui.",
+        "This image is too large to show here.",
+    ),
+    (
+        "Esta instalação não tem atualização com um clique compatível.",
+        "This installation has no supported one-click update.",
     ),
     ("Esta parte entra em seguida.", "This part comes next."),
     (
@@ -1045,6 +1611,30 @@ const ENTRIES: &[(&str, &str)] = &[
         "Esta página está numa janela flutuante.",
         "This page is in a floating window.",
     ),
+    (
+        "Esta resposta não aceita instruções agora.",
+        "This reply cannot take instructions now.",
+    ),
+    (
+        "Esta saída não está mais disponível.",
+        "This output is no longer available.",
+    ),
+    (
+        "Esta skill está desativada no Sirus.",
+        "This skill is disabled in Sirus.",
+    ),
+    (
+        "Esta tarefa em segundo plano não está em execução.",
+        "This background task is not running.",
+    ),
+    (
+        "Esta transcrição excede o limite de contexto de bifurcação de 32 KiB. Use uma conversa mais curta ou escreva um resumo de transferência.",
+        "This transcript exceeds the 32 KiB fork context limit. Use a shorter session or write a handoff summary.",
+    ),
+    (
+        "Esta é a própria janela do Sirus Native, não um dispositivo.",
+        "This is the Sirus Native window itself, not a device.",
+    ),
     ("Estado atualizado.", "Status updated."),
     ("Este Mac", "This Mac"),
     (
@@ -1052,12 +1642,32 @@ const ENTRIES: &[(&str, &str)] = &[
         "This PDF exceeds the reader's page or image limits.",
     ),
     (
+        "Este agente auxiliar não pode ser resolvido agora.",
+        "This helper cannot be resolved right now.",
+    ),
+    (
         "Este anexo não está mais disponível. Anexe novamente.",
         "This attachment is no longer available. Attach it again.",
     ),
     (
+        "Este anexo não é uma imagem.",
+        "This attachment is not an image.",
+    ),
+    (
         "Este arquivo excede os limites de conteúdo do leitor. Use um documento menor.",
         "This file exceeds the reader's content limits. Use a smaller document.",
+    ),
+    (
+        "Este branch não tem upstream em um remoto de onde puxar.",
+        "This branch has no upstream on a remote to pull from.",
+    ),
+    (
+        "Este branch é o branch padrão do repositório.",
+        "This branch is the repository's default branch.",
+    ),
+    (
+        "Este computador ainda não tem endereço. Defina a rota pública dele em remote-public.json.",
+        "This computer has no address yet. Set its public route in remote-public.json.",
     ),
     ("Este código expirou", "This code expired"),
     (
@@ -1065,8 +1675,24 @@ const ENTRIES: &[(&str, &str)] = &[
         "This diff exceeded the review storage limit.",
     ),
     (
+        "Este diff é grande demais para mostrar aqui. Abra-o no GitHub.",
+        "This diff is too large to show here. Open it on GitHub.",
+    ),
+    (
+        "Este documento está danificado, criptografado ou não é suportado.",
+        "This document is damaged, encrypted or unsupported.",
+    ),
+    (
+        "Este documento excede os limites de conteúdo do leitor.",
+        "This document exceeds the reader's content limits.",
+    ),
+    (
         "Este documento não tem conteúdo legível.",
         "This document has no readable content.",
+    ),
+    (
+        "Este item não pode ser movido para a Lixeira aqui.",
+        "This entry cannot be moved to the Trash here.",
     ),
     (
         "Este link de prompt não foi aberto.",
@@ -1077,12 +1703,36 @@ const ENTRIES: &[(&str, &str)] = &[
         "This link belongs to another repository. Open it in its own project.",
     ),
     (
+        "Este modelo não oferece suporte ao esforço selecionado.",
+        "This model does not support the selected effort.",
+    ),
+    (
+        "Este modo de aprovação não é compatível com este adaptador.",
+        "This approval mode is not supported by this adapter.",
+    ),
+    (
+        "Este não é um arquivo de cookies do Safari.",
+        "This is not a Safari cookies file.",
+    ),
+    (
         "Este pedido já tentou iniciar. Para mudar o texto, cancele e adicione outro pedido.",
         "This request already attempted to start. To change its text, cancel it and add another request.",
     ),
     (
+        "Este perfil pertence a conversas existentes. Adicione outra conta.",
+        "This profile belongs to existing sessions. Add another account instead.",
+    ),
+    (
+        "Este projeto não tem script desse tipo.",
+        "This project has no script of that kind.",
+    ),
+    (
         "Este projeto não tem um remote do GitHub (origin): publique-o no GitHub antes de mover.",
         "This project has no GitHub remote (origin): publish it to GitHub before moving.",
+    ),
+    (
+        "Este projeto não tem um remoto do GitHub (origin), então o outro computador não consegue obter os arquivos. Publique-o no GitHub primeiro.",
+        "This project has no GitHub remote (origin), so the other computer cannot get its files. Publish it to GitHub first.",
     ),
     (
         "Este projeto não tem um repositório no GitHub.",
@@ -1093,8 +1743,40 @@ const ENTRIES: &[(&str, &str)] = &[
         "This provider does not report usage.",
     ),
     (
+        "Este provedor não tem modo somente leitura. Escolha outro provedor para o Ask.",
+        "This provider has no read-only mode. Pick another provider for Ask.",
+    ),
+    (
+        "Este repositório configura auxiliares de rede do Git. O push está indisponível porque a configuração do projeto poderia redirecionar credenciais ou conexões.",
+        "This repository configures Git network helpers. Push is unavailable because project configuration could redirect credentials or connections.",
+    ),
+    (
+        "Este repositório não é um dos seus projetos.",
+        "This repository is not one of your projects.",
+    ),
+    (
+        "Este servidor não foi iniciado pelo Sirus, então continua em execução.",
+        "This server was not started by Sirus, so it is left running.",
+    ),
+    (
         "Este servidor não precisa de login.",
         "This server needs no sign-in.",
+    ),
+    (
+        "Este serviço não oferece um login que o Sirus possa usar. Adicione-o com um token.",
+        "This service does not offer a sign-in Sirus can use. Add it with a token instead.",
+    ),
+    (
+        "Este serviço não permite que apps se registrem para login. Adicione-o com um token.",
+        "This service does not let apps register for sign-in. Add it with a token instead.",
+    ),
+    (
+        "Este subagente não está em execução.",
+        "This subagent is not running.",
+    ),
+    (
+        "Estes anexos já foram enviados.",
+        "These attachments were already sent.",
     ),
     ("Estilo da barra lateral", "Sidebar style"),
     ("Estilo do cursor", "Cursor style"),
@@ -1124,6 +1806,17 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Exportar conversa", "Export conversation"),
     ("Extra alto", "Extra high"),
+    (
+        "Falha ao gerar o título do commit",
+        "Commit title generation failed",
+    ),
+    (
+        "Falha ao gerar o título do commit ou o limite seguro foi excedido",
+        "Commit title generation failed or exceeded its safe limits",
+    ),
+    ("Falha na saída do login.", "Sign-in output failed."),
+    ("Falha no ditado.", "Dictation failed."),
+    ("Falha no processo de login.", "Sign-in process failed."),
     ("Falhou", "Failed"),
     ("Fase {}", "Phase {}"),
     (
@@ -1179,6 +1872,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Gerar código", "Generate code"),
     ("Gerar título do commit", "Generate commit title"),
     (
+        "Gerar um título de commit exige um provedor Codex ou Claude instalado e ativado",
+        "Generating a commit title requires an enabled installed Codex or Claude provider",
+    ),
+    (
         "Geração do título cancelada.",
         "Title generation cancelled.",
     ),
@@ -1196,6 +1893,11 @@ const ENTRIES: &[(&str, &str)] = &[
         "Recording saved in Movies › Sirus",
     ),
     ("Gravações do navegador", "Browser recordings"),
+    (
+        "Head do pull request inválido.",
+        "Invalid pull request head.",
+    ),
+    ("Histórico do Git incompleto", "Incomplete Git history"),
     ("Histórico · {}", "History · {}"),
     ("Hoje", "Today"),
     (
@@ -1220,12 +1922,29 @@ const ENTRIES: &[(&str, &str)] = &[
         "There are conflicts: resolve them before staging.",
     ),
     (
+        "Há filtros externos do Git configurados. As operações automáticas de status, diff e worktree estão indisponíveis porque os filtros podem executar comandos do projeto.",
+        "External Git filters are configured. Automatic status, diff and worktree operations are unavailable because filters can execute project commands.",
+    ),
+    (
+        "Há hooks do Git configurados. As operações automáticas do Git estão indisponíveis porque esses hooks podem executar comandos do projeto.",
+        "Configured Git hooks are present. Automatic Git operations are unavailable because these hooks can execute project commands.",
+    ),
+    (
         "Há mais arquivos do que os listados.",
         "There are more files than listed.",
     ),
     (
+        "Há temas do VS Code demais instalados.",
+        "Too many VS Code themes are installed.",
+    ),
+    (
         "Há um comando rodando em \"{}\". Fechar encerra o shell e o que estiver rodando nele.",
         "A command is running in \"{}\". Closing ends the shell and whatever runs in it.",
+    ),
+    ("ID de modelo do Cursor inválido", "Invalid Cursor model ID"),
+    (
+        "Identidade da pergunta desconhecida",
+        "Unknown question identity",
     ),
     ("Idioma", "Language"),
     ("Ignorado", "Skipped"),
@@ -1234,6 +1953,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Indisponível", "Unavailable"),
     ("Informado pelo provedor", "Reported by the provider"),
     ("Informar", "Provide"),
+    (
+        "Informe um predefinido de dispositivo ou largura e altura.",
+        "Give a device preset, or both width and height.",
+    ),
     (
         "Informe um site, um usuário e uma senha.",
         "Enter a site, a username and a password.",
@@ -1288,11 +2011,39 @@ const ENTRIES: &[(&str, &str)] = &[
         "Integrations that provide models for sessions.",
     ),
     (
+        "Interrompa a conversa antes de movê-la para outro computador.",
+        "Stop the conversation before moving it to another computer.",
+    ),
+    (
+        "Interrompa o chat lateral desta conversa antes de excluí-lo.",
+        "Stop this session's side chat before deleting it.",
+    ),
+    (
+        "Interrompa ou conclua a conversa de origem antes de bifurcar.",
+        "Stop or finish the source session before forking.",
+    ),
+    (
+        "Interrompa ou conclua a conversa de origem antes de transferi-la.",
+        "Stop or finish the source session before handing it off.",
+    ),
+    (
+        "Interrompa ou conclua esta conversa antes de movê-la para outra conta.",
+        "Stop or finish this conversation before moving it to another account.",
+    ),
+    (
         "Investigar erros, issues e traces",
         "Investigate errors, issues and traces",
     ),
     ("Início", "Home"),
+    (
+        "Início do histórico do Git inválido",
+        "Invalid Git history start",
+    ),
     ("Isso não pode ser desfeito.", "This can't be undone."),
+    (
+        "Isso não é um nome de domínio.",
+        "That is not a domain name.",
+    ),
     (
         "Issues do Jira e páginas do Confluence",
         "Jira issues and Confluence pages",
@@ -1301,10 +2052,34 @@ const ENTRIES: &[(&str, &str)] = &[
         "Issues, pull requests e repositórios (token)",
         "Issues, pull requests and repositories (token)",
     ),
+    (
+        "Item do espaço de trabalho inválido.",
+        "Invalid workspace entry.",
+    ),
     ("Janela flutuante", "Floating window"),
     (
         "Já existe um branch com esse nome.",
         "A branch with this name already exists.",
+    ),
+    (
+        "Já existe um item com este nome.",
+        "An entry with this name already exists.",
+    ),
+    (
+        "Já existe um pull request para este branch.",
+        "A pull request already exists for this branch.",
+    ),
+    (
+        "Já existe um servidor com esse nome ali.",
+        "A server with that name already exists there.",
+    ),
+    (
+        "Já há outra solicitação de título de commit em execução",
+        "Another commit title request is already running",
+    ),
+    (
+        "Já há outro login de conta em andamento.",
+        "Another account sign-in is already in progress.",
     ),
     (
         "Já pode usar o Sirus pelo telefone.",
@@ -1342,6 +2117,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Ligando {}…", "Booting {}…"),
     ("Ligar", "Turn on"),
     ("Limite de 5 horas", "5-hour limit"),
+    (
+        "Limite de armazenamento de anexos atingido. Remova os anexos não utilizados.",
+        "Attachment storage limit reached. Remove unused attachments.",
+    ),
     ("Limite de painéis atingido", "Pane limit reached"),
     ("Limite do histórico", "Scrollback limit"),
     ("Limite individual", "Individual limit"),
@@ -1388,6 +2167,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Luminosidade da cor", "Color lightness"),
     ("Mais antigas", "Older"),
     ("Mais escura ou mais clara.", "Darker or lighter."),
+    ("Mantendo", "Keeping"),
     (
         "Mantenha no máximo 10 perfis personalizados.",
         "Keep at most 10 custom profiles.",
@@ -1429,7 +2209,15 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Mesclar", "Merge"),
     ("Mesclar {}?", "Merge {}?"),
+    (
+        "Mescle ou ignore todas as tarefas concluídas antes de remover os worktrees.",
+        "Merge or skip every finished task before removing worktrees.",
+    ),
     ("Meta", "Goal"),
+    (
+        "Metadados de histórico do Git inválidos ou excessivos",
+        "Invalid or excessive Git history metadata",
+    ),
     (
         "Mexa o mouse e clique no fundo",
         "Move the mouse and click the background",
@@ -1491,7 +2279,15 @@ const ENTRIES: &[(&str, &str)] = &[
         "Move the folder “{}” to the Trash?",
     ),
     ("Mover para a Lixeira", "Move to Trash"),
+    (
+        "Mover para a Lixeira não está disponível nesta plataforma.",
+        "Moving to the Trash is unavailable on this platform.",
+    ),
     ("Mover para {}", "Move to {}"),
+    (
+        "Mover uma conversa envia um branch ao GitHub e exige confirmação.",
+        "Moving a conversation pushes a branch to GitHub and needs confirmation.",
+    ),
     ("Mover “{}” para a Lixeira?", "Move “{}” to the Trash?"),
     ("Máximo", "Maximum"),
     ("Médio", "Medium"),
@@ -1537,6 +2333,14 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Nenhum arquivo encontrado.", "No files found."),
     ("Nenhum commit ainda.", "No commits yet."),
     ("Nenhum conector encontrado.", "No connector matches."),
+    (
+        "Nenhum dispositivo de entrada de microfone está disponível.",
+        "No microphone input device is available.",
+    ),
+    (
+        "Nenhum dispositivo pareado tem este id.",
+        "No paired device has this id.",
+    ),
     ("Nenhum elemento foi marcado.", "No element was marked."),
     ("Nenhum executável", "No executable"),
     (
@@ -1561,6 +2365,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Nenhum projeto aqui corresponde a “{}”, então o rascunho está no projeto atual.",
         "No project here matches “{}”, so the draft is in the current project.",
     ),
+    ("Nenhum provedor selecionado.", "No providers selected."),
     ("Nenhum pull request aberto.", "No open pull requests."),
     ("Nenhum pull request fechado.", "No closed pull requests."),
     ("Nenhum pull request mesclado.", "No merged pull requests."),
@@ -1598,6 +2403,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "No máximo dois provedores. Desligue um para escolher outro.",
         "Up to two providers. Turn one off to choose another.",
     ),
+    (
+        "No máximo quatro skills podem ser invocadas por turno.",
+        "At most four skills may be invoked per turn.",
+    ),
     ("Nome", "Name"),
     ("Nome da ação", "Action name"),
     (
@@ -1605,6 +2414,8 @@ const ENTRIES: &[(&str, &str)] = &[
         "Account name, Enter to sign in",
     ),
     ("Nome da pasta", "Folder name"),
+    ("Nome de anexo inválido.", "Invalid attachment name."),
+    ("Nome de branch inválido", "Invalid branch name"),
     ("Nome do arquivo", "File name"),
     ("Nome do novo branch", "New branch name"),
     ("Nome do perfil", "Profile name"),
@@ -1615,6 +2426,10 @@ const ENTRIES: &[(&str, &str)] = &[
     (
         "Nome longo demais (120 caracteres no máximo).",
         "Name too long (120 characters at most).",
+    ),
+    (
+        "Nomes de skills desativadas inválidos.",
+        "Invalid disabled skill names.",
     ),
     ("Notificações", "Notifications"),
     ("Notificações do sistema", "System notifications"),
@@ -1648,6 +2463,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Não detectado", "Not detected"),
     ("Não encontrado", "Not found"),
+    ("Não encontrado no GitHub.", "Not found on GitHub."),
     ("Não encontrados {}", "Not found {}"),
     (
         "Não encontrei certificados do sistema.",
@@ -1665,7 +2481,27 @@ const ENTRIES: &[(&str, &str)] = &[
         "Não foi possível abrir este documento.",
         "Could not open this document.",
     ),
+    (
+        "Não foi possível abrir o Keychain.",
+        "The Keychain could not be opened.",
+    ),
+    (
+        "Não foi possível abrir o arquivo selecionado.",
+        "Cannot open selected file.",
+    ),
+    (
+        "Não foi possível abrir o navegador.",
+        "Cannot open the browser.",
+    ),
     ("Não foi possível abrir {}.", "Could not open {}."),
+    (
+        "Não foi possível acessar o Open VSX.",
+        "Open VSX could not be reached.",
+    ),
+    (
+        "Não foi possível acessar o registro de provedores.",
+        "Cannot reach the provider registry.",
+    ),
     ("Não foi possível anexar.", "Couldn't attach."),
     ("Não foi possível atualizar: {}", "Could not update: {}"),
     (
@@ -1673,34 +2509,228 @@ const ENTRIES: &[(&str, &str)] = &[
         "Could not capture the page.",
     ),
     (
+        "Não foi possível capturar suas alterações não commitadas.",
+        "Cannot snapshot your uncommitted changes.",
+    ),
+    (
+        "Não foi possível converter essa imagem.",
+        "Could not convert that image.",
+    ),
+    (
+        "Não foi possível copiar os cookies do Chrome.",
+        "Chrome's cookies could not be copied.",
+    ),
+    (
+        "Não foi possível criar o perfil da conta",
+        "Cannot create account profile",
+    ),
+    (
+        "Não foi possível criar o perfil isolado da conta.",
+        "Cannot create the isolated account profile.",
+    ),
+    (
+        "Não foi possível criar uma pasta temporária.",
+        "A temporary folder could not be created.",
+    ),
+    (
         "Não foi possível executar o git: {}",
         "Could not run git: {}",
     ),
     (
+        "Não foi possível iniciar a verificação de atualização do provedor.",
+        "Cannot start the provider update check.",
+    ),
+    (
+        "Não foi possível iniciar o download do tema.",
+        "Cannot start the theme download.",
+    ),
+    (
+        "Não foi possível iniciar o login no provedor.",
+        "Cannot start the provider sign-in.",
+    ),
+    (
+        "Não foi possível iniciar o provedor de título de commit",
+        "Cannot start commit title provider",
+    ),
+    (
+        "Não foi possível inspecionar o arquivo selecionado.",
+        "Cannot inspect selected file.",
+    ),
+    (
+        "Não foi possível inspecionar o item selecionado.",
+        "Cannot inspect selected entry.",
+    ),
+    (
+        "Não foi possível ler a captura do anexo.",
+        "Cannot read attachment snapshot.",
+    ),
+    (
+        "Não foi possível ler a gravação.",
+        "The recording could not be read.",
+    ),
+    (
+        "Não foi possível ler a imagem da área de transferência.",
+        "Cannot read clipboard image.",
+    ),
+    (
+        "Não foi possível ler a resposta do registro de provedores.",
+        "Cannot read the provider registry response.",
+    ),
+    (
+        "Não foi possível ler as alterações do agente.",
+        "Cannot read the worker's changes.",
+    ),
+    (
+        "Não foi possível ler essa imagem.",
+        "Could not read that image.",
+    ),
+    (
+        "Não foi possível ler esta conversa.",
+        "This conversation could not be read.",
+    ),
+    (
         "Não foi possível ler este PDF. Ele pode estar protegido por senha ou danificado.",
         "Could not read this PDF. It may be encrypted or damaged.",
+    ),
+    ("Não foi possível ler o HEAD", "Cannot read HEAD"),
+    (
+        "Não foi possível ler o arquivo selecionado.",
+        "Cannot read selected file.",
     ),
     (
         "Não foi possível ler o commit.",
         "Could not read the commit.",
     ),
     ("Não foi possível ler o diff.", "Could not read the diff."),
+    (
+        "Não foi possível ler o histórico de uso.",
+        "Usage history could not be read.",
+    ),
+    (
+        "Não foi possível ler o item da pasta selecionada.",
+        "Cannot read selected folder entry.",
+    ),
+    (
+        "Não foi possível ler os cookies do Chrome.",
+        "Chrome's cookies could not be read.",
+    ),
+    (
+        "Não foi possível ler os cookies do Safari.",
+        "Safari's cookies could not be read.",
+    ),
     ("Não foi possível ler {}.", "Could not read {}."),
+    (
+        "Não foi possível listar a pasta selecionada.",
+        "Cannot list selected folder.",
+    ),
+    (
+        "Não foi possível montar o endereço da busca.",
+        "Cannot build the search address.",
+    ),
+    (
+        "Não foi possível mover este item para a Lixeira.",
+        "Could not move this entry to the Trash.",
+    ),
+    (
+        "Não foi possível preparar a captura do anexo.",
+        "Cannot prepare attachment snapshot.",
+    ),
     (
         "Não foi possível preparar a imagem anotada.",
         "Could not prepare the annotated image.",
     ),
+    (
+        "Não foi possível remover o perfil da conta",
+        "Cannot remove account profile",
+    ),
+    (
+        "Não foi possível renomear o perfil da conta",
+        "Cannot rename account profile",
+    ),
+    (
+        "Não foi possível salvar a conversa.",
+        "Could not save the conversation.",
+    ),
+    (
+        "Não foi possível salvar as alterações do agente auxiliar antes da limpeza.",
+        "Cannot save a helper's changes before cleanup.",
+    ),
+    (
+        "Não foi possível salvar o login.",
+        "The sign-in could not be saved.",
+    ),
+    (
+        "Não foi possível salvar o plano de fundo.",
+        "Could not save the background.",
+    ),
+    (
+        "Não foi possível selecionar o perfil da conta",
+        "Cannot select account profile",
+    ),
     ("Não foi possível verificar", "Could not check"),
+    (
+        "Não há mensagem para enviar novamente.",
+        "There is no message to send again.",
+    ),
+    ("Não há pasta pessoal.", "No home folder."),
+    (
+        "Não há perfil de navegador com esse nome.",
+        "There is no browser profile with that name.",
+    ),
+    (
+        "Não há plano proposto para iniciar.",
+        "There is no proposed plan to start.",
+    ),
+    (
+        "Não há solicitação nativa ativa para esta conversa",
+        "No live native request for this session",
+    ),
     ("Não instalado", "Not installed"),
     ("Não permitir", "Don't allow"),
     ("Não quebrar linhas", "Don't wrap lines"),
+    (
+        "Não é possível acessar o anexo selecionado.",
+        "Cannot access selected attachment.",
+    ),
+    (
+        "Não é possível preparar caminhos, diretórios e submódulos vinculados",
+        "Linked paths, directories and submodules cannot be prepared",
+    ),
+    (
+        "Não é um anexo de imagem do GitHub.",
+        "Not a GitHub image attachment.",
+    ),
     (
         "Não é um link sirus://new.",
         "It is not a sirus://new link.",
     ),
     (
+        "Número de pull request ou issue inválido.",
+        "Invalid pull request or issue number.",
+    ),
+    (
+        "Número inválido de agentes a manter prontos.",
+        "Invalid number of agents to keep ready.",
+    ),
+    (
+        "O Chrome não tem cookies para esse perfil.",
+        "Chrome has no cookies for that profile.",
+    ),
+    (
         "O Claude lista só as skills que combinam com o projeto, pelas dependências e pelo AGENTS.md. Uma linha Skills: a, b no AGENTS.md mantém essas. As outras continuam disponíveis no composer.",
         "Claude lists only the skills that fit the project, from its dependencies and AGENTS.md. A line Skills: a, b in AGENTS.md keeps those. The others stay available in the composer.",
+    ),
+    (
+        "O Claude não interrompeu a tarefa a tempo.",
+        "Claude did not stop the task in time.",
+    ),
+    (
+        "O Claude não moveu o subagente a tempo.",
+        "Claude did not move the subagent in time.",
+    ),
+    (
+        "O Claude não recebeu a mensagem a tempo.",
+        "Claude did not take the message in time.",
     ),
     (
         "O Claude resume a conversa ao chegar perto deste total de tokens, de 100000 a 1000000. Vazio segue o padrão do Claude Code. Muda quando compacta, não o tamanho da janela do modelo.",
@@ -1719,16 +2749,68 @@ const ENTRIES: &[(&str, &str)] = &[
         "GitHub CLI could not switch the account.",
     ),
     (
+        "O GitHub não pode mesclar este pull request agora (verificações, revisões ou conflitos).",
+        "GitHub cannot merge this pull request now (checks, reviews or conflicts).",
+    ),
+    (
+        "O GitHub não respondeu. Tente novamente.",
+        "GitHub did not answer. Try again.",
+    ),
+    (
+        "O GitHub não retornou o novo pull request.",
+        "GitHub did not return the new pull request.",
+    ),
+    (
+        "O GitHub recusou a mudança do estado de rascunho.",
+        "GitHub refused to change the draft state.",
+    ),
+    (
+        "O GitHub recusou esta alteração.",
+        "GitHub refused this change.",
+    ),
+    (
+        "O GitHub recusou este pull request (o branch foi enviado e é diferente da base?).",
+        "GitHub refused this pull request (is the branch pushed and different from the base?).",
+    ),
+    (
         "O HEAD do Git mudou desde esta resposta ({} para {}): houve commit, checkout, rebase ou pull. Nada será desfeito. Abra o diff e reverta à mão, ou use git revert no novo commit.",
         "Git HEAD moved since this reply ({} to {}): a commit, checkout, rebase or pull happened. Nothing is undone. Open the diff and revert it by hand, or use git revert on the new commit.",
+    ),
+    (
+        "O Keychain não liberou a chave do Chrome. Permita o Sirus quando o macOS perguntar e tente de novo.",
+        "The Keychain did not release Chrome's key. Allow Sirus when macOS asks, then try again.",
     ),
     (
         "O Keychain só existe no macOS.",
         "The Keychain only exists on macOS.",
     ),
     (
+        "O Open VSX está indisponível no momento.",
+        "Open VSX is unavailable right now.",
+    ),
+    (
+        "O Open VSX parou de responder.",
+        "Open VSX stopped responding.",
+    ),
+    (
+        "O Open VSX retornou detalhes de tema malformados.",
+        "Open VSX returned malformed theme details.",
+    ),
+    (
+        "O Open VSX retornou uma resposta de busca ilegível.",
+        "Open VSX returned an unreadable search response.",
+    ),
+    (
+        "O Open VSX retornou uma resposta ilegível.",
+        "Open VSX returned an unreadable response.",
+    ),
+    (
         "O QR code do app aponta para este endereço.",
         "The app's QR code points to this address.",
+    ),
+    (
+        "O Safari ainda não tem cookies. Abra o Safari uma vez e tente de novo.",
+        "Safari has no cookies yet. Open Safari once, then try again.",
     ),
     (
         "O Simulador não está disponível",
@@ -1747,6 +2829,11 @@ const ENTRIES: &[(&str, &str)] = &[
         "O Sirus abre o login do serviço no seu navegador; você entra uma vez.",
         "Sirus opens the service's sign-in in your browser; you sign in once.",
     ),
+    ("O Sirus está sendo fechado", "Sirus is closing"),
+    (
+        "O Sirus precisa de Acesso Total ao Disco para ler os cookies do Safari.",
+        "Sirus needs Full Disk Access to read Safari's cookies.",
+    ),
     (
         "O Sirus preenche seu login salvo na página. O agente nunca vê a senha, e você não é perguntado de novo sobre este site nesta conversa.",
         "Sirus fills your saved login into the page. The agent never sees the password, and you are not asked again for this site in this conversation.",
@@ -1754,6 +2841,26 @@ const ENTRIES: &[(&str, &str)] = &[
     (
         "O Sirus removeu {} caractere(s) invisível(is), que podem esconder instruções para o agente. O link pode ser malicioso: leia o prompt antes de enviar.",
         "Sirus removed {} invisible character(s), which can hide instructions for the agent. The link may be malicious: read the prompt before you send it.",
+    ),
+    (
+        "O acesso remoto ainda não está pronto.",
+        "Remote access is not ready yet.",
+    ),
+    (
+        "O acesso remoto já está em execução.",
+        "Remote access is already running.",
+    ),
+    (
+        "O acesso total não pode ser combinado com o modo de planejamento.",
+        "Full access cannot be combined with planning mode.",
+    ),
+    (
+        "O acompanhamento de PR está desativado em Configurações → Git.",
+        "PR watch is turned off in Settings → Git.",
+    ),
+    (
+        "O agente aceita apenas uma decisão para a sua solicitação",
+        "The agent accepts only a decision for its request",
     ),
     (
         "O agente consulta, mas não altera o banco.",
@@ -1773,13 +2880,39 @@ const ENTRIES: &[(&str, &str)] = &[
         "O agente trabalha dentro da pasta que você escolher.",
         "The agent works inside the folder you choose.",
     ),
+    ("O anexo excede 10 MiB.", "Attachment exceeds 10 MiB."),
+    (
+        "O anexo não está mais disponível.",
+        "Attachment is no longer available.",
+    ),
+    ("O anexo não tem arquivo.", "Attachment has no file."),
+    (
+        "O anexo selecionado não é uma pasta.",
+        "Selected attachment is not a folder.",
+    ),
     (
         "O arquivo está danificado, protegido por senha ou usa um formato não suportado.",
         "This file is damaged, encrypted or uses an unsupported format.",
     ),
     (
+        "O branch desta conversa não tem um pull request aberto no GitHub.",
+        "This session's branch has no open pull request on GitHub.",
+    ),
+    (
         "O branch está desatualizado em relação ao base.",
         "The branch is behind the base.",
+    ),
+    (
+        "O caminho do Git não está em UTF-8",
+        "Git path is not UTF-8",
+    ),
+    (
+        "O caminho do espaço de trabalho mudou",
+        "Workspace path changed",
+    ),
+    (
+        "O commit foi concluído, mas seus metadados não estão disponíveis. Atualize antes de continuar.",
+        "Commit completed, but its metadata is unavailable. Refresh before continuing.",
     ),
     (
         "O computador demorou demais para responder.",
@@ -1802,18 +2935,74 @@ const ENTRIES: &[(&str, &str)] = &[
         "The computer refused the request.",
     ),
     (
+        "O contexto da skill mudou. Revise a conversa atual e tente de novo.",
+        "Skill context changed. Review the current session and try again.",
+    ),
+    (
+        "O contexto da solicitação na fila mudou. Revise a fila antes de enviar novamente.",
+        "Queued request context changed. Review the queue before sending again.",
+    ),
+    (
         "O conteúdo textual não mudou; o arquivo ou suas permissões foram alterados.",
         "The text content did not change; the file or its permissions changed.",
+    ),
+    (
+        "O coordenador da equipe deve ser Codex, Claude Code ou OpenCode.",
+        "A team coordinator must be Codex, Claude Code or OpenCode.",
+    ),
+    (
+        "O coordenador não concluiu o plano da equipe.",
+        "The coordinator did not finish the team plan.",
+    ),
+    (
+        "O coordenador não retornou um plano de equipe.",
+        "The coordinator did not return a team plan.",
+    ),
+    (
+        "O coordenador retornou um plano de equipe inválido.",
+        "The coordinator returned an invalid team plan.",
     ),
     (
         "O código de login expirou. Tente de novo.",
         "The sign-in code expired. Try again.",
     ),
     ("O código tem seis dígitos.", "The code has six digits."),
+    (
+        "O destino do espaço de trabalho está fora desta conversa.",
+        "Workspace destination is outside this session.",
+    ),
+    (
+        "O destino do espaço de trabalho mudou. Tente novamente.",
+        "Workspace destination changed. Try again.",
+    ),
     ("O diff foi truncado.", "The diff was truncated."),
+    (
+        "O diretório de dados está indisponível.",
+        "Data directory is unavailable.",
+    ),
+    (
+        "O diretório de logs não pode ser um link simbólico.",
+        "Logs directory must not be a symlink.",
+    ),
+    (
+        "O ditado só está disponível no macOS.",
+        "Dictation is only available on macOS.",
+    ),
+    (
+        "O encaixe dessa janela expirou.",
+        "That window snap has expired.",
+    ),
     (
         "O endereço HTTPS dele, como https://seu-computador.exemplo.com",
         "Its HTTPS address, such as https://your-computer.example.com",
+    ),
+    (
+        "O endereço de login do serviço é inválido.",
+        "The service's sign-in address is invalid.",
+    ),
+    (
+        "O endereço de prévia deve ser uma URL http(s) de localhost com porta, como http://localhost:5173.",
+        "The preview address must be a localhost http(s) URL with a port, like http://localhost:5173.",
     ),
     (
         "O endereço de qualquer servidor MCP remoto (HTTP).",
@@ -1829,6 +3018,26 @@ const ENTRIES: &[(&str, &str)] = &[
         "The address must be https.",
     ),
     (
+        "O espaço de trabalho do PR mudou. Atualize para carregar o estado atual.",
+        "The PR workspace changed. Refresh to load its current state.",
+    ),
+    (
+        "O espaço de trabalho do coordenador mudou; tente de novo.",
+        "The coordinator workspace changed; try again.",
+    ),
+    (
+        "O espaço de trabalho está fora do repositório",
+        "Workspace is outside repository",
+    ),
+    (
+        "O espaço de trabalho mudou. Atualize antes de continuar.",
+        "Workspace changed. Refresh before continuing.",
+    ),
+    (
+        "O espaço de trabalho mudou; tente de novo.",
+        "The workspace changed; try again.",
+    ),
+    (
         "O fetch automático está indisponível enquanto a configuração Git do projeto puder executar helpers ou divulgar credenciais. Faça o fetch manualmente pelo terminal.",
         "Automatic fetch is unavailable while project Git configuration can execute helpers or disclose credentials. Fetch manually in your terminal.",
     ),
@@ -1837,6 +3046,15 @@ const ENTRIES: &[(&str, &str)] = &[
         "The background already changes as you choose. You can change it later in Settings.",
     ),
     ("O git falhou.", "Git failed."),
+    ("O host da URL não é permitido", "URL host is not allowed"),
+    (
+        "O item do espaço de trabalho está fora desta conversa.",
+        "Workspace entry is outside this session.",
+    ),
+    (
+        "O item do espaço de trabalho não existe mais.",
+        "Workspace entry no longer exists.",
+    ),
     (
         "O link escolheu {} para esta conversa.",
         "The link picked {} for this thread.",
@@ -1851,8 +3069,24 @@ const ENTRIES: &[(&str, &str)] = &[
         "The link asked for {}, which is not set up here; your default stays.",
     ),
     (
+        "O login da conta está em andamento. Conclua-o antes de usar este perfil.",
+        "Account sign-in is in progress. Complete it before using this profile.",
+    ),
+    (
+        "O login da conta expirou. Tente novamente.",
+        "Account sign-in timed out. Try again.",
+    ),
+    (
+        "O login da conta foi cancelado.",
+        "Account sign-in was cancelled.",
+    ),
+    (
         "O login de {} sai deste Mac. Conversas que usam esta conta impedem a remoção.",
         "{}'s sign-in leaves this Mac. Conversations using this account prevent removal.",
+    ),
+    (
+        "O login demorou demais. Tente novamente.",
+        "The sign-in took too long. Try again.",
     ),
     (
         "O login desta conta expirou ou foi sobrescrito por outra sessão.",
@@ -1880,6 +3114,14 @@ const ENTRIES: &[(&str, &str)] = &[
         "The approval mode new conversations start on. A provider without it uses the next safer mode it offers; a conversation keeps the mode it last used.",
     ),
     (
+        "O modo de planejamento não é compatível com este adaptador.",
+        "Planning mode is not supported by this adapter.",
+    ),
+    (
+        "O modo rápido não é compatível com este adaptador/modelo.",
+        "Fast mode is not supported by this adapter/model.",
+    ),
+    (
         "O motor desta janela, com seus projetos e arquivos.",
         "This window's engine, with your projects and files.",
     ),
@@ -1892,11 +3134,67 @@ const ENTRIES: &[(&str, &str)] = &[
         "The engine did not generate a code.",
     ),
     (
+        "O nome da conta deve ter de 1 a 48 caracteres.",
+        "Account name must contain 1–48 characters.",
+    ),
+    (
+        "O nome deve ser uma única linha de texto.",
+        "The name must be one line of text.",
+    ),
+    (
+        "O nome do computador deve ter de 1 a 60 caracteres, em uma linha.",
+        "The computer's name must have 1–60 characters on one line.",
+    ),
+    (
+        "O nome precisa de pelo menos uma letra ou um número.",
+        "The name needs at least one letter or digit.",
+    ),
+    (
         "O número do pull request não é válido.",
         "Its pull request number is not valid.",
     ),
+    (
+        "O objetivo deve ter no máximo 400 caracteres.",
+        "Goal must contain at most 400 characters.",
+    ),
     ("O pareamento foi recusado.", "Pairing was declined."),
     ("O pareamento não respondeu.", "Pairing did not respond."),
+    (
+        "O parâmetro de esforço do Cursor não está disponível",
+        "Cursor effort parameter is unavailable",
+    ),
+    (
+        "O perfil da conta deve ser privado ao usuário atual.",
+        "The account profile must be private to the current user.",
+    ),
+    (
+        "O perfil isolado da conta não existe.",
+        "The isolated account profile is missing.",
+    ),
+    (
+        "O planejamento exige um modelo selecionado.",
+        "Planning requires a selected model.",
+    ),
+    (
+        "O plano da equipe tem um caminho inválido.",
+        "Team plan has an invalid path.",
+    ),
+    (
+        "O plano da equipe tem um id de tarefa inválido.",
+        "Team plan has an invalid task id.",
+    ),
+    (
+        "O plano da equipe tem uma dependência inválida entre tarefas.",
+        "Team plan has an invalid dependency between tasks.",
+    ),
+    (
+        "O plano da equipe é grande demais.",
+        "Team plan is too large.",
+    ),
+    (
+        "O processo nativo terminou antes de aceitar a resposta",
+        "Native process ended before accepting response",
+    ),
     ("O projeto não é válido.", "Its project is not valid."),
     (
         "O prompt só tinha caracteres ocultos, então pode ser malicioso.",
@@ -1906,28 +3204,125 @@ const ENTRIES: &[(&str, &str)] = &[
         "O prompt tem mais de 8.000 caracteres.",
         "Its prompt is longer than 8,000 characters.",
     ),
+    (
+        "O provedor não aceita respostas interativas",
+        "Provider does not accept interactive responses",
+    ),
+    (
+        "O provedor não concluiu o login. Tente novamente.",
+        "The provider did not complete sign-in. Try again.",
+    ),
+    (
+        "O provedor não recebeu a instrução a tempo.",
+        "The provider did not take the instruction in time.",
+    ),
+    (
+        "O provedor retornou um título de commit inválido",
+        "Provider returned an invalid commit title",
+    ),
+    (
+        "O próprio agente para com o Parar da conversa.",
+        "The agent itself stops with the conversation's Stop.",
+    ),
+    (
+        "O pull request mudou no GitHub. Atualize e revise-o novamente.",
+        "The pull request changed on GitHub. Refresh and review it again.",
+    ),
     ("O que um aparelho pode fazer", "What a device can do"),
     ("O que vamos fazer em {}?", "What shall we do in {}?"),
     (
+        "O rascunho excede o limite de 64 KiB",
+        "Draft exceeds the 64 KiB limit",
+    ),
+    (
+        "O reconhecimento de voz não está disponível para este idioma.",
+        "Speech recognition is unavailable for this language.",
+    ),
+    (
         "O repositório não está no formato dono/nome.",
         "Its repository is not owner/name.",
+    ),
+    (
+        "O responsável pela skill mudou. Atualize e tente de novo.",
+        "Skill owner changed. Refresh and try again.",
+    ),
+    (
+        "O responsável pelo anexo não existe mais.",
+        "Attachment owner no longer exists.",
+    ),
+    (
+        "O responsável pelo contexto não existe mais",
+        "Context owner no longer exists",
+    ),
+    (
+        "O responsável pelo rascunho do anexo não existe mais.",
+        "Attachment draft owner no longer exists.",
+    ),
+    (
+        "O responsável pelo rascunho não existe mais",
+        "Draft owner no longer exists",
+    ),
+    (
+        "O serviço não enviou um token de acesso.",
+        "The service sent no access token.",
+    ),
+    (
+        "O serviço não registrou o Sirus para login.",
+        "The service did not register Sirus for sign-in.",
     ),
     (
         "O sirus-host não foi encontrado.",
         "sirus-host was not found.",
     ),
     (
+        "O tema do VS Code escolhido não está instalado.",
+        "The chosen VS Code theme is not installed.",
+    ),
+    (
         "O terminal usa sempre o shell configurado no sistema.",
         "The PTY always launches $SHELL. This cannot be changed.",
+    ),
+    (
+        "O texto da busca deve ter de 1 a 256 caracteres.",
+        "Search text must be 1 to 256 characters.",
     ),
     (
         "O trabalho da conversa, inclusive o que ainda não foi commitado, vai para uma branch sirus/move-… no GitHub do projeto. {} baixa essa branch e continua a conversa lá, com o texto até aqui. Esta conversa fica marcada como movida.",
         "The conversation's work, including what is not committed yet, goes to a sirus/move-… branch on the project's GitHub. {} fetches that branch and continues the conversation there, with the text so far. This conversation is marked as moved.",
     ),
     (
+        "O turno de planejamento não foi concluído.",
+        "The planning turn did not complete.",
+    ),
+    (
+        "O título deve ter de 1 a 256 caracteres.",
+        "The title must have 1 to 256 characters.",
+    ),
+    (
+        "O título do commit exige alterações preparadas completas, sem conflitos e inalteradas, dentro deste espaço de trabalho",
+        "Commit title requires unchanged complete conflict-free prepared changes inside this workspace",
+    ),
+    (
+        "O uso do computador só está disponível no macOS",
+        "Computer use is only available on macOS",
+    ),
+    (
         "O uso do computador só está disponível no macOS.",
         "Computer use is available on macOS only.",
     ),
+    (
+        "O valor de esforço do Cursor não está disponível",
+        "Cursor effort value is unavailable",
+    ),
+    (
+        "O worktree de origem não é mais um repositório Git.",
+        "The source worktree is no longer a Git repository.",
+    ),
+    (
+        "O worktree desta conversa não existe mais.",
+        "That session's worktree no longer exists.",
+    ),
+    ("Objetivo inválido.", "Invalid goal."),
     ("Observou", "Read"),
     ("Oceano", "Ocean"),
     ("Ocultar saída", "Hide output"),
@@ -1956,12 +3351,21 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Organização da sidebar", "Sidebar organization"),
     (
+        "Os agentes da equipe usam aprovações do Ask ou do Auto; o acesso total não está disponível para equipes.",
+        "Team workers use Ask or Auto approvals; Full access is unavailable for teams.",
+    ),
+    (
         "Os agentes deixam de recebê-lo e o login dele é esquecido.",
         "Agents stop receiving it and its sign-in is forgotten.",
     ),
     (
         "Os anexos devem somar até 40 MiB.",
         "Attachments must total at most 40 MiB.",
+    ),
+    ("Os anexos excedem 40 MiB.", "Attachments exceed 40 MiB."),
+    (
+        "Os anexos não pertencem a esta conversa.",
+        "Attachments do not belong to this conversation.",
     ),
     (
         "Os arquivos voltam a como estavam antes desta resposta. Um arquivo mudado de novo depois, nos mesmos trechos, fica como está. Nada é commitado nem preparado.",
@@ -1972,12 +3376,40 @@ const ENTRIES: &[(&str, &str)] = &[
         "Buttons react to the mouse pointer.",
     ),
     (
+        "Os chats laterais acompanham a conversa.",
+        "Side chats move with their conversation.",
+    ),
+    (
+        "Os comentários devem ter de 1 a 65.536 bytes de texto.",
+        "Comments must have 1 to 65,536 bytes of text.",
+    ),
+    (
         "Os cookies, logins e dados dos sites são removidos deste Mac, e as abas dele fecham.",
         "Its cookies, sign-ins and site data are removed from this Mac, and its tabs close.",
     ),
     (
+        "Os detalhes do tema no Open VSX estão indisponíveis no momento.",
+        "Open VSX theme details are unavailable right now.",
+    ),
+    (
         "Os diffs antigos foram liberados. O resumo e a confirmação foram preservados.",
         "Older diffs were released. The summary and acknowledgment are preserved.",
+    ),
+    (
+        "Os logs devem ser arquivos regulares.",
+        "Logs must be regular files.",
+    ),
+    (
+        "Os metadados do Git não estão em UTF-8",
+        "Git metadata is not UTF-8",
+    ),
+    (
+        "Os modos de depuração e equipe não podem ser combinados.",
+        "Debug and team modes cannot be combined.",
+    ),
+    (
+        "Os modos de depuração e planejamento não podem ser combinados.",
+        "Debug and planning modes cannot be combined.",
     ),
     (
         "Os nomes e ícones dos provedores indicam onde cada cópia foi encontrada. Skills invocadas ficam disponíveis entre provedores. Os switches controlam o catálogo do Sirus; não alteram a descoberta nas CLIs externas.",
@@ -1992,8 +3424,20 @@ const ENTRIES: &[(&str, &str)] = &[
         "Requests start in order after a completed response. The queue lasts for this app run only.",
     ),
     (
+        "Os scripts do projeto são executados somente no worktree da própria conversa.",
+        "Project scripts run only in a session's own worktree.",
+    ),
+    (
         "Os seis dígitos de `sirus-host pair`, ou do QR code da página Conexões do outro Mac.",
         "The six digits from `sirus-host pair`, or from the other Mac's Connections page.",
+    ),
+    (
+        "Os seletores de arquivo não estão disponíveis neste host.",
+        "File pickers are not available on this host.",
+    ),
+    (
+        "Os servidores MCP deste provedor não são gerenciados aqui.",
+        "This provider's MCP servers are not managed here.",
     ),
     (
         "Ou diga ao agente o que fazer em vez disso (recusa a aprovação)…",
@@ -2001,8 +3445,20 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Ou digite no app", "Or type in the app"),
     (
+        "Outra conta não é compatível com este provedor, ou o limite de perfis foi atingido.",
+        "Another account is not supported for this provider or the profile limit was reached.",
+    ),
+    (
+        "Outra conversa ainda usa este worktree; exclua sem remover o worktree.",
+        "Another session still works in this worktree; delete without removing it.",
+    ),
+    (
         "Outro documento está carregando. Tente novamente em instantes.",
         "Another document is loading. Try again in a moment.",
+    ),
+    (
+        "Outro documento está carregando. Tente novamente.",
+        "Another document is loading. Try again.",
     ),
     ("Outro limite", "Other limit"),
     ("Outros", "Others"),
@@ -2067,6 +3523,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Pedir aprovação", "Request approval"),
     ("Pediu alterações", "Requested changes"),
     ("Pendente", "Pending"),
+    ("Perfil de conta inválido.", "Invalid account profile."),
     (
         "Perfis personalizados precisam do macOS 14 ou mais recente.",
         "Custom profiles need macOS 14 or later.",
@@ -2101,6 +3558,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Personalizado", "Custom"),
     (
+        "Personalização da barra inválida.",
+        "Invalid rail customization.",
+    ),
+    (
         "Personalize materiais e movimento.",
         "Personalize materials and motion.",
     ),
@@ -2114,6 +3575,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Peça qualquer coisa", "Ask for anything"),
     ("Planejamento", "Planning"),
     ("Planejamento é só leitura", "Planning stays read-only"),
+    (
+        "Plano de fundo do chat inválido.",
+        "Invalid chat background.",
+    ),
     ("Pool da equipe", "Team pool"),
     ("Populares", "Popular"),
     ("Por modelo", "By model"),
@@ -2128,10 +3593,18 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Precisa de você", "Needs you"),
     ("Precisam entrar", "Need to sign in"),
     (
+        "Predefinido de dispositivo desconhecido.",
+        "Unknown device preset.",
+    ),
+    (
         "Preencher o código de {}",
         "Fill the authenticator code for {}",
     ),
     ("Preencher {}", "Fill {}"),
+    (
+        "Preferências de execução do modelo inválidas.",
+        "Invalid model execution preferences.",
+    ),
     ("Preferências padrão", "Core defaults"),
     ("Preparado", "Staged"),
     ("Preparados", "Staged"),
@@ -2187,13 +3660,32 @@ const ENTRIES: &[(&str, &str)] = &[
         "Cannot be turned off. Sirus never runs reset --hard, clean -fd, or worktree remove --force automatically.",
     ),
     ("Provedor", "Provider"),
+    (
+        "Provedor de título de commit indisponível",
+        "Commit title provider unavailable",
+    ),
+    ("Provedor desconhecido.", "Unknown provider."),
+    ("Provedor não reconhecido", "Unknown provider"),
     ("Provedor padrão", "Default provider"),
     ("Provedores", "Providers"),
     ("Prévia em HTML", "HTML preview"),
     ("Próximo projeto", "Next project"),
     ("Pular", "Skip"),
+    ("Pull exige confirmação.", "Pull requires confirmation."),
     ("Pull request criado", "Pull request created"),
     ("Pull request mesclado.", "Pull request merged."),
+    (
+        "Pull request não encontrado no GitHub.",
+        "Pull request not found on GitHub.",
+    ),
+    (
+        "Pull requests fixados inválidos.",
+        "Invalid pinned pull requests.",
+    ),
+    (
+        "Pull requests lidos inválidos.",
+        "Invalid read pull requests.",
+    ),
     (
         "Pull requests, acompanhamento de PRs, correção de CI e pushes por HTTPS usam a conta ativa. As contas ficam guardadas no GitHub CLI (gh).",
         "Pull requests, PR watches, CI fixes and HTTPS pushes use the active account. Accounts are kept by GitHub CLI (gh).",
@@ -2289,7 +3781,15 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Renomear {}", "Rename {}"),
     ("Renova em {}", "Renews in {}"),
     ("Repositório", "Repository"),
+    (
+        "Responda a cada pergunta nativa exatamente uma vez",
+        "Answer every native question exactly once",
+    ),
     ("Responder", "Reply"),
+    (
+        "Resposta do Codex desatualizada ou de outra conversa",
+        "Stale or foreign Codex response",
+    ),
     ("Resposta incompleta.", "Incomplete reply."),
     (
         "Resposta inesperada do GitHub.",
@@ -2423,8 +3923,16 @@ const ENTRIES: &[(&str, &str)] = &[
         "Select a workflow to add /skill-name to your draft.",
     ),
     (
+        "Selecione um modelo antes de ativar o modo de planejamento.",
+        "Select a model before enabling planning mode.",
+    ),
+    (
         "Selecione um pull request ou issue na lista.",
         "Select a pull request or issue from the list.",
+    ),
+    (
+        "Seleção de provedor de uso inválida.",
+        "Invalid usage provider selection.",
     ),
     ("Sem", "None"),
     (
@@ -2485,13 +3993,52 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Slide {} de {}", "Slide {} of {}"),
     ("Sobre", "About"),
     ("Solicitar aprovação", "Request approval"),
+    ("Solicitação de saída inválida.", "Invalid output request."),
+    (
+        "Solicitação de título de commit inválida",
+        "Invalid commit title request",
+    ),
+    (
+        "Somente alterações fora dos caminhos planejados podem ser mescladas assim mesmo.",
+        "Only changes outside the planned paths can be merged anyway.",
+    ),
+    (
+        "Somente arquivos regulares podem ser anexados.",
+        "Only regular files can be attached.",
+    ),
+    (
+        "Somente conversas do Claude e do Codex podem continuar em outra conta.",
+        "Only Claude and Codex conversations can continue on another account.",
+    ),
     ("Somente leitura", "Read-only"),
+    (
+        "Somente servidores localhost podem ser interrompidos.",
+        "Only localhost servers can be stopped.",
+    ),
+    (
+        "Somente um plano proposto pode ser descartado.",
+        "Only a proposed plan can be discarded.",
+    ),
+    (
+        "Somente uma mesclagem interrompida pode ser ignorada ou forçada.",
+        "Only a stopped merge can be skipped or forced.",
+    ),
+    (
+        "Somente uma tarefa interrompida por um conflito pode ser resolvida.",
+        "Only a task that stopped on a conflict can be resolved.",
+    ),
     ("Sons", "Sounds"),
     ("Sons de notificação", "Notification sounds"),
     ("Sortear visual", "Draw another look"),
     ("Squash e mesclar", "Squash and merge"),
+    ("Status do Git inválido", "Invalid Git status"),
+    (
+        "Sua conta do GitHub não pode alterar este repositório.",
+        "Your GitHub account cannot change this repository.",
+    ),
     ("Suave", "Smooth"),
     ("Suavização de fontes", "Font smoothing"),
+    ("Subagente desconhecido.", "Unknown subagent."),
     ("Subagente {}", "Subagent {}"),
     ("Sublinhado", "Underline"),
     (
@@ -2532,6 +4079,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Tarefa", "Task"),
     ("Tarefa concluída", "Task completed"),
+    (
+        "Tarefa em segundo plano desconhecida.",
+        "Unknown background task.",
+    ),
     ("Tarefas, projetos e metas", "Tasks, projects and goals"),
     (
         "Teclas digitadas na página aparecem embaixo do vídeo. Campos de senha nunca aparecem.",
@@ -2539,6 +4090,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Tem uma pergunta", "Has a question"),
     ("Tema", "Theme"),
+    (
+        "Tema do VS Code inválido: id duplicado.",
+        "Invalid VS Code theme: duplicate id.",
+    ),
     ("Tema do workspace", "Workspace theme"),
     ("Tentar de novo", "Try again"),
     ("Tentar novamente", "Try again"),
@@ -2584,6 +4139,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Translucidez", "Translucency"),
     ("Trazer de volta ao painel", "Bring back to the pane"),
     ("Trocar", "Change"),
+    (
+        "Trocar de branch exige confirmação.",
+        "Switching branches requires confirmation.",
+    ),
     ("Trocar de projeto", "Switch project"),
     ("Trocar filtro", "Switch filter"),
     ("Trocar modelo e esforço", "Change model and effort"),
@@ -2597,8 +4156,32 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Título do pull request", "Pull request title"),
     ("Título escrito por {}", "Title written by {}"),
     (
+        "Um agente da equipe está em execução de novo; aguarde a conclusão.",
+        "A team worker is running again; wait for it to finish.",
+    ),
+    (
+        "Um agente da equipe não pode coordenar outra equipe.",
+        "A team worker cannot coordinate another team.",
+    ),
+    (
         "Um aparelho conectado pode fazer o que esta janela faz: abrir sessões, enviar mensagens, aprovar ações, fazer commit e push. Seletores de arquivo, ditado e controle do computador ficam só no Mac. Remova o aparelho que não usar mais.",
         "A connected device can do what this window does: start sessions, send messages, approve actions, commit and push. Pickers, dictation and computer use stay on the Mac. Remove a device you no longer use.",
+    ),
+    (
+        "Um chat lateral não pode abrir outro chat lateral.",
+        "A side chat cannot open another side chat.",
+    ),
+    (
+        "Um chat lateral não pode coordenar uma equipe.",
+        "A side chat cannot coordinate a team.",
+    ),
+    (
+        "Um chat lateral ou uma conversa do Ask não pode acompanhar um pull request; use uma conversa principal.",
+        "A side chat or Ask conversation cannot watch a pull request; use a main session.",
+    ),
+    (
+        "Um chat lateral usa o espaço de trabalho da sua conversa principal; ele não pode removê-lo.",
+        "A side chat uses its main session's workspace; it cannot remove it.",
     ),
     (
         "Um círculo marca cada clique no vídeo.",
@@ -2608,14 +4191,50 @@ const ENTRIES: &[(&str, &str)] = &[
         "Um endereço localhost que o script serve, como http://localhost:5173.",
         "A localhost address the script serves, such as http://localhost:5173.",
     ),
+    (
+        "Um plano de equipe precisa de 1 a 3 tarefas.",
+        "A team plan needs 1 to 3 tasks.",
+    ),
+    (
+        "Um script do projeto deve ser um texto de no máximo 8 KiB.",
+        "A project script must be text of at most 8 KiB.",
+    ),
+    (
+        "Um script do projeto já está em execução nesta conversa.",
+        "A project script is already running in this session.",
+    ),
     ("Um script já está rodando", "A script is already running"),
     (
         "Um toque suave quando um agente termina um turno ou precisa de você. Não toca para a conversa que você está vendo.",
         "A soft chime when an agent finishes a turn or needs you. Not played for the conversation you are viewing.",
     ),
     (
+        "Uma conversa do Ask não pode coordenar uma equipe nem depurar.",
+        "An Ask conversation cannot coordinate a team or debug.",
+    ),
+    (
+        "Uma conversa do Ask não pode ser bifurcada.",
+        "An Ask conversation cannot be forked.",
+    ),
+    (
+        "Uma conversa do Ask não pode ser transferida.",
+        "An Ask conversation cannot be handed off.",
+    ),
+    (
+        "Uma conversa do Ask não tem chat lateral.",
+        "An Ask conversation has no side chat.",
+    ),
+    (
+        "Uma conversa do Ask usa a cópia do projeto; ela não pode removê-la.",
+        "An Ask conversation uses the project's checkout; it cannot remove it.",
+    ),
+    (
         "Uma conversa do Claude com mais de 200 mil tokens parada compacta uns dois minutos antes do cache do prompt expirar (1 hora na assinatura, 5 minutos com chave de API), assim ao voltar a conversa inteira não é reenviada. Aparece como um turno /compact; conversas adiadas ficam como estão.",
         "A Claude conversation over 200,000 tokens that sits idle compacts about two minutes before its prompt cache expires (1 hour on a subscription, 5 minutes with an API key), so coming back does not resend the whole conversation. It shows as a /compact turn; snoozed conversations are left alone.",
+    ),
+    (
+        "Uma conversa em execução ou em espera não pode ser adiada.",
+        "A conversation that is running or waiting cannot be snoozed.",
     ),
     (
         "Uma conversa está trabalhando nesta pasta. Puxe quando ela terminar.",
@@ -2626,6 +4245,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "A conversation stopped by the provider's limit sends \"Continue from where you left off.\" at the reset. Each notice can cancel it.",
     ),
     ("Uma conversa à parte.", "A separate conversation."),
+    (
+        "Uma equipe precisa de 1 a 3 tarefas.",
+        "A team needs 1 to 3 tasks.",
+    ),
     (
         "Uma imagem atrás dos painéis de conversa. Ela fica neste Mac.",
         "An image behind the conversation panels. It stays on this Mac.",
@@ -2652,6 +4275,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Usar shell padrão do sistema", "Use system default shell"),
     ("Usar uma skill", "Use a skill"),
     (
+        "Use PDF, DOCX, XLSX, PPTX ou CSV. Converta antes os arquivos DOC/XLS/PPT antigos.",
+        "Use PDF, DOCX, XLSX, PPTX or CSV. Convert legacy DOC/XLS/PPT files first.",
+    ),
+    (
         "Use PDF, DOCX, XLSX, PPTX ou CSV. Converta arquivos antigos DOC/XLS/PPT primeiro.",
         "Use PDF, DOCX, XLSX, PPTX or CSV. Convert older DOC/XLS/PPT files first.",
     ),
@@ -2667,6 +4294,24 @@ const ENTRIES: &[(&str, &str)] = &[
         "Use um nome curto que ainda não existe, nem Padrão nem Privado.",
         "Use a short name that is not already taken, Default or Private.",
     ),
+    (
+        "Use um nome de pasta com letras, números, hífens, pontos ou sublinhados.",
+        "Use a folder name of letters, digits, dashes, dots or underscores.",
+    ),
+    (
+        "Use um nome de projeto de 1 a 100 caracteres.",
+        "Use a project name of 1–100 characters.",
+    ),
+    (
+        "Use um nome imprimível único de até 255 bytes, sem separadores nem nomes reservados de espaço de trabalho.",
+        "Use a single printable name up to 255 bytes, without separators or reserved workspace names.",
+    ),
+    (
+        "Use um owner/repo do GitHub, um endereço https:// ou um endereço git@.",
+        "Use a GitHub owner/repo, an https:// address or a git@ address.",
+    ),
+    ("Use um único emoji.", "Use a single emoji."),
+    ("Use uma imagem PNG ou JPEG.", "Use a PNG or JPEG image."),
     (
         "Use ⌘ com uma letra ou número livre.",
         "Use ⌘ with a free letter or number.",
@@ -2742,50 +4387,400 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Workers, KV, R2 e D1", "Workers, KV, R2 and D1"),
     ("Workspace da sessão", "Session workspace"),
     ("Workspace padrão da sessão", "Default session workspace"),
+    (
+        "a conversa atingiu o limite de terminais",
+        "session reached the terminal limit",
+    ),
+    (
+        "a conversa já tem um agente em execução",
+        "session already has a running agent",
+    ),
+    (
+        "a entrada servers não é um objeto",
+        "the servers entry is not an object",
+    ),
+    (
+        "a execução foi cancelada antes de a inicialização ser concluída",
+        "execution was cancelled before startup completed",
+    ),
+    (
+        "a execução foi cancelada durante a captura do espaço de trabalho",
+        "execution was cancelled during workspace capture",
+    ),
+    (
+        "a limpeza do utilitário expirou",
+        "utility cleanup timed out",
+    ),
+    ("a mensagem do commit está vazia", "commit message is empty"),
+    (
+        "a mensagem do commit excede o limite de 8 KiB",
+        "commit message exceeds the 8 KiB limit",
+    ),
+    ("a mensagem está vazia", "prompt is empty"),
+    (
+        "a mensagem excede o limite de 64 KiB",
+        "prompt exceeds the 64 KiB limit",
+    ),
+    (
+        "a pasta deve ser um caminho absoluto",
+        "the folder must be an absolute path",
+    ),
+    (
+        "a pasta do projeto excede seus limites",
+        "project folder exceeds its bounds",
+    ),
+    ("a pasta não existe", "the folder does not exist"),
+    (
+        "a pasta pai deve ser um caminho absoluto",
+        "the parent folder must be an absolute path",
+    ),
+    ("a pasta pai não existe", "the parent folder does not exist"),
+    (
+        "a prévia do diff exige um arquivo",
+        "diff preview requires a file",
+    ),
+    (
+        "a prévia suporta somente arquivos regulares",
+        "preview supports regular files only",
+    ),
+    (
+        "a raiz da skill mudou durante a leitura",
+        "skill root changed during read",
+    ),
+    (
+        "a saída limitada do utilitário foi excedida",
+        "bounded utility output exceeded",
+    ),
     ("abaixo do ritmo", "below pace"),
+    ("abrir um app exige um Mac", "opening an app needs a Mac"),
     ("acima do orçamento de hoje", "over today's budget"),
     ("acima do ritmo", "above pace"),
     ("agente", "agent"),
     ("agentes", "agents"),
     ("agora", "now"),
+    (
+        "aparência do projeto inválida",
+        "invalid project appearance",
+    ),
+    (
+        "aqui só abrem imagens PNG, JPEG, GIF e WebP",
+        "only PNG, JPEG, GIF and WebP images open here",
+    ),
+    (
+        "armazenamento de skills indisponível",
+        "skill storage unavailable",
+    ),
     ("arquivo", "file"),
+    (
+        "arquivo binário não pode ser visualizado como texto",
+        "binary file cannot be previewed as text",
+    ),
+    (
+        "arquivo do espaço de trabalho de outra conversa",
+        "foreign workspace file",
+    ),
+    ("arquivo grande demais", "file too large"),
     ("arquivos", "files"),
+    (
+        "as pastas abertas da barra lateral excedem seus limites",
+        "open sidebar folders exceed their bounds",
+    ),
+    (
+        "as referências da barra lateral excedem seus limites",
+        "sidebar references exceed their bounds",
+    ),
     ("atual", "current"),
+    ("banco de dados indisponível", "database unavailable"),
     ("binário", "binary"),
     ("bloqueado", "blocked"),
+    ("branch ou commit inválido", "invalid branch or commit"),
+    (
+        "clientRequestId deve ser um UUID com hífens",
+        "clientRequestId must be a hyphenated UUID",
+    ),
     ("comando", "command"),
     ("comandos", "commands"),
+    (
+        "consulta de arquivo do espaço de trabalho inválida",
+        "invalid workspace file query",
+    ),
+    ("consulta de busca inválida", "invalid search query"),
+    (
+        "conversa do agente da equipe não encontrada",
+        "team worker session not found",
+    ),
+    ("conversa não encontrada", "session not found"),
+    (
+        "digite o caminho completo da pasta",
+        "type the folder's full path",
+    ),
+    (
+        "documento da skill fora das raízes do catálogo",
+        "skill document outside catalog roots",
+    ),
     ("e mais {} arquivos", "and {} more files"),
+    ("editor desconhecido", "unknown editor"),
+    ("escolha uma pasta pai", "choose a parent folder"),
+    ("escopo MCP desconhecido", "unknown MCP scope"),
+    ("esta conversa não tem equipe", "this session has no team"),
+    (
+        "este modelo está desativado em Configurações",
+        "this model is disabled in Settings",
+    ),
+    (
+        "este provedor está desativado em Configurações",
+        "this provider is disabled in Settings",
+    ),
     ("estes arquivos", "these files"),
     ("estimativa a preços de tabela", "estimate at list prices"),
     (
         "estimativa parcial, há modelos sem preço",
         "partial estimate, some models have no price",
     ),
+    ("falha no git branch", "git branch failed"),
+    ("falha no git fetch", "git fetch failed"),
     ("falhou", "failed"),
     ("feito", "done"),
     ("ferramenta", "tool"),
     ("ferramentas", "tools"),
+    ("guia não encontrado", "guide not found"),
     ("https://exemplo.com", "https://example.com"),
     ("há {} dias", "{} days ago"),
     ("há {} h", "{} h ago"),
     ("há {} min", "{} min ago"),
     ("iPhone conectado", "iPhone connected"),
+    ("id de terminal inválido", "invalid terminal id"),
+    (
+        "interrompa as conversas em execução antes de remover este projeto",
+        "stop running sessions before removing this project",
+    ),
+    (
+        "interrompa o agente antes de excluir esta conversa",
+        "stop the agent before deleting this session",
+    ),
     ("liberado", "allowed"),
+    ("limite do diff", "diff limit"),
+    ("listagem de worktrees inválida", "invalid worktree listing"),
+    ("mcp_servers não é uma tabela", "mcp_servers is not a table"),
+    ("nenhum projeto", "no project"),
+    (
+        "nenhum remoto origin está configurado",
+        "no origin remote is configured",
+    ),
+    ("nenhum servidor com esse nome", "no server with that name"),
+    ("nome de servidor inválido", "invalid server name"),
+    ("nome do branch inválido", "invalid branch name"),
+    (
+        "não foi possível alocar um caminho de worktree único",
+        "could not allocate a unique worktree path",
+    ),
+    ("não há diretório para abrir", "no directory to open"),
+    ("não há pasta pai", "no parent folder"),
+    (
+        "não é possível abrir caminhos reservados",
+        "cannot open reserved paths",
+    ),
+    (
+        "não é possível abrir um pull request a partir de um HEAD destacado",
+        "cannot open a pull request from a detached HEAD",
+    ),
+    (
+        "não é possível alterar o provedor ou o modelo de uma conversa em execução",
+        "cannot change a running session provider or model",
+    ),
+    (
+        "não é possível enviar um HEAD destacado",
+        "cannot push a detached HEAD",
+    ),
+    (
+        "não é possível gravar caminhos reservados",
+        "cannot write reserved paths",
+    ),
+    ("não é possível gravar no git", "cannot write to git"),
+    (
+        "não é possível inspecionar a configuração de filtros do Git com segurança",
+        "cannot inspect Git filter configuration safely",
+    ),
+    (
+        "não é possível inspecionar a configuração de rede do Git com segurança",
+        "cannot inspect Git network configuration safely",
+    ),
+    (
+        "não é possível inspecionar a configuração do Git com segurança",
+        "cannot inspect Git configuration safely",
+    ),
+    (
+        "não é possível inspecionar com segurança os processos do terminal próprios",
+        "cannot inspect owned terminal processes safely",
+    ),
+    (
+        "não é possível inspecionar os hooks do Git configurados com segurança",
+        "cannot inspect configured Git hooks safely",
+    ),
+    ("não é possível ler os processos", "cannot read processes"),
+    (
+        "não é possível puxar para um HEAD destacado",
+        "cannot pull into a detached HEAD",
+    ),
+    ("não é um TOML válido", "not valid TOML"),
+    ("não é um arquivo de imagem", "not an image file"),
+    ("não é um arquivo de vídeo", "not a video file"),
+    ("não é um arquivo regular", "not a regular file"),
+    ("não é um branch de movimentação", "not a move branch"),
+    ("não é um endereço do GitHub", "not a GitHub address"),
+    (
+        "o app não conseguiu abrir esta pasta",
+        "the app could not open this folder",
+    ),
+    (
+        "o arquivo não é um objeto JSON",
+        "the file is not a JSON object",
+    ),
+    (
+        "o arquivo é grande demais para editar (limite de 2 MiB)",
+        "file is too large to edit (2 MiB limit)",
+    ),
+    (
+        "o arquivo é grande demais para visualizar (limite de 2 MiB)",
+        "file is too large to preview (2 MiB limit)",
+    ),
+    ("o caminho deve ser absoluto", "path must be absolute"),
+    ("o caminho do worktree está vazio", "worktree path is empty"),
+    ("o caminho não é um diretório", "path is not a directory"),
+    (
+        "o caminho sai da raiz permitida do projeto ou do worktree",
+        "path escapes the allowed project or worktree root",
+    ),
+    (
+        "o conteúdo do arquivo excede o limite de 1 MiB",
+        "file content exceeds the 1 MiB limit",
+    ),
+    (
+        "o diretório vinculado do espaço de trabalho está indisponível",
+        "linked workspace directory is unavailable",
+    ),
+    (
+        "o documento da skill excede o limite de 64 KiB ou não é um arquivo regular",
+        "skill document exceeds the 64 KiB limit or is not a regular file",
+    ),
+    (
+        "o documento da skill não está em UTF-8",
+        "skill document is not UTF-8",
+    ),
+    (
+        "o editor grava apenas arquivos regulares",
+        "editor writes regular files only",
+    ),
+    ("o editor não está instalado", "editor is not installed"),
+    (
+        "o espaço de trabalho está fora da raiz do Git",
+        "workspace is outside Git root",
+    ),
+    (
+        "o espaço de trabalho mudou durante a admissão do turno",
+        "workspace changed during turn admission",
+    ),
+    (
+        "o espaço de trabalho mudou durante a busca de arquivos",
+        "workspace changed during file search",
+    ),
+    (
+        "o espaço de trabalho mudou durante a busca de texto",
+        "workspace changed during text search",
+    ),
+    (
+        "o git fetch não terminou a tempo",
+        "git fetch did not finish in time",
+    ),
+    (
+        "o git pull não terminou em 30 segundos.",
+        "git pull did not finish in 30 seconds.",
+    ),
     (
         "o motor de aparelhos não respondeu.",
         "the device hub did not answer.",
     ),
+    (
+        "o nome do projeto deve ter de 1 a 200 caracteres imprimíveis",
+        "project name must contain 1–200 printable characters",
+    ),
+    (
+        "o origin não tem branch padrão",
+        "origin has no default branch",
+    ),
+    (
+        "o tamanho do documento da skill mudou",
+        "skill document changed size",
+    ),
+    ("o terminal não está em execução", "terminal is not running"),
+    (
+        "o título da conversa deve ter de 1 a 200 caracteres",
+        "session title must contain 1–200 characters",
+    ),
+    (
+        "o título da conversa excede 200 caracteres",
+        "session title exceeds 200 characters",
+    ),
+    (
+        "o worktree contém alterações não commitadas ou não rastreadas; preserve-as antes de remover",
+        "worktree contains uncommitted or untracked changes; preserve them before removal",
+    ),
     ("ontem", "yesterday"),
+    ("origem da skill indisponível", "skill source unavailable"),
+    ("origem da skill não encontrada", "skill source not found"),
+    ("origem de skill inválida", "invalid skill source"),
+    (
+        "os caminhos do worktree não estão em UTF-8",
+        "worktree paths are not UTF-8",
+    ),
     ("parcial", "partial"),
+    (
+        "pasta de skill portátil insegura",
+        "unsafe portable skill folder",
+    ),
+    ("pastas de projeto demais", "too many project folders"),
     ("por {}", "by {}"),
+    ("projeto não encontrado", "project not found"),
     ("recusado", "declined"),
+    (
+        "recusando caminho de diff absoluto ou que sai do diretório",
+        "refusing absolute or traversing diff path",
+    ),
+    (
+        "remover um worktree exclui essa cópia de trabalho. confirme explicitamente.",
+        "removing a worktree deletes that working copy. confirm explicitly.",
+    ),
+    (
+        "remover worktrees da equipe exclui essas cópias de trabalho. confirme explicitamente.",
+        "removing team worktrees deletes those working copies. confirm explicitly.",
+    ),
+    (
+        "remover worktrees restantes exclui essas pastas. confirme explicitamente.",
+        "removing leftover worktrees deletes those folders. confirm explicitly.",
+    ),
     ("renova em {}", "resets in {}"),
+    (
+        "responsável pela skill de outra conversa",
+        "foreign skill owner",
+    ),
+    (
+        "responsável pelo espaço de trabalho de outra conversa",
+        "foreign workspace owner",
+    ),
     ("resumido", "truncated"),
+    (
+        "revisão do turno não disponível",
+        "turn review not available",
+    ),
     ("ritmo uniforme em {}%", "even pace at {}%"),
     ("saída {}", "exit {}"),
     ("sem preço", "no price"),
+    ("tarefa da equipe não encontrada", "team task not found"),
     ("trabalhando", "working"),
+    (
+        "worktrees isolados exigem um repositório Git",
+        "isolated worktrees require a Git repository",
+    ),
     ("{} agentes", "{} agents"),
     ("{} ainda não está pronto", "{} is not ready yet"),
     ("{} anexos", "{} attachments"),
@@ -2860,7 +4855,12 @@ const ENTRIES: &[(&str, &str)] = &[
         "It is a draft: mark it ready before merging.",
     ),
     ("Ícone", "Icon"),
+    ("Ícone de projeto desconhecido.", "Unknown project icon."),
     ("Ícone do Dock", "Dock icon"),
+    (
+        "Ícone ou estilo do Astro desconhecido.",
+        "Unknown Astro icon or style.",
+    ),
     ("Últimos 30 dias", "Last 30 days"),
     ("Últimos 7 dias", "Last 7 days"),
     ("últimas 24 horas", "last 24 hours"),
@@ -2892,6 +4892,16 @@ mod tests {
                 "no translation: {portuguese}"
             );
         }
+    }
+
+    #[test]
+    fn a_host_message_reads_in_portuguese_when_known() {
+        set_locale("pt-BR");
+        assert_eq!(
+            from_host("This reply cannot take instructions now."),
+            "Esta resposta não aceita instruções agora."
+        );
+        assert_eq!(from_host("Something else."), "Something else.");
     }
 
     #[test]

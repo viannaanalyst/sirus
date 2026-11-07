@@ -177,6 +177,12 @@ fn compacting(messages: &[Value]) -> bool {
         })
 }
 
+/// Whether the conversation takes an instruction this moment. During a compaction a message simply
+/// stays in the queue and goes out behind it.
+fn takes_instruction(provider: &str, status: &str, messages: &[Value]) -> bool {
+    can_steer(provider, status) && !compacting(messages)
+}
+
 /// A sent prompt as the person wrote it, without the reference block the agent received.
 fn request_of(content: &str) -> &str {
     let marker = format!("\n\n{REFERENCE_HEADER}\n");
@@ -715,8 +721,11 @@ impl Shell {
             .as_bool()
             .unwrap_or(false);
         let steer = (redirect || steer_by_default != invert)
-            && can_steer(conversation.provider, &conversation.status)
-            && !compacting(&conversation.messages)
+            && takes_instruction(
+                conversation.provider,
+                &conversation.status,
+                &conversation.messages,
+            )
             && !out.team
             && !out.prompt.is_empty();
         if steer {
@@ -1146,7 +1155,11 @@ impl Shell {
             .get(&session_id)
             .filter(|q| !q.items.is_empty())?;
         let count = queue.items.len();
-        let steerable = can_steer(conversation.provider, &conversation.status);
+        let steerable = takes_instruction(
+            conversation.provider,
+            &conversation.status,
+            &conversation.messages,
+        );
         let editing = self.queues.editing.clone();
         let edit_error = self.queues.edit_error;
         let steering = self.queues.steering.is_some();
@@ -1817,6 +1830,14 @@ mod tests {
         let args = steer_args("s", "go", &[("a1".into(), "shot.png".into())]);
         assert_eq!(args["attachmentIds"], json!(["a1"]));
         assert_eq!(args["attachmentOwner"], "session:s");
+    }
+
+    #[test]
+    fn a_compaction_takes_no_instruction() {
+        let compacting = [json!({ "role": "user", "content": "/compact" })];
+        let replying = [json!({ "role": "user", "content": "fix it" })];
+        assert!(!takes_instruction("claude", "running", &compacting));
+        assert!(takes_instruction("claude", "running", &replying));
     }
 
     #[test]

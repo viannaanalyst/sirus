@@ -86,6 +86,9 @@ pub(crate) mod global_search;
 /// The row of actions under a finished reply: copy, try again, undo, side chat (ADR-187).
 #[path = "message_actions.rs"]
 pub(crate) mod message_actions;
+/// A failure as a toast that leaves by itself (problem_toast.rs).
+#[path = "problem_toast.rs"]
+mod problem_toast;
 /// ⌘F: the find bar over the open conversation (transcript_find.rs).
 #[path = "transcript_find.rs"]
 pub(crate) mod transcript_find;
@@ -1265,6 +1268,8 @@ pub struct Shell {
     current_project: Option<usize>,
     marked: Option<Range<usize>>,
     problem: Option<String>,
+    /// The problem whose toast is on screen, so its timer starts once (problem_toast.rs).
+    problem_shown: Option<String>,
     connected: bool,
     files: (String, Vec<(String, String)>),
     diffs: HashMap<String, (u32, u32)>,
@@ -1618,6 +1623,7 @@ impl Shell {
             current_project: None,
             marked: None,
             problem: None,
+            problem_shown: None,
             connected: false,
             files: (String::new(), Vec::new()),
             diffs: HashMap::new(),
@@ -12572,15 +12578,6 @@ impl Shell {
                     .child(icon("refresh", 12.)),
             )
             .when_some(self.computer_chip(cx), |d, chip| d.child(chip))
-            .when_some(self.problem.clone(), |d, problem| {
-                d.child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .text_color(rgb(0xe08a8a))
-                        .child(problem),
-                )
-            })
             .children(agents)
             .child(div().flex_1())
             .when_some(self.update_notice(cx), |d, notice| d.child(notice))
@@ -16052,7 +16049,7 @@ fn base64(data: &[u8]) -> String {
 fn error_text(value: &Value) -> String {
     value["message"]
         .as_str()
-        .map_or_else(|| value.to_string(), str::to_owned)
+        .map_or_else(|| value.to_string(), crate::i18n::from_host)
 }
 
 /// A model id as a person reads it: `claude-opus-5-5` is Opus 5.5, `gpt-5.5` is GPT-5.5.
@@ -17138,6 +17135,7 @@ impl Render for Shell {
         let context_popup = self.context_popup_view(now, &mut moving, cx);
         let sidebar_card = self.sidebar_card_view(now, &mut moving, cx);
         let activity_cards = self.cards_view(cx);
+        let problem_toast = self.problem_toast(cx);
         let project_menu = self.project_menu_view(now, &mut moving, cx);
         let filter_menu = self.filter_menu_view(now, &mut moving, cx);
         let sidebar_options = self.sidebar_options_view(now, &mut moving, cx);
@@ -17402,6 +17400,7 @@ impl Render for Shell {
             .children(usage_page)
             // Over Settings and Usage too, whose pages would cover them.
             .children(activity_cards)
+            .children(problem_toast)
             .children(palette_view)
             .children(first_run)
             .children(stats)

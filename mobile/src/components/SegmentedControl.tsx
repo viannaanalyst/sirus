@@ -1,82 +1,63 @@
-import ExpoSegmentedControl from "@expo/ui/community/segmented-control";
-import { requireNativeView, requireOptionalNativeModule } from "expo";
-import { View, type NativeSyntheticEvent, type ViewProps } from "react-native";
+import { useEffect, useState } from "react";
+import { Pressable, View } from "react-native";
+import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 
-import { useAppearancePreferences } from "../features/settings/appearance/AppearancePreferencesProvider";
-import { flattenThemeColor, themeColorWithAlpha, themeColorWithContrast } from "../lib/mobileTheme";
+import { inkOn, useMacAccent } from "../data/mac-accent";
+import { AppText } from "./AppText";
 
-interface NativeSegmentedControlProps extends ViewProps {
-  readonly labels: string[];
-  readonly selectedIndex: number;
-  readonly trackColor: string;
-  readonly selectedColor: string;
-  readonly textColor: string;
-  readonly mutedColor: string;
-  readonly appearance: string;
-  readonly onSelectionChange: (event: NativeSyntheticEvent<{ index: number }>) => void;
-}
-
-// A build from before runtime 4 has no `SirusNativeControls` view; it keeps the untinted
-// SwiftUI picker from `@expo/ui`.
-function resolveNativeSegmentedControl() {
-  try {
-    const module = requireOptionalNativeModule<{
-      readonly ViewPrototypes?: { readonly SirusNativeControls_SegmentedControl?: unknown };
-    }>("SirusNativeControls");
-    if (!module?.ViewPrototypes?.SirusNativeControls_SegmentedControl) return null;
-    return requireNativeView<NativeSegmentedControlProps>("SirusNativeControls", "SegmentedControl");
-  } catch {
-    return null;
-  }
-}
-const NativeSegmentedControl = resolveNativeSegmentedControl();
+/** The Mac's segment thumb: 220 ms, ease-out (`segment_pill.rs`). */
+const SLIDE = { duration: 220, easing: Easing.out(Easing.exp) };
+const TRACK_PADDING = 3;
 
 export interface SegmentedControlProps<Value extends string | number> {
   readonly options: readonly { readonly value: Value; readonly label: string }[];
   readonly selected: Value;
   readonly onSelect: (value: Value) => void;
-  /** Compact is a 32-point capsule; the default is 36 points. */
+  /** Compact is 32 points tall; the default is 36. */
   readonly size?: "default" | "compact";
   readonly className?: string;
 }
 
 /**
- * A native iOS segmented control in the theme's colours: the track is the prominent action
- * colour washed over the screen, the selected segment is the prominent action in dark and the
- * secondary fill in light, and the idle labels keep a readable contrast against the track.
+ * The Mac's segmented control: equal segments on a quiet track, and one thumb in the Mac's accent
+ * that slides to the chosen segment, whose label takes the ink that reads on it.
  */
 export function SegmentedControl<Value extends string | number>(props: SegmentedControlProps<Value>) {
-  const { themeVariables: colors, themeAppearance: colorScheme } = useAppearancePreferences();
-  const selectedIndex = props.options.findIndex((option) => option.value === props.selected);
-  const select = (index: number) => {
-    const option = props.options[index];
-    if (option) props.onSelect(option.value);
-  };
-  if (!NativeSegmentedControl) {
-    return <View className={props.className}>
-      <ExpoSegmentedControl
-        values={props.options.map((option) => option.label)}
-        selectedIndex={selectedIndex}
-        onChange={({ nativeEvent }) => select(nativeEvent.selectedSegmentIndex)}
-      />
-    </View>;
-  }
-  const dark = colorScheme === "dark";
-  const trackColor = flattenThemeColor(
-    themeColorWithAlpha(colors["--color-prominent-action"], dark ? 0.18 : 0.07),
-    colors["--color-screen"],
-  );
+  const accent = useMacAccent();
+  const count = Math.max(props.options.length, 1);
+  const chosen = Math.max(props.options.findIndex((option) => option.value === props.selected), 0);
+  const [width, setWidth] = useState(0);
+  const cell = useSharedValue(0);
+  const place = useSharedValue(chosen);
+  useEffect(() => {
+    place.value = withTiming(chosen, SLIDE);
+  }, [chosen, place]);
+  const thumb = useAnimatedStyle(() => ({
+    width: cell.value,
+    transform: [{ translateX: place.value * cell.value }],
+  }));
+  const ink = inkOn(accent);
   return <View className={props.className}>
-    <NativeSegmentedControl
-      labels={props.options.map((option) => option.label)}
-      selectedIndex={selectedIndex}
-      trackColor={trackColor}
-      selectedColor={dark ? colors["--color-prominent-action"] : colors["--color-secondary"]}
-      textColor={dark ? colors["--color-prominent-action-foreground"] : colors["--color-secondary-foreground"]}
-      mutedColor={themeColorWithContrast(colors["--color-foreground-muted"], trackColor, dark ? 7 : 4.5)}
-      appearance={colorScheme}
-      onSelectionChange={({ nativeEvent }) => select(nativeEvent.index)}
-      style={{ height: props.size === "compact" ? 32 : 36 }}
-    />
+    <View
+      className="flex-row rounded-[10px] bg-card"
+      style={{ height: props.size === "compact" ? 32 : 36, padding: TRACK_PADDING }}
+      accessibilityRole="tablist"
+      onLayout={(event) => {
+        const inner = event.nativeEvent.layout.width - TRACK_PADDING * 2;
+        setWidth(inner);
+        cell.value = inner / count;
+      }}>
+      {width > 0 ? <Animated.View
+        pointerEvents="none"
+        style={[thumb, { position: "absolute", top: TRACK_PADDING, bottom: TRACK_PADDING, left: TRACK_PADDING, borderRadius: 7, backgroundColor: accent }]} /> : null}
+      {props.options.map((option, index) => <Pressable
+        key={String(option.value)}
+        onPress={() => props.onSelect(option.value)}
+        accessibilityRole="tab"
+        accessibilityState={{ selected: index === chosen }}
+        className="flex-1 items-center justify-center active:opacity-70">
+        <AppText numberOfLines={1} className={index === chosen ? "text-[13px] font-app-medium" : "text-[13px] text-foreground-muted"} style={index === chosen ? { color: ink } : undefined}>{option.label}</AppText>
+      </Pressable>)}
+    </View>
   </View>;
 }

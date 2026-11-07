@@ -26,7 +26,7 @@ export const WorkingPill = memo(function WorkingPill(props: { readonly activity:
   if (!activity) return null;
   const progress = teamProgress(teamPhases(activity.items));
   const elapsed = formatActivityDuration(activityElapsed(activity, now));
-  const label = progress.total ? `Trabalhando, ${progress.running} de ${progress.total} subagentes em execução` : "Trabalhando";
+  const label = progress.total ? `Trabalhando, ${progress.done} de ${progress.total} subagentes prontos` : "Trabalhando";
   return <Pressable onPress={() => { void Haptics.selectionAsync().catch(() => undefined); props.onPress?.(); }} accessibilityRole="button" accessibilityLabel={label} accessibilityValue={{ text: elapsed }} accessibilityHint="Vai ao trabalho atual"
     style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1, transform: [{ scale: pressed ? 0.96 : 1 }] })}>
   <GlassSurface style={{ borderRadius: 19 }} className="flex-row items-center gap-2 px-[15px]" pointerEvents="none">
@@ -34,7 +34,7 @@ export const WorkingPill = memo(function WorkingPill(props: { readonly activity:
     {progress.total ? <>
       <View className="h-4 w-px bg-border-subtle" />
       <SymbolView name="person.2" size={16} tintColorClassName="accent-foreground-muted" />
-      <AppText className="text-[13.5px] tabular-nums text-foreground-muted">{`${progress.running}/${progress.total}`}</AppText>
+      <AppText className="text-[13.5px] tabular-nums text-foreground-muted">{`${progress.done} de ${progress.total}`}</AppText>
     </> : null}
   </GlassSurface>
   </Pressable>;

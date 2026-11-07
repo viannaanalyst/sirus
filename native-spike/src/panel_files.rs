@@ -1403,7 +1403,7 @@ impl FilesPanel {
                         .child(crate::segment_pill::pill(
                             "files-view",
                             usize::from(opened.mode == Mode::Source),
-                            content(0.12),
+                            crate::theme::accent(),
                             crate::theme::RADIUS_SM,
                         ))
                         .child(Self::segment(
@@ -1447,7 +1447,11 @@ impl FilesPanel {
             .flex()
             .items_center()
             .text_size(px(11.5))
-            .text_color(content(if on { 0.95 } else { 0.5 }))
+            .text_color(if on {
+                crate::theme::on_accent()
+            } else {
+                content(0.5)
+            })
             .when(!on, |segment| {
                 segment.hover(|style| style.bg(content(0.06)))
             })

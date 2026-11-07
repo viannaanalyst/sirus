@@ -4,7 +4,9 @@ import { useRef, useState } from "react";
 import { ActivityIndicator, Alert, Pressable, View } from "react-native";
 
 import { inkOn, useMacAccent } from "../data/mac-accent";
+import { voiceLevel } from "../lib/project-avatar";
 import { SymbolView } from "./AppSymbol";
+import { dictationLevel } from "./ListeningRobot";
 import { ICON } from "../lib/icon-sizes";
 
 /**
@@ -25,10 +27,17 @@ export function ComposerSend(props: {
   readonly canSend?: boolean;
   /** The Mac's accent colour (`#rrggbb`), the fill of send and stop; the first computer's by default. */
   readonly accent?: string;
+  /** The microphone opened or closed: the composer shows its robot meanwhile. */
+  readonly onListening?: (listening: boolean) => void;
 }) {
   const macAccent = useMacAccent();
   const accent = props.accent ?? macAccent;
-  const [listening, setListening] = useState(false);
+  const [listening, setListeningState] = useState(false);
+  const setListening = (on: boolean) => {
+    setListeningState(on);
+    props.onListening?.(on);
+    if (!on) dictationLevel.value = 0;
+  };
   // What was in the field when dictation began; the live words follow it.
   const base = useRef("");
   const join = (spoken: string) => [base.current.trimEnd(), spoken.trim()].filter(Boolean).join(" ");
@@ -37,6 +46,9 @@ export function ComposerSend(props: {
   useSpeechRecognitionEvent("result", (event) => {
     const spoken = event.results[0]?.transcript ?? "";
     props.onTextChange(join(spoken));
+  });
+  useSpeechRecognitionEvent("volumechange", (event) => {
+    dictationLevel.value = voiceLevel(event.value);
   });
   useSpeechRecognitionEvent("end", () => setListening(false));
   useSpeechRecognitionEvent("error", (event) => {
@@ -52,7 +64,7 @@ export function ComposerSend(props: {
     }
     base.current = props.text;
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    ExpoSpeechRecognitionModule.start({ lang: "pt-BR", interimResults: true, continuous: true, addsPunctuation: true });
+    ExpoSpeechRecognitionModule.start({ lang: "pt-BR", interimResults: true, continuous: true, addsPunctuation: true, volumeChangeEventOptions: { enabled: true, intervalMillis: 80 } });
     setListening(true);
   };
   const stopDictation = () => {

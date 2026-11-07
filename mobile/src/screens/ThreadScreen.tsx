@@ -12,6 +12,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { Message, MessageAttachment, PromptAttachment, TurnActivity } from "@sirus/client/types";
 import { afterSend, executionWithModes, promptExtras, setDebugging, setGoal, setPlanning, setTeam } from "@sirus/lib/composer-modes";
 
+import { ListeningRobot } from "../components/ListeningRobot";
 import { ComposerSend } from "../components/ComposerSend";
 import { ProviderIcon } from "../components/ProviderIcon";
 import { ControlPillMenu } from "../components/ControlPillMenu";
@@ -333,6 +334,12 @@ function Composer(props: {
   const [attachments, setAttachments] = useState<PromptAttachment[]>([]);
   const returnSends = useSirus((state) => state.prefs.returnKey === "send");
   const [busy, setBusy] = useState<"sending" | "attaching" | null>(null);
+  const [listening, setListening] = useState(false);
+  const project = useSirus((state) => {
+    const data = state.data[props.computerId];
+    const projectId = data?.sessions.find((item) => item.id === props.sessionId)?.projectId;
+    return data?.projects.find((item) => item.id === projectId);
+  });
   const canSend = (text.trim().length > 0 || attachments.length > 0) && !busy;
   const { execution, provider, model, session } = useConversationModel(props.computerId, props.sessionId);
   const accent = useMacAccent(props.computerId);
@@ -389,7 +396,7 @@ function Composer(props: {
     <SymbolView name="plus" size={ICON.composerPlus} tintColorClassName="accent-icon" />
   </Pressable>;
   const send = <ComposerSend text={text} onTextChange={setText} onSend={() => void submit()} sending={busy === "sending"} canSend={canSend} accent={accent}
-    onStop={props.working && !attachments.length ? stop : undefined} disabled={busy === "attaching"} />;
+    onStop={props.working && !attachments.length ? stop : undefined} disabled={busy === "attaching"} onListening={setListening} />;
   const field = <ComposerField ref={composer.field} value={text} onChangeText={composer.onChangeText} onSelection={composer.setSelection} caret={composer.caret}
     onFocus={composer.onFocus} onBlur={composer.onBlur} placeholder="Pergunte ao agente…" submit={returnSends ? () => void submit() : undefined}
     className="max-h-40 min-h-[42px] rounded-none border-0 bg-transparent px-1 py-2.5 text-base" />;
@@ -402,9 +409,10 @@ function Composer(props: {
         <SymbolView name="arrow.down" size={18} weight="semibold" tintColorClassName="accent-foreground" />
       </GlassSurface>
     </Pressable> : null}
-    {props.pill && !listing ? <Animated.View entering={FadeIn.duration(200)} exiting={FadeOut.duration(160)} pointerEvents="box-none" style={{ position: "absolute", top: -46, left: 0, right: 0, alignItems: "center" }}>{props.pill}</Animated.View> : null}
+    {props.pill && !listing && !listening ? <Animated.View entering={FadeIn.duration(200)} exiting={FadeOut.duration(160)} pointerEvents="box-none" style={{ position: "absolute", top: -46, left: 0, right: 0, alignItems: "center" }}>{props.pill}</Animated.View> : null}
     <View style={{ paddingHorizontal: 12 }}><SuggestionsPanel composer={composer} /></View>
     <View style={{ paddingHorizontal: 12, paddingBottom: Math.max(insets.bottom, 12) }} onLayout={(event) => props.onHeight(Math.round(event.nativeEvent.layout.height))}>
+      {listening ? <ListeningRobot name={project?.name ?? "Sirus"} appearance={project?.appearance} /> : null}
       {props.queued.length ? <PromptQueue computerId={props.computerId} sessionId={props.sessionId} agent={props.agent} items={props.queued} /> : null}
       <GlassSurface style={{ borderRadius: 29 }} className="min-h-[58px] justify-center p-[7px]">
         <ComposerStrip attachments={strip} modes={composer.modes} onRemoveMode={removeMode}>

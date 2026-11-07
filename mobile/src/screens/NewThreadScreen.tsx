@@ -16,6 +16,7 @@ import { isProviderEnabled } from "@sirus/lib/settings";
 import type { AppSymbolName } from "../components/AppSymbol";
 import { SymbolView } from "../components/AppSymbol";
 import { AppText, AppTextInput } from "../components/AppText";
+import { ListeningRobot } from "../components/ListeningRobot";
 import { ComposerSend } from "../components/ComposerSend";
 import { AddSheet } from "../components/composer/AddSheet";
 import { ComposerField } from "../components/composer/ComposerField";
@@ -154,6 +155,7 @@ function MainPage(props: { readonly embedded?: boolean }) {
   const catalogs = useSirus((state) => state.models);
   const computers = useSirus((state) => state.computers);
   const scratch = computers.find((computer) => scratchKey(computer.id) === draft.projectKey);
+  const [listening, setListening] = useState(false);
   const chosen = scratch ? undefined : projects.find((item) => item.key === draft.projectKey) ?? projects[0];
   const target = scratch ?? chosen?.computer;
   const computerId = target?.id;
@@ -288,6 +290,8 @@ function MainPage(props: { readonly embedded?: boolean }) {
           </Pressable>
         </View> : null}
         <SuggestionsPanel composer={composer} />
+        <View>
+        {listening ? <ListeningRobot name={chosen?.project.name ?? "Sirus"} appearance={chosen?.project.appearance} /> : null}
         <GlassSurface style={{ borderRadius: 26 }} className="gap-1 px-1.5 pb-1.5 pt-1.5">
           <ComposerStrip attachments={strip} modes={composer.modes} onRemoveMode={removeMode} />
           <ComposerField ref={composer.field} value={draft.prompt} onChangeText={composer.onChangeText} onSelection={composer.setSelection} caret={composer.caret}
@@ -312,10 +316,11 @@ function MainPage(props: { readonly embedded?: boolean }) {
             </ControlPillMenu>
             <View className="pr-1">
               <ComposerSend text={draft.prompt} onTextChange={(prompt) => setDraft((current) => ({ ...current, prompt }))} onSend={() => void start()} sending={busy}
-                disabled={!target || !installed.length} canSend={canStart} />
+                disabled={!target || !installed.length} canSend={canStart} onListening={setListening} />
             </View>
           </View>
         </GlassSurface>
+        </View>
         <AddSheet composer={composer} provider={provider} model={model} onPhotos={() => void attach("photos")} onFiles={() => void attach("files")} />
       </View>
       </KeyboardStickyView>

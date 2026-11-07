@@ -2735,7 +2735,11 @@ fn segmented<V: 'static>(
                 .flex()
                 .items_center()
                 .text_size(px(12.5))
-                .text_color(content(if chosen { 1. } else { 0.55 }))
+                .text_color(if chosen {
+                    crate::theme::accent()
+                } else {
+                    content(0.55)
+                })
                 .when(!chosen, |d| d.hover(|s| s.text_color(content(0.9))))
                 .cursor_pointer()
                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -2759,7 +2763,7 @@ fn segmented<V: 'static>(
         .child(crate::segment_pill::pill(
             id,
             selected,
-            content(0.1),
+            crate::theme::accent_wash(0.18),
             crate::theme::RADIUS_SM,
         ))
         .children(items)

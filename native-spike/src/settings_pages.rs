@@ -1348,8 +1348,13 @@ fn control_view<V: 'static>(ctl: Ctl, ui: &mut Ui<'_, V>, cx: &mut Context<V>) -
                         .flex()
                         .items_center()
                         .text_size(px(12.5))
-                        .text_color(content(if chosen { 1. } else { 0.55 }))
-                        .when(chosen, |d| d.bg(content(0.1)))
+                        // Quiet: a page holds many of these, and none is its main action.
+                        .text_color(if chosen {
+                            crate::theme::accent()
+                        } else {
+                            content(0.55)
+                        })
+                        .when(chosen, |d| d.bg(crate::theme::accent_wash(0.18)))
                         .when(!chosen, |d| d.hover(|s| s.text_color(content(0.9))))
                         .cursor_pointer()
                         .on_click(

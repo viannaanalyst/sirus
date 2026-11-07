@@ -1089,7 +1089,11 @@ impl Shell {
                     .text_size(px(14.))
                     .text_center()
                     .cursor_pointer()
-                    .text_color(content(if ix == chosen { 0.95 } else { 0.65 }))
+                    .text_color(if ix == chosen {
+                        on_accent()
+                    } else {
+                        content(0.65)
+                    })
                     .on_click(cx.listener(move |this, _, _, cx| this.first_run_set_mode(ix, cx)))
                     .child(label)
                     .into_any_element()
@@ -1136,7 +1140,7 @@ impl Shell {
                         .left(px(3. + thumb * SEGMENT_W))
                         .w(px(SEGMENT_W))
                         .rounded(px(9.))
-                        .bg(content(0.13)),
+                        .bg(accent()),
                 )
                 .children(segments)
                 .into_any_element(),

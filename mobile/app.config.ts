@@ -48,11 +48,12 @@ const config: ExpoConfig = {
     "expo-secure-store",
     "expo-web-browser",
     ["expo-camera", { cameraPermission: "O Sirus usa a câmera para ler o QR de conexão do seu Mac.", microphonePermission: false, recordAudioAndroid: false }],
+    ["expo-image-picker", { photosPermission: "O Sirus anexa fotos às mensagens que você manda aos agentes.", cameraPermission: false, microphonePermission: false }],
+    // After the two above: their `microphonePermission: false` deletes the key, and iOS closes an app that opens the microphone without it.
     ["expo-speech-recognition", {
       microphonePermission: "O Sirus usa o microfone para ditar mensagens aos agentes.",
       speechRecognitionPermission: "O Sirus transcreve o que você fala para escrever mensagens aos agentes.",
     }],
-    ["expo-image-picker", { photosPermission: "O Sirus anexa fotos às mensagens que você manda aos agentes.", cameraPermission: false, microphonePermission: false }],
     ["expo-splash-screen", { image: "./assets/splash.png", imageWidth: 309, backgroundColor: "#0f0f12" }],
     ["expo-build-properties", { ios: { deploymentTarget: "16.4" } }],
   ],

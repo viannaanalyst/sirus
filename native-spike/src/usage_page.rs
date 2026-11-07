@@ -2541,7 +2541,7 @@ fn segmented<T: Copy + PartialEq + 'static>(
                 .w(px(cell))
                 .h(px(24.))
                 .rounded(px(crate::theme::RADIUS_SM))
-                .bg(content(0.12)),
+                .bg(crate::theme::accent()),
         )
         .children(options.iter().enumerate().map(|(ix, (value, label))| {
             let value = *value;
@@ -2557,7 +2557,12 @@ fn segmented<T: Copy + PartialEq + 'static>(
                 .items_center()
                 .justify_center()
                 .text_size(px(12.))
-                .text_color(content(0.6 + 0.4 * near))
+                // The label takes the thumb's ink as the thumb crosses it.
+                .text_color(if near >= 0.5 {
+                    crate::theme::on_accent()
+                } else {
+                    content(0.6)
+                })
                 .child(label.clone());
             if disabled {
                 return option.into_any_element();

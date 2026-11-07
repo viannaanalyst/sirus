@@ -9528,7 +9528,7 @@ impl Shell {
                                     LookTab::Mascot => 1,
                                     LookTab::Eyes => 2,
                                 },
-                                content(0.12),
+                                accent(),
                                 crate::theme::RADIUS_SM,
                             ))
                             .children(
@@ -9553,7 +9553,7 @@ impl Shell {
                                         .items_center()
                                         .justify_center()
                                         .text_size(px(12.))
-                                        .text_color(content(if on { 0.95 } else { 0.55 }))
+                                        .text_color(if on { on_accent() } else { content(0.55) })
                                         .cursor_pointer()
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             if let Some(menu) = this.project_menu.as_mut() {
@@ -15337,7 +15337,7 @@ impl Shell {
                 .child(crate::segment_pill::pill(
                     id,
                     chosen,
-                    content(0.1),
+                    accent_wash(0.18),
                     crate::theme::RADIUS_SM,
                 ))
                 .children(options.iter().enumerate().map(|(ix, label)| {
@@ -15352,7 +15352,11 @@ impl Shell {
                         .flex()
                         .items_center()
                         .text_size(px(12.5))
-                        .text_color(content(if ix == chosen { 1. } else { 0.55 }))
+                        .text_color(if ix == chosen {
+                            accent()
+                        } else {
+                            content(0.55)
+                        })
                         .when(ix != chosen, |d| d.hover(|s| s.text_color(content(0.9))))
                         .cursor_pointer()
                         .on_click(
@@ -17526,7 +17530,7 @@ fn segmented_icons(
             .child(crate::segment_pill::pill(
                 id,
                 chosen,
-                content(0.14),
+                accent_wash(0.18),
                 crate::theme::RADIUS_SM,
             ))
             .children(options.iter().enumerate().map(|(ix, (glyph, label))| {
@@ -17544,7 +17548,7 @@ fn segmented_icons(
                     .w(px(108.))
                     .rounded(px(crate::theme::RADIUS_SM))
                     .text_size(px(13.))
-                    .text_color(content(if on { 1. } else { 0.65 }))
+                    .text_color(if on { accent() } else { content(0.65) })
                     .when(!on, |d| d.hover(|s| s.bg(content(0.06))))
                     .cursor_pointer()
                     .on_click(
@@ -17552,7 +17556,7 @@ fn segmented_icons(
                             this.set_look(|look| apply(look, ix), cx)
                         }),
                     )
-                    .child(icon(glyph, 16.).text_color(content(if on { 0.95 } else { 0.6 })))
+                    .child(icon(glyph, 16.).text_color(if on { accent() } else { content(0.6) }))
                     .child(*label)
             })),
     )

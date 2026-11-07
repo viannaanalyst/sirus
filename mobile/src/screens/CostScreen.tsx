@@ -1,3 +1,4 @@
+import { SegmentedControl } from "../components/SegmentedControl";
 import { useNavigation, type NavigationProp, type ParamListBase } from "@react-navigation/native";
 import * as Haptics from "expo-haptics";
 import { useMemo, useState } from "react";
@@ -32,13 +33,7 @@ const STACK: readonly CostProvider[] = ["opencode", "other", "codex", "claude"];
 const AMBER = "#e9b44c";
 
 function SegmentBar<T extends string>(props: { readonly options: readonly { id: T; label: string }[]; readonly value: T; readonly onChange: (id: T) => void; readonly className?: string }) {
-  return <View className={`flex-row gap-0.5 rounded-[13px] border border-border-subtle bg-card p-[3px] ${props.className ?? ""}`} accessibilityRole="tablist">
-    {props.options.map((option) => <Pressable key={option.id} onPress={() => { if (option.id !== props.value) { void Haptics.selectionAsync().catch(() => undefined); props.onChange(option.id); } }}
-      accessibilityRole="tab" accessibilityState={{ selected: option.id === props.value }}
-      className={`flex-1 items-center rounded-[10px] py-[7px] ${option.id === props.value ? "bg-subtle-strong" : ""}`}>
-      <AppText className={`text-[13px] ${option.id === props.value ? "font-app-medium" : "text-foreground-muted"}`}>{option.label}</AppText>
-    </Pressable>)}
-  </View>;
+  return <SegmentedControl options={props.options.map((option) => ({ value: option.id, label: option.label }))} selected={props.value} onSelect={(id) => { if (id !== props.value) { void Haptics.selectionAsync().catch(() => undefined); props.onChange(id); } }} className={props.className} />;
 }
 
 /**

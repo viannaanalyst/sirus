@@ -147,6 +147,8 @@ export interface MessageVisual {
   html: string;
   createdAt: string;
   revision: number;
+  /** Instructions the reply had taken when it was published. */
+  steersBefore?: number;
 }
 
 export interface MessageAttachment {

@@ -61,8 +61,8 @@ export const PROVIDERS: ProviderDefinition[] = [
   },
   {
     id: "antigravity", name: "Antigravity", vendor: "Google", website: "https://antigravity.google/docs/cli/install/",
-    capabilities: ["cli", "workspace-edits"], approvalPolicy: "vendor", approvalModes: [],
-    executionNote: "Antigravity uses its CLI permissions and terminal sandbox. Headless permission requests are denied by the CLI; this adapter cannot answer them. Its terminal sandbox is not a filesystem sandbox for every tool.",
+    capabilities: ["cli", "workspace-edits"], approvalPolicy: "host", approvalModes: ["ask", "auto", "full"],
+    executionNote: "Antigravity runs through ACP: Sirus answers its permission requests by access mode, and conversations resume exactly.",
   },
   {
     id: "droid", name: "Droid", vendor: "Factory", website: "https://docs.factory.ai/droid-cli/overview",

@@ -9,7 +9,7 @@ export interface PromptExtras { goal?: string | null; debugging?: boolean; team?
 
 /** Whether the provider (and model) can plan before editing; Codex needs a chosen model. */
 export function supportsPlanning(provider: AgentProviderId, model: string | null): boolean {
-  return provider === "claude" || provider === "cursor" || provider === "opencode" || provider === "pi" || provider === "droid" || provider === "devin" || provider === "hermes" || (provider === "codex" && Boolean(model));
+  return provider === "claude" || provider === "cursor" || provider === "opencode" || provider === "pi" || provider === "droid" || provider === "devin" || provider === "hermes" || provider === "antigravity" || (provider === "codex" && Boolean(model));
 }
 
 /** Whether the provider can run a team of agents. */

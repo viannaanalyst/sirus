@@ -1,5 +1,5 @@
-//! ACP command-line agents: Devin (`devin acp`) and Hermes Agent
-//! (`hermes acp`). Native sessions resume exactly; mode, model and reasoning are selected and
+//! ACP command-line agents: Devin (`devin acp`), Hermes Agent (`hermes acp`), Cursor and
+//! Antigravity (`agy acp`). Native sessions resume exactly; mode, model and reasoning are selected and
 //! confirmed; cancellation rejects leftover requests; approvals are answered once only.
 //!
 //! Each CLI uses its own sign-in or provider setup on this Mac; Sirus starts no login. Modes map
@@ -22,7 +22,10 @@ use tokio::sync::{mpsc, watch};
 pub fn handles(provider: &AgentProviderId) -> bool {
     matches!(
         provider,
-        AgentProviderId::Devin | AgentProviderId::Hermes | AgentProviderId::Cursor
+        AgentProviderId::Devin
+            | AgentProviderId::Hermes
+            | AgentProviderId::Cursor
+            | AgentProviderId::Antigravity
     )
 }
 
@@ -30,6 +33,7 @@ fn name(provider: &AgentProviderId) -> &'static str {
     match provider {
         AgentProviderId::Hermes => "Hermes",
         AgentProviderId::Cursor => "Cursor",
+        AgentProviderId::Antigravity => "Antigravity",
         _ => "Devin",
     }
 }
@@ -38,6 +42,7 @@ fn name(provider: &AgentProviderId) -> &'static str {
 fn sign_in_help(provider: &AgentProviderId) -> &'static str {
     match provider {
         AgentProviderId::Hermes => "Hermes has no model provider yet. Run `hermes model` in a terminal, check it with `hermes acp --check`, then send again.",
+        AgentProviderId::Antigravity => "Antigravity is not signed in. Run `agy` in a terminal, then send again.",
         AgentProviderId::Cursor => "Cursor is not signed in. Run `cursor-agent login` in a terminal, then send again.",
         _ => "Devin is not signed in. Run `devin auth login` in a terminal, then send again.",
     }
@@ -90,6 +95,16 @@ pub fn mode(provider: &AgentProviderId, options: &ExecutionOptions) -> &'static 
                 "agent"
             }
         }
+        // Antigravity has no mode that skips asking: Full access answers for the person.
+        AgentProviderId::Antigravity => {
+            if options.planning {
+                "plan"
+            } else if options.approval == Some(ApprovalMode::Auto) {
+                "accept-edits"
+            } else {
+                "default"
+            }
+        }
         AgentProviderId::Hermes => {
             if options.planning || options.approval == Some(ApprovalMode::Ask) {
                 "default"
@@ -111,7 +126,7 @@ pub fn mode(provider: &AgentProviderId, options: &ExecutionOptions) -> &'static 
     }
 }
 
-/// Requests Sirus answers itself for agents without a matching mode (Cursor): Full
+/// Requests Sirus answers itself for agents without a matching mode (Cursor, Antigravity): Full
 /// access allows every request, Auto-review allows file edits; anything else asks the person.
 /// Planning never auto-allows.
 pub fn auto_answer(
@@ -119,7 +134,11 @@ pub fn auto_answer(
     options: &ExecutionOptions,
     kind: &PendingRequestKind,
 ) -> bool {
-    if *provider != AgentProviderId::Cursor || options.planning {
+    if !matches!(
+        provider,
+        AgentProviderId::Cursor | AgentProviderId::Antigravity
+    ) || options.planning
+    {
         return false;
     }
     match options.approval {
@@ -163,6 +182,16 @@ pub fn offered_model(row: &Value, model: &str) -> Option<String> {
         }
         by_base(&stripped)
     })
+}
+
+/// Antigravity lists one model per reasoning level (`gemini-3.8-flash-high`) and sets the model and
+/// the level apart, so the level comes from the name.
+fn model_effort(provider: &AgentProviderId, model: Option<&str>) -> Option<String> {
+    if *provider != AgentProviderId::Antigravity {
+        return None;
+    }
+    let level = model?.rsplit('-').next()?;
+    matches!(level, "low" | "medium" | "high").then(|| level.to_owned())
 }
 
 pub async fn start(
@@ -389,7 +418,12 @@ fn permission(
         if planning {
             return None;
         }
-        let (kind, allow, reject) = crate::opencode::approval(params, cwd)?;
+        let approval = crate::opencode::approval(params, cwd);
+        // Antigravity's edit may come without a diff to show: it still asks, by the tool's name.
+        if approval.is_none() && *provider == AgentProviderId::Antigravity {
+            return tool_permission(params);
+        }
+        let (kind, allow, reject) = approval?;
         let kind = match kind {
             PendingRequestKind::FileChange { changes, .. } => PendingRequestKind::FileChange {
                 reason: Some(format!("{} proposed edit", name(provider))),
@@ -399,6 +433,19 @@ fn permission(
         };
         return Some((kind, allow, reject));
     }
+    tool_permission_for(provider, params, cwd)
+}
+
+fn tool_permission(params: &Value) -> Option<(PendingRequestKind, String, String)> {
+    tool_permission_for(&AgentProviderId::Antigravity, params, "")
+}
+
+fn tool_permission_for(
+    _provider: &AgentProviderId,
+    params: &Value,
+    cwd: &str,
+) -> Option<(PendingRequestKind, String, String)> {
+    let call = &params["toolCall"];
     let options = params["options"].as_array()?;
     let once = |kind: &str| {
         let mut rows = options.iter().filter(|row| row["kind"] == kind);
@@ -417,6 +464,8 @@ fn permission(
     let kind = if call["kind"] == "execute" {
         let command = raw["command"]
             .as_str()
+            // Antigravity's own name for it.
+            .or_else(|| raw["CommandLine"].as_str())
             .map(str::to_owned)
             .or_else(|| {
                 raw["command"].as_array().map(|parts| {
@@ -620,7 +669,13 @@ pub(crate) async fn execute(
         }
     }
     // Reasoning follows what the selected model offers; nothing is sent when it offers none.
-    if let Some(effort) = run.session.execution.effort.clone() {
+    if let Some(effort) = run
+        .session
+        .execution
+        .effort
+        .clone()
+        .or_else(|| model_effort(&provider, run.session.model.as_deref()))
+    {
         let options = options_of(&setup, &updates);
         if let Some(row) = select_option(&options, "thought_level").cloned() {
             if offers(&row, &effort) {
@@ -851,6 +906,154 @@ mod tests {
 
     fn session(cwd: &str) -> Session {
         serde_json::from_value(json!({"id":"s","projectId":"p","title":"fixture","agent":"devin","status":"running","createdAt":"time","lastActivityAt":"time","worktree":{"path":cwd,"branch":"main","isolated":false},"messages":[]})).unwrap()
+    }
+
+    /// A real turn and its resume in a new process. Needs `agy` signed in; spends a little quota.
+    #[tokio::test]
+    #[ignore = "real provider; explicitly run with existing authentication"]
+    async fn live_antigravity_edits_runs_and_resumes() {
+        let root = std::env::temp_dir().join(format!("sirus-agy-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let cwd = root.canonicalize().unwrap().to_string_lossy().into_owned();
+        let mut session = session(&cwd);
+        session.agent = AgentProviderId::Antigravity;
+        session.model = Some("gemini-3.8-flash-medium".into());
+        session.execution = serde_json::from_value(json!({"approval":"full"})).unwrap();
+        let mut thread = None;
+        for (prompt, expected) in [
+            (
+                "Create a.txt containing hi, run ls, then reply exactly FIRST_OK.",
+                "FIRST_OK",
+            ),
+            (
+                "What file did you create? Reply exactly the file name.",
+                "a.txt",
+            ),
+        ] {
+            let mut turn = session.clone();
+            turn.native_thread = thread.clone();
+            let mut child = Command::new("agy")
+                .arg("acp")
+                .current_dir(&cwd)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .kill_on_drop(true)
+                .spawn()
+                .unwrap();
+            let mut wire = Wire::new(child.stdin.take().unwrap(), child.stdout.take().unwrap());
+            let (_sender, replies) = mpsc::channel(16);
+            let mut run = Run {
+                session: turn,
+                cwd: cwd.clone(),
+                prompt: prompt.into(),
+                attachments: Vec::new(),
+                generation: "g".into(),
+                replies,
+            };
+            let (_cancel, mut cancel) = watch::channel(false);
+            let mut output = String::new();
+            let mut steps = Vec::new();
+            let mut emit =
+                |event| {
+                    match event {
+                        Event::Delta(text) => output.push_str(&text),
+                        Event::Identity(native) => thread = Some(native),
+                        Event::Activity(items) => steps.extend(items.into_iter().map(|item| {
+                            format!("{:?} {} [{}]", item.kind, item.detail, item.caption)
+                        })),
+                        Event::Pending(pending) => panic!("full access asked: {:?}", pending.kind),
+                        _ => {}
+                    }
+                    Ok(())
+                };
+            let interrupted = execute(&mut wire, &mut run, &mut cancel, &mut emit)
+                .await
+                .unwrap();
+            eprintln!(
+                "{output}\n{:#?}",
+                steps.iter().rev().take(4).collect::<Vec<_>>()
+            );
+            assert!(!interrupted);
+            assert!(output.contains(expected), "{output}");
+        }
+        assert!(root.join("a.txt").exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn antigravity_asks_by_access_mode_and_takes_its_level_from_the_model() {
+        let options = |value: Value| serde_json::from_value::<ExecutionOptions>(value).unwrap();
+        let agy = AgentProviderId::Antigravity;
+        assert_eq!(mode(&agy, &options(json!({"approval":"ask"}))), "default");
+        assert_eq!(
+            mode(&agy, &options(json!({"approval":"auto"}))),
+            "accept-edits"
+        );
+        assert_eq!(mode(&agy, &options(json!({"approval":"full"}))), "default");
+        assert_eq!(mode(&agy, &options(json!({"planning":true}))), "plan");
+        let command = PendingRequestKind::Command {
+            command: "ls".into(),
+            cwd: None,
+            reason: None,
+        };
+        assert!(auto_answer(
+            &agy,
+            &options(json!({"approval":"full"})),
+            &command
+        ));
+        assert!(!auto_answer(
+            &agy,
+            &options(json!({"approval":"auto"})),
+            &command
+        ));
+        assert!(!auto_answer(
+            &agy,
+            &options(json!({"approval":"full","planning":true})),
+            &command
+        ));
+        assert_eq!(
+            model_effort(&agy, Some("gemini-3.8-flash-medium")).as_deref(),
+            Some("medium")
+        );
+        assert_eq!(model_effort(&agy, Some("claude-opus-4-6-thinking")), None);
+        assert_eq!(model_effort(&AgentProviderId::Cursor, Some("x-high")), None);
+    }
+
+    #[test]
+    fn antigravity_permissions_read_as_the_person_expects() {
+        let allow = json!([
+            {"optionId":"allow","name":"Allow","kind":"allow_once"},
+            {"optionId":"deny","name":"Deny","kind":"reject_once"}
+        ]);
+        let agy = AgentProviderId::Antigravity;
+        // A new file: the diff has no old text.
+        let root = std::env::temp_dir().canonicalize().unwrap();
+        let path = root
+            .join("sirus-agy-new.txt")
+            .to_string_lossy()
+            .into_owned();
+        let cwd = root.to_string_lossy().into_owned();
+        let edit = json!({"toolCall":{"toolCallId":"e","kind":"edit","title":"File a",
+            "content":[{"type":"diff","path":path,"newText":"oi"}]},"options":allow});
+        let (kind, ok, no) = permission(&agy, &edit, &cwd, false).unwrap();
+        assert!(matches!(kind, PendingRequestKind::FileChange { .. }));
+        assert_eq!((ok.as_str(), no.as_str()), ("allow", "deny"));
+        assert!(permission(&agy, &edit, &cwd, true).is_none());
+        // An edit with nothing to show still asks.
+        let bare =
+            json!({"toolCall":{"toolCallId":"e","kind":"edit","title":"File a"},"options":allow});
+        assert!(matches!(
+            permission(&agy, &bare, &cwd, false).unwrap().0,
+            PendingRequestKind::Tool { .. }
+        ));
+        // A command names itself in its own field.
+        let run = json!({"toolCall":{"toolCallId":"c","kind":"execute","title":"t",
+            "rawInput":{"CommandLine":"ls -la"}},"options":allow});
+        match permission(&agy, &run, &cwd, false).unwrap().0 {
+            PendingRequestKind::Command { command, .. } => assert_eq!(command, "ls -la"),
+            _ => panic!("a command"),
+        }
     }
 
     #[test]

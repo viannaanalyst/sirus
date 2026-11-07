@@ -1466,6 +1466,11 @@ pub fn opencode(v: &Value) -> Vec<ActivityItem> {
         .or_else(|| v["title"].as_str())
         .unwrap_or("")
         .to_owned();
+    // Antigravity says what a command is for.
+    row.caption = v["rawInput"]["toolSummary"]
+        .as_str()
+        .unwrap_or("")
+        .to_owned();
     // OpenCode's `todowrite` and Cursor's todo updates carry the list in the call's input.
     let plan = plan_signal(&v["rawInput"]["todos"]);
     std::iter::once(row).chain(plan).collect()

@@ -354,7 +354,8 @@ pub(crate) fn approval(params: &Value, cwd: &str) -> Option<(PendingRequestKind,
         if !ancestor.starts_with(cwd) {
             return None;
         }
-        let old = c["oldText"].as_str()?;
+        // A new file has no old text (Antigravity leaves the field out).
+        let old = c["oldText"].as_str().unwrap_or("");
         let new = c["newText"].as_str()?;
         changes.push(ProposedFileChange {
             path: path.into(),

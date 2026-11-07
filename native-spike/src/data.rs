@@ -98,6 +98,9 @@ pub struct Visual {
     pub title: String,
     pub source: Option<String>,
     pub html: Option<String>,
+    /// The instruction it was published before (a `Turn::steers` index): an instruction sent into
+    /// a running reply starts a new stretch, and the visual stays in the stretch it answered.
+    pub before_steer: Option<usize>,
 }
 
 pub struct Conversation {
@@ -500,8 +503,12 @@ fn turns_of(messages: &[Value]) -> Vec<Turn> {
             if let Some(provider) = activity["provider"].as_str() {
                 turn.provider = Some(provider_id(provider));
             }
+            let steers_so_far = turn.steers.len();
             for visual in message["visuals"].as_array().into_iter().flatten() {
                 turn.visuals.push(Visual {
+                    before_steer: visual["steersBefore"]
+                        .as_u64()
+                        .map(|count| steers_so_far + count as usize),
                     id: visual["id"].as_str().unwrap_or("").to_owned(),
                     title: visual["title"].as_str().unwrap_or("Visual").to_owned(),
                     source: visual["source"].as_str().map(str::to_owned),
@@ -576,6 +583,25 @@ fn turns_of(messages: &[Value]) -> Vec<Turn> {
 #[cfg(test)]
 mod beat_tests {
     use super::*;
+
+    #[test]
+    fn a_visual_remembers_the_instruction_it_came_before() {
+        let turns = turns_of(&[
+            serde_json::json!({"role": "user", "content": "a"}),
+            serde_json::json!({
+                "role": "agent",
+                "content": "b",
+                "visuals": [
+                    {"id": "1", "title": "x", "steersBefore": 0},
+                    {"id": "2", "title": "y"},
+                    {"id": "3", "title": "z", "steersBefore": 1},
+                ],
+                "steers": [{"text": "s", "offset": 1}],
+            }),
+        ]);
+        let before: Vec<Option<usize>> = turns[0].visuals.iter().map(|v| v.before_steer).collect();
+        assert_eq!(before, vec![Some(0), None, Some(1)]);
+    }
 
     #[test]
     fn prose_splits_the_steps_in_the_order_they_happened() {

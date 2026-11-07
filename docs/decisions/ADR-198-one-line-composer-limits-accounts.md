@@ -88,5 +88,8 @@ A conversation stays on the account that started it, so one on the default accou
 - **Folders slide.** A folder in the Files tree slides open and shut, its chevron turning with it.
 - **Accounts share a row.** Connectors from the same catalog entry show as one row with up to three account chips, each opening that account's menu. A single button follows: "+" connects another, or "+N" opens a popup with every account, those waiting to sign in first and a search from eight accounts on.
 - **The phone's tiles.** A reply's header and its work runs wear the Mac's tiles (`Tile.tsx`), the header names the model as the Mac does and opens the folded work, and a sent message retries its rise until it reaches the top.
+- **Antigravity over ACP.** Antigravity runs through `acp_cli.rs` (`agy acp`) instead of print mode: live permission requests by access mode, planning, exact resume and cancellation. It has no mode that skips asking, so Full access answers for the person; the reasoning level comes from the model's name.
+- **Visuals stay above later instructions.** A visual records how many instructions the reply had taken, and stays above any that come later.
+- **The selection menu.** It is smaller and its hover slides.
 - **Turn actions.** The `⋯` menu is gone. A reply's row reads Copy, Handoff, Side chat, Fork, with Undo after them. Try again left it: it now sits under the sent message, only on the last turn and only after a failure.
 - **Edge fades.** The transcript's fades are now an alpha mask around the list. The gradients drawn in the conversation's color showed as dark bands once the conversation became translucent black.

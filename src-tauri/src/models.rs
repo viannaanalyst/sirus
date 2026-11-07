@@ -230,6 +230,9 @@ pub struct MessageVisual {
     pub created_at: String,
     #[serde(default)]
     pub revision: u32,
+    /// Instructions the reply had taken when it was published: it stays above any later ones.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub steers_before: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

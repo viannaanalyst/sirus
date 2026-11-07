@@ -120,6 +120,7 @@ pub fn publish_with(
         ));
     }
     let id = uuid::Uuid::new_v4().to_string();
+    let steers_before = Some(reply.steers.len());
     reply.visuals.push(MessageVisual {
         id: id.clone(),
         title,
@@ -127,6 +128,7 @@ pub fn publish_with(
         source,
         created_at: now.to_owned(),
         revision: 0,
+        steers_before,
     });
     Ok((index, id, 0))
 }
@@ -394,6 +396,7 @@ mod tests {
         let encoded = serde_json::to_value(&session.messages[1]).unwrap();
         assert_eq!(encoded["visuals"][0]["title"], "Chart");
         assert_eq!(encoded["visuals"][0]["createdAt"], "t");
+        assert_eq!(encoded["visuals"][0]["steersBefore"], 0);
         let decoded: crate::models::Message = serde_json::from_value(encoded).unwrap();
         assert_eq!(decoded.visuals, session.messages[1].visuals);
         // Rows written before visuals existed, and replies without any, carry no field.

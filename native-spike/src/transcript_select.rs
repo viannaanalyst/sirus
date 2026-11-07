@@ -724,7 +724,7 @@ impl Element for Selected {
 // ---- The window's side: keys, copy, menu ---------------------------------------------------
 
 const MENU_OPEN: f32 = 0.12;
-const MENU_WIDTH: f32 = 218.;
+const MENU_WIDTH: f32 = 164.;
 
 impl Shell {
     /// The fragments of a reply in render order, from its current source.
@@ -845,20 +845,20 @@ impl Shell {
             }
             eased(t.min(1.), Curve::Expo)
         };
+        let track = crate::hover_track::list("selection-menu");
         let item = |id: &'static str, glyph: &'static str, label: &'static str| {
             div()
                 .id(id)
-                .h(px(30.))
-                .px(px(8.))
+                .h(px(26.))
+                .px(px(7.))
                 .rounded(px(crate::theme::RADIUS_MD))
                 .flex()
                 .items_center()
-                .gap(px(9.))
-                .text_size(px(13.))
+                .gap(px(7.))
+                .text_size(px(12.5))
                 .text_color(content(0.92))
                 .cursor_pointer()
-                .hover(|s| s.bg(content(0.07)))
-                .child(icon(glyph, 14.).text_color(content(0.65)))
+                .child(icon(glyph, 13.).text_color(content(0.65)))
                 .child(
                     div()
                         .flex_1()
@@ -869,7 +869,7 @@ impl Shell {
         };
         let copy = text.clone();
         let ask = text;
-        const HEIGHT: f32 = 68.;
+        const HEIGHT: f32 = 60.;
         let left = (f32::from(anchor.x) - MENU_WIDTH / 2.)
             .min(self.viewport_width - MENU_WIDTH - 8.)
             .max(8.);
@@ -887,7 +887,7 @@ impl Shell {
                 .left(px(left))
                 .top(px(top + (1. - shown) * 4.))
                 .w(px(MENU_WIDTH))
-                .p(px(4.))
+                .p(px(3.))
                 .flex()
                 .flex_col()
                 .opacity(shown)
@@ -897,7 +897,8 @@ impl Shell {
                 .child(crate::theme::floating_surface(crate::theme::RADIUS_LG))
                 .shadow_lg()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .child(
+                .child(track.pill())
+                .child(track.row(
                     item("selection-copy", "copy", "Copiar").on_click(cx.listener(
                         move |this, _, _, cx| {
                             cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy.clone()));
@@ -905,8 +906,10 @@ impl Shell {
                             cx.notify();
                         },
                     )),
-                )
-                .child(
+                    0,
+                    false,
+                ))
+                .child(track.row(
                     item("selection-add-chat", "comment-add", "Adicionar ao chat").on_click(
                         cx.listener(move |this, _, window, cx| {
                             this.select.clear();
@@ -915,7 +918,9 @@ impl Shell {
                             cx.notify();
                         }),
                     ),
-                )
+                    1,
+                    false,
+                ))
                 .into_any_element(),
         )
     }

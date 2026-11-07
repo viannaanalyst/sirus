@@ -1112,7 +1112,10 @@ pub fn monitor(
     // OpenCode and Devin write routine logs to stderr: drained, never shown as messages.
     let quiet_logs = matches!(
         run.session.agent,
-        AgentProviderId::OpenCode | AgentProviderId::Devin | AgentProviderId::Hermes
+        AgentProviderId::OpenCode
+            | AgentProviderId::Devin
+            | AgentProviderId::Hermes
+            | AgentProviderId::Antigravity
     );
     // The log reader of a kept process outlives its first turn: it reports to whichever turn
     // runs now.

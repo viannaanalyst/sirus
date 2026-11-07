@@ -1309,6 +1309,7 @@ mod tests {
                 source: None,
                 created_at: "t".into(),
                 revision: 2,
+                steers_before: None,
             });
         save(&path, &data).unwrap();
         let state = Mutex::new(load_or_create(&path).unwrap());

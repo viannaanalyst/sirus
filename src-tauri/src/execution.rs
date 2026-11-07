@@ -79,7 +79,7 @@ pub fn debug_prompt(debugging: bool, request: String) -> String {
 /// The approval modes a provider accepts; empty when it takes none (its own policy applies).
 pub fn approval_modes(provider: &AgentProviderId) -> &'static [ApprovalMode] {
     match provider {
-        AgentProviderId::Grok | AgentProviderId::Antigravity => &[],
+        AgentProviderId::Grok => &[],
         AgentProviderId::Droid | AgentProviderId::Pi => &[ApprovalMode::Auto],
         _ => &[ApprovalMode::Ask, ApprovalMode::Auto, ApprovalMode::Full],
     }
@@ -133,6 +133,7 @@ pub fn supports_planning(provider: &AgentProviderId) -> bool {
             | AgentProviderId::Pi
             | AgentProviderId::Devin
             | AgentProviderId::Hermes
+            | AgentProviderId::Antigravity
     )
 }
 
@@ -388,11 +389,7 @@ mod tests {
     }
     #[test]
     fn additional_adapters_reject_unimplemented_permission_profiles() {
-        for provider in [
-            AgentProviderId::Antigravity,
-            AgentProviderId::Droid,
-            AgentProviderId::Pi,
-        ] {
+        for provider in [AgentProviderId::Droid, AgentProviderId::Pi] {
             for mode in [ApprovalMode::Ask, ApprovalMode::Full] {
                 assert!(validate(
                     &provider,
@@ -409,10 +406,7 @@ mod tests {
                 approval: Some(ApprovalMode::Auto),
                 ..Default::default()
             };
-            assert_eq!(
-                validate(&provider, None, &auto, None).is_ok(),
-                provider != AgentProviderId::Antigravity
-            );
+            assert!(validate(&provider, None, &auto, None).is_ok());
         }
         for provider in [AgentProviderId::Droid, AgentProviderId::Pi] {
             assert!(validate(

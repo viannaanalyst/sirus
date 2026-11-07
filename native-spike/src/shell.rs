@@ -5933,8 +5933,8 @@ impl Shell {
         );
         // As Sirus's `supportsPlanning` and its team check.
         let provider = conversation.provider;
-        let planning_ok = !matches!(provider, "grok" | "antigravity")
-            && (provider != "codex" || conversation.model.is_some());
+        let planning_ok =
+            provider != "grok" && (provider != "codex" || conversation.model.is_some());
         let team_ok = matches!(provider, "claude" | "codex" | "opencode");
         let caret = move || {
             div()
@@ -13045,6 +13045,11 @@ impl Shell {
             let working = live && last_section;
             let beats = &turn.beats[range.clone()];
             if let Some(steer) = steer {
+                for (at, visual) in turn.visuals.iter().enumerate() {
+                    if visual.before_steer == Some(steer) {
+                        blocks.push(self.visual_element(index, at, visual, cx));
+                    }
+                }
                 // From here on, the stretch fills the view while the turn is the anchored one, so
                 // following the end brings the instruction to the top, as a sent message.
                 steer_block_start = Some(blocks.len());
@@ -13382,6 +13387,12 @@ impl Shell {
                         turn.visuals
                             .iter()
                             .enumerate()
+                            // Those from before an instruction were drawn above it.
+                            .filter(|(_, visual)| {
+                                visual
+                                    .before_steer
+                                    .is_none_or(|steer| steer >= turn.steers.len())
+                            })
                             .map(|(i, visual)| self.visual_element(index, i, visual, cx)),
                     )
                     .when_some(answer_view, |d, (beat, shown)| {

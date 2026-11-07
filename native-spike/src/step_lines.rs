@@ -105,8 +105,14 @@ pub fn command_label(command: &str) -> String {
 pub fn command_paths(command: &str, max: usize) -> Vec<(String, bool, String)> {
     let mut found: Vec<(String, bool, String)> = Vec::new();
     for word in command.split_whitespace().skip(1) {
+        // A redirect's target is the word after its arrow, and a device is no file of the project.
+        let word = word.rsplit(['<', '>']).next().unwrap_or(word);
         let word = word.trim_matches(|c| matches!(c, '\'' | '"' | ';' | '|' | '&' | '(' | ')'));
-        if word.starts_with('-') || word.contains(['=', '*', '$']) || word.len() < 2 {
+        if word.starts_with('-')
+            || word.contains(['=', '*', '$'])
+            || word.len() < 2
+            || word.starts_with("/dev/")
+        {
             continue;
         }
         if !(word.contains('/') || word.starts_with('~') || word.starts_with('.')) {
@@ -171,6 +177,8 @@ mod tests {
             ]
         );
         assert!(command_paths("echo hi && ls", 2).is_empty());
+        assert!(command_paths("cat a 2>/dev/null > /dev/null", 2).is_empty());
+        assert_eq!(command_paths("run >out/log.txt", 2)[0].0, "log.txt");
     }
 
     #[test]

@@ -99,7 +99,7 @@ npm run publish:update               # JavaScript-only changes reach the install
 
 The update signing key is `~/.config/sirus-code/updater.key` (no password; `--key` or `SIRUS_UPDATER_KEY` point elsewhere, `SIRUS_UPDATER_KEY_PASSWORD` if it has one). Keep a backup: without it installed apps cannot accept new updates. Only its public half is in `native-spike/updater.pub` (the app embeds it); it must never change, and key files are ignored by Git.
 
-The app is signed with "Sirus Code Local Signing" when that identity is in the keychain (ad-hoc otherwise) and is not notarized, so a downloaded DMG opens the first time through System Settings → Privacy & Security → Open Anyway. The website is the static `website/public/` folder, served by Cloudflare Workers static assets; publish it with `cd website && npx wrangler deploy` (run it inside `website/`).
+The app is signed with the Mac's Apple Development identity when it has one, else "Sirus Code Local Signing", else ad-hoc (ADR-198), and is not notarized, so a downloaded DMG opens the first time through System Settings → Privacy & Security → Open Anyway. The website is the static `website/public/` folder, served by Cloudflare Workers static assets; publish it with `cd website && npx wrangler deploy` (run it inside `website/`).
 
 ## Measuring CPU and memory
 

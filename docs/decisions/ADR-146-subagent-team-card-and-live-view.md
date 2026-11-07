@@ -2,6 +2,7 @@
 
 - Status: accepted
 - Date: 2026-10-19
+- Amended by: [ADR-198](ADR-198-one-line-composer-limits-accounts.md), whose card has no headline
 
 ## Context
 

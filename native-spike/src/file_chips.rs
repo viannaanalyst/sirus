@@ -11,11 +11,13 @@ use std::time::{Duration, Instant};
 /// How old a folder's file list may get before the next frame asks for it again.
 const STALE: Duration = Duration::from_secs(15);
 
-/// What a chip opens: an absolute path inside the conversation's folder.
+/// What a chip opens: an absolute path inside the conversation's folder, or a PDF outside it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Target {
     pub path: String,
     pub folder: bool,
+    /// Outside the folder: the host wouldn't read it, so the app reads it on the person's click.
+    pub outside: bool,
 }
 
 /// A folder's files and folders by their last component, as paths relative to it.
@@ -104,7 +106,8 @@ fn tidy(path: &Path) -> PathBuf {
 }
 
 /// What `word` names inside `root`. `kind` tells whether a path is a folder, or `None` when it
-/// isn't there. A path outside `root` opens nothing: the host wouldn't read it.
+/// isn't there. A path outside `root` opens nothing, since the host wouldn't read it, except a
+/// PDF an agent left elsewhere, like one in Downloads: only the reader opens it.
 fn resolve(
     root: &str,
     word: &str,
@@ -130,16 +133,23 @@ fn resolve(
         return Some(Target {
             path: written.to_string_lossy().into_owned(),
             folder,
+            outside: false,
         });
     }
     if elsewhere {
-        return None;
+        let pdf = word.to_ascii_lowercase().ends_with(".pdf");
+        return (pdf && kind(&written) == Some(false)).then(|| Target {
+            path: written.to_string_lossy().into_owned(),
+            folder: false,
+            outside: true,
+        });
     }
     let tail = word.trim_start_matches("./").trim_start_matches("../");
     let (found, folder) = index?.lookup(tail)?;
     Some(Target {
         path: root.join(found).to_string_lossy().into_owned(),
         folder,
+        outside: false,
     })
 }
 
@@ -234,10 +244,30 @@ mod tests {
         )
     }
 
+    #[test]
+    fn a_pdf_outside_the_folder_opens_and_nothing_else_does() {
+        let there = |word: &str| {
+            resolve("/work/app", word, Some("/Users/me"), None, |path| {
+                path.starts_with("/Users/me/Downloads").then_some(false)
+            })
+        };
+        assert_eq!(
+            there("~/Downloads/plan.PDF"),
+            Some(Target {
+                path: "/Users/me/Downloads/plan.PDF".to_owned(),
+                folder: false,
+                outside: true,
+            })
+        );
+        assert_eq!(there("~/Downloads/notes.txt"), None);
+        assert_eq!(there("~/Documents/gone.pdf"), None);
+    }
+
     fn file(path: &str) -> Option<Target> {
         Some(Target {
             path: path.to_owned(),
             folder: false,
+            outside: false,
         })
     }
 
@@ -245,6 +275,7 @@ mod tests {
         Some(Target {
             path: path.to_owned(),
             folder: true,
+            outside: false,
         })
     }
 

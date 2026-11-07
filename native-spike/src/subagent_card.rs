@@ -1,7 +1,8 @@
 //! The subagents of a turn as one card in the transcript (Sirus's `SubagentTeam`, ADR-146):
-//! a header with the team's headline and counts, the subagents in phases, a row each. Pointing
-//! at a running Claude subagent shows Mensagem and Parar (ADR-111, ADR-113); a row opens what
-//! that subagent did (`subagent_feed`, Sirus's `SubagentPane`) in place, under the row.
+//! a header with how many there are and how far they got, the subagents in phases, a row each.
+//! One subagent has no header: its row is the card. Pointing at a running Claude subagent swaps
+//! its step count for Mensagem and Parar (ADR-111, ADR-113), so nothing is covered; a row opens
+//! what that subagent did (`subagent_feed`, Sirus's `SubagentPane`) in place, under the row.
 //!
 //! The data and its rules are in `subagent_team.rs`. This module is a child of `shell`
 //! (`#[path]`), so it reaches the window's private state. Nothing here draws while idle: the
@@ -14,7 +15,11 @@ use std::collections::HashSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const HEAD: f32 = 36.;
-const ROW: f32 = 28.;
+const ROW: f32 = 30.;
+/// A pip per subagent up to this many; past it the count says enough.
+const MAX_PIPS: usize = 8;
+/// The room the three buttons take, which the step count shares.
+const ACTIONS: f32 = 80.;
 const PHASE: f32 = 22.;
 const COMPOSE: f32 = 38.;
 const FEED: f32 = 232.;
@@ -175,18 +180,14 @@ fn now_ms() -> i64 {
         .map_or(0, |d| d.as_millis() as i64)
 }
 
-/// "N de M concluídos · K em execução · J falharam", the card's counts.
+/// "1 de 3", with any failures after it; the pips show the rest.
 fn summary(p: &team::Progress) -> String {
-    let mut parts = vec![tf("{} de {} concluídos", &[&p.done, &p.total])];
-    if p.running > 0 {
-        parts.push(tf("{} em execução", &[&p.running]));
-    }
+    let count = tf("{} de {}", &[&p.done, &p.total]);
     match p.failed {
-        0 => {}
-        1 => parts.push(t("1 falhou").to_owned()),
-        n => parts.push(tf("{} falharam", &[&n])),
+        0 => count,
+        1 => format!("{count} · {}", t("1 falhou")),
+        n => format!("{count} · {}", tf("{} falharam", &[&n])),
     }
-    parts.join(" · ")
 }
 
 fn steps_text(tools: usize) -> String {
@@ -195,6 +196,19 @@ fn steps_text(tools: usize) -> String {
     } else {
         tf("{} passos", &[&tools])
     }
+}
+
+/// The provider's mark, in the header or in a lone subagent's row.
+fn provider_tile(provider: &str) -> impl IntoElement {
+    mark_tile(
+        &crate::tab_tile::TileSize {
+            w: 16.,
+            h: 14.,
+            radius: 4.,
+        },
+        Face::provider(provider),
+        provider_glyph(provider, 10.),
+    )
 }
 
 impl Shell {
@@ -216,56 +230,77 @@ impl Shell {
         let session = self.conversations[conversation].session_id.clone();
         let progress = team::progress(members);
         let state = &self.subagents;
+        // One subagent has no header to fold it with.
         let open = match state.folds.get(&(conversation, index)) {
-            Some(tween) => {
+            Some(tween) if members.len() > 1 => {
                 *moving |= !tween.done(now);
                 tween.at(now).clamp(0., 1.)
             }
-            None => 1.,
+            _ => 1.,
         };
-        let title = if turn.headline.is_empty() {
-            if members.len() == 1 {
-                t("1 subagente").to_owned()
-            } else {
-                tf("{} subagentes", &[&members.len()])
-            }
-        } else {
-            turn.headline.clone()
-        };
-        let head = div()
-            .id(("sub-head", index))
-            .h(px(HEAD))
-            .px(px(12.))
-            .flex()
-            .items_center()
-            .gap(px(8.))
-            .cursor_pointer()
-            .on_click(cx.listener(move |this, _, _, cx| this.toggle_fold(conversation, index, cx)))
-            .child(theme_icon("users", 14.).text_color(content(0.7)))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_size(px(13.))
-                    .text_color(content(0.85))
-                    .child(title),
-            )
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .text_size(px(12.))
-                    .text_color(content(0.45))
-                    .child(summary(&progress)),
-            )
-            .child(
-                theme_icon("chevron-right", 12.)
-                    .text_color(content(0.5))
-                    .with_transformation(Transformation::rotate(percentage(open * 0.25))),
-            );
+        let lone = members.len() == 1;
+        let (add, remove) = diff_colors(self.look.diff);
+        let pips = (members.len() <= MAX_PIPS).then(|| {
+            div()
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .gap(px(3.))
+                .children(members.iter().map(|member| {
+                    div()
+                        .w(px(14.))
+                        .h(px(3.))
+                        .rounded(px(2.))
+                        .bg(match member.status {
+                            Status::Running => accent(),
+                            Status::Completed => add.into(),
+                            Status::Failed | Status::Stopped => remove.into(),
+                            Status::Unknown => content(0.14),
+                        })
+                }))
+        });
+        let head = (!lone).then(|| {
+            div()
+                .id(("sub-head", index))
+                .h(px(HEAD))
+                .px(px(12.))
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .cursor_pointer()
+                .on_click(
+                    cx.listener(move |this, _, _, cx| this.toggle_fold(conversation, index, cx)),
+                )
+                .child(provider_tile(provider))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(px(13.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(content(0.88))
+                        .child(tf("{} subagentes", &[&members.len()])),
+                )
+                .children(pips)
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .text_size(px(12.))
+                        .text_color(content(0.45))
+                        .child(summary(&progress)),
+                )
+                .child(
+                    theme_icon("chevron-right", 12.)
+                        .text_color(content(0.5))
+                        .with_transformation(Transformation::rotate(percentage(open * 0.25))),
+                )
+        });
 
         // The body is laid out only while it shows; its height is exact (every row is the same).
-        let mut body: Vec<AnyElement> = Vec::new();
+        let rows = crate::hover_track::list(&format!("sub-rows-{conversation}-{index}"));
+        let buttons = crate::hover_track::list(&format!("sub-actions-{conversation}-{index}"));
+        let mut body: Vec<AnyElement> = vec![rows.pill().into_any_element()];
         let mut natural = 0.;
         if open > 0.001 {
             let runs = team::phases(members);
@@ -291,9 +326,17 @@ impl Shell {
                 for at in run {
                     let member = &members[at];
                     natural += ROW;
-                    body.push(self.subagent_row(
-                        &session, index, at, member, provider, controls, wall, now, cx,
-                    ));
+                    body.push(
+                        rows.row(
+                            self.subagent_row(
+                                &session, index, at, member, lone, provider, controls, wall, now,
+                                &buttons, cx,
+                            ),
+                            at,
+                            false,
+                        )
+                        .into_any_element(),
+                    );
                     if let Some(extra) = self.under_row(&session, member, now, moving, cx) {
                         natural += extra.0;
                         body.push(extra.1);
@@ -312,9 +355,10 @@ impl Shell {
                 .overflow_hidden()
                 .flex()
                 .flex_col()
-                .child(head)
+                .children(head)
                 .child(
                     div()
+                        .relative()
                         .w_full()
                         .h(px(natural * open))
                         .opacity(open)
@@ -336,15 +380,18 @@ impl Shell {
         turn: usize,
         at: usize,
         member: &Member,
+        lone: bool,
         provider: &str,
         controls: bool,
         wall: i64,
         now: Instant,
+        buttons: &crate::hover_track::HoverTrack,
         cx: &mut Context<Self>,
-    ) -> AnyElement {
+    ) -> Stateful<Div> {
         let (add, remove) = diff_colors(self.look.diff);
         let uid = turn * 4096 + at;
         let group = format!("sub-row-{uid}");
+        let group_steps = group.clone();
         let lead: AnyElement = match member.status {
             Status::Running => self.spin(now).into_any_element(),
             Status::Completed => theme_icon("check", 13.).text_color(add).into_any_element(),
@@ -374,77 +421,79 @@ impl Shell {
             let background = member
                 .backgroundable()
                 .map(|source| (session.to_owned(), member.task.clone(), source.to_owned()));
+            let action =
+                |id: &'static str, offset: usize, name: &'static str, glyph: AnyElement| {
+                    buttons.row(
+                        div()
+                            .id((id, uid + offset))
+                            .relative()
+                            .w(px(26.))
+                            .h(px(24.))
+                            .rounded(px(crate::theme::RADIUS_SM))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .tooltip(crate::shell::message_actions::name_tip(t(name)))
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .child(glyph),
+                        uid * 3 + offset,
+                        false,
+                    )
+                };
             div()
                 .absolute()
-                // Clear of the elapsed time, which keeps ticking.
-                .right(px(46.))
-                .top(px((ROW - 26.) / 2.))
-                .h(px(26.))
-                .px(px(1.))
-                .rounded(px(crate::theme::RADIUS_MD))
+                .right_0()
+                .top(px((ROW - 24.) / 2.))
                 .flex()
                 .items_center()
-                .gap(px(2.))
-                .child(crate::theme::floating_surface(crate::theme::RADIUS_MD))
-                .border_1()
-                .border_color(content(0.1))
+                .gap(px(1.))
                 .opacity(0.)
                 .group_hover(group.clone(), |s| s.opacity(1.))
                 .child(
-                    div()
-                        .id(("sub-message", uid))
-                        .size(px(24.))
-                        .rounded(px(crate::theme::RADIUS_SM))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .cursor_pointer()
-                        .hover(|s| s.bg(content(0.07)))
-                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            cx.stop_propagation();
-                            this.compose_subagent(&message_session, &message_task, cx);
-                        }))
-                        .child(theme_icon("message-square", 13.).text_color(content(0.7))),
+                    action(
+                        "sub-message",
+                        0,
+                        "Enviar mensagem",
+                        theme_icon("message-square", 14.)
+                            .text_color(content(0.7))
+                            .into_any_element(),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.compose_subagent(&message_session, &message_task, cx);
+                    })),
                 )
                 .children(background.map(|(bg_session, bg_task, bg_source)| {
-                    div()
-                        .id(("sub-background", uid))
-                        .size(px(24.))
-                        .rounded(px(crate::theme::RADIUS_SM))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .cursor_pointer()
-                        .hover(|s| s.bg(content(0.07)))
-                        .tooltip(crate::shell::message_actions::name_tip(t(
-                            "Enviar para segundo plano",
-                        )))
-                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            cx.stop_propagation();
-                            this.background_subagent(&bg_session, &bg_task, &bg_source, cx);
-                        }))
-                        .child(theme_icon("zap", 13.).text_color(content(0.7)))
+                    action(
+                        "sub-background",
+                        1,
+                        "Mandar para segundo plano",
+                        theme_icon("layers", 14.)
+                            .text_color(content(0.7))
+                            .into_any_element(),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.background_subagent(&bg_session, &bg_task, &bg_source, cx);
+                    }))
                 }))
                 .child(
-                    div()
-                        .id(("sub-stop", uid))
-                        .size(px(24.))
-                        .rounded(px(crate::theme::RADIUS_SM))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .cursor_pointer()
-                        .hover(|s| s.bg(content(0.07)))
-                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            cx.stop_propagation();
-                            this.stop_subagent(&stop_session, &stop_task, cx);
-                        }))
-                        .child(theme_icon("square-fill", 10.).text_color(content(0.7))),
+                    action(
+                        "sub-stop",
+                        2,
+                        "Parar subagente",
+                        theme_icon("square-fill", 12.)
+                            .text_color(content(0.7))
+                            .into_any_element(),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.stop_subagent(&stop_session, &stop_task, cx);
+                    })),
                 )
         });
+        let swaps = actions.is_some();
         div()
             .id(("sub-row", uid))
             .group(group)
@@ -458,22 +507,13 @@ impl Shell {
             .items_center()
             .gap(px(8.))
             .cursor_pointer()
-            .hover(|s| s.bg(content(0.07)))
             .on_click(cx.listener(move |this, _, _, cx| this.toggle_feed(&open_session, &key, cx)))
             .child(lead)
-            .child(mark_tile(
-                &crate::tab_tile::TileSize {
-                    w: 16.,
-                    h: 14.,
-                    radius: 4.,
-                },
-                Face::provider(provider),
-                provider_glyph(provider, 10.),
-            ))
+            .when(lone, |d| d.child(provider_tile(provider)))
             .child(
                 div()
                     .flex_shrink_0()
-                    .max_w(px(220.))
+                    .max_w(px(240.))
                     .truncate()
                     .text_size(px(13.))
                     .text_color(content(0.9))
@@ -488,15 +528,27 @@ impl Shell {
                     .text_color(content(0.4))
                     .child(member.step.clone()),
             )
-            .when(member.tools > 0, |d| {
-                d.child(
-                    div()
-                        .flex_shrink_0()
-                        .text_size(px(12.))
-                        .text_color(content(0.4))
-                        .child(steps_text(member.tools)),
-                )
-            })
+            // The step count and the buttons share one place, and neither covers the time.
+            .child(
+                div()
+                    .relative()
+                    .flex_shrink_0()
+                    .h_full()
+                    .when(swaps, |d| d.w(px(ACTIONS)))
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .when(member.tools > 0, |d| {
+                        d.child(
+                            div()
+                                .text_size(px(12.))
+                                .text_color(content(0.4))
+                                .when(swaps, |d| d.group_hover(group_steps, |s| s.opacity(0.)))
+                                .child(steps_text(member.tools)),
+                        )
+                    })
+                    .children(actions),
+            )
             .child(
                 div()
                     .flex_shrink_0()
@@ -507,8 +559,6 @@ impl Shell {
                     .text_color(content(0.45))
                     .children(elapsed),
             )
-            .children(actions)
-            .into_any_element()
     }
 
     /// What opens under a row: the message input, then the subagent's own conversation.
@@ -1147,7 +1197,7 @@ mod tests {
             failed: 0,
             background: 0,
         };
-        assert_eq!(summary(&p), "2 de 5 concluídos · 3 em execução");
+        assert_eq!(summary(&p), "2 de 5");
         let p = team::Progress {
             done: 5,
             total: 5,
@@ -1155,7 +1205,7 @@ mod tests {
             failed: 1,
             background: 0,
         };
-        assert_eq!(summary(&p), "5 de 5 concluídos · 1 falhou");
+        assert_eq!(summary(&p), "5 de 5 · 1 falhou");
         let p = team::Progress {
             done: 4,
             total: 4,
@@ -1163,7 +1213,7 @@ mod tests {
             failed: 2,
             background: 0,
         };
-        assert_eq!(summary(&p), "4 de 4 concluídos · 2 falharam");
+        assert_eq!(summary(&p), "4 de 4 · 2 falharam");
     }
 
     #[test]

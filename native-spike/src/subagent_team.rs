@@ -1,6 +1,6 @@
 //! The subagents a turn launched, as Sirus's team card reads them (`lib/subagent-team.ts`,
-//! ADR-146): who they are, their state, the phases they were launched in, the card's counts, the
-//! headline and the elapsed-time text. Pure data, so it is tested without a window.
+//! ADR-146): who they are, their state, the phases they were launched in, the card's counts and
+//! the elapsed-time text. Pure data, so it is tested without a window.
 use serde_json::Value;
 use std::ops::Range;
 
@@ -66,18 +66,31 @@ impl Member {
                 .sum(),
             None => steps.map_or(0, Vec::len) + item["hiddenSteps"].as_u64().unwrap_or(0) as usize,
         };
-        let step = steps
-            .and_then(|steps| {
-                steps
-                    .iter()
-                    .rev()
-                    .find(|s| s["state"] == "running")
-                    .or_else(|| steps.last())
+        let status = Status::of(
+            item["state"].as_str().unwrap_or(""),
+            item["timedOut"].as_bool().unwrap_or(false),
+        );
+        // Progress in the agent's own words, else the running step. A finished subagent shows
+        // none: "Running cargo test" would read as still happening.
+        let step = (status == Status::Running)
+            .then(|| {
+                item["detail"]
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|detail| !detail.is_empty())
+                    .map(str::to_owned)
+                    .or_else(|| {
+                        steps?
+                            .iter()
+                            .rev()
+                            .find(|s| s["state"] == "running")
+                            .or_else(|| steps?.last())?["label"]
+                            .as_str()
+                            .map(|label| crate::i18n::from_host(label.trim()))
+                    })
             })
-            .and_then(|s| s["label"].as_str())
-            .unwrap_or("")
-            .trim()
-            .to_owned();
+            .flatten()
+            .unwrap_or_default();
         Self {
             task: id.strip_prefix("agent:").unwrap_or(id).to_owned(),
             key: item["source"]
@@ -86,10 +99,7 @@ impl Member {
                 .unwrap_or(id)
                 .to_owned(),
             label: item["label"].as_str().unwrap_or("").trim().to_owned(),
-            status: Status::of(
-                item["state"].as_str().unwrap_or(""),
-                item["timedOut"].as_bool().unwrap_or(false),
-            ),
+            status,
             started: item["startedAt"].as_i64(),
             ended: item["endedAt"].as_i64(),
             tools,
@@ -212,79 +222,6 @@ pub fn progress(members: &[Member]) -> Progress {
     out
 }
 
-const MAX_HEADLINE: usize = 120;
-
-fn plain_line(line: &str) -> String {
-    let line = line.trim_start_matches('#');
-    let line = line.trim_start();
-    let line = match line.chars().next() {
-        Some('-' | '*' | '>') if line[1..].starts_with(char::is_whitespace) => {
-            line[1..].trim_start()
-        }
-        _ => line,
-    };
-    let mut out = String::with_capacity(line.len());
-    let mut rest = line;
-    while let Some(ch) = rest.chars().next() {
-        // A link keeps its text: `[text](target)`.
-        if ch == '[' {
-            if let Some(close) = rest.find("](") {
-                if let Some(end) = rest[close..].find(')') {
-                    out.push_str(&rest[1..close]);
-                    rest = &rest[close + end + 1..];
-                    continue;
-                }
-            }
-        }
-        if !matches!(ch, '*' | '_' | '`') {
-            out.push(ch);
-        }
-        rest = &rest[ch.len_utf8()..];
-    }
-    out.trim().to_owned()
-}
-
-fn clip(text: String) -> String {
-    if text.chars().count() <= MAX_HEADLINE {
-        return text;
-    }
-    let cut: String = text.chars().take(MAX_HEADLINE - 1).collect();
-    format!("{}…", cut.trim_end())
-}
-
-/// The reply up to `offset` UTF-16 units, where the first subagent was launched.
-pub fn reply_head(reply: &str, offset: Option<u32>) -> &str {
-    let Some(offset) = offset else { return reply };
-    let mut units = 0u32;
-    for (at, ch) in reply.char_indices() {
-        if units >= offset {
-            return &reply[..at];
-        }
-        units += ch.len_utf16() as u32;
-    }
-    reply
-}
-
-/// The card's headline: the title of a plan the agent wrote before delegating (its first
-/// Markdown heading, up to the first launch), else the first line of the person's prompt.
-pub fn headline(prompt: &str, reply_head: &str) -> String {
-    let heading = reply_head.lines().find(|line| {
-        let line = line.trim();
-        let hashes = line.chars().take_while(|c| *c == '#').count();
-        (1..=3).contains(&hashes)
-            && line[hashes..].starts_with(char::is_whitespace)
-            && !line[hashes..].trim().is_empty()
-    });
-    if let Some(title) = heading.map(plain_line).filter(|t| !t.is_empty()) {
-        return clip(title);
-    }
-    prompt
-        .lines()
-        .map(plain_line)
-        .find(|line| !line.is_empty())
-        .map_or_else(String::new, clip)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -403,6 +340,13 @@ mod tests {
             (5, "Running cargo test", 2)
         );
         assert!(m.running() && m.background);
+        // Its progress wins over the step's generic name, and a finished one shows neither.
+        let told = json!({ "id": "agent:t3", "state": "running", "detail": "Running npm test",
+            "steps": [{ "label": "Command", "state": "running" }] });
+        assert_eq!(Member::from_item(&told, 1).step, "Running npm test");
+        let done = json!({ "id": "agent:t4", "state": "completed", "detail": "Running npm test",
+            "steps": [{ "label": "Command", "state": "completed" }] });
+        assert_eq!(Member::from_item(&done, 1).step, "");
         // Without steps it has no current step; the key falls back to the row id.
         let bare = Member::from_item(&json!({ "id": "agent:t2", "state": "completed" }), 1);
         assert_eq!(bare.backgroundable(), None);
@@ -435,34 +379,5 @@ mod tests {
     fn a_workflow_counts_its_members_tools() {
         let item = json!({ "id": "agent:w", "workflow": { "agents": [{ "toolCalls": 3 }, { "toolCalls": 4 }, {}] } });
         assert_eq!(Member::from_item(&item, 1).tools, 7);
-    }
-
-    #[test]
-    fn the_headline_is_the_plan_title_else_the_prompt() {
-        assert_eq!(
-            headline("do it", "Intro\n## The **plan**\nmore"),
-            "The plan"
-        );
-        assert_eq!(
-            headline("- [fix](http://x) the _build_\nsecond", ""),
-            "fix the build"
-        );
-        assert_eq!(headline("\n\n  ", ""), "");
-        // A heading deeper than three levels is not a plan title.
-        assert_eq!(headline("ask", "#### deep"), "ask");
-        let long = "a".repeat(200);
-        let h = headline(&long, "");
-        assert_eq!(h.chars().count(), MAX_HEADLINE);
-        assert!(h.ends_with('…'));
-    }
-
-    #[test]
-    fn the_reply_head_stops_at_the_launch_in_utf16_units() {
-        assert_eq!(reply_head("abcdef", Some(3)), "abc");
-        assert_eq!(reply_head("abcdef", None), "abcdef");
-        assert_eq!(reply_head("abc", Some(99)), "abc");
-        // An emoji is two UTF-16 units.
-        assert_eq!(reply_head("a😀b", Some(3)), "a😀");
-        assert_eq!(reply_head("x", Some(0)), "");
     }
 }

@@ -52,8 +52,6 @@ pub struct Turn {
     pub attachments: Vec<crate::attachment_doc::Info>,
     pub steps: Vec<Step>,
     pub agents: Vec<AgentRun>,
-    /// The subagent card's title: the plan's heading, else the first line of the request.
-    pub headline: String,
     /// Who answered this turn, which can differ from the conversation's current provider.
     pub provider: Option<&'static str>,
     /// Visuals the agent published: (id, title, native source, or the old HTML).
@@ -406,7 +404,6 @@ fn blank(user: &str) -> Turn {
         attachments: Vec::new(),
         steps: Vec::new(),
         agents: Vec::new(),
-        headline: String::new(),
         provider: None,
         visuals: Vec::new(),
         launched: Vec::new(),
@@ -534,10 +531,6 @@ fn turns_of(messages: &[Value]) -> Vec<Turn> {
                         continue;
                     }
                     let offset = item["offset"].as_u64().map(|o| o as u32);
-                    if turn.agents.is_empty() {
-                        let head = crate::subagent_team::reply_head(content, offset);
-                        turn.headline = crate::subagent_team::headline(&turn.user, head);
-                    }
                     let phase = phaser.member(offset);
                     turn.agents.push(AgentRun::from_item(item, phase));
                     continue;

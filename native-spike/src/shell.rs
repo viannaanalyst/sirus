@@ -13494,6 +13494,10 @@ impl Shell {
 
     /// Opens a file or folder named in a chip: the Files pane comes up showing it.
     pub(crate) fn open_chip(&mut self, target: crate::file_chips::Target, cx: &mut Context<Self>) {
+        if target.outside {
+            self.open_pdf_file(target.path, cx);
+            return;
+        }
         self.open_pane(1, cx);
         let session = self.conversations[self.active_conversation()]
             .session_id
@@ -16189,21 +16193,27 @@ fn model_name(provider: &str) -> &'static str {
     }
 }
 
-/// The live phase's header: "Running 11 commands · Explored the project".
+/// The live phase's header: "Rodando 11 comandos · Explorou o projeto".
 fn live_summary(steps: &[data::Step]) -> String {
     let count = |kind: &str| steps.iter().filter(|s| s.kind == kind).count();
     let (commands, reads, edits) = (count("command"), count("read"), count("edit"));
     let mut parts = Vec::new();
     if commands > 0 {
-        let noun = if commands == 1 { "command" } else { "commands" };
-        parts.push(format!("Running {commands} {noun}"));
+        parts.push(if commands == 1 {
+            t("Rodando 1 comando").to_owned()
+        } else {
+            tf("Rodando {} comandos", &[&commands])
+        });
     }
     if reads > 0 {
-        parts.push("Explored the project".to_owned());
+        parts.push(t("Explorou o projeto").to_owned());
     }
     if edits > 0 {
-        let noun = if edits == 1 { "file" } else { "files" };
-        parts.push(format!("Edited {edits} {noun}"));
+        parts.push(if edits == 1 {
+            t("Editou 1 arquivo").to_owned()
+        } else {
+            tf("Editou {} arquivos", &[&edits])
+        });
     }
     parts.join(" · ")
 }
@@ -16228,15 +16238,16 @@ mod live_header_tests {
 
     #[test]
     fn the_live_header_counts_commands_and_what_it_read() {
+        crate::i18n::set_locale("pt-BR");
         let steps: Vec<_> = (0..11)
             .map(|_| step("command"))
             .chain([step("read")])
             .collect();
         assert_eq!(
             live_summary(&steps),
-            "Running 11 commands · Explored the project"
+            "Rodando 11 comandos · Explorou o projeto"
         );
-        assert_eq!(live_summary(&[step("command")]), "Running 1 command");
+        assert_eq!(live_summary(&[step("command")]), "Rodando 1 comando");
         assert_eq!(live_summary(&[]), "");
     }
 }

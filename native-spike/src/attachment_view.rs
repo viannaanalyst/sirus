@@ -327,6 +327,31 @@ fn pdf_message(error: attachment_pdf::Error) -> &'static str {
     }
 }
 
+/// A PDF from disk, checked by the reader, as the viewer takes it.
+fn read_pdf(path: &str) -> Result<(Info, Content), &'static str> {
+    let bytes = std::fs::read(path).map_err(|_| t("Não foi possível abrir este documento."))?;
+    let pdf = attachment_pdf::open(&bytes).map_err(pdf_message)?;
+    let name = std::path::Path::new(path).file_name().map_or_else(
+        || path.to_owned(),
+        |name| name.to_string_lossy().into_owned(),
+    );
+    let info = Info {
+        id: "reply".to_owned(),
+        name,
+        kind: "file".to_owned(),
+        mime: "application/pdf".to_owned(),
+        size: Some(bytes.len() as u64),
+        content: String::new(),
+        truncated: false,
+        thumb: None,
+    };
+    let content = Content::Pdf(Arc::new(PdfData {
+        pages: pdf.sizes.len(),
+        bytes: Arc::new(bytes),
+    }));
+    Ok((info, content))
+}
+
 /// Everything slow about opening `info`: the host's reply, then decoding it.
 fn load(backend: &Backend, info: &Info, owner: &str) -> Content {
     let viewer = info.viewer();
@@ -1102,6 +1127,32 @@ impl Shell {
                 .detach();
             }
         }
+    }
+
+    /// A PDF outside the conversation's folder, which the host wouldn't read: only this click
+    /// reads it, here, and only the reader shows it.
+    pub(super) fn open_pdf_file(&mut self, path: String, cx: &mut Context<Self>) {
+        let rx = crate::project_files::run_blocking(move || read_pdf(&path));
+        cx.spawn(async move |this, cx| {
+            let Ok(read) = rx.recv().await else {
+                return;
+            };
+            let _ = this.update(cx, |this, cx| match read {
+                Ok((info, content)) => this.open_attachment_with(
+                    info,
+                    String::new(),
+                    true,
+                    Vec::new(),
+                    Some((content, None)),
+                    cx,
+                ),
+                Err(message) => {
+                    this.problem = Some(message.to_owned());
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     /// HTML a reply wrote, in the web view under Sirus's rules for it (`reply_rich::PREVIEW_POLICY`):

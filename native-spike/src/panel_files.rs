@@ -1244,6 +1244,35 @@ impl FilesPanel {
                 theme::icon("plus", 14.).group_hover("new-file-tab", |s| s.text_color(content(1.))),
             )
             .on_click(cx.listener(|this, _, _, cx| this.add_tab(cx)));
+        let wrapping = crate::file_editor::wrapping();
+        let wrap = div()
+            .id("file-wrap")
+            .cursor_pointer()
+            .size(px(26.))
+            .mr(px(5.))
+            .flex_shrink_0()
+            .rounded(px(crate::theme::RADIUS_MD))
+            .when(wrapping, |d| d.bg(content(0.08)))
+            .flex()
+            .items_center()
+            .justify_center()
+            .hover(|s| s.bg(content(0.1)))
+            .tooltip(crate::shell::message_actions::name_tip(if wrapping {
+                t("Não quebrar linhas")
+            } else {
+                t("Quebrar linhas")
+            }))
+            .child(
+                theme::icon("wrap-text", 14.).text_color(content(if wrapping {
+                    0.85
+                } else {
+                    0.5
+                })),
+            )
+            .on_click(cx.listener(|_, _, _, cx| {
+                crate::file_editor::toggle_wrapping();
+                cx.notify();
+            }));
         div()
             .h(px(36.))
             .w_full()
@@ -1268,6 +1297,7 @@ impl FilesPanel {
                     .children(tabs)
                     .child(add),
             )
+            .child(wrap)
             .into_any_element()
     }
 

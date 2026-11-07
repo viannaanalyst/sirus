@@ -52,9 +52,7 @@ export function AddSheet(props: {
           <SheetRow first icon="photo" title="Fotos" note="Da sua galeria" disabled={props.busy} onPress={run(props.onPhotos)} />
           <SheetRow icon="folder" title="Arquivos" note="Escolher arquivos" disabled={props.busy} onPress={run(props.onFiles)} />
           <SheetRow icon="shippingbox" title="Usar uma skill" note="Adiciona /nome-da-skill ao rascunho" onPress={composer.startSkill} />
-        </SheetGroup>
-        <SheetGroup className="mt-3">
-          <SheetRow first icon="scope" title="Meta" note={modes.goal || "Defina uma meta a perseguir"} accessory={check(!!modes.goal)} onPress={editGoal} />
+          <SheetRow icon="scope" title="Meta" note={modes.goal || "Defina uma meta a perseguir"} accessory={check(!!modes.goal)} onPress={editGoal} />
           <SheetRow icon="lightbulb" title="Modo planejamento" note={planningOk ? "Analisar e propor antes de editar" : "Indisponível para este agente ou modelo"}
             disabled={!planningOk} accessory={check(modes.planning)} onPress={mode((current) => setPlanning(current, !current.planning))} />
           <SheetRow icon="ladybug" title="Modo debug" note="Ativar modo debug" accessory={check(modes.debugging)} onPress={mode((current) => setDebugging(current, !current.debugging))} />

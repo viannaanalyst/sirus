@@ -13,6 +13,9 @@ import { Markdown } from "./Markdown";
 import { StepTree, ThinkingRow, type StepSource } from "./thread/StepTree";
 import { SubagentTeam } from "./thread/SubagentTeam";
 import { Tree } from "./thread/TreeRow";
+import { ProviderIcon } from "./ProviderIcon";
+import { modelLabel } from "./thread/steps";
+import { useNow } from "./thread/use-now";
 
 const t = (key: string, params?: Record<string, string | number>) => translate("pt-BR", key, params);
 
@@ -31,6 +34,8 @@ export const AgentReply = memo(function AgentReply(props: {
   readonly message: Message; readonly agent: string; readonly computerId: string; readonly cwd?: string; readonly files?: ReplyFiles;
   /** The person's prompt this reply answers; the team card's headline falls back to it. */
   readonly prompt?: string;
+  /** The conversation's model, for the name over the reply. */
+  readonly model?: string | null;
 }) {
   const { message } = props;
   const items = message.activity?.items;
@@ -48,13 +53,15 @@ export const AgentReply = memo(function AgentReply(props: {
   const thinking = message.streaming && lastPart?.kind !== "text" && !(items ?? []).some((item) => item.state === "running" && !item.shell && !item.finishedTask);
   const trailing = thinking ? <ThinkingRow thought={message.activity?.thought} /> : undefined;
 
-  if (!parts.length) return thinking ? <Tree>{trailing}</Tree> : null;
+  const head = <ReplyHead provider={props.agent} model={props.model} activity={message.activity} streaming={!!message.streaming} />;
+  if (!parts.length) return thinking ? <View className="gap-1">{head}<Tree>{trailing}</Tree></View> : null;
   const duration = message.activity ? formatActivityDuration(activityElapsed(message.activity, Date.now())) : null;
   const steps = (items ?? []).filter(countsAsStep).length;
   const subagents = teamSize(items ?? []);
   const summary = [steps ? `${steps} ${steps === 1 ? "passo" : "passos"}` : null, subagents ? `${subagents} ${subagents === 1 ? "subagente" : "subagentes"}` : null].filter(Boolean).join(" · ");
   const lastWork = parts.findLastIndex((part) => part.kind === "work");
   return <View className="gap-1">
+    {head}
     {fold > 0
       ? <Pressable onPress={() => setOpen((value) => !value)} accessibilityRole="button" className="mt-2 flex-row items-center gap-[7px] self-start py-1 active:opacity-60">
           <SymbolView name="checkmark" size={13} weight="semibold" tintColorClassName="accent-foreground-muted" />
@@ -71,6 +78,17 @@ export const AgentReply = memo(function AgentReply(props: {
     {thinking && lastPart?.kind !== "work" ? <Tree>{trailing}</Tree> : null}
   </View>;
 });
+
+/** Over a reply, as on the Mac: the provider's tile, the model and how long it has been working. */
+function ReplyHead(props: { readonly provider: string; readonly model?: string | null; readonly activity: Message["activity"]; readonly streaming: boolean }) {
+  const now = useNow(props.streaming);
+  const elapsed = props.streaming && props.activity ? formatActivityDuration(activityElapsed(props.activity, now)) : null;
+  return <View className="mb-1 flex-row items-center gap-2">
+    <ProviderIcon provider={props.provider} size={20} />
+    <AppText numberOfLines={1} className="shrink text-[13.5px] text-foreground-muted">{modelLabel(props.model, props.provider)}</AppText>
+    {elapsed ? <AppText numberOfLines={1} className="shrink text-[13.5px] text-foreground-tertiary">{`trabalhando há ${elapsed}`}</AppText> : null}
+  </View>;
+}
 
 function partKey(part: TimelinePart, index: number) {
   return part.kind === "text" ? `t${part.start}` : part.kind === "work" ? `w${part.items[0]?.id ?? index}` : part.kind === "marker" ? `m${part.item.id}` : `s${index}`;

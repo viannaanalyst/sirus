@@ -1689,6 +1689,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Não foi possível verificar", "Could not check"),
     ("Não instalado", "Not installed"),
     ("Não permitir", "Don't allow"),
+    ("Não quebrar linhas", "Don't wrap lines"),
     (
         "Não é um link sirus://new.",
         "It is not a sirus://new link.",
@@ -2241,6 +2242,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Quanto da cor aparece no fundo.",
         "How much of the color shows in the background.",
     ),
+    ("Quebrar linhas", "Wrap lines"),
     ("Quebrar linhas nos diffs", "Wrap lines in diffs"),
     ("Raciocínio", "Thinking"),
     ("Rascunho", "Draft"),

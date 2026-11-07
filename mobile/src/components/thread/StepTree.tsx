@@ -1,16 +1,17 @@
 import { memo, useContext, useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, ScrollView, View } from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, View } from "react-native";
 
 import type { ActivityItem, TurnReview } from "@sirus/client/types";
 
 import { isSubagent } from "@sirus/lib/subagent-team";
 
 import { useSirus } from "../../data/store";
+import { SymbolView } from "../AppSymbol";
 import { AppText } from "../AppText";
+import { ShimmerText } from "./Shimmer";
 import { OpenSubagent } from "./subagent-context";
-import { TreeRow, Tree } from "./TreeRow";
-import { fileName, shortElapsed, stepLine, stepSeconds, t } from "./steps";
-import { useNow } from "./use-now";
+import { PathChip, TargetChip, TreeRow } from "./TreeRow";
+import { commandLabel, commandPaths, fileName, groupTitle, stepCaption, stepLine, t } from "./steps";
 
 /** Where a reply lives, so a row can fetch what transcripts leave out (full output, diffs). */
 export interface StepSource { readonly computerId: string; readonly sessionId: string; readonly messageId: string }
@@ -92,53 +93,48 @@ function CommandBody(props: { readonly item: ActivityItem; readonly source: Step
   </View>;
 }
 
-/** Elapsed seconds of a step; ticks only while it runs. */
-function useElapsed(item: ActivityItem): string | null {
-  const running = item.state === "running";
-  const now = useNow(running);
-  return shortElapsed(stepSeconds(item, now));
-}
-
 /** "Executou" while it runs reads "Executando"; verbs with no such form stay. */
 const liveVerb = (verb: string) => verb === "Leu" ? "Lendo" : verb.replace(/ou$/, "ando");
 
-const Title = (props: { readonly verb: string; readonly target: string | null; readonly extra?: React.ReactNode }) => <>
-  {props.verb ? `${props.verb} ` : ""}{props.target ? <AppText className="text-[13.5px] font-app-medium text-foreground">{props.target}</AppText> : null}{props.extra}
-</>;
+const Delta = (props: { readonly file: ReviewFile }) => <AppText className="text-xs">
+  <AppText className="text-xs" style={{ color: GREEN }}>{`+${props.file.additions}`}</AppText>{" "}<AppText className="text-xs" style={{ color: RED }}>{`-${props.file.deletions}`}</AppText>
+</AppText>;
 
-const Delta = (props: { readonly file: ReviewFile }) => <>
-  {"  "}<AppText className="text-xs" style={{ color: GREEN }}>{`+${props.file.additions}`}</AppText>{" "}<AppText className="text-xs" style={{ color: RED }}>{`−${props.file.deletions}`}</AppText>
-</>;
-
-/** One step as a row: the Mac's verb and target, time, +/− for edits, details on tap. */
+/** One step as a row: a command reads as what it was for, with its program and files as chips. */
 export const StepRow = memo(function StepRow(props: { readonly item: ActivityItem; readonly cwd?: string; readonly file?: ReviewFile; readonly source: StepSource }) {
   const { item, file, source } = props;
   const line = stepLine(item, props.cwd);
   const live = item.state === "running";
-  const time = useElapsed(item);
+  const failed = item.state === "failed";
   const detail = item.detail?.trim() ?? "";
   const openSubagent = useContext(OpenSubagent);
   // A lone subagent (no team card) is a row that opens its sheet.
-  if (isSubagent(item)) return <TreeRow icon="person.2" live={live} failed={item.state === "failed"} time={time} onPress={() => openSubagent(source.messageId, item.id)}>{item.label.trim() || t("subagentView.title")}</TreeRow>;
+  if (isSubagent(item)) return <TreeRow icon="person.2" live={live} failed={failed} title={item.detail?.trim() || "Subagente"} onPress={() => openSubagent(source.messageId, item.id)} />;
+  if (line.category === "command") {
+    const paths = commandPaths(detail);
+    const program = commandLabel(detail);
+    return <TreeRow live={live} failed={failed} title={stepCaption(item) || undefined} body={detail || item.output ? () => <CommandBody item={item} source={source} /> : undefined}
+      chips={<>
+        {program ? <TargetChip>{program}</TargetChip> : null}
+        {paths.map((path) => <PathChip key={path.name} name={path.name} folder={path.folder} />)}
+      </>} />;
+  }
   const body = line.category === "edit" && detail ? () => <EditBody file={file} path={detail} source={source} />
-    : line.category === "command" && (detail || item.output) ? () => <CommandBody item={item} source={source} />
     : item.output?.trim() ? () => <CodeBlock lines={item.output!.replace(/\n+$/, "").split("\n")} />
     : undefined;
-  return <TreeRow icon={line.icon} live={live} failed={item.state === "failed"} time={time} body={body}>
-    <Title verb={live ? liveVerb(line.verb) : line.verb} target={line.target} extra={file && line.category === "edit" ? <Delta file={file} /> : null} />
-  </TreeRow>;
+  return <TreeRow icon={line.icon} live={live} failed={failed} title={live ? liveVerb(line.verb) : line.verb} body={body} chips={<>
+    {line.target ? <TargetChip>{line.target}</TargetChip> : null}
+    {file && line.category === "edit" ? <Delta file={file} /> : null}
+  </>} />;
 });
 
 /** Back-to-back file reads fold into one row ("Leu 8 arquivos"); a tap lists them. */
 const ReadsRow = memo(function ReadsRow(props: { readonly items: ActivityItem[] }) {
   const names = useMemo(() => [...new Set(props.items.map((item) => fileName(item.detail ?? "")))], [props.items]);
-  const seconds = props.items.reduce((sum, item) => sum + (stepSeconds(item, 0) ?? 0), 0);
-  return <TreeRow icon="doc.text" time={shortElapsed(seconds)} body={() => <View className="gap-0.5">
+  return <TreeRow icon="doc.text" title="Leu" chips={<TargetChip>{`${names.length} arquivos`}</TargetChip>} body={() => <View className="gap-0.5">
     {names.slice(0, 40).map((name) => <AppText key={name} numberOfLines={1} style={MONO} className="text-xs leading-[19px] text-foreground-muted">{name}</AppText>)}
     {names.length > 40 ? <AppText className="text-xs text-foreground-tertiary">{`+ ${names.length - 40} arquivos`}</AppText> : null}
-  </View>}>
-    <Title verb="Leu" target={`${names.length} arquivos`} />
-  </TreeRow>;
+  </View>} />;
 });
 
 type Entry = { readonly kind: "step"; readonly item: ActivityItem } | { readonly kind: "reads"; readonly items: ActivityItem[] };
@@ -160,27 +156,42 @@ function entries(items: readonly ActivityItem[]): Entry[] {
   return out;
 }
 
-/** The activity tree of a run of steps. */
+/**
+ * A run of steps as on the Mac: a tile with a chevron and what the run did, and its rows on a rail.
+ * It stays open while it works and folds when it ends, unless the person opened or closed it.
+ */
 export const StepTree = memo(function StepTree(props: {
   readonly items: readonly ActivityItem[];
   readonly cwd?: string;
   readonly review?: TurnReview | null;
   readonly source: StepSource;
-  /** Rendered after the steps, still on the guide: the "Pensando" line. */
+  /** Rendered after the steps, on the rail: the "Pensando" line. */
   readonly trailing?: React.ReactNode;
 }) {
   const list = useMemo(() => entries(props.items), [props.items]);
-  return <Tree>
-    {list.map((entry) => entry.kind === "reads"
-      ? <ReadsRow key={`r${entry.items[0]!.id}`} items={entry.items} />
-      : <StepRow key={entry.item.id} item={entry.item} cwd={props.cwd} file={entry.item.kind === "edit" ? reviewFor(props.review?.files, entry.item.detail) : undefined} source={props.source} />)}
-    {props.trailing}
-  </Tree>;
+  const live = props.items.some((item) => item.state === "running") || !!props.trailing;
+  const [choice, setChoice] = useState<boolean | null>(null);
+  const open = choice ?? live;
+  const title = groupTitle(props.items, live);
+  return <View className="mt-1">
+    <Pressable onPress={() => setChoice(!open)} accessibilityRole="button" accessibilityLabel={title} className="min-h-[34px] flex-row items-center gap-[9px] active:opacity-60">
+      <View className={`size-[25px] items-center justify-center rounded-[8px] border bg-card ${live ? "border-[#7fb4ff66]" : "border-border-subtle"}`}>
+        <SymbolView name={open ? "chevron.down" : "chevron.right"} size={12} weight="semibold" tintColorClassName="accent-foreground-muted" />
+      </View>
+      {live
+        ? <ShimmerText numberOfLines={1} className="min-w-0 flex-1 text-[13.5px] text-foreground-muted">{title}</ShimmerText>
+        : <AppText numberOfLines={1} className="min-w-0 flex-1 text-[13.5px] text-foreground-muted">{title}</AppText>}
+    </Pressable>
+    {open ? <View>
+      {list.map((entry) => entry.kind === "reads"
+        ? <ReadsRow key={`r${entry.items[0]!.id}`} items={entry.items} />
+        : <StepRow key={entry.item.id} item={entry.item} cwd={props.cwd} file={entry.item.kind === "edit" ? reviewFor(props.review?.files, entry.item.detail) : undefined} source={props.source} />)}
+      {props.trailing}
+    </View> : null}
+  </View>;
 });
 
 /** The tail of a running turn when no tool is running: the agent is thinking. */
 export function ThinkingRow(props: { readonly thought?: string | null }) {
-  return <TreeRow icon="brain" live body={props.thought ? () => <AppText className="text-[13px] leading-[19px] text-foreground-tertiary">{props.thought}</AppText> : undefined}>
-    Pensando
-  </TreeRow>;
+  return <TreeRow icon="brain" live title="Pensando" body={props.thought ? () => <AppText className="text-[13px] leading-[19px] text-foreground-muted">{props.thought}</AppText> : undefined} />;
 }

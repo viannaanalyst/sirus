@@ -7,9 +7,11 @@
 //! Also here: drag selection (a drag past the top or bottom edge scrolls one line a move), a double
 //! click for a word, a triple click for a line, and Option+arrows and Option+Backspace by word.
 //!
-//! Not here yet: wrapping (lines run on, and the pane does not scroll sideways), find and replace,
-//! and auto-indent. Click placement assumes one advance per character, so tabs and wide characters
-//! put the caret a little off.
+//! Long lines wrap by default, under the line's own indent, with one number per line; a switch in
+//! the tab strip turns that off for every file. Up and Down still move by whole lines.
+//!
+//! Not here yet: find and replace, and auto-indent. Click placement assumes one advance per
+//! character, so tabs and wide characters put the caret a little off.
 //!
 //! `Buffer` is the text, its selection and its edits, with no UI, so it is unit-tested on its own.
 //! Positions are byte offsets that always sit on a character boundary.
@@ -38,6 +40,83 @@ const ROW: f32 = 19.;
 /// padding inside (the box is border-box), so the text starts here.
 const GUTTER: f32 = 48.;
 const FONT_SIZE: f32 = 12.5;
+/// Below this many characters a row is too narrow to read, so it stops wrapping tighter.
+const MIN_COLUMNS: usize = 16;
+
+/// One row on screen: a whole line, or one piece of it.
+#[derive(Clone, Debug, PartialEq)]
+struct Row {
+    line: usize,
+    /// Bytes of the whole text.
+    range: Range<usize>,
+    /// Characters it starts in from the left edge: the line's indent, on a row after the first.
+    indent: usize,
+}
+
+/// Where a line's text breaks to fit `columns` characters, as byte ranges of `text` with each one's
+/// indent: after a space when there is one in the row, anywhere otherwise.
+fn wrap_line(text: &str, columns: usize) -> Vec<(Range<usize>, usize)> {
+    let columns = columns.max(MIN_COLUMNS);
+    let lead = text.chars().take_while(|c| *c == ' ' || *c == '\t').count();
+    // Past half the row, an indent leaves too little room for the text.
+    let hanging = lead.min(columns / 2);
+    let mut out = Vec::new();
+    let (mut start, mut indent) = (0, 0);
+    loop {
+        let room = columns - indent;
+        let mut end = text.len();
+        let mut count = 0;
+        let mut space = None;
+        for (at, c) in text[start..].char_indices() {
+            if count == room {
+                end = start + at;
+                break;
+            }
+            count += 1;
+            if c == ' ' || c == '\t' {
+                space = Some(start + at + c.len_utf8());
+            }
+        }
+        if end == text.len() {
+            out.push((start..end, indent));
+            return out;
+        }
+        // A break in the indent itself would show nothing on the row.
+        if let Some(space) = space.filter(|space| *space > start + lead.min(text.len() - start)) {
+            end = space;
+        }
+        out.push((start..end, indent));
+        start = end;
+        indent = hanging;
+    }
+}
+
+static WRAPS: std::sync::OnceLock<std::sync::atomic::AtomicBool> = std::sync::OnceLock::new();
+
+fn wrap_file() -> std::path::PathBuf {
+    crate::backend::data_dir().join("code-wrap.json")
+}
+
+fn wraps() -> &'static std::sync::atomic::AtomicBool {
+    WRAPS.get_or_init(|| {
+        let saved = std::fs::read(wrap_file())
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<bool>(&bytes).ok());
+        std::sync::atomic::AtomicBool::new(saved.unwrap_or(true))
+    })
+}
+
+/// Whether long lines wrap, in every open file.
+pub fn wrapping() -> bool {
+    wraps().load(std::sync::atomic::Ordering::Relaxed)
+}
+
+pub fn toggle_wrapping() {
+    let on = !wrapping();
+    wraps().store(on, std::sync::atomic::Ordering::Relaxed);
+    let _ = std::fs::create_dir_all(crate::backend::data_dir());
+    let _ = std::fs::write(wrap_file(), on.to_string());
+}
 /// Quiet time after the last edit before the colors are parsed again.
 const HIGHLIGHT_DEBOUNCE_MS: u64 = 150;
 /// Lines a page key moves the caret by.
@@ -584,6 +663,9 @@ pub struct Editor {
     geometry: Rc<RefCell<Geometry>>,
     /// The left button went down on the text and the selection follows the pointer.
     dragging: bool,
+    /// The rows on screen, and what they were laid out for: revision, columns (0 unwrapped).
+    rows: Vec<Row>,
+    rows_for: Option<(u64, usize)>,
 }
 
 impl EventEmitter<EditorEvent> for Editor {}
@@ -602,6 +684,8 @@ impl Editor {
             advance: FONT_SIZE * 0.6,
             geometry: Rc::default(),
             dragging: false,
+            rows: Vec::new(),
+            rows_for: None,
         };
         editor.schedule_highlight(cx);
         editor
@@ -675,8 +759,69 @@ impl Editor {
     }
 
     fn reveal_caret(&self) {
-        let line = self.buffer.line_of(self.buffer.cursor());
-        self.scroll.scroll_to_item(line, ScrollStrategy::Nearest);
+        let row = self.row_of(self.buffer.cursor());
+        self.scroll.scroll_to_item(row, ScrollStrategy::Nearest);
+    }
+
+    /// Lays the rows out again when the text or the width changed.
+    fn layout_rows(&mut self) {
+        let width = self
+            .geometry
+            .borrow()
+            .list
+            .map_or(0., |list| f32::from(list.size.width));
+        let columns = if wrapping() && width > GUTTER && self.advance > 0. {
+            // A character's room is kept on the right for the caret.
+            (((width - GUTTER) / self.advance).floor() as usize)
+                .saturating_sub(1)
+                .max(MIN_COLUMNS)
+        } else {
+            0
+        };
+        let key = (self.buffer.revision(), columns);
+        if self.rows_for == Some(key) {
+            return;
+        }
+        self.rows_for = Some(key);
+        self.rows.clear();
+        for line in 0..self.buffer.line_count() {
+            let range = self.buffer.line_range(line);
+            if columns == 0 {
+                self.rows.push(Row {
+                    line,
+                    range,
+                    indent: 0,
+                });
+                continue;
+            }
+            let text = &self.buffer.text()[range.clone()];
+            for (piece, indent) in wrap_line(text, columns) {
+                self.rows.push(Row {
+                    line,
+                    range: range.start + piece.start..range.start + piece.end,
+                    indent,
+                });
+            }
+        }
+    }
+
+    /// The row holding a byte. The end of a piece belongs to the next row of its line.
+    fn row_of(&self, byte: usize) -> usize {
+        self.rows
+            .partition_point(|row| row.range.start <= byte)
+            .saturating_sub(1)
+    }
+
+    /// The byte under `x` on a row.
+    fn byte_on_row(&self, row: usize, x: f32) -> usize {
+        let Some(row) = self.rows.get(row) else {
+            return self.buffer.text().len();
+        };
+        let column = self.column_at(x).saturating_sub(row.indent);
+        let text = &self.buffer.text()[row.range.clone()];
+        text.char_indices()
+            .nth(column)
+            .map_or(row.range.end, |(at, _)| row.range.start + at)
     }
 
     /// The column under `x`, in characters, counted from the text's left edge.
@@ -691,10 +836,8 @@ impl Editor {
 
     /// A press on `line`: a click places the caret, a double click selects the word and a triple
     /// click the line. Only a single click starts a drag.
-    fn press(&mut self, line: usize, event: &MouseDownEvent) {
-        let byte = self
-            .buffer
-            .byte_of(line, self.column_at(f32::from(event.position.x)));
+    fn press(&mut self, row: usize, event: &MouseDownEvent) {
+        let byte = self.byte_on_row(row, f32::from(event.position.x));
         match event.click_count {
             2 => self.buffer.select_word_at(byte),
             3.. => self.buffer.select_line_at(byte),
@@ -710,7 +853,7 @@ impl Editor {
         let Some(list) = list else {
             return;
         };
-        let count = self.buffer.line_count();
+        let count = self.rows.len().max(1);
         let (first, inner) = self.scroll.0.borrow().base_handle.logical_scroll_top();
         let (top, height) = (f32::from(list.origin.y), f32::from(list.size.height));
         let y = f32::from(position.y);
@@ -727,9 +870,7 @@ impl Editor {
             let rows = (y - top + f32::from(inner)) / ROW;
             (first + rows.max(0.) as usize).min(count - 1)
         };
-        let byte = self
-            .buffer
-            .byte_of(line, self.column_at(f32::from(position.x)));
+        let byte = self.byte_on_row(line, f32::from(position.x));
         self.buffer.move_to(byte, true);
     }
 
@@ -858,14 +999,30 @@ impl Editor {
 
     /// One row of the text: its number in the gutter, the text in its colors, the selection behind
     /// it, and the caret when it is on this line.
-    fn row(&self, line: usize, focused: bool, entity: &Entity<Editor>) -> AnyElement {
-        let range = self.buffer.line_range(line);
+    fn row(&self, at: usize, focused: bool, entity: &Entity<Editor>) -> AnyElement {
+        let Some(shown_row) = self.rows.get(at).cloned() else {
+            return div().h(px(ROW)).into_any_element();
+        };
+        let line = shown_row.line;
+        let whole = self.buffer.line_range(line);
+        let range = shown_row.range.clone();
+        let first_of_line = range.start == whole.start;
+        let last_of_line = range.end == whole.end;
         let text = self.buffer.text()[range.clone()].to_owned();
-        let spans = self
+        let spans: LineSpans = self
             .spans
             .as_ref()
             .and_then(|spans| spans.get(line))
-            .cloned()
+            .map(|spans| {
+                let (from, to) = (range.start - whole.start, range.end - whole.start);
+                spans
+                    .iter()
+                    .filter(|(span, _)| span.end > from && span.start < to)
+                    .map(|(span, group)| {
+                        (span.start.max(from) - from..span.end.min(to) - from, *group)
+                    })
+                    .collect()
+            })
             .unwrap_or_default();
         let selection = self.buffer.selection();
         let picked = {
@@ -874,10 +1031,15 @@ impl Editor {
             (from < to).then(|| from - range.start..to - range.start)
         };
         // A selection that runs past the line's end also colors the line break, one character wide.
-        let newline_picked =
-            !selection.is_empty() && selection.start <= range.end && selection.end > range.end;
-        let on_line = self.buffer.cursor() >= range.start && self.buffer.cursor() <= range.end;
-        let caret = (focused && on_line).then(|| self.buffer.cursor() - range.start);
+        let newline_picked = last_of_line
+            && !selection.is_empty()
+            && selection.start <= range.end
+            && selection.end > range.end;
+        let cursor = self.buffer.cursor();
+        let on_line = cursor >= whole.start && cursor <= whole.end;
+        let on_row =
+            cursor >= range.start && (cursor < range.end || last_of_line && cursor == range.end);
+        let caret = (focused && on_row).then(|| cursor - range.start);
         let shown = if text.is_empty() {
             " ".to_owned()
         } else {
@@ -903,7 +1065,7 @@ impl Editor {
             move |event: &MouseDownEvent, window, cx| {
                 click.update(cx, |this, cx| {
                     window.focus(&this.focus, cx);
-                    this.press(line, event);
+                    this.press(at, event);
                     cx.notify();
                 });
             },
@@ -915,7 +1077,16 @@ impl Editor {
                 .pr(px(14.))
                 .text_right()
                 .text_color(content(0.3))
-                .child((line + 1).to_string()),
+                .child(if first_of_line {
+                    (line + 1).to_string()
+                } else {
+                    String::new()
+                }),
+        )
+        .child(
+            div()
+                .flex_shrink_0()
+                .w(px(advance * shown_row.indent as f32)),
         )
         .child(
             canvas(
@@ -973,15 +1144,16 @@ fn normalize(text: &str) -> String {
 impl Render for Editor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.advance = measure(window);
+        self.layout_rows();
         let focused = self.focus.is_focused(window);
         let entity = cx.entity();
         let rows = uniform_list(
             "file-editor-lines",
-            self.buffer.line_count(),
+            self.rows.len().max(1),
             move |range, _window, cx| {
                 let editor = entity.read(cx);
                 range
-                    .map(|line| editor.row(line, focused, &entity))
+                    .map(|row| editor.row(row, focused, &entity))
                     .collect::<Vec<_>>()
             },
         )
@@ -1014,6 +1186,7 @@ impl Render for Editor {
         // listens for the pointer, which may leave the box.
         let (list_geometry, dragging, drag_view) =
             (self.geometry.clone(), self.dragging, cx.entity());
+        let resize_view = cx.entity();
         let lines = div()
             .flex_1()
             .min_h_0()
@@ -1023,8 +1196,18 @@ impl Render for Editor {
             .child(rows)
             .child(
                 canvas(
-                    move |bounds, _, _| {
-                        list_geometry.borrow_mut().list = Some(bounds);
+                    move |bounds, window, cx| {
+                        // A new width lays the rows out again, on the next frame.
+                        let mut geometry = list_geometry.borrow_mut();
+                        let resized = geometry
+                            .list
+                            .is_none_or(|old| old.size.width != bounds.size.width);
+                        geometry.list = Some(bounds);
+                        if resized {
+                            let view = resize_view.clone();
+                            window.on_next_frame(move |_, cx| view.update(cx, |_, cx| cx.notify()));
+                        }
+                        let _ = cx;
                     },
                     move |_, _, window, _| {
                         if !dragging {
@@ -1760,6 +1943,47 @@ mod tests {
         b.select_line_at(5);
         b.insert("");
         assert_eq!(b.text(), "one\nthree");
+    }
+
+    #[test]
+    fn a_long_line_breaks_after_a_space_under_its_indent() {
+        let pieces = wrap_line("    aaaa bbbb cccc dddd eeee ffff", 20);
+        assert_eq!(pieces[0], (0..19, 0));
+        assert_eq!(pieces[1], (19..33, 4));
+        let text = "    aaaa bbbb cccc dddd eeee ffff";
+        let joined: String = pieces
+            .iter()
+            .map(|(range, _)| &text[range.clone()])
+            .collect();
+        assert_eq!(joined, text);
+    }
+
+    #[test]
+    fn a_word_longer_than_the_row_breaks_anywhere_and_short_lines_stay_whole() {
+        let long = "x".repeat(45);
+        let pieces = wrap_line(&long, 20);
+        assert_eq!(
+            pieces
+                .iter()
+                .map(|(range, _)| range.len())
+                .collect::<Vec<_>>(),
+            vec![20, 20, 5]
+        );
+        assert_eq!(wrap_line("short", 20), vec![(0..5, 0)]);
+        assert_eq!(wrap_line("", 20), vec![(0..0, 0)]);
+        // Accents are one column and never cut in half.
+        let accented = "é".repeat(25);
+        let pieces = wrap_line(&accented, 20);
+        assert_eq!(pieces[0], (0..40, 0));
+        assert_eq!(pieces[1], (40..50, 0));
+    }
+
+    #[test]
+    fn a_row_of_only_indent_never_repeats_forever() {
+        let spaces = " ".repeat(50);
+        let pieces = wrap_line(&spaces, 20);
+        let total: usize = pieces.iter().map(|(range, _)| range.len()).sum();
+        assert_eq!(total, 50);
     }
 
     #[test]

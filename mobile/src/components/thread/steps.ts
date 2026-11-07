@@ -55,6 +55,61 @@ export function stepLine(item: Pick<ActivityItem, "kind" | "label" | "detail">, 
   }
 }
 
+/** The sentence the model gave for a command, when the host sent it. */
+export function stepCaption(item: object): string {
+  return ((item as { caption?: string }).caption ?? "").trim();
+}
+
+/** `git status --short` reads as `git status`; flags and paths are detail (`step_lines.rs`). */
+export function commandLabel(command: string): string {
+  const [first = "", sub] = command.trim().split(/\s+/);
+  const program = first.split("/").at(-1) ?? first;
+  return sub && !sub.startsWith("-") && !/[/.='"~$]/.test(sub) && sub.length <= 16 ? `${program} ${sub}` : program;
+}
+
+/** The files and folders a command line names, at most `max`, as the Mac's chips. */
+export function commandPaths(command: string, max = 2): { readonly name: string; readonly folder: boolean }[] {
+  const found: { name: string; folder: boolean }[] = [];
+  for (const raw of command.trim().split(/\s+/).slice(1)) {
+    const word = raw.replace(/^['";|&()]+|['";|&()]+$/g, "");
+    if (word.startsWith("-") || /[=*$]/.test(word) || word.length < 2) continue;
+    if (!word.includes("/") && !word.startsWith("~") && !word.startsWith(".")) continue;
+    const name = fileName(word);
+    if (!name || name === "." || name === ".." || name === "~") continue;
+    const folder = word.endsWith("/") || !name.includes(".") || (name.startsWith(".") && !name.slice(1).includes("."));
+    if (!found.some((known) => known.name === name)) found.push({ name, folder });
+    if (found.length >= max) break;
+  }
+  return found;
+}
+
+const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
+
+/** A group's title: what it is doing while it runs, what it did once it ended (the Mac's). */
+export function groupTitle(items: readonly Pick<ActivityItem, "kind" | "label" | "detail">[], live: boolean): string {
+  const count = (...kinds: StepCategory[]) => items.filter((item) => kinds.includes(stepCategory(item))).length;
+  const commands = count("command");
+  const reads = count("read", "search");
+  const edits = count("edit");
+  const parts: string[] = [];
+  if (live) {
+    if (commands) parts.push(`Executando ${plural(commands, "comando", "comandos")}`);
+    if (reads) parts.push("Explorando o projeto");
+    if (edits) parts.push(`Editando ${plural(edits, "arquivo", "arquivos")}`);
+    if (parts.length) return parts.join(" · ");
+  }
+  const tools = count("tool", "web");
+  const agents = count("agent");
+  const skills = count("skill");
+  if (commands) parts.push(`Executou ${plural(commands, "comando", "comandos")}`);
+  if (reads) parts.push(`Leu ${plural(reads, "arquivo", "arquivos")}`);
+  if (edits) parts.push(`Editou ${plural(edits, "arquivo", "arquivos")}`);
+  if (tools) parts.push(`Usou ${plural(tools, "ferramenta", "ferramentas")}`);
+  if (agents) parts.push(`Iniciou ${plural(agents, "agente", "agentes")}`);
+  if (skills) parts.push(`Usou ${plural(skills, "skill", "skills")}`);
+  return parts.join(" · ");
+}
+
 /** A step's seconds when both ends are known, ticking while it runs. */
 export function stepSeconds(item: Pick<ActivityItem, "startedAt" | "endedAt" | "state">, now: number): number | null {
   if (item.startedAt == null) return null;

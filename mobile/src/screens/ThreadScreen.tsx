@@ -4,7 +4,7 @@ import { SymbolView } from "../components/AppSymbol";
 import { ICON } from "../lib/icon-sizes";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as Clipboard from "expo-clipboard";
-import { ActivityIndicator, Alert, FlatList, Pressable, View } from "react-native";
+import { ActivityIndicator, Alert, FlatList, Keyboard, Pressable, View } from "react-native";
 import Animated, { FadeIn, FadeOut, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 import { KeyboardStickyView, useKeyboardState } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -92,6 +92,14 @@ export function ThreadScreen() {
   const dragging = useRef(false);
   const anchors = useMemo(createWorkAnchors, []);
   const scroll = useRef({ offset: 0, viewport: 0, content: 0 });
+  // A message just sent rises to the top of the list and stays there while the reply grows under
+  // it, as on the Mac: `pinRoom` is the empty space at the end that lets it get that high.
+  const sentAfter = useRef<string | null | undefined>(undefined);
+  const [pinId, setPinId] = useState<string | null>(null);
+  const [pinRoom, setPinRoom] = useState(0);
+  const pinRef = useRef<React.ComponentRef<typeof View>>(null);
+  const pinTarget = useRef<number | null>(null);
+  const topPad = safeArea.top + 52;
 
   useEffect(() => {
     void useSirus.getState().loadTranscript(computerId, sessionId).catch(() => undefined);
@@ -112,6 +120,26 @@ export function ThreadScreen() {
     const timers = [60, 250, 600, 1200, 2000].map((delay) => setTimeout(() => { if (!dragging.current) toEnd(); }, delay));
     return () => timers.forEach(clearTimeout);
   }, [loaded, sessionId]);
+  const lastUser = useMemo(() => shown.findLast((message) => message.role === "user")?.id ?? null, [shown]);
+  useEffect(() => {
+    if (sentAfter.current === undefined || lastUser === sentAfter.current || !lastUser) return;
+    sentAfter.current = undefined;
+    pinTarget.current = null;
+    atEnd.current = false;
+    dragging.current = false;
+    setPinId(lastUser);
+    setPinRoom(scroll.current.viewport);
+    // Once the room and the new row are laid out, the row's place is known.
+    const timer = setTimeout(() => {
+      const native = list.current?.getNativeScrollRef() as { measureInWindow?: (callback: (x: number, y: number) => void) => void } | null;
+      native?.measureInWindow?.((_x, listTop) => pinRef.current?.measureInWindow((_nx: number, top: number) => {
+        const offset = Math.max(0, top - listTop + scroll.current.offset - topPad);
+        pinTarget.current = offset;
+        list.current?.scrollToOffset({ offset, animated: true });
+      }));
+    }, 60);
+    return () => clearTimeout(timer);
+  }, [lastUser, topPad]);
   const working = session ? ACTIVE_STATUS.has(session.status) : false;
   const cwd = session?.worktree?.path ?? project?.path;
   // File references in replies open in the conversation's files.
@@ -210,18 +238,27 @@ export function ThreadScreen() {
       maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
       ListHeaderComponent={loadingOlder ? <ActivityIndicator className="py-2" /> : undefined}
       data={shown}
+      extraData={pinId}
       keyExtractor={(message) => message.id}
-      renderItem={({ item, index }) => <MessageRow message={item} computerId={computerId} agent={session?.agent ?? "claude"} cwd={cwd} files={files} prompt={shown[index - 1]?.role === "user" ? shown[index - 1]!.content : ""} />}
+      renderItem={({ item, index }) => <View ref={item.id === pinId ? pinRef : undefined} collapsable={false}><MessageRow message={item} computerId={computerId} agent={session?.agent ?? "claude"} model={session?.model} cwd={cwd} files={files} prompt={shown[index - 1]?.role === "user" ? shown[index - 1]!.content : ""} /></View>}
       // The agent waiting on an approval or an answer, as the desktop's cards under the reply.
       ListFooterComponent={<View style={{ marginTop: requests.length ? 0 : -ROW_GAP }}>
         {requests.length ? <View className="gap-3">
           {requests.map((request) => <AgentRequest key={request.requestId} computerId={computerId} sessionId={sessionId} agent={session?.agent ?? "claude"} request={request} />)}
         </View> : null}
         <PillSpacer on={pillOn} />
+        <View pointerEvents="none" style={{ height: pinRoom }} />
       </View>}
       contentContainerStyle={{ paddingHorizontal: 18, paddingTop: safeArea.top + 44 + 8, paddingBottom: composerHeight + lift + 12, gap: ROW_GAP }}
       onLayout={({ nativeEvent }) => { scroll.current.viewport = nativeEvent.layout.height; }}
-      onContentSizeChange={(_width, height) => { scroll.current.content = height; if (atEnd.current) toEnd(); }}
+      onContentSizeChange={(_width, height) => {
+        // The reply fills the room as it grows; the row stays where it rose to.
+        if (pinTarget.current !== null) {
+          const room = Math.max(0, pinTarget.current + scroll.current.viewport - (height - pinRoom));
+          if (Math.abs(room - pinRoom) > 1) setPinRoom(room);
+        }
+        scroll.current.content = height; if (atEnd.current) toEnd();
+      }}
       // Follows new content while the newest message is in view; a drag up stops it.
       onScrollBeginDrag={() => { dragging.current = true; }}
       onScroll={({ nativeEvent }) => {
@@ -234,16 +271,16 @@ export function ThreadScreen() {
       }}
       scrollEventThrottle={64}
     />}
-    <Composer computerId={computerId} sessionId={sessionId} working={working} onHeight={setComposerHeight} agent={session?.agent ?? "claude"} queued={queued}
+    <Composer computerId={computerId} sessionId={sessionId} working={working} onSending={() => { sentAfter.current = lastUser; }} onSendFailed={() => { sentAfter.current = undefined; }} onHeight={setComposerHeight} agent={session?.agent ?? "claude"} queued={queued}
       away={away} onJump={() => { atEnd.current = true; dragging.current = false; setAway(false); toEnd(true); }}
       pill={pillOn ? <WorkingPill activity={latestActivity} onPress={() => void jumpToWork()} /> : null} />
     <SubagentSheet computerId={computerId} sessionId={sessionId} target={subagent} provider={session?.agent ?? "claude"} onClose={closeSubagent} />
   </View></OpenSubagent.Provider></WorkAnchorsContext.Provider>;
 }
 
-const MessageRow = memo(function MessageRow(props: { readonly message: Message; readonly computerId: string; readonly agent: string; readonly cwd?: string; readonly files?: ReplyFiles; readonly prompt: string }) {
+const MessageRow = memo(function MessageRow(props: { readonly message: Message; readonly computerId: string; readonly agent: string; readonly model?: string | null; readonly cwd?: string; readonly files?: ReplyFiles; readonly prompt: string }) {
   if (props.message.role === "user") return <UserBubble text={props.message.content} attachments={props.message.attachments} computerId={props.computerId} />;
-  return <AgentReply message={props.message} computerId={props.computerId} agent={props.agent} cwd={props.cwd} files={props.files} prompt={props.prompt} />;
+  return <AgentReply message={props.message} computerId={props.computerId} agent={props.agent} model={props.model} cwd={props.cwd} files={props.files} prompt={props.prompt} />;
 });
 
 /** A sent message in the Mac's accent at 24%: a pill on one line, a card past it. */
@@ -269,6 +306,9 @@ function Composer(props: {
   readonly queued: QueuedPrompt[];
   /** The composer's height, for the list to keep its last message above it. */
   readonly onHeight: (height: number) => void;
+  /** A message is leaving: the list raises it once it shows. */
+  readonly onSending: () => void;
+  readonly onSendFailed: () => void;
   /** Away from the newest message: the round arrow rides just above the composer. */
   readonly away: boolean; readonly onJump: () => void;
   /** The working pill: floats above the composer (and its queue) while the agent works. */
@@ -289,14 +329,21 @@ function Composer(props: {
     if (!canSend) return;
     setBusy("sending");
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    // It leaves the composer at once, and comes back if the send fails.
+    const sent = { text, attachments };
+    setText("");
+    setAttachments([]);
+    Keyboard.dismiss();
+    props.onSending();
     try {
       // While the agent works it joins the queue and goes once the reply ends.
-      await useSirus.getState().submitPrompt(props.computerId, props.sessionId, text, attachments.map((item) => item.id),
+      await useSirus.getState().submitPrompt(props.computerId, props.sessionId, sent.text, sent.attachments.map((item) => item.id),
         executionWithModes(execution, composer.modes, provider, model), promptExtras(composer.modes, provider, model));
-      setText("");
-      setAttachments([]);
       composer.setModes(afterSend);
     } catch (reason) {
+      setText(sent.text);
+      setAttachments(sent.attachments);
+      props.onSendFailed();
       Alert.alert("Não foi possível enviar", reason instanceof Error ? reason.message : String(reason));
     } finally {
       setBusy(null);

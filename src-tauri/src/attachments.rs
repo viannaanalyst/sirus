@@ -1256,7 +1256,13 @@ fn bounded_decode(bytes: &[u8]) -> Option<image::DynamicImage> {
     limits.max_image_height = Some(12_000);
     limits.max_alloc = Some(512 * 1024 * 1024);
     reader.limits(limits);
-    reader.decode().ok()
+    // An iPhone stores a portrait photo sideways and says so in its EXIF.
+    use image::ImageDecoder as _;
+    let mut decoder = reader.into_decoder().ok()?;
+    let orientation = decoder.orientation().ok()?;
+    let mut decoded = image::DynamicImage::from_decoder(decoder).ok()?;
+    decoded.apply_orientation(orientation);
+    Some(decoded)
 }
 
 /// The full image of a composer attachment, for the viewer and the annotator.
@@ -1297,6 +1303,33 @@ pub(crate) fn thumbnail(bytes: &[u8]) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod thumbnail_tests {
+    #[test]
+    fn a_photo_stored_sideways_comes_out_upright() {
+        let image = image::RgbImage::from_pixel(40, 20, image::Rgb([200, 80, 40]));
+        let mut jpeg = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 80)
+            .encode_image(&image)
+            .unwrap();
+        // EXIF right after the start of the file: orientation 6, rotate 90 degrees to show it.
+        let tiff: &[u8] = &[
+            b'M', b'M', 0, 42, 0, 0, 0, 8, 0, 1, 0x01, 0x12, 0, 3, 0, 0, 0, 1, 0, 6, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ];
+        let mut app1 = b"Exif\0\0".to_vec();
+        app1.extend_from_slice(tiff);
+        let mut tagged = jpeg[..2].to_vec();
+        tagged.extend_from_slice(&[0xFF, 0xE1]);
+        tagged.extend_from_slice(&((app1.len() + 2) as u16).to_be_bytes());
+        tagged.extend_from_slice(&app1);
+        tagged.extend_from_slice(&jpeg[2..]);
+        let decoded = crate::attachments::bounded_decode(&tagged).unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (20, 40));
+        assert_eq!(
+            crate::attachments::bounded_decode(&jpeg).unwrap().width(),
+            40
+        );
+    }
+
     #[test]
     fn thumbnails_are_small_jpegs() {
         let mut png = Vec::new();

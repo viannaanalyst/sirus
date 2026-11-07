@@ -6475,6 +6475,7 @@ impl Shell {
                         .flex()
                         .items_center()
                         .justify_center()
+                        .cursor_pointer()
                         .opacity(0.)
                         .group_hover(group, |s| s.opacity(1.))
                         .hover(|s| s.bg(content(0.1)))
@@ -6773,37 +6774,41 @@ impl Shell {
                             .overflow_hidden()
                             .children(tabs),
                     )
-                    .child(
-                        div()
-                            .id("new-tab")
-                            .group("new-tab")
-                            .size(px(PLATE))
-                            .rounded(px(crate::theme::RADIUS_MD))
-                            .bg(content(0.04))
-                            .opacity(0.65)
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .cursor_pointer()
-                            .sinks()
-                            .hover(|s| s.opacity(1.).bg(content(0.07)))
-                            .child(
-                                icon("plus", 14.)
-                                    .text_color(content(0.8))
-                                    .group_hover("new-tab", |s| s.text_color(content(1.))),
-                            )
-                            .absolute()
-                            .left(px(add_x))
-                            .top(px((TITLE_BAR - PLATE) / 2.))
-                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if this.term_plus_click(strip_left + add_x, cx) {
-                                    return;
-                                }
-                                this.new_conversation(None, cx);
-                                cx.notify();
-                            })),
-                    ),
+                    // A panel filling the window leaves the strip no room, and the button would
+                    // sit under the panel's own buttons.
+                    .when(strip >= PLATE, |d| {
+                        d.child(
+                            div()
+                                .id("new-tab")
+                                .group("new-tab")
+                                .size(px(PLATE))
+                                .rounded(px(crate::theme::RADIUS_MD))
+                                .bg(content(0.04))
+                                .opacity(0.65)
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .cursor_pointer()
+                                .sinks()
+                                .hover(|s| s.opacity(1.).bg(content(0.07)))
+                                .child(
+                                    icon("plus", 14.)
+                                        .text_color(content(0.8))
+                                        .group_hover("new-tab", |s| s.text_color(content(1.))),
+                                )
+                                .absolute()
+                                .left(px(add_x))
+                                .top(px((TITLE_BAR - PLATE) / 2.))
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    if this.term_plus_click(strip_left + add_x, cx) {
+                                        return;
+                                    }
+                                    this.new_conversation(None, cx);
+                                    cx.notify();
+                                })),
+                        )
+                    }),
             )
             .into_any_element()
     }
@@ -11839,7 +11844,7 @@ impl Shell {
             div()
                 .id(id)
                 .size(px(30.))
-                .rounded_full()
+                .rounded(px(crate::theme::RADIUS_MD))
                 .flex()
                 .items_center()
                 .justify_center()

@@ -151,12 +151,12 @@ export function SubagentSheet(props: { readonly computerId: string; readonly ses
           ? <Markdown key={block.entry.id} markdown={block.entry.text!.trim()} />
           : <Tree key={`b${index}`}>
               {block.entries.map((entry) => entry.kind === "thinking"
-                ? <TreeRow key={entry.id} icon="brain" body={entry.text?.trim() ? () => <AppText className="text-[13px] leading-[19px] text-foreground-tertiary">{entry.text}</AppText> : undefined}>Pensou</TreeRow>
+                ? <TreeRow key={entry.id} icon="brain" title="Pensou" body={entry.text?.trim() ? () => <AppText className="text-[13px] leading-[19px] text-foreground-tertiary">{entry.text}</AppText> : undefined} />
                 : <StepRow key={entry.id} item={asItem(entry)} source={source} />)}
             </Tree>)}
         {fallback.length ? <View>
           <AppText className="text-xs text-foreground-tertiary">{t("subagentView.empty")}</AppText>
-          <Tree>{fallback.map((step) => <TreeRow key={step.id} icon={KIND_ICON[step.kind]} live={step.state === "running"} failed={step.state === "failed"}>{step.label}</TreeRow>)}</Tree>
+          <Tree>{fallback.map((step) => <TreeRow key={step.id} icon={KIND_ICON[step.kind]} live={step.state === "running"} failed={step.state === "failed"} title={step.label} />)}</Tree>
         </View> : null}
         {empty ? <AppText className="py-3 text-sm text-foreground-tertiary">{t(running ? "subagentView.waiting" : "subagentView.nothing")}</AppText> : null}
       </ScrollView>

@@ -72,5 +72,6 @@ A conversation stays on the account that started it, so one on the default accou
 - **The VPS without Tailscale.** The `sirus` container owns its network on the isolated `sirus` bridge, `sirus-cloudflared` shares it, and `--url` names `https://vps.siruscode.com`. The `sirus-tailscale` container and its state are gone.
 - **Connector sign-in.** The host opens the sign-in page in the default browser on the Mac; it had kept the phone's refusal since the Tauri window left. Result cards draw over Settings and Usage, whose pages hid them.
 - **The robot over the composer.** It walks on top of the whole stack, so a queued instruction or a card sits under it.
+- **Renaming a row.** The text starts at the left and only an overflow keeps its end in view. ⌘A selects the name, which the next key replaces, and ⌘C, ⌘X and ⌘V work in the field.
 - **Turn actions.** The `⋯` menu is gone. A reply's row reads Copy, Handoff, Side chat, Fork, with Undo after them. Try again left it: it now sits under the sent message, only on the last turn and only after a failure.
 - **Edge fades.** The transcript's fades are now an alpha mask around the list. The gradients drawn in the conversation's color showed as dark bands once the conversation became translucent black.

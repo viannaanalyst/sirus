@@ -476,6 +476,8 @@ struct ContextMenu {
     y: f32,
     open: Tween,
     renaming: Option<String>,
+    /// ⌘A in the name being typed: the next key replaces it.
+    renaming_all: bool,
 }
 
 const EFFORT_ORDER: [&str; 8] = [
@@ -555,9 +557,10 @@ fn cursor_preset(id: &str) -> (String, Option<&'static str>, bool) {
     (rest.to_owned(), None, fast)
 }
 
-/// A sidebar title being renamed: the caret follows the text, and a long text keeps its end
-/// (and the caret) in view, clipped at the start with no ellipsis.
-fn inline_name_field(text: &str) -> AnyElement {
+/// A sidebar title being renamed: the caret follows the text from the left, and a long text
+/// keeps its end (and the caret) in view, clipped at the start with no ellipsis. The empty space
+/// after the caret takes up what a short text leaves, so only an overflow pushes to the end.
+fn inline_name_field(text: &str, selected: bool) -> AnyElement {
     let caret = div()
         .flex_shrink_0()
         .w(px(crate::theme::CARET_WIDTH))
@@ -569,18 +572,19 @@ fn inline_name_field(text: &str) -> AnyElement {
         .min_w_0()
         .flex()
         .items_center()
+        .justify_end()
         .overflow_hidden()
         .text_size(px(13.))
-        .when(text.is_empty(), |d| d.justify_start())
-        .when(!text.is_empty(), |d| d.justify_end())
         .child(
             div()
                 .flex_shrink_0()
                 .whitespace_nowrap()
                 .text_color(content(0.95))
+                .when(selected, |d| d.bg(crate::theme::text_selection()))
                 .child(text.to_owned()),
         )
-        .child(caret)
+        .when(!selected, |d| d.child(caret))
+        .child(div().flex_1().min_w_0())
         .into_any_element()
 }
 
@@ -4077,6 +4081,62 @@ impl Shell {
                 .is_some_and(|p| p.adding.is_some())
     }
 
+    /// The name being typed in a rename: ⌘A, ⌘C, ⌘X and ⌘V, and a selection the next key replaces.
+    fn rename_keys(&mut self, keys: &gpui::Keystroke, cx: &mut Context<Self>) -> bool {
+        let Some(menu) = self.context_menu.as_mut() else {
+            return false;
+        };
+        let Some(name) = menu.renaming.as_mut() else {
+            return false;
+        };
+        let key = keys.key.as_str();
+        if keys.modifiers.platform {
+            match key {
+                "a" => menu.renaming_all = true,
+                "c" | "x" if menu.renaming_all => {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(name.clone()));
+                    if key == "x" {
+                        name.clear();
+                        menu.renaming_all = false;
+                    }
+                }
+                "v" => {
+                    let pasted = cx.read_from_clipboard().and_then(|item| item.text());
+                    if let Some(text) = pasted {
+                        if std::mem::take(&mut menu.renaming_all) {
+                            name.clear();
+                        }
+                        name.push_str(text.replace(['\n', '\r'], " ").trim());
+                    }
+                }
+                _ => return false,
+            }
+            return true;
+        }
+        match key {
+            "backspace" | "delete" if menu.renaming_all => {
+                name.clear();
+                menu.renaming_all = false;
+                true
+            }
+            "left" | "right" | "up" | "down" | "home" | "end" => {
+                menu.renaming_all = false;
+                false
+            }
+            _ => false,
+        }
+    }
+
+    /// Typing over a name selected with ⌘A starts it anew.
+    fn replace_selected_name(&mut self) {
+        if let Some(menu) = self.context_menu.as_mut()
+            && std::mem::take(&mut menu.renaming_all)
+            && let Some(name) = menu.renaming.as_mut()
+        {
+            name.clear();
+        }
+    }
+
     /// A click on the composer's toolbar hands the keys back to the composer, unless a popup
     /// that takes typing is up (its field keeps the focus).
     fn keep_typing_focus(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -4920,6 +4980,11 @@ impl Shell {
             }
         };
         let key = keys.key.as_str();
+        if self.rename_keys(keys, cx) {
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
         // The find bar's keys come first: its Esc closes the bar, never stops the agent.
         if self.find_keys(keys, window, cx) {
             return;
@@ -7118,6 +7183,7 @@ impl Shell {
                 Curve::Expo,
             ),
             renaming: None,
+            renaming_all: false,
         });
         cx.notify();
     }
@@ -7510,16 +7576,22 @@ impl Shell {
                 .flex()
                 .items_center()
                 .text_size(px(13.))
-                .child(typed_text(
-                    name,
-                    crate::i18n::t("Nome"),
-                    div()
-                        .flex_shrink_0()
-                        .w(px(1.5))
-                        .h(px(15.))
-                        .rounded_full()
-                        .bg(crate::theme::caret_color()),
-                ))
+                .map(|d| {
+                    if name.is_empty() {
+                        d.child(typed_text(
+                            name,
+                            crate::i18n::t("Nome"),
+                            div()
+                                .flex_shrink_0()
+                                .w(px(1.5))
+                                .h(px(15.))
+                                .rounded_full()
+                                .bg(crate::theme::caret_color()),
+                        ))
+                    } else {
+                        d.child(inline_name_field(name, menu.renaming_all))
+                    }
+                })
                 .into_any_element()
         } else {
             match menu.target {
@@ -9987,7 +10059,10 @@ impl Shell {
             )
             .child(self.conversation_mark(conversation, now, active))
             .child(match &draft {
-                Some(text) => inline_name_field(text),
+                Some(text) => inline_name_field(
+                    text,
+                    self.context_menu.as_ref().is_some_and(|m| m.renaming_all),
+                ),
                 None => div()
                     .flex_1()
                     .min_w_0()
@@ -16646,6 +16721,7 @@ impl EntityInputHandler for Shell {
         if self.first_run.active() {
             return;
         }
+        self.replace_selected_name();
         let marked = self.marked.take();
         self.mention_selected = 0;
         self.mention_dismissed = None;
@@ -16676,6 +16752,7 @@ impl EntityInputHandler for Shell {
         if self.first_run.active() {
             return;
         }
+        self.replace_selected_name();
         let marked = self.marked.take();
         let start_utf16;
         if let Some(query) = self.query_target() {

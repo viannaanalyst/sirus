@@ -386,14 +386,6 @@ pub fn final_answer(beats: &[Beat]) -> Option<usize> {
     beats.iter().rposition(|beat| matches!(beat, Beat::Text(_)))
 }
 
-/// The words a settled turn ends on, drawn apart from the rest: its last beat, when that is prose.
-pub fn settled_answer(turn: &Turn) -> Option<&str> {
-    match turn.beats.last()? {
-        Beat::Text(range) if !turn.live => turn.answer.get(range.clone()),
-        _ => None,
-    }
-}
-
 /// Whether a finished turn folds its work: there is an answer, and steps before it.
 pub fn folds_work(beats: &[Beat]) -> bool {
     final_answer(beats).is_some_and(|answer| {

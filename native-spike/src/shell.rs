@@ -12998,13 +12998,21 @@ impl Shell {
                         if text.start >= end {
                             continue;
                         }
-                        // A settled turn's last words are drawn after its cards, with selection.
+                        // A settled turn's last words are drawn after its cards.
                         if !working && last_section && at + 1 == beats.len() {
-                            answer_view = Some(&shown_answer[text.start..end]);
+                            answer_view = Some((absolute, &shown_answer[text.start..end]));
                             continue;
                         }
-                        let body =
-                            crate::markdown::render_rich(&shown_answer[text.start..end], &rich);
+                        let body = transcript_select::scoped(
+                            &self.select,
+                            transcript_select::Reply {
+                                conversation,
+                                turn: index,
+                                user: false,
+                                beat: absolute,
+                            },
+                            || crate::markdown::render_rich(&shown_answer[text.start..end], &rich),
+                        );
                         self.wake_reply_assets(cx);
                         body
                     }
@@ -13182,6 +13190,7 @@ impl Shell {
                                                 conversation,
                                                 turn: index,
                                                 user: true,
+                                                beat: 0,
                                             },
                                             turn.user.clone(),
                                             styled_tokens(turn.user.clone()),
@@ -13250,13 +13259,14 @@ impl Shell {
                             .enumerate()
                             .map(|(i, visual)| self.visual_element(index, i, visual, cx)),
                     )
-                    .when_some(answer_view, |d, shown| {
+                    .when_some(answer_view, |d, (beat, shown)| {
                         d.child(transcript_select::scoped(
                             &self.select,
                             transcript_select::Reply {
                                 conversation,
                                 turn: index,
                                 user: false,
+                                beat,
                             },
                             || {
                                 // Linked pictures and videos, diagrams, formulas and HTML open from here.

@@ -20,12 +20,14 @@ use std::collections::HashMap;
 use std::ops::Range;
 use std::rc::Rc;
 
-/// One selectable message: a user bubble or an answer, in one turn of one conversation.
+/// One selectable message: a user bubble or one stretch of an answer (the turn's text beat at
+/// `beat`), in one turn of one conversation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct Reply {
     pub conversation: usize,
     pub turn: usize,
     pub user: bool,
+    pub beat: usize,
 }
 
 /// (fragment number, byte in the fragment's text); tuples order the way the text reads.
@@ -493,6 +495,7 @@ pub(crate) fn record(f: impl FnOnce()) -> Vec<String> {
             conversation: 0,
             turn: 0,
             user: false,
+            beat: 0,
         },
         next: 0,
         mode: Mode::Record(Vec::new()),
@@ -745,8 +748,14 @@ impl Shell {
                 streaming: turn.live,
                 act: std::rc::Rc::new(|_, _, _| {}),
             };
-            // Only the answer drawn under the header is selectable, not the folded work.
-            let answer = data::settled_answer(turn).unwrap_or("").to_owned();
+            let answer = match turn.beats.get(reply.beat) {
+                Some(data::Beat::Text(range)) => turn
+                    .answer
+                    .get(range.start..range.end.min(turn.answer.len()))
+                    .unwrap_or("")
+                    .to_owned(),
+                _ => String::new(),
+            };
             record(|| {
                 crate::markdown::render_rich(&answer, &rich);
             })
@@ -920,6 +929,7 @@ mod tests {
         conversation: 0,
         turn: 1,
         user: false,
+        beat: 0,
     };
 
     fn at(x: f32, y: f32) -> Point<Pixels> {
@@ -1090,6 +1100,7 @@ mod window_tests {
         conversation: 0,
         turn: 1,
         user: false,
+        beat: 0,
     };
 
     /// A reply rendered the way the transcript renders it, with the root's handlers as the shell has them.

@@ -12,7 +12,7 @@ use crate::file_editor::{Editor, EditorEvent, MAX_EDITABLE_BYTES};
 use crate::file_icons::{file_icon, folder_icon};
 use crate::i18n::{t, tf};
 use crate::markdown;
-use crate::motion::{Curve, DISCLOSE, eased};
+use crate::motion::{Curve, Tween};
 use crate::panels::PanelContext;
 use crate::project_files::{self, Hit};
 use crate::syntax::{self, Group, LineSpans};
@@ -21,18 +21,18 @@ use crate::theme::Sinks as _;
 use crate::theme::{self, accent, content, is_light};
 use crate::tool_images;
 use gpui::{
-    Animation, AnimationExt, AnyElement, AnyView, App, Background, Context, ElementInputHandler,
-    Entity, EntityInputHandler, EventEmitter, FocusHandle, FontWeight, HighlightStyle, Hsla,
-    KeyDownEvent, ListAlignment, ListState, MouseButton, ObjectFit, Pixels, Point, Render,
-    StyledText, Subscription, Transformation, UTF16Selection, Window, canvas, div, img,
-    linear_color_stop, linear_gradient, list, prelude::*, px, radians, rgb, svg,
+    AnyElement, AnyView, App, Background, Context, ElementInputHandler, Entity, EntityInputHandler,
+    EventEmitter, FocusHandle, FontWeight, HighlightStyle, Hsla, KeyDownEvent, ListAlignment,
+    ListState, MouseButton, ObjectFit, Pixels, Point, Render, StyledText, Subscription,
+    Transformation, UTF16Selection, Window, canvas, div, img, linear_color_stop, linear_gradient,
+    list, prelude::*, px, radians, rgb, svg,
 };
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Results the search lists.
 const RESULT_CAP: usize = 80;
@@ -79,6 +79,9 @@ pub fn new(context: PanelContext, cx: &mut App) -> AnyView {
             open: HashSet::new(),
             selected: None,
             root_open: true,
+            folds: Default::default(),
+            folds_moving: Default::default(),
+            tree_width: Default::default(),
             tabs: Vec::new(),
             active: None,
             search,
@@ -181,6 +184,10 @@ struct FilesPanel {
     /// The selected row's path and whether it is a folder.
     selected: Option<(String, bool)>,
     root_open: bool,
+    /// How far each folder in motion has slid open, drawn from its place in the tree.
+    folds: std::cell::RefCell<HashMap<String, Tween>>,
+    folds_moving: std::cell::Cell<bool>,
+    tree_width: Rc<std::cell::Cell<f32>>,
     /// The open files, in tab order.
     tabs: Vec<Opened>,
     /// The tab on screen; None while the tree is showing (no tab open, or `+` was pressed).
@@ -854,28 +861,79 @@ impl FilesPanel {
         }
         for node in nodes {
             let open = node.is_dir && self.open.contains(&node.path);
-            rows.push(self.row(node, depth, open, cx));
-            if open {
-                let children = self.tree_rows(&node.path, depth + 1, cx);
-                rows.push(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .children(children)
-                        .with_animation(
-                            format!("children:{}", node.path),
-                            Animation::new(Duration::from_secs_f32(DISCLOSE))
-                                .with_easing(|t| eased(t, Curve::Expo)),
-                            |el, t| el.opacity(t),
-                        )
-                        .into_any_element(),
-                );
-            }
+            // A folder slides open once its listing is here, and slides shut with its rows.
+            let fold = self.fold_of(node, open, cx);
+            rows.push(self.row(node, depth, fold.unwrap_or(0.), open, cx));
+            let Some(fold) = fold.filter(|fold| *fold > 0.001 || open) else {
+                if open {
+                    rows.extend(self.tree_rows(&node.path, depth + 1, cx));
+                }
+                continue;
+            };
+            let children =
+                div()
+                    .flex()
+                    .flex_col()
+                    .children(self.tree_rows(&node.path, depth + 1, cx));
+            let width = self.tree_width.get();
+            rows.push(if fold >= 0.999 || width <= 0. {
+                children.into_any_element()
+            } else {
+                div()
+                    .w_full()
+                    .overflow_hidden()
+                    .opacity(fold)
+                    .child(crate::disclosure::Disclosure::new(
+                        children,
+                        px(width),
+                        fold,
+                    ))
+                    .into_any_element()
+            });
         }
         rows
     }
 
-    fn row(&self, node: &Node, depth: usize, open: bool, cx: &mut Context<Self>) -> AnyElement {
+    /// How far a folder has slid open, or None when it is shut and at rest or still listing.
+    fn fold_of(&self, node: &Node, open: bool, cx: &App) -> Option<f32> {
+        if !node.is_dir {
+            return None;
+        }
+        let now = Instant::now();
+        let mut folds = self.folds.borrow_mut();
+        if !folds.contains_key(&node.path) {
+            if !open || !matches!(self.folders.get(&node.path), Some(Listing::Ready(_))) {
+                return None;
+            }
+            folds.insert(node.path.clone(), Tween::still(0., now));
+        }
+        let fold = folds.get_mut(&node.path)?;
+        let to = if open { 1. } else { 0. };
+        let duration = if cx.reduce_motion() {
+            0.
+        } else {
+            crate::disclosure::REVEAL
+        };
+        fold.set(to, now, duration, Curve::Expo);
+        if !fold.done(now) {
+            self.folds_moving.set(true);
+        }
+        let shown = fold.at(now).clamp(0., 1.);
+        if !open && fold.done(now) {
+            folds.remove(&node.path);
+            return None;
+        }
+        Some(shown)
+    }
+
+    fn row(
+        &self,
+        node: &Node,
+        depth: usize,
+        fold: f32,
+        open: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let selected = self
             .selected
             .as_ref()
@@ -911,7 +969,7 @@ impl FilesPanel {
             div()
                 .w(px(12.))
                 .flex_shrink_0()
-                .when(is_dir, |column| column.child(chevron(open))),
+                .when(is_dir, |column| column.child(chevron(fold))),
         )
         .child(icon)
         .child(div().min_w_0().flex_1().truncate().child(node.name.clone()))
@@ -1046,7 +1104,7 @@ impl FilesPanel {
                 div()
                     .w(px(12.))
                     .flex_shrink_0()
-                    .child(chevron(self.root_open)),
+                    .child(chevron(if self.root_open { 1. } else { 0. })),
             )
             .child(
                 div()
@@ -1059,23 +1117,36 @@ impl FilesPanel {
             .into_any_element()
     }
 
-    fn tree(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn tree(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let width = self.tree_width.clone();
         let mut rows = if self.root_open {
             self.tree_rows(&self.root, 0, cx)
         } else {
             Vec::new()
         };
+        if self.folds_moving.take() {
+            window.request_animation_frame();
+        }
         if let Some(error) = &self.trash_error {
             rows.insert(0, note(error, 0, true));
         }
         div()
             .id("files-tree")
+            .relative()
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
             .py(px(4.))
             .flex()
             .flex_col()
+            .child(
+                canvas(
+                    move |bounds, _, _| width.set(f32::from(bounds.size.width)),
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full(),
+            )
             .children(rows)
             .into_any_element()
     }
@@ -1388,7 +1459,7 @@ impl FilesPanel {
 }
 
 impl Render for FilesPanel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mut column = div().size_full().flex().flex_col();
         if !self.tabs.is_empty() {
             column = column.child(self.tab_strip(cx));
@@ -1418,7 +1489,7 @@ impl Render for FilesPanel {
                     .child(if searching {
                         self.results(cx)
                     } else {
-                        self.tree(cx)
+                        self.tree(window, cx)
                     })
                     .into_any_element()
             }
@@ -1504,15 +1575,16 @@ fn is_markdown(name: &str) -> bool {
     lower.ends_with(".md") || lower.ends_with(".markdown") || lower.ends_with(".mdx")
 }
 
-fn chevron(open: bool) -> AnyElement {
+/// A folder's chevron, turned as far as the folder has slid open.
+fn chevron(fold: f32) -> AnyElement {
     svg()
         .path("chevron-right")
         .size(px(12.))
         .text_color(content(0.45))
         .flex_shrink_0()
-        .when(open, |icon| {
-            icon.with_transformation(Transformation::rotate(radians(std::f32::consts::FRAC_PI_2)))
-        })
+        .with_transformation(Transformation::rotate(radians(
+            std::f32::consts::FRAC_PI_2 * fold,
+        )))
         .into_any_element()
 }
 

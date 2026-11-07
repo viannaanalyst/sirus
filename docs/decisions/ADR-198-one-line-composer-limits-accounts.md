@@ -85,5 +85,6 @@ A conversation stays on the account that started it, so one on the default accou
 - **The phone's turn matches the Mac's.** A reply opens with the provider, the model and the time; a run of steps is one group with a tile, a title and rows on a rail, with the command's purpose and chips, open while it works. A sent message leaves the composer at once (and returns if the send fails), the keyboard closes, and the message rises to the top while the reply grows under it. The add sheet is one group, every row with an icon.
 - **Upright photos.** Thumbnails follow a photo's EXIF orientation; an iPhone stores a portrait sideways.
 - **Code wraps.** The Files pane's editor wraps long lines by default, under the line's indent and with one number per line; a switch in the tab strip turns that off and is remembered. Up and Down still move by whole lines.
+- **Folders slide.** A folder in the Files tree slides open and shut, its chevron turning with it.
 - **Turn actions.** The `⋯` menu is gone. A reply's row reads Copy, Handoff, Side chat, Fork, with Undo after them. Try again left it: it now sits under the sent message, only on the last turn and only after a failure.
 - **Edge fades.** The transcript's fades are now an alpha mask around the list. The gradients drawn in the conversation's color showed as dark bands once the conversation became translucent black.

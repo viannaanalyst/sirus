@@ -314,6 +314,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Agentes podem usar este login", "Agents may use this login"),
     ("Agora não", "Not now"),
     ("Aguardando o navegador…", "Waiting for the browser…"),
+    ("Aguardando resposta", "Waiting for an answer"),
     (
         "Ainda não há o que compactar: esta conversa não começou.",
         "There is nothing to compact yet: this conversation has not started.",

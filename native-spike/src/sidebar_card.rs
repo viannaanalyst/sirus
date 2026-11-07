@@ -1,20 +1,22 @@
 //! The sidebar's hover card. A conversation row rests under the pointer
 //! for 500 ms and a small card opens to its right, beside the row and not over it: the provider
-//! and the model, the work time of the last turn, the full title, and the project's folder.
+//! and the model, what the conversation is doing, the full title, its branch and its folder.
 //! Moving to another row switches the card at once; leaving the row and the card closes it; a
 //! scroll of the list closes it. Nothing waits while the card is shut: the 500 ms is a task that
 //! is dropped, and so cancelled, when the pointer leaves the row.
 //!
 //! This module is a child of `shell` (`#[path]`), so it reaches the window's private state.
 
+use super::activity_cards::{AMBER, GREEN, Kind, RED, pending_counts};
 use super::*;
+use gpui::Hsla;
 use gpui::canvas;
 use std::cell::Cell;
 use std::rc::Rc;
 
 /// How long the pointer rests on a row before its card opens.
 const DELAY: Duration = Duration::from_millis(500);
-const WIDTH: f32 = 280.;
+const WIDTH: f32 = 260.;
 /// The gap between the row and the card. The card's wrapper starts at the row's edge and holds
 /// the gap, so the pointer crosses it without leaving the card's area.
 const GAP: f32 = 6.;
@@ -60,27 +62,6 @@ struct Open {
     row: Bounds<Pixels>,
     /// The fade and slide in, 0 to 1.
     fade: Tween,
-}
-
-/// The work time of a turn in seconds: the running clock while it streams, else the final one.
-fn work_seconds(turn: &Turn) -> Option<u64> {
-    if turn.live {
-        let start = turn.started_ms?;
-        let now = chrono::Utc::now().timestamp_millis().max(0) as u64;
-        Some(now.saturating_sub(start).saturating_sub(turn.paused_ms) / 1000)
-    } else {
-        turn.seconds
-    }
-}
-
-/// `m:ss`, or `h:mm:ss` from an hour on. The digits need no translation.
-fn clock(seconds: u64) -> String {
-    let (hours, minutes, seconds) = (seconds / 3600, seconds / 60 % 60, seconds % 60);
-    if hours > 0 {
-        format!("{hours}:{minutes:02}:{seconds:02}")
-    } else {
-        format!("{minutes}:{seconds:02}")
-    }
 }
 
 /// The folder with the home directory written as `~`.
@@ -218,17 +199,58 @@ impl Shell {
         let top = f32::from(open.row.top())
             .min(viewport_height - HEIGHT - 8.)
             .max(8.);
-        let turn = conversation.turns.last();
         let model = conversation
             .model
             .clone()
-            .or_else(|| turn.and_then(|turn| turn.model.clone()))
+            .or_else(|| {
+                conversation
+                    .turns
+                    .last()
+                    .and_then(|turn| turn.model.clone())
+            })
             .filter(|model| !model.is_empty());
-        let elapsed = turn.and_then(work_seconds);
-        let folder = self
+        let project_path = self
             .project_of(open.index)
-            .map(|project| self.projects[project].path.clone())
-            .unwrap_or_else(|| conversation.worktree.clone());
+            .map(|project| self.projects[project].path.clone());
+        let folder = Some(conversation.worktree.clone())
+            .filter(|path| !path.is_empty())
+            .or_else(|| project_path.clone())
+            .unwrap_or_default();
+        let linked = project_path.is_some_and(|path| path != folder);
+        // What matters first: a waiting request, then work, then an unseen result, then the age.
+        let (permissions, questions) = pending_counts(&conversation.pending);
+        let (state, state_color): (String, Hsla) = if permissions > 0 {
+            (t("Precisa de aprovação").to_owned(), rgb(AMBER).into())
+        } else if questions > 0 {
+            (t("Aguardando resposta").to_owned(), rgb(AMBER).into())
+        } else if conversation.working() {
+            (format!("{}…", t("Trabalhando")), accent())
+        } else {
+            match self.cards.result_of(&conversation.session_id) {
+                Some(Kind::Failed) => (t("Falhou").to_owned(), rgb(RED).into()),
+                Some(_) => (t("Concluída").to_owned(), rgb(GREEN).into()),
+                None => (conversation.age(), content(0.45)),
+            }
+        };
+        let detail = |label: &'static str, value: String| {
+            div()
+                .flex()
+                .gap(px(8.))
+                .child(
+                    div()
+                        .w(px(72.))
+                        .flex_shrink_0()
+                        .text_color(content(0.45))
+                        .child(label),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_color(content(0.8))
+                        .child(value),
+                )
+        };
         let view = cx.entity();
         let provider = conversation.provider;
         Some(
@@ -250,10 +272,9 @@ impl Shell {
                         .w_full()
                         .flex()
                         .flex_col()
-                        .gap(px(4.))
-                        .px(px(10.))
-                        .py(px(8.))
-                        .rounded(px(crate::theme::RADIUS_MD))
+                        .px(px(12.))
+                        .py(px(10.))
+                        .rounded(px(crate::theme::RADIUS_LG))
                         .border_1()
                         .border_color(content(0.14))
                         .child(crate::theme::floating_surface(crate::theme::RADIUS_LG))
@@ -262,48 +283,61 @@ impl Shell {
                             div()
                                 .flex()
                                 .items_center()
-                                .gap(px(6.))
-                                .text_size(px(11.5))
-                                .child(crate::tab_tile::mark_tile(
-                                    &crate::tab_tile::TileSize {
-                                        w: 16.,
-                                        h: 14.,
-                                        radius: 4.,
-                                    },
-                                    Face::provider(provider),
-                                    provider_glyph(provider, 10.),
-                                ))
+                                .justify_between()
+                                .gap(px(12.))
+                                .text_size(px(11.))
                                 .child(
                                     div()
-                                        .flex_1()
                                         .min_w_0()
-                                        .truncate()
-                                        .text_size(px(12.))
-                                        .text_color(content(0.5))
-                                        .child(model.unwrap_or_default()),
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(6.))
+                                        .text_color(content(0.55))
+                                        .child(crate::tab_tile::mark_tile(
+                                            &crate::tab_tile::TileSize {
+                                                w: 14.,
+                                                h: 14.,
+                                                radius: 4.,
+                                            },
+                                            Face::provider(provider),
+                                            provider_glyph(provider, 10.),
+                                        ))
+                                        .child(
+                                            div()
+                                                .min_w_0()
+                                                .truncate()
+                                                .child(model.unwrap_or_default()),
+                                        ),
                                 )
-                                .children(elapsed.map(|seconds| {
-                                    div()
-                                        .flex_shrink_0()
-                                        .text_size(px(12.))
-                                        .text_color(content(0.5))
-                                        .child(clock(seconds))
-                                })),
+                                .child(div().flex_shrink_0().text_color(state_color).child(state)),
                         )
                         .child(
                             div()
+                                .mt(px(6.))
                                 .text_size(px(13.))
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(content(0.95))
-                                .truncate()
-                                .child(conversation.title.clone()),
+                                .line_height(px(20.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(content(1.))
+                                .child(conversation.title.replace('\n', " ")),
                         )
                         .child(
                             div()
-                                .text_size(px(11.5))
-                                .text_color(content(0.5))
-                                .truncate()
-                                .child(tilde(&folder)),
+                                .mt(px(8.))
+                                .pt(px(8.))
+                                .border_t_1()
+                                .border_color(content(0.08))
+                                .text_size(px(11.))
+                                .line_height(px(16.))
+                                .flex()
+                                .flex_col()
+                                .gap(px(6.))
+                                .when(!conversation.branch.is_empty(), |d| {
+                                    d.child(detail("Branch", conversation.branch.clone()))
+                                })
+                                .child(detail(
+                                    if linked { "Worktree" } else { t("Pasta") },
+                                    tilde(&folder),
+                                )),
                         ),
                 )
                 .into_any_element(),
@@ -314,15 +348,6 @@ impl Shell {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_clock_has_minutes_and_hours_only_from_an_hour_on() {
-        assert_eq!(clock(0), "0:00");
-        assert_eq!(clock(65), "1:05");
-        assert_eq!(clock(3599), "59:59");
-        assert_eq!(clock(3600), "1:00:00");
-        assert_eq!(clock(3725), "1:02:05");
-    }
 
     #[test]
     fn the_folder_shows_home_as_a_tilde() {

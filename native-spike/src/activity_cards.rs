@@ -30,9 +30,9 @@ const WIDTH: f32 = 340.;
 const SLIDE: f32 = 26.;
 const SLIDE_TIME: f32 = 0.26;
 
-const AMBER: u32 = 0xf0a35e;
-const GREEN: u32 = 0x5fce8c;
-const RED: u32 = 0xee8a96;
+pub(super) const AMBER: u32 = 0xf0a35e;
+pub(super) const GREEN: u32 = 0x5fce8c;
+pub(super) const RED: u32 = 0xee8a96;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Kind {
@@ -244,7 +244,7 @@ impl State {
     }
 
     /// The unseen result of a conversation.
-    fn result_of(&self, session: &str) -> Option<Kind> {
+    pub(super) fn result_of(&self, session: &str) -> Option<Kind> {
         self.results
             .iter()
             .find(|(s, _)| s == session)

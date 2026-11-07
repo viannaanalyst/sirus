@@ -40,6 +40,11 @@ const CONNECTOR_GROUPS: &[(&str, &str)] = &[
 const IMAGES: &[&str] = &["canva", "context7", "monday"];
 
 const SEARCH: &str = "cn-search";
+const ACCOUNT_SEARCH: &str = "cn-account-search";
+/// Accounts of one service shown in its row; the rest wait in its popup.
+const CHIPS: usize = 3;
+/// From here on the accounts popup offers a search.
+const SEARCH_FROM: usize = 8;
 const NAME: &str = "cd-name";
 const URL: &str = "cd-url";
 const TOKEN: &str = "cd-token";
@@ -157,6 +162,9 @@ struct State {
     menu: Option<Menu>,
     /// When the last menu closed: a click on its button then must not reopen it.
     menu_closed: Option<Instant>,
+    /// The service whose accounts popup is open: its catalog id, and whether it is on its way out.
+    accounts: Option<(String, bool)>,
+    accounts_query: String,
     dialog: Option<Dialog>,
     /// A field to start typing in as soon as its dialog shows.
     autofocus: Option<(&'static str, String)>,
@@ -175,6 +183,8 @@ static STATE: Mutex<State> = Mutex::new(State {
     project_only: false,
     menu: None,
     menu_closed: None,
+    accounts: None,
+    accounts_query: String::new(),
     dialog: None,
     generation: 0,
     signing: Vec::new(),
@@ -218,12 +228,15 @@ pub fn enter_saves(key: &str) -> bool {
 
 pub fn wants_keys() -> bool {
     let now = state();
-    now.menu.is_some() || now.dialog.is_some()
+    now.menu.is_some() || now.dialog.is_some() || now.accounts.is_some()
 }
 
 /// A finished text edit of this page. True when the key was one of its own.
 pub fn commit(key: &str, text: &str) -> bool {
-    if !matches!(key, SEARCH | NAME | URL | TOKEN | REF | LABEL | IDLE) {
+    if !matches!(
+        key,
+        SEARCH | ACCOUNT_SEARCH | NAME | URL | TOKEN | REF | LABEL | IDLE
+    ) {
         return false;
     }
     set_field(key, text);
@@ -234,6 +247,10 @@ fn set_field(key: &str, text: &str) {
     let mut now = state();
     if key == SEARCH {
         now.query = text.trim().to_string();
+        return;
+    }
+    if key == ACCOUNT_SEARCH {
+        now.accounts_query = text.trim().to_string();
         return;
     }
     let Some(dialog) = now.dialog.as_mut() else {
@@ -613,6 +630,26 @@ fn close_menu<V: 'static>(cx: &mut Context<V>) {
     });
 }
 
+fn close_accounts<V: 'static>(cx: &mut Context<V>) {
+    {
+        let mut now = state();
+        match now.accounts.as_mut() {
+            Some((_, closing)) if !*closing => *closing = true,
+            _ => return,
+        }
+        now.menu_closed = Some(Instant::now());
+    }
+    cx.notify();
+    after(cx, (MENU_TIME * 1000.) as u64 + 10, |_, cx| {
+        let mut now = state();
+        if now.accounts.as_ref().is_some_and(|(_, closing)| *closing) {
+            now.accounts = None;
+            now.accounts_query.clear();
+        }
+        cx.notify();
+    });
+}
+
 fn close_dialog<V: 'static>(cx: &mut Context<V>) {
     {
         let mut now = state();
@@ -646,7 +683,34 @@ struct Conn {
     raw: Value,
 }
 
+/// The rows of the Connected list: accounts of one service share a row. `catalog` is what each
+/// connector comes from; custom ones have none and always stand alone. Each row is the indexes of
+/// its connectors, in the order the first of them appears.
+fn account_rows(catalog: &[Option<&str>]) -> Vec<Vec<usize>> {
+    let mut rows: Vec<Vec<usize>> = Vec::new();
+    for (at, service) in catalog.iter().enumerate() {
+        let same = service
+            .and_then(|service| rows.iter().position(|row| catalog[row[0]] == Some(service)));
+        match same {
+            Some(row) => rows[row].push(at),
+            None => rows.push(vec![at]),
+        }
+    }
+    rows
+}
+
+/// What a row shows of its accounts: this many chips, and whether the rest wait behind "+N".
+fn chips_shown(accounts: usize) -> (usize, usize) {
+    let shown = accounts.min(CHIPS);
+    (shown, accounts - shown)
+}
+
 impl Conn {
+    /// Whether it waits on the person to sign in.
+    fn needs_sign_in(&self) -> bool {
+        self.auth != "none" && matches!(self.state.as_str(), "signedOut" | "expired")
+    }
+
     /// What the person calls it: their label, else its name.
     fn title(&self) -> &str {
         if self.label.is_empty() {
@@ -784,6 +848,13 @@ pub fn view<V: 'static>(
         .filter(|id| CONNECTOR_AGENTS.contains(id))
         .map(str::to_string)
         .collect();
+    let (accounts_open, accounts_query) = {
+        let now = state();
+        (now.accounts.clone(), now.accounts_query.clone())
+    };
+    let account_typing = editing
+        .filter(|(key, _)| *key == ACCOUNT_SEARCH)
+        .map(|(_, text)| text.to_string());
     let (query, project_only, menu, current, projects, width, signing) = {
         let mut now = state();
         now.installed = installed;
@@ -976,19 +1047,37 @@ pub fn view<V: 'static>(
         .collect();
     let mut any = !shown.is_empty();
     if !shown.is_empty() {
-        let items: Vec<AnyElement> = shown
-            .iter()
-            .map(|c| {
-                connected_item(
-                    c,
-                    &project_name,
-                    menu.as_ref(),
-                    &signing,
-                    &list,
-                    save,
-                    run,
-                    cx,
-                )
+        let services: Vec<Option<&str>> = shown.iter().map(|c| c.catalog.as_deref()).collect();
+        let items: Vec<AnyElement> = account_rows(&services)
+            .into_iter()
+            .map(|row| {
+                let accounts: Vec<&Conn> = row.iter().map(|at| shown[*at]).collect();
+                if let [only] = accounts.as_slice() {
+                    connected_item(
+                        only,
+                        &project_name,
+                        menu.as_ref(),
+                        &signing,
+                        &list,
+                        save,
+                        run,
+                        cx,
+                    )
+                } else {
+                    account_group(
+                        &accounts,
+                        &project_name,
+                        menu.as_ref(),
+                        accounts_open.as_ref(),
+                        &accounts_query,
+                        account_typing.as_deref(),
+                        &list,
+                        save,
+                        edit,
+                        run,
+                        cx,
+                    )
+                }
             })
             .collect();
         page = page.child(section(t("Conectados"), items, cols));
@@ -1368,7 +1457,7 @@ fn connected_item<V: 'static>(
                 .into_any_element()
         });
     }
-    actions.push(more_menu(c, menu, list, save, run, cx));
+    actions.push(more_menu(c, MenuAt::Row, menu, list, save, run, cx));
     let mark = logo(c.catalog.as_deref(), &c.name, 28.);
     item(
         format!("con-{}", c.id),
@@ -1378,6 +1467,363 @@ fn connected_item<V: 'static>(
         !c.enabled,
         actions,
     )
+}
+
+/// A service with several accounts, in one row: its first chips, then "+N" with the rest in a
+/// popup, or "+" to connect another when they all fit.
+#[allow(clippy::too_many_arguments)]
+fn account_group<V: 'static>(
+    accounts: &[&Conn],
+    project_name: &dyn Fn(&str) -> String,
+    menu: Option<&(String, bool)>,
+    open: Option<&(String, bool)>,
+    query: &str,
+    typing: Option<&str>,
+    list: &[Value],
+    save: Save<V>,
+    edit: Edit<V>,
+    run: Run<V>,
+    cx: &mut Context<V>,
+) -> AnyElement {
+    let first = accounts[0];
+    let service = first.catalog.clone().unwrap_or_default();
+    let catalog = entry(&service);
+    let name = catalog.map_or_else(|| first.name.clone(), |e| e.1.to_string());
+    let about = catalog.map_or_else(|| host_of(&first.url), |e| t(e.3).to_string());
+    let entry_id = catalog.map(|e| e.0);
+    let (shown, hidden) = chips_shown(accounts.len());
+    let is_open = open.is_some_and(|(id, _)| *id == service);
+    let mut chips = div()
+        .flex()
+        .items_center()
+        .gap(px(5.))
+        .mt(px(6.))
+        .min_w_0()
+        .children(
+            accounts[..shown]
+                .iter()
+                .map(|c| more_menu(c, MenuAt::Chip, menu, list, save, run, cx)),
+        );
+    let button = {
+        let target = service.clone();
+        let more = div()
+            .id(format!("cn-accounts-{service}"))
+            .h(px(26.))
+            .min_w(px(26.))
+            .px(px(7.))
+            .flex_shrink_0()
+            .rounded(px(crate::theme::RADIUS_MD))
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(content(if is_open { 0.14 } else { 0.07 }))
+            .hover(|s| s.bg(content(0.12)))
+            .cursor_pointer()
+            .sinks()
+            .text_size(px(12.))
+            .text_color(content(0.75));
+        if hidden > 0 {
+            more.on_click(cx.listener(move |_, _, _, cx| {
+                let mut now = state();
+                let reopened = now
+                    .menu_closed
+                    .is_some_and(|at| at.elapsed() < Duration::from_millis(250));
+                let here = now
+                    .accounts
+                    .as_ref()
+                    .is_some_and(|(id, closing)| *id == target && !closing);
+                if here {
+                    drop(now);
+                    close_accounts(cx);
+                } else if !reopened {
+                    now.accounts = Some((target.clone(), false));
+                    now.accounts_query.clear();
+                }
+                cx.notify();
+            }))
+            .child(format!("+{hidden}"))
+            .into_any_element()
+        } else {
+            more.on_click(cx.listener(move |_, _, _, cx| {
+                open_dialog(Kind::Connect, None, entry_id, false);
+                cx.notify();
+            }))
+            .child(svg().path("plus").size(px(13.)).text_color(content(0.7)))
+            .into_any_element()
+        }
+    };
+    chips = chips.child(button);
+    let popup = open.filter(|(id, _)| *id == service).map(|(_, closing)| {
+        accounts_popup(
+            accounts,
+            &service,
+            entry_id,
+            *closing,
+            query,
+            typing,
+            project_name,
+            menu,
+            list,
+            save,
+            edit,
+            run,
+            cx,
+        )
+    });
+    div()
+        .id(format!("con-group-{service}"))
+        .relative()
+        .w_full()
+        .min_w_0()
+        .px(px(8.))
+        .py(px(8.))
+        .rounded(px(crate::theme::RADIUS_LG))
+        .flex()
+        .gap(px(11.))
+        .hover(|s| s.bg(content(0.07)))
+        .child(logo(first.catalog.as_deref(), &first.name, 28.))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(1.))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .child(
+                            div()
+                                .flex_shrink_0()
+                                .text_size(px(13.))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(content(0.95))
+                                .child(name),
+                        )
+                        .child(
+                            div()
+                                .flex_shrink_0()
+                                .text_size(px(11.5))
+                                .text_color(content(0.5))
+                                .child(tf("{} contas", &[&accounts.len()])),
+                        ),
+                )
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(content(0.5))
+                        .truncate()
+                        .child(about),
+                )
+                .child(chips)
+                .children(popup),
+        )
+        .into_any_element()
+}
+
+/// Every account of a service: a search once there are many, those waiting to sign in first, and
+/// connecting another at the foot.
+#[allow(clippy::too_many_arguments)]
+fn accounts_popup<V: 'static>(
+    accounts: &[&Conn],
+    service: &str,
+    entry_id: Option<&'static str>,
+    closing: bool,
+    query: &str,
+    typing: Option<&str>,
+    project_name: &dyn Fn(&str) -> String,
+    menu: Option<&(String, bool)>,
+    list: &[Value],
+    save: Save<V>,
+    edit: Edit<V>,
+    run: Run<V>,
+    cx: &mut Context<V>,
+) -> AnyElement {
+    const TOP: f32 = 84.;
+    let needle = typing.unwrap_or(query).trim().to_lowercase();
+    let found: Vec<&&Conn> = accounts
+        .iter()
+        .filter(|c| {
+            needle.is_empty()
+                || c.title().to_lowercase().contains(&needle)
+                || c.account
+                    .as_deref()
+                    .is_some_and(|account| account.to_lowercase().contains(&needle))
+        })
+        .collect();
+    let track = crate::hover_track::list("connector-accounts");
+    let mut rows: Vec<AnyElement> = vec![track.pill().into_any_element()];
+    let heading = |text: &str| {
+        div()
+            .h(px(24.))
+            .px(px(8.))
+            .flex()
+            .items_center()
+            .text_size(px(11.5))
+            .text_color(content(0.5))
+            .child(text.to_string())
+            .into_any_element()
+    };
+    let waiting: Vec<&&&Conn> = found.iter().filter(|c| c.needs_sign_in()).collect();
+    let signed: Vec<&&&Conn> = found.iter().filter(|c| !c.needs_sign_in()).collect();
+    let row = |c: &Conn, cx: &mut Context<V>| {
+        let group = format!("cn-account-{}", c.id);
+        let trailing = if c.needs_sign_in() && c.auth == "oauth" {
+            let id = c.id.clone();
+            div()
+                .id(format!("cn-account-in-{}", c.id))
+                .flex_shrink_0()
+                .text_size(px(11.5))
+                .text_color(gpui::rgb(0xe5a54b))
+                .cursor_pointer()
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    sign_in(this, &id, run, cx);
+                    cx.notify();
+                }))
+                .child(t("Entrar"))
+                .into_any_element()
+        } else {
+            div().flex_shrink_0().into_any_element()
+        };
+        let line = div()
+            .id(format!("cn-account-row-{}", c.id))
+            .group(group.clone())
+            .relative()
+            .h(px(30.))
+            .pl(px(8.))
+            .pr(px(1.))
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .text_size(px(13.))
+            .text_color(content(0.92))
+            .child(account_dot(c))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .child(c.title().to_string()),
+            )
+            .when_some(c.project.as_deref(), |d, project| {
+                d.child(
+                    div()
+                        .flex_shrink_0()
+                        .max_w(px(90.))
+                        .truncate()
+                        .text_size(px(11.5))
+                        .text_color(content(0.45))
+                        .child(project_name(project)),
+                )
+            })
+            .child(trailing)
+            .child(more_menu(c, MenuAt::Popup, menu, list, save, run, cx));
+        track.row_named(line, &c.id, false).into_any_element()
+    };
+    if !waiting.is_empty() {
+        rows.push(heading(t("Precisam entrar")));
+        for c in waiting.iter() {
+            rows.push(row(c, cx));
+        }
+        if !signed.is_empty() {
+            rows.push(heading(t("Conectadas")));
+        }
+    }
+    for c in signed.iter() {
+        rows.push(row(c, cx));
+    }
+    if found.is_empty() {
+        rows.push(heading(t("Nenhuma conta encontrada")));
+    }
+    let search = (accounts.len() >= SEARCH_FROM).then(|| {
+        let current = typing.unwrap_or(query).to_string();
+        let typing_now = typing.is_some();
+        let empty = current.is_empty();
+        let shown = if empty && !typing_now {
+            t("Buscar conta").to_string()
+        } else {
+            current.clone()
+        };
+        div()
+            .id(ACCOUNT_SEARCH)
+            .flex_shrink_0()
+            .h(px(32.))
+            .px(px(9.))
+            .mb(px(4.))
+            .border_b_1()
+            .border_color(content(0.08))
+            .flex()
+            .items_center()
+            .gap(px(7.))
+            .text_size(px(13.))
+            .cursor_text()
+            .on_click(
+                cx.listener(move |this, _, _, cx| edit(this, ACCOUNT_SEARCH, current.clone(), cx)),
+            )
+            .child(svg().path("search").size(px(13.)).text_color(content(0.5)))
+            .child(
+                div()
+                    .text_color(content(if empty && !typing_now { 0.4 } else { 0.95 }))
+                    .child(shown),
+            )
+            .when(typing_now, |d| {
+                d.child(div().w(px(1.5)).h(px(14.)).bg(accent()))
+            })
+    });
+    let another = menu_row(
+        format!("cn-account-add-{service}"),
+        "plus",
+        t("Conectar outra conta").to_string(),
+        false,
+        cx.listener(move |_, _, _, cx| {
+            close_accounts(cx);
+            open_dialog(Kind::Connect, None, entry_id, false);
+            cx.notify();
+        }),
+    );
+    let panel = div()
+        .id(format!("cn-accounts-menu-{service}"))
+        .absolute()
+        .top(px(TOP))
+        .left(px(47.))
+        .w(px(290.))
+        .max_h(px(340.))
+        .p(px(4.))
+        .flex()
+        .flex_col()
+        .rounded(px(crate::theme::RADIUS_LG))
+        .border_1()
+        .border_color(content(0.12))
+        .child(crate::theme::floating_surface(crate::theme::RADIUS_LG))
+        .shadow_md()
+        .occlude()
+        .on_mouse_down_out(cx.listener(|_, _, _, cx| close_accounts(cx)))
+        .children(search)
+        .child(
+            div()
+                .id("cn-accounts-list")
+                .relative()
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .flex()
+                .flex_col()
+                .children(rows),
+        )
+        .child(div().flex_shrink_0().h(px(1.)).my(px(4.)).bg(content(0.08)))
+        .child(another)
+        .with_animation(
+            format!("cn-accounts-{service}-{closing}"),
+            Animation::new(Duration::from_secs_f32(MENU_TIME))
+                .with_easing(|t| eased(t, Curve::Expo)),
+            move |el, t| {
+                let p = if closing { 1. - t } else { t };
+                el.opacity(p).top(px(TOP - (1. - p) * 6.))
+            },
+        );
+    gpui::deferred(panel).with_priority(5).into_any_element()
 }
 
 fn sign_in<V: 'static>(view: &mut V, id: &str, run: Run<V>, cx: &mut Context<V>) {
@@ -1394,55 +1840,101 @@ fn sign_in<V: 'static>(view: &mut V, id: &str, run: Run<V>, cx: &mut Context<V>)
     });
 }
 
-/// The "⋯" button and, while open, its menu.
+/// Where an account's menu hangs from.
+#[derive(Clone, Copy, PartialEq)]
+enum MenuAt {
+    /// The "⋯" at the end of its row.
+    Row,
+    /// Its chip in a service's row.
+    Chip,
+    /// Its row in the accounts popup.
+    Popup,
+}
+
+/// The dot of an account: green signed in, amber waiting on the person.
+fn account_dot(c: &Conn) -> gpui::Div {
+    let color = if c.needs_sign_in() {
+        gpui::rgb(0xe5a54b).into()
+    } else {
+        success()
+    };
+    div().size(px(6.)).flex_shrink_0().rounded_full().bg(color)
+}
+
+/// The "⋯" button or an account's chip and, while open, its menu.
 fn more_menu<V: 'static>(
     c: &Conn,
+    at: MenuAt,
     menu: Option<&(String, bool)>,
     list: &[Value],
     save: Save<V>,
     run: Run<V>,
     cx: &mut Context<V>,
 ) -> AnyElement {
-    let id = c.id.clone();
+    // One account can show a chip and a popup row at once: each opens its own menu.
+    let id = match at {
+        MenuAt::Row => c.id.clone(),
+        MenuAt::Chip => format!("chip:{}", c.id),
+        MenuAt::Popup => format!("popup:{}", c.id),
+    };
+    let key = id.clone();
     let trigger = {
         let id = id.clone();
-        div()
+        let base = div()
             .id(format!("cn-more-{id}"))
-            .size(px(28.))
             .flex_shrink_0()
             .rounded(px(crate::theme::RADIUS_MD))
             .flex()
             .items_center()
-            .justify_center()
-            .cursor_pointer()
-            .hover(|s| s.bg(content(0.07)))
-            .on_click(cx.listener(move |_, _, _, cx| {
-                let mut now = state();
-                let reopened = now
-                    .menu_closed
-                    .is_some_and(|at| at.elapsed() < Duration::from_millis(250));
-                let here = now.menu.as_ref().is_some_and(|m| m.id == id && !m.closing);
-                if here {
-                    drop(now);
-                    close_menu(cx);
-                } else if !reopened {
-                    now.menu = Some(Menu {
-                        id: id.clone(),
-                        closing: false,
-                    });
-                    drop(now);
-                }
-                cx.notify();
-            }))
-            .child(
-                svg()
-                    .path("connector-ui/ellipsis")
-                    .size(px(15.))
-                    .text_color(content(0.55)),
-            )
+            .cursor_pointer();
+        let shaped = if at == MenuAt::Chip {
+            base.flex_shrink(1.)
+                .min_w_0()
+                .h(px(26.))
+                .px(px(8.))
+                .gap(px(6.))
+                .bg(content(0.07))
+                .hover(|s| s.bg(content(0.12)))
+                .text_size(px(12.))
+                .text_color(content(0.85))
+                .child(account_dot(c))
+                .child(div().min_w_0().truncate().child(c.title().to_string()))
+        } else {
+            base.size(px(28.))
+                .justify_center()
+                .hover(|s| s.bg(content(0.07)))
+                .child(
+                    svg()
+                        .path("connector-ui/ellipsis")
+                        .size(px(15.))
+                        .text_color(content(0.55)),
+                )
+        };
+        shaped.on_click(cx.listener(move |_, _, _, cx| {
+            let mut now = state();
+            let reopened = now
+                .menu_closed
+                .is_some_and(|at| at.elapsed() < Duration::from_millis(250));
+            let here = now.menu.as_ref().is_some_and(|m| m.id == id && !m.closing);
+            if here {
+                drop(now);
+                close_menu(cx);
+            } else if !reopened {
+                now.menu = Some(Menu {
+                    id: id.clone(),
+                    closing: false,
+                });
+                drop(now);
+            }
+            cx.notify();
+        }))
     };
-    let mut holder = div().relative().flex_shrink_0().child(trigger);
-    let Some((open, closing)) = menu.filter(|(open, _)| *open == c.id) else {
+    let mut holder = div()
+        .relative()
+        .when(at == MenuAt::Chip, |d| d.flex_shrink(1.).min_w_0())
+        .when(at != MenuAt::Chip, |d| d.flex_shrink_0())
+        .child(trigger);
+    let Some((open, closing)) = menu.filter(|(open, _)| *open == key) else {
         return holder.into_any_element();
     };
     let _ = open;
@@ -1545,7 +2037,8 @@ fn more_menu<V: 'static>(
         .id(format!("cn-menu-{}", c.id))
         .absolute()
         .top(px(32.))
-        .right(px(0.))
+        .when(at == MenuAt::Chip, |d| d.left(px(0.)))
+        .when(at != MenuAt::Chip, |d| d.right(px(0.)))
         .w(px(190.))
         .p(px(4.))
         .rounded(px(crate::theme::RADIUS_LG))
@@ -2384,6 +2877,7 @@ pub fn key<V: 'static>(
     match key {
         "escape" if dialog => close_dialog(cx),
         "escape" if menu => close_menu(cx),
+        "escape" if state().accounts.is_some() => close_accounts(cx),
         "enter" if dialog => {
             let list = list.as_array().cloned().unwrap_or_default();
             submit(view, &list, save, run, &None, cx);
@@ -2396,6 +2890,30 @@ pub fn key<V: 'static>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn accounts_of_a_service_share_a_row_and_custom_ones_stand_alone() {
+        let list = [
+            Some("cloudflare"),
+            Some("vercel"),
+            None,
+            Some("cloudflare"),
+            None,
+            Some("supabase"),
+            Some("supabase"),
+        ];
+        assert_eq!(
+            account_rows(&list),
+            vec![vec![0, 3], vec![1], vec![2], vec![4], vec![5, 6]]
+        );
+    }
+
+    #[test]
+    fn a_row_shows_three_accounts_and_the_rest_wait() {
+        assert_eq!(chips_shown(2), (2, 0));
+        assert_eq!(chips_shown(3), (3, 0));
+        assert_eq!(chips_shown(8), (3, 5));
+    }
 
     #[test]
     fn supabase_addresses_round_trip() {

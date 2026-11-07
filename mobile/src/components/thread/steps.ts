@@ -123,9 +123,14 @@ export function shortElapsed(seconds: number | null): string | null {
   return seconds < 60 ? `${seconds} s` : formatActivityDuration(seconds);
 }
 
+/** What Claude Code's model aliases stand for, as the Mac's picker names them (`CLAUDE_ALIASES`). */
+const CLAUDE_ALIASES: Record<string, string> = { fable: "Fable 5.1", opus: "Opus 5.5", sonnet: "Sonnet 5.5", haiku: "Haiku 5.5" };
+
 /** A model id as the Mac names it ("claude-opus-4-5" → "Opus 4.5", "gpt-5.5" → "GPT-5.5"). */
 export function modelLabel(model: string | null | undefined, provider: string): string {
-  const raw = model?.trim();
+  const raw = model?.trim().replace(/\[1m\]$/i, "");
+  const alias = raw ? CLAUDE_ALIASES[raw] : undefined;
+  if (alias) return alias;
   if (!raw) return ({ claude: "Claude", codex: "Codex", opencode: "OpenCode" } as Record<string, string>)[provider] ?? "Agente";
   const trimmed = raw.replace(/^claude-/, "");
   if (trimmed.startsWith("gpt")) return `GPT${trimmed.slice(3)}`;

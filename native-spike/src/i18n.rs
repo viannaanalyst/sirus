@@ -486,6 +486,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Buscar atualização", "Check for updates"),
     ("Buscar conectores", "Search connectors"),
     ("Buscar configurações", "Search Settings"),
+    ("Buscar conta", "Search accounts"),
     (
         "Buscar conversas, arquivos e projetos",
         "Search conversations, files and projects",
@@ -624,6 +625,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Concluir", "Done"),
     ("Concluída", "Done"),
     ("Concluídas", "Done"),
+    ("Conectadas", "Connected"),
     ("Conectado", "Connected"),
     ("Conectado como {}", "Signed in as {}"),
     ("Conectados", "Connected"),
@@ -631,6 +633,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Conectando à tela…", "Connecting to the screen…"),
     ("Conectando…", "Connecting…"),
     ("Conectar", "Connect"),
+    ("Conectar outra conta", "Connect another account"),
     ("Conectar um aparelho", "Connect a device"),
     ("Conectar {}", "Connect {}"),
     (
@@ -1577,6 +1580,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Nenhuma conta do GitHub conectada.",
         "No GitHub account signed in.",
     ),
+    ("Nenhuma conta encontrada", "No accounts found"),
     ("Nenhuma issue aberta.", "No open issues."),
     ("Nenhuma pasta criada", "No folders created"),
     ("Nenhuma skill encontrada", "No skills found"),
@@ -2122,6 +2126,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Posição do terminal", "Terminal position"),
     ("Precisa de aprovação", "Needs approval"),
     ("Precisa de você", "Needs you"),
+    ("Precisam entrar", "Need to sign in"),
     (
         "Preencher o código de {}",
         "Fill the authenticator code for {}",
@@ -2793,6 +2798,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("{} assumiu", "{} took over"),
     ("{} commit novo em {}", "{} new commit on {}"),
     ("{} commits novos em {}", "{} new commits on {}"),
+    ("{} contas", "{} accounts"),
     ("{} de {}", "{} of {}"),
     ("{} de {} concluídos", "{} of {} done"),
     (

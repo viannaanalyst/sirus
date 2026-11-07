@@ -99,6 +99,16 @@ export function ThreadScreen() {
   const [pinRoom, setPinRoom] = useState(0);
   const pinRef = useRef<React.ComponentRef<typeof View>>(null);
   const pinTarget = useRef<number | null>(null);
+  // Until it gets there: the list may still be too short (the keyboard is closing), so it tries again.
+  const pinSettled = useRef(true);
+  const raise = useCallback(() => {
+    if (pinSettled.current || pinTarget.current === null) return;
+    list.current?.scrollToOffset({ offset: pinTarget.current, animated: true });
+  }, []);
+  useEffect(() => {
+    const hidden = Keyboard.addListener("keyboardDidHide", raise);
+    return () => hidden.remove();
+  }, [raise]);
   const topPad = safeArea.top + 52;
 
   useEffect(() => {
@@ -128,16 +138,17 @@ export function ThreadScreen() {
     atEnd.current = false;
     dragging.current = false;
     setPinId(lastUser);
-    setPinRoom(scroll.current.viewport);
+    // More than a screen, so nothing stops the rise; it shrinks to what is needed afterwards.
+    setPinRoom(scroll.current.viewport * 2);
+    pinSettled.current = false;
     // Once the room and the new row are laid out, the row's place is known.
     const timer = setTimeout(() => {
       const native = list.current?.getNativeScrollRef() as { measureInWindow?: (callback: (x: number, y: number) => void) => void } | null;
       native?.measureInWindow?.((_x, listTop) => pinRef.current?.measureInWindow((_nx: number, top: number) => {
-        const offset = Math.max(0, top - listTop + scroll.current.offset - topPad);
-        pinTarget.current = offset;
-        list.current?.scrollToOffset({ offset, animated: true });
+        pinTarget.current = Math.max(0, top - listTop + scroll.current.offset - topPad);
+        raise();
       }));
-    }, 60);
+    }, 90);
     return () => clearTimeout(timer);
   }, [lastUser, topPad]);
   const working = session ? ACTIVE_STATUS.has(session.status) : false;
@@ -255,13 +266,15 @@ export function ThreadScreen() {
         // The reply fills the room as it grows; the row stays where it rose to.
         if (pinTarget.current !== null) {
           const room = Math.max(0, pinTarget.current + scroll.current.viewport - (height - pinRoom));
-          if (Math.abs(room - pinRoom) > 1) setPinRoom(room);
+          if (pinSettled.current && Math.abs(room - pinRoom) > 1) setPinRoom(room);
+          raise();
         }
         scroll.current.content = height; if (atEnd.current) toEnd();
       }}
       // Follows new content while the newest message is in view; a drag up stops it.
-      onScrollBeginDrag={() => { dragging.current = true; }}
+      onScrollBeginDrag={() => { dragging.current = true; pinSettled.current = true; }}
       onScroll={({ nativeEvent }) => {
+        if (!pinSettled.current && pinTarget.current !== null && Math.abs(nativeEvent.contentOffset.y - pinTarget.current) < 2) pinSettled.current = true;
         scroll.current = { offset: nativeEvent.contentOffset.y, viewport: nativeEvent.layoutMeasurement.height, content: nativeEvent.contentSize.height };
         if (dragging.current && nativeEvent.contentOffset.y < nativeEvent.layoutMeasurement.height * 1.5) loadOlder();
         const near = nativeEvent.contentOffset.y + nativeEvent.layoutMeasurement.height >= nativeEvent.contentSize.height - 160;

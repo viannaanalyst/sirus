@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { commandLabel, commandPaths, groupTitle } from "../src/components/thread/steps.ts";
+import { commandLabel, commandPaths, groupTitle, modelLabel } from "../src/components/thread/steps.ts";
 
 const step = (kind: string, label: string, detail = "") => ({ kind, label, detail }) as never;
 
@@ -25,4 +25,11 @@ test("a group says what it is doing, then what it did", () => {
   const items = [step("command", "Command", "ls"), step("command", "Command", "pwd"), step("edit", "File changes", "a.ts")];
   assert.equal(groupTitle(items, true), "Executando 2 comandos · Editando 1 arquivo");
   assert.equal(groupTitle(items, false), "Executou 2 comandos · Editou 1 arquivo");
+});
+
+test("a model reads as the Mac names it", () => {
+  assert.equal(modelLabel("opus", "claude"), "Opus 5.5");
+  assert.equal(modelLabel("opus[1m]", "claude"), "Opus 5.5");
+  assert.equal(modelLabel("claude-opus-5-5", "claude"), "Opus 5.5");
+  assert.equal(modelLabel(null, "codex"), "Codex");
 });

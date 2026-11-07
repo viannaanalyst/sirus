@@ -6,10 +6,10 @@ import type { ActivityItem, TurnReview } from "@sirus/client/types";
 import { isSubagent } from "@sirus/lib/subagent-team";
 
 import { useSirus } from "../../data/store";
-import { SymbolView } from "../AppSymbol";
 import { AppText } from "../AppText";
 import { ShimmerText } from "./Shimmer";
 import { OpenSubagent } from "./subagent-context";
+import { WorkTile, workKind } from "./Tile";
 import { PathChip, TargetChip, TreeRow } from "./TreeRow";
 import { commandLabel, commandPaths, fileName, groupTitle, stepCaption, stepLine, t } from "./steps";
 
@@ -175,9 +175,7 @@ export const StepTree = memo(function StepTree(props: {
   const title = groupTitle(props.items, live);
   return <View className="mt-1">
     <Pressable onPress={() => setChoice(!open)} accessibilityRole="button" accessibilityLabel={title} className="min-h-[34px] flex-row items-center gap-[9px] active:opacity-60">
-      <View className={`size-[25px] items-center justify-center rounded-[8px] border bg-card ${live ? "border-[#7fb4ff66]" : "border-border-subtle"}`}>
-        <SymbolView name={open ? "chevron.down" : "chevron.right"} size={12} weight="semibold" tintColorClassName="accent-foreground-muted" />
-      </View>
+      <WorkTile kind={workKind(props.items)} live={live} open={open} />
       {live
         ? <ShimmerText numberOfLines={1} className="min-w-0 flex-1 text-[13.5px] text-foreground-muted">{title}</ShimmerText>
         : <AppText numberOfLines={1} className="min-w-0 flex-1 text-[13.5px] text-foreground-muted">{title}</AppText>}

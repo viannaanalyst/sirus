@@ -7,13 +7,13 @@ import { activityElapsed, formatActivityDuration } from "@sirus/lib/agent-activi
 import { isSubagent, teamSize } from "@sirus/lib/subagent-team";
 import { foldBoundary, markerSentence, timelineParts, type TimelinePart } from "@sirus/lib/turn-timeline";
 
-import { SymbolView } from "./AppSymbol";
 import { AppText } from "./AppText";
 import { Markdown } from "./Markdown";
 import { StepTree, ThinkingRow, type StepSource } from "./thread/StepTree";
 import { SubagentTeam } from "./thread/SubagentTeam";
 import { Tree } from "./thread/TreeRow";
-import { ProviderIcon } from "./ProviderIcon";
+import { ProviderTile } from "./thread/Tile";
+import { ShimmerText } from "./thread/Shimmer";
 import { modelLabel } from "./thread/steps";
 import { useNow } from "./thread/use-now";
 
@@ -43,7 +43,6 @@ export const AgentReply = memo(function AgentReply(props: {
   const finished = !message.streaming;
   const fold = finished ? foldBoundary(parts) : 0;
   const [open, setOpen] = useState(false);
-  const shown = fold > 0 && !open ? parts.slice(fold) : parts;
   const source = useMemo<StepSource>(() => ({ computerId: props.computerId, sessionId: message.sessionId, messageId: message.id }), [props.computerId, message.sessionId, message.id]);
   const team = useMemo(() => teamSize(items ?? []) >= 2, [items]);
   const launchId = useMemo(() => items?.find(isSubagent)?.id, [items]);
@@ -53,41 +52,46 @@ export const AgentReply = memo(function AgentReply(props: {
   const thinking = message.streaming && lastPart?.kind !== "text" && !(items ?? []).some((item) => item.state === "running" && !item.shell && !item.finishedTask);
   const trailing = thinking ? <ThinkingRow thought={message.activity?.thought} /> : undefined;
 
-  const head = <ReplyHead provider={props.agent} model={props.model} activity={message.activity} streaming={!!message.streaming} />;
+  const model = message.activity?.model ?? props.model;
+  const head = <ReplyHead provider={props.agent} model={model} activity={message.activity} streaming={!!message.streaming}
+    fold={fold > 0 ? { open, toggle: () => setOpen((value) => !value) } : undefined} />;
   if (!parts.length) return thinking ? <View className="gap-1">{head}<Tree>{trailing}</Tree></View> : null;
-  const duration = message.activity ? formatActivityDuration(activityElapsed(message.activity, Date.now())) : null;
-  const steps = (items ?? []).filter(countsAsStep).length;
-  const subagents = teamSize(items ?? []);
-  const summary = [steps ? `${steps} ${steps === 1 ? "passo" : "passos"}` : null, subagents ? `${subagents} ${subagents === 1 ? "subagente" : "subagentes"}` : null].filter(Boolean).join(" · ");
   const lastWork = parts.findLastIndex((part) => part.kind === "work");
+  const piece = (part: TimelinePart, at: number) => <Part key={partKey(part, at)} part={part} content={message.content} cwd={props.cwd} files={props.files} source={source} review={message.activity?.review}
+    team={team} launchId={launchId} agent={props.agent} prompt={props.prompt ?? ""} allItems={items ?? []} trailing={at === lastWork && at === parts.length - 1 ? trailing : undefined} />;
+  // What a finished turn folds away hangs off the header, on a rail; its answer stays at the left.
+  const shownParts = (from: number, to: number) => {
+    if (from === 0 && fold > 0) {
+      if (!open) return null;
+      return <View style={{ marginLeft: 30 }} className="gap-1">
+        <View pointerEvents="none" className="absolute border-b border-l border-border-subtle" style={{ left: -19, top: -7, height: 24, width: 12, borderBottomLeftRadius: 6 }} />
+        {parts.slice(0, fold).map((part, at) => piece(part, at))}
+      </View>;
+    }
+    return parts.slice(from, to).map((part, at) => piece(part, from + at));
+  };
   return <View className="gap-1">
     {head}
-    {fold > 0
-      ? <Pressable onPress={() => setOpen((value) => !value)} accessibilityRole="button" className="mt-2 flex-row items-center gap-[7px] self-start py-1 active:opacity-60">
-          <SymbolView name="checkmark" size={13} weight="semibold" tintColorClassName="accent-foreground-muted" />
-          <AppText numberOfLines={1} className="shrink text-[13.5px] text-foreground-muted">{duration ? t("timeline.workedFor", { duration }) : t("timeline.worked")}</AppText>
-          {summary ? <AppText numberOfLines={1} className="shrink text-[13.5px] text-foreground-tertiary">{`· ${summary}`}</AppText> : null}
-          <SymbolView name={open ? "chevron.down" : "chevron.right"} size={11} weight="semibold" tintColorClassName="accent-foreground-tertiary" />
-        </Pressable>
-      : null}
-    {shown.map((part) => {
-      const at = parts.indexOf(part);
-      return <Part key={partKey(part, at)} part={part} content={message.content} cwd={props.cwd} files={props.files} source={source} review={message.activity?.review}
-        team={team} launchId={launchId} agent={props.agent} prompt={props.prompt ?? ""} allItems={items ?? []} trailing={at === lastWork && at === parts.length - 1 ? trailing : undefined} />;
-    })}
+    {shownParts(0, fold)}
+    {shownParts(fold, parts.length)}
     {thinking && lastPart?.kind !== "work" ? <Tree>{trailing}</Tree> : null}
   </View>;
 });
 
-/** Over a reply, as on the Mac: the provider's tile, the model and how long it has been working. */
-function ReplyHead(props: { readonly provider: string; readonly model?: string | null; readonly activity: Message["activity"]; readonly streaming: boolean }) {
+/** Over a reply, as on the Mac: the provider's tile, the model and how long it worked. With work folded away, it opens it. */
+function ReplyHead(props: { readonly provider: string; readonly model?: string | null; readonly activity: Message["activity"]; readonly streaming: boolean; readonly fold?: { readonly open: boolean; readonly toggle: () => void } }) {
   const now = useNow(props.streaming);
-  const elapsed = props.streaming && props.activity ? formatActivityDuration(activityElapsed(props.activity, now)) : null;
-  return <View className="mb-1 flex-row items-center gap-2">
-    <ProviderIcon provider={props.provider} size={20} />
-    <AppText numberOfLines={1} className="shrink text-[13.5px] text-foreground-muted">{modelLabel(props.model, props.provider)}</AppText>
-    {elapsed ? <AppText numberOfLines={1} className="shrink text-[13.5px] text-foreground-tertiary">{`trabalhando há ${elapsed}`}</AppText> : null}
-  </View>;
+  const name = modelLabel(props.model, props.provider);
+  const seconds = props.activity ? activityElapsed(props.activity, now) : null;
+  const time = seconds == null ? null : formatActivityDuration(seconds);
+  const label = props.streaming ? (time ? `${name} trabalhando há ${time}` : `${name} trabalhando`) : time ? `${name} trabalhou por ${time}` : name;
+  return <Pressable onPress={props.fold?.toggle} disabled={!props.fold} accessibilityRole={props.fold ? "button" : undefined}
+    className="mb-1 min-h-[30px] flex-row items-center gap-2 active:opacity-60">
+    <ProviderTile provider={props.provider} chevron={props.fold?.open} />
+    {props.streaming
+      ? <ShimmerText numberOfLines={1} className="shrink text-[14px] text-foreground-muted">{label}</ShimmerText>
+      : <AppText numberOfLines={1} className="shrink text-[14px] text-foreground-muted">{label}</AppText>}
+  </Pressable>;
 }
 
 function partKey(part: TimelinePart, index: number) {

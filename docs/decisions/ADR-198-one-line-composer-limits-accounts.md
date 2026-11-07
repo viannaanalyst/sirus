@@ -86,5 +86,7 @@ A conversation stays on the account that started it, so one on the default accou
 - **Upright photos.** Thumbnails follow a photo's EXIF orientation; an iPhone stores a portrait sideways.
 - **Code wraps.** The Files pane's editor wraps long lines by default, under the line's indent and with one number per line; a switch in the tab strip turns that off and is remembered. Up and Down still move by whole lines.
 - **Folders slide.** A folder in the Files tree slides open and shut, its chevron turning with it.
+- **Accounts share a row.** Connectors from the same catalog entry show as one row with up to three account chips, each opening that account's menu. A single button follows: "+" connects another, or "+N" opens a popup with every account, those waiting to sign in first and a search from eight accounts on.
+- **The phone's tiles.** A reply's header and its work runs wear the Mac's tiles (`Tile.tsx`), the header names the model as the Mac does and opens the folded work, and a sent message retries its rise until it reaches the top.
 - **Turn actions.** The `⋯` menu is gone. A reply's row reads Copy, Handoff, Side chat, Fork, with Undo after them. Try again left it: it now sits under the sent message, only on the last turn and only after a failure.
 - **Edge fades.** The transcript's fades are now an alpha mask around the list. The gradients drawn in the conversation's color showed as dark bands once the conversation became translucent black.

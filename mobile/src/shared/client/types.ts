@@ -364,6 +364,10 @@ export interface AppSettings {
   continueInterruptedSessions: boolean;
   /** Beta: idle Claude conversations over 200K tokens compact shortly before the cache expires (ADR-157). */
   compactIdleBeforeCacheExpiry: boolean;
+  /** Claude compacts at about this many tokens (100000 to 1000000); empty leaves it to Claude Code. */
+  claudeAutoCompactWindow?: string;
+  /** Claude lists only the skills that fit the project; the others stay callable by name. */
+  skillsByProject?: boolean;
   /** At 80% of the context window the next send starts a fresh session seeded with a brief built by code, no model call (ADR-181). */
   rotateAtContextLimit: boolean;
   /** Sounds (off by default): soft chimes when an agent finishes a turn or needs you (ADR-171). */

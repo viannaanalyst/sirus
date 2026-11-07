@@ -276,9 +276,37 @@ pub fn endpoint(session_id: &str) -> Option<Endpoint> {
     })
 }
 
+pub(crate) fn socket_path() -> Option<PathBuf> {
+    APP.get().map(|(_, socket)| socket.clone())
+}
+
+pub(crate) fn token_known(token: &str) -> bool {
+    with_bridge(|bridge| {
+        bridge
+            .tokens
+            .values()
+            .any(|known| crate::browser_mcp::constant_time_eq(known.as_bytes(), token.as_bytes()))
+    })
+}
+
+pub(crate) fn http_server() -> crate::mcp_stdio::Server {
+    crate::mcp_stdio::Server {
+        name: SERVER_NAME,
+        socket_env: SOCKET_ENV,
+        token_env: TOKEN_ENV,
+        tools: tool_definitions,
+        failure: "the computer action failed",
+        instructions: None,
+    }
+}
+
 /// Claude `mcpServers` entry (merged into the browser config file).
 pub fn claude_server(session_id: &str) -> Option<Value> {
     let endpoint = endpoint(session_id)?;
+    #[cfg(unix)]
+    if let Some(entry) = crate::mcp_http::claude_entry(SERVER_NAME, &endpoint.token) {
+        return Some(entry);
+    }
     Some(
         json!({ "command": endpoint.executable, "args": ["--mcp-computer"], "env": { SOCKET_ENV: endpoint.socket, TOKEN_ENV: endpoint.token } }),
     )

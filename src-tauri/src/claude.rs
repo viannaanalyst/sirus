@@ -46,12 +46,104 @@ pub fn validate_response(pending: &PendingRequest, response: &AgentResponse) -> 
     Ok(())
 }
 
+/// The `--settings` a conversation starts with.
+fn launch_settings(
+    fast: bool,
+    auto_compact_window: &str,
+    skills: serde_json::Map<String, Value>,
+) -> Value {
+    let mut settings = serde_json::json!({ "fastMode": fast });
+    if let Ok(tokens) = auto_compact_window.parse::<u32>() {
+        settings["autoCompactWindow"] = tokens.into();
+    }
+    if !skills.is_empty() {
+        settings["skillOverrides"] = Value::Object(skills);
+    }
+    settings
+}
+
+/// What a Claude conversation takes from the app's settings when it starts.
+#[derive(Clone, Default)]
+pub struct LaunchChoices {
+    pub auto_compact_window: String,
+    pub disabled_skills: Vec<String>,
+    pub skills_by_project: bool,
+}
+
+impl LaunchChoices {
+    pub fn of(settings: &AppSettings) -> Self {
+        Self {
+            auto_compact_window: settings.claude_auto_compact_window.clone(),
+            disabled_skills: settings.disabled_skills.clone(),
+            skills_by_project: settings.skills_by_project,
+        }
+    }
+}
+
+/// The overrides for the skills Claude would list in `cwd`, from the account's folder or the
+/// default one, and the app's own.
+fn skill_overrides(
+    choices: &LaunchChoices,
+    account_home: Option<&std::path::Path>,
+    cwd: &str,
+) -> serde_json::Map<String, Value> {
+    let home = account_home
+        .map(std::path::Path::to_path_buf)
+        .or_else(|| std::env::var_os("CLAUDE_CONFIG_DIR").map(Into::into))
+        .or_else(|| {
+            std::env::var_os("HOME").map(|home| std::path::Path::new(&home).join(".claude"))
+        });
+    let account = home.map(|home| home.join("skills"));
+    let mut folders: Vec<&std::path::Path> = account.iter().map(|path| path.as_path()).collect();
+    if let Some(portable) = crate::skills::portable_skills() {
+        folders.push(portable);
+    }
+    let names = crate::skill_scope::names_in(&folders);
+    crate::skill_scope::overrides(
+        std::path::Path::new(cwd),
+        &names,
+        &choices.disabled_skills,
+        choices.skills_by_project,
+    )
+}
+
+/// `subagentPromptCacheTtl` from Claude's settings files, the closest one winning.
+fn subagent_cache_ttl(account_home: Option<&std::path::Path>, cwd: &str) -> Option<&'static str> {
+    let home = account_home
+        .map(std::path::Path::to_path_buf)
+        .or_else(|| std::env::var_os("CLAUDE_CONFIG_DIR").map(Into::into))
+        .or_else(|| {
+            std::env::var_os("HOME").map(|home| std::path::Path::new(&home).join(".claude"))
+        });
+    let project = std::path::Path::new(cwd).join(".claude");
+    [
+        Some(project.join("settings.local.json")),
+        Some(project.join("settings.json")),
+        home.map(|home| home.join("settings.json")),
+    ]
+    .into_iter()
+    .flatten()
+    .find_map(|path| {
+        let text = std::fs::read_to_string(path).ok()?;
+        ttl_of(&serde_json::from_str(&text).ok()?)
+    })
+}
+
+fn ttl_of(settings: &Value) -> Option<&'static str> {
+    match settings["subagentPromptCacheTtl"].as_str()? {
+        "5m" => Some("5m"),
+        "1h" => Some("1h"),
+        _ => None,
+    }
+}
+
 pub async fn start(
     session: Session,
     cwd: String,
     prompt: String,
     overrides: HashMap<AgentProviderId, String>,
     account_home: Option<std::path::PathBuf>,
+    choices: LaunchChoices,
 ) -> Result<(crate::agent::AgentProcess, crate::agent::StartedAgent)> {
     validate_binding(&session, &cwd)?;
     if (session.provider_account_id == "default") != account_home.is_none() {
@@ -64,9 +156,10 @@ pub async fn start(
     }
     let binary = install.path.unwrap_or(install.binary);
     let connectors = crate::connectors::for_session(&session).await;
+    let skills = skill_overrides(&choices, account_home.as_deref(), &cwd);
     // Everything fixed when the CLI starts is part of the key a kept process must match.
     let key = format!(
-        "{binary}\u{0}{}\u{0}{}\u{0}{cwd}\u{0}{}\u{0}{}\u{0}{:?}\u{0}{:?}\u{0}{}\u{0}{}",
+        "{binary}\u{0}{}\u{0}{}\u{0}{cwd}\u{0}{}\u{0}{}\u{0}{:?}\u{0}{:?}\u{0}{}\u{0}{}\u{0}{}\u{0}{}",
         session.provider_account_id,
         account_home
             .as_deref()
@@ -78,6 +171,8 @@ pub async fn start(
         session.model,
         crate::computer_mcp::endpoint(&session.id).is_some(),
         crate::connectors::fingerprint(&connectors),
+        choices.auto_compact_window,
+        Value::Object(skills.clone()),
     );
     if let Some((child, wire)) =
         crate::agent_pool::take(&session.id, &crate::agent_pool::with_thread(&key, &session))
@@ -159,8 +254,16 @@ pub async fn start(
     ]);
     command.args([
         "--settings",
-        &serde_json::json!({"fastMode":session.execution.fast}).to_string(),
+        &launch_settings(session.execution.fast, &choices.auto_compact_window, skills).to_string(),
     ]);
+    // A delegated task is its own Claude session, so it would get the main conversation's cache
+    // lifetime; the person's setting for subagents applies to it, as to a native subagent.
+    if session.delegated_by.is_some() && std::env::var_os("CLAUDE_CODE_PROMPT_CACHE_TTL").is_none()
+    {
+        if let Some(ttl) = subagent_cache_ttl(account_home.as_deref(), &cwd) {
+            command.env("CLAUDE_CODE_PROMPT_CACHE_TTL", ttl);
+        }
+    }
     if let Some(effort) = &session.execution.effort {
         command.arg(format!("--effort={effort}"));
     }
@@ -1488,6 +1591,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_launch_settings_carry_the_auto_compact_window_only_when_set() {
+        let mut skills = serde_json::Map::new();
+        skills.insert("n8n".into(), json!("off"));
+        assert_eq!(
+            launch_settings(true, "", Default::default()),
+            json!({"fastMode": true})
+        );
+        assert_eq!(
+            launch_settings(false, "300000", skills),
+            json!({
+                "fastMode": false,
+                "autoCompactWindow": 300000,
+                "skillOverrides": {"n8n": "off"}
+            })
+        );
+    }
+
+    #[test]
+    fn only_a_known_subagent_cache_lifetime_counts() {
+        assert_eq!(ttl_of(&json!({"subagentPromptCacheTtl": "5m"})), Some("5m"));
+        assert_eq!(ttl_of(&json!({"subagentPromptCacheTtl": "1h"})), Some("1h"));
+        assert_eq!(ttl_of(&json!({"subagentPromptCacheTtl": "9h"})), None);
+        assert_eq!(ttl_of(&json!({})), None);
+    }
+
+    #[test]
     fn claude_5_1_updates_before_a_tool_join_the_reply() {
         assert!(writes_updates_as_thinking("claude-opus-5-5"));
         assert!(writes_updates_as_thinking("claude-fable-5-1"));
@@ -2605,6 +2734,7 @@ assert sys.stdin.read()==''
             prompt.into(),
             HashMap::new(),
             None,
+            LaunchChoices::default(),
         )
         .await
         .unwrap();

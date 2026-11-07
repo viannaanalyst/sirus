@@ -1680,6 +1680,18 @@ fn chat(s: &Value) -> Vec<Group> {
         ),
     ];
     conversation.extend(switches(s, conversation_rows));
+    conversation.push(row(
+        t("Auto-compactar depois de"),
+        t(
+            "O Claude resume a conversa ao chegar perto deste total de tokens, de 100000 a 1000000. Vazio segue o padrão do Claude Code. Muda quando compacta, não o tamanho da janela do modelo.",
+        ),
+        vec![Ctl::Field {
+            key: "claudeAutoCompactWindow",
+            text: current(s, top("claudeAutoCompactWindow")),
+            width: 110.,
+            button: None,
+        }],
+    ));
     let mut agent = vec![row(
         t("Exibição da resposta"),
         t("Como o texto da resposta aparece enquanto o agente escreve."),
@@ -2869,6 +2881,14 @@ fn skills(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
                             .unwrap_or_default()
                             .to_string(),
                     )],
+                ),
+                switch_row(
+                    s,
+                    t("Skills conforme o projeto"),
+                    t(
+                        "O Claude lista só as skills que combinam com o projeto, pelas dependências e pelo AGENTS.md. Uma linha Skills: a, b no AGENTS.md mantém essas. As outras continuam disponíveis no composer.",
+                    ),
+                    top("skillsByProject"),
                 ),
                 row(
                     "",

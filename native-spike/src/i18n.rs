@@ -436,6 +436,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Makes everything larger or smaller.",
     ),
     ("Aumentar zoom", "Zoom in"),
+    ("Auto-compactar depois de", "Auto-compact after"),
     ("Autocorreção", "Autocorrect"),
     ("Automático", "Automatic"),
     ("Avançado", "Advanced"),
@@ -563,7 +564,15 @@ const ENTRIES: &[(&str, &str)] = &[
         "Clique de novo para voltar ao do tema.",
         "Click again to go back to the theme's.",
     ),
+    (
+        "Clique para compactar antes de enviar",
+        "Click to compact before sending",
+    ),
     ("Clique para entrar", "Click to sign in"),
+    (
+        "Clique para manter o histórico nesta mensagem",
+        "Click to keep the history for this message",
+    ),
     ("Colar token", "Paste token"),
     (
         "Cole um token do serviço; ele fica no Keychain, nunca nos ajustes.",
@@ -1685,6 +1694,14 @@ const ENTRIES: &[(&str, &str)] = &[
         "It is not a sirus://new link.",
     ),
     (
+        "O Claude lista só as skills que combinam com o projeto, pelas dependências e pelo AGENTS.md. Uma linha Skills: a, b no AGENTS.md mantém essas. As outras continuam disponíveis no composer.",
+        "Claude lists only the skills that fit the project, from its dependencies and AGENTS.md. A line Skills: a, b in AGENTS.md keeps those. The others stay available in the composer.",
+    ),
+    (
+        "O Claude resume a conversa ao chegar perto deste total de tokens, de 100000 a 1000000. Vazio segue o padrão do Claude Code. Muda quando compacta, não o tamanho da janela do modelo.",
+        "Claude summarizes the conversation near this many tokens, from 100000 to 1000000. Empty follows Claude Code's default. This changes when it compacts, not the model's window.",
+    ),
+    (
         "O GitHub CLI (gh) não está instalado. Instale com `brew install gh` e depois adicione uma conta aqui.",
         "GitHub CLI (gh) is not installed. Install it with `brew install gh`, then add an account here.",
     ),
@@ -2454,6 +2471,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Sites, lojas e agendamentos", "Sites, stores and bookings"),
     ("Sites, páginas e CMS", "Sites, pages and CMS"),
     ("Skills compartilhadas", "Shared skills"),
+    ("Skills conforme o projeto", "Skills by project"),
     ("Skills do projeto", "Project skills"),
     ("Skills dos agentes", "Agent skills"),
     ("Skills portáteis", "Portable skills"),

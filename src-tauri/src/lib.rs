@@ -60,6 +60,8 @@ mod launch;
 mod local_servers;
 mod login_vault;
 mod mcp_config;
+#[cfg(unix)]
+mod mcp_http;
 mod mcp_stdio;
 mod media_preview;
 mod memory;
@@ -97,6 +99,7 @@ mod side_chat;
 mod sidebar;
 mod sirus_tools;
 mod site_favicon;
+mod skill_scope;
 mod skills;
 mod snooze;
 mod store;

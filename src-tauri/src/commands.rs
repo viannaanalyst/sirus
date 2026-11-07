@@ -2225,12 +2225,14 @@ pub async fn send_prompt(
         )
         .await
     } else if provider == AgentProviderId::Claude {
+        let choices = crate::claude::LaunchChoices::of(&state.data.lock().settings);
         crate::claude::start(
             session_snapshot.clone(),
             cwd,
             process_prompt,
             overrides,
             scope.unwrap().home,
+            choices,
         )
         .await
     } else if provider == AgentProviderId::OpenCode {

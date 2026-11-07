@@ -17,9 +17,8 @@ use std::rc::Rc;
 
 /// The standalone command that compacts the native conversation; never text for the model.
 pub(crate) const COMPACT_COMMAND: &str = "/compact";
-/// A heavy context: at least this many tokens, or this share of a known window.
-const COMPACT_TOKENS: u64 = 100_000;
-const COMPACT_RATIO: f64 = 0.7;
+/// A heavy context. Below this a cold re-read is cheap, so compacting mostly loses context.
+const COMPACT_TOKENS: u64 = 200_000;
 /// Without a known expiry: long enough that the provider's prompt cache has expired.
 const COMPACT_IDLE_MS: i64 = 70 * 60 * 1000;
 
@@ -53,6 +52,8 @@ pub(crate) struct State {
     pub(super) skip_compact: bool,
     /// The message being sent behind a compaction is not asked about compacting again.
     resending: bool,
+    /// The conversation whose chip says "Manter": its next message goes out without compacting.
+    pub(super) keep: Option<String>,
 }
 
 impl State {
@@ -159,11 +160,7 @@ pub(crate) fn compact_before_send(conversation: &Conversation, now_ms: i64) -> b
     let Some(usage) = conversation.context else {
         return false;
     };
-    let heavy = usage.used >= COMPACT_TOKENS
-        || usage
-            .window
-            .is_some_and(|window| usage.used as f64 / window as f64 >= COMPACT_RATIO);
-    if !heavy {
+    if usage.used < COMPACT_TOKENS {
         return false;
     }
     // The cache's own expiry when Claude reported it; else the idle-time guess.
@@ -538,7 +535,53 @@ impl Shell {
             && !self.context.skip_compact
             && !conversation.team
             && !conversation.working()
+            && self.context.keep.as_deref() != Some(conversation.session_id.as_str())
             && compact_before_send(conversation, now_ms())
+    }
+
+    /// The chip beside send, in a heavy conversation idle past its cache: "Compactar" with the
+    /// tokens it holds; a click turns it to "Manter", which keeps the history for that message.
+    pub(super) fn compact_chip(&self, live: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let conversation = &self.conversations[self.active_conversation()];
+        if live || conversation.team || !compact_before_send(conversation, now_ms()) {
+            return None;
+        }
+        let used = conversation.context?.used;
+        let session = conversation.session_id.clone();
+        let keeping = self.context.keep.as_deref() == Some(session.as_str());
+        let tokens = format_tokens(used);
+        Some(
+            div()
+                .id("composer-compact-chip")
+                .flex_shrink_0()
+                .h(px(26.))
+                .px(px(8.))
+                .ml(px(2.))
+                .rounded(px(crate::theme::RADIUS_MD))
+                .flex()
+                .items_center()
+                .gap(px(5.))
+                .text_size(px(12.))
+                .text_color(content(if keeping { 0.55 } else { 0.85 }))
+                .bg(content(if keeping { 0.05 } else { 0.09 }))
+                .cursor_pointer()
+                .hover(|s| s.bg(content(0.14)))
+                .tooltip(crate::shell::message_actions::name_tip(if keeping {
+                    t("Clique para compactar antes de enviar")
+                } else {
+                    t("Clique para manter o histórico nesta mensagem")
+                }))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.context.keep = if keeping { None } else { Some(session.clone()) };
+                    cx.notify();
+                }))
+                .child(if keeping {
+                    t("Manter").to_owned()
+                } else {
+                    format!("{} {tokens}", t("Compactar"))
+                })
+                .into_any_element(),
+        )
     }
 
     /// A compaction in the transcript: one quiet line between two hairlines instead of a

@@ -716,6 +716,13 @@ pub struct AppSettings {
     /// Chat behavior (beta, off by default): an idle Claude conversation with a large context
     /// compacts shortly before its prompt cache expires (ADR-157).
     pub compact_idle_before_cache_expiry: bool,
+    /// Claude sees only the skills that fit the project; the others stay callable by name.
+    #[serde(default = "default_true")]
+    pub skills_by_project: bool,
+    /// Claude's `autoCompactWindow`: compact at about this many tokens (100,000 to 1,000,000).
+    /// Empty leaves it to Claude Code.
+    #[serde(default)]
+    pub claude_auto_compact_window: String,
     /// Chat behavior (off by default): when a Claude or Codex conversation's reported context
     /// reaches 80% of its window, the next send starts a fresh provider session seeded with a
     /// brief built by code, with no model call (ADR-181).
@@ -953,6 +960,8 @@ impl Default for AppSettings {
             show_session_tabs: true,
             continue_interrupted_sessions: true,
             compact_idle_before_cache_expiry: false,
+            skills_by_project: true,
+            claude_auto_compact_window: String::new(),
             rotate_at_context_limit: false,
             agent_sounds: false,
             keep_idle_agents: 16,
@@ -1111,6 +1120,16 @@ pub(crate) fn valid_github_pin(pin: &str) -> bool {
 impl AppSettings {
     pub fn validate_controls(&self) -> crate::error::Result<()> {
         crate::skills::validate_disabled(&self.disabled_skills)?;
+        if !self.claude_auto_compact_window.is_empty()
+            && !self
+                .claude_auto_compact_window
+                .parse::<u32>()
+                .is_ok_and(|tokens| (100_000..=1_000_000).contains(&tokens))
+        {
+            return Err(crate::error::Error::agent(
+                "Auto-compact takes a number from 100000 to 1000000, or stays empty.",
+            ));
+        }
         if self.app_update_notes.as_ref().is_some_and(|notes| {
             notes.version.is_empty()
                 || notes.version.len() > 64

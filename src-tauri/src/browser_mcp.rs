@@ -15,7 +15,7 @@ pub const SOCKET_ENV: &str = "SIRUS_BROWSER_SOCKET";
 pub const TOKEN_ENV: &str = "SIRUS_BROWSER_TOKEN";
 /// Set to `0` for the MCP child when agents may not use the browser (ADR-130).
 const BROWSER_TOOLS_ENV: &str = "SIRUS_BROWSER_TOOLS";
-const MCP_SERVER_NAME: &str = "sirus_browser";
+pub(crate) const MCP_SERVER_NAME: &str = "sirus_browser";
 
 /// Settings → Agent browser access (ADR-130). On by default; off, the `browser_*` tools are
 /// neither listed to new agents nor run for kept ones. Session tools, secrets and PR watch
@@ -79,6 +79,43 @@ pub fn init(app: crate::runtime::AppHandle, data_dir: PathBuf) {
         return;
     }
     start_server(app, socket);
+    #[cfg(unix)]
+    crate::mcp_http::start();
+}
+
+pub(crate) fn socket_path() -> Option<PathBuf> {
+    APP.get().map(|(_, socket)| socket.clone())
+}
+
+pub(crate) fn token_known(token: &str) -> bool {
+    endpoint_map().as_ref().is_some_and(|map| {
+        map.values()
+            .any(|endpoint| constant_time_eq(endpoint.token.as_bytes(), token.as_bytes()))
+    })
+}
+
+/// The server as the host's HTTP route answers it: what it lists follows the host's own state,
+/// since there is no child started with a snapshot of it in its environment.
+pub(crate) fn http_server() -> crate::mcp_stdio::Server {
+    crate::mcp_stdio::Server {
+        name: MCP_SERVER_NAME,
+        socket_env: SOCKET_ENV,
+        token_env: TOKEN_ENV,
+        tools: live_tool_definitions,
+        failure: "the browser operation failed",
+        instructions: Some(crate::secrets::INSTRUCTIONS),
+    }
+}
+
+fn live_tool_definitions() -> Vec<Value> {
+    let browser = agent_access() && crate::browser_bridge::window_expected();
+    browser_tool_definitions()
+        .into_iter()
+        .filter(|_| browser)
+        .chain(crate::sirus_tools::live_tool_definitions())
+        .chain(crate::secrets::tool_definitions())
+        .chain(crate::pr_watch::tool_definitions())
+        .collect()
 }
 
 /// The app handle once the bridge is initialised (never in unit tests).
@@ -126,6 +163,10 @@ pub fn claude_mcp_config(
     });
     for (key, value) in child_env() {
         config["mcpServers"][MCP_SERVER_NAME]["env"][key] = json!(value);
+    }
+    #[cfg(unix)]
+    if let Some(entry) = crate::mcp_http::claude_entry(MCP_SERVER_NAME, &endpoint.token) {
+        config["mcpServers"][MCP_SERVER_NAME] = entry;
     }
     if let Some(computer) = crate::computer_mcp::claude_server(session_id) {
         config["mcpServers"][crate::computer_mcp::SERVER_NAME] = computer;

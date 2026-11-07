@@ -1276,6 +1276,8 @@ pub struct Shell {
     dock_max: Tween,
     dock_panes: Vec<usize>,
     dock_active: Option<usize>,
+    /// Conversations with their transcript in memory, the newest last.
+    remembered: Vec<usize>,
     /// The panels of the projects not on screen.
     dock_places: HashMap<usize, DockPlace>,
     chooser_since: Instant,
@@ -1627,6 +1629,7 @@ impl Shell {
             dock_max: Tween::still(0., now),
             dock_panes: Vec::new(),
             dock_active: None,
+            remembered: Vec::new(),
             dock_places: HashMap::new(),
             chooser_since: now,
             look: load_look(),
@@ -2214,6 +2217,7 @@ impl Shell {
         recent.truncate(4);
         self.parked.clear();
         self.dock_places.clear();
+        self.remembered.clear();
         self.current_project = recent.first().and_then(|ix| self.project_of(*ix));
         for ix in &recent {
             let project = self.project_of(*ix);
@@ -3817,7 +3821,31 @@ impl Shell {
         ix
     }
 
+    /// A conversation just shown is the newest one remembered; past the limit the oldest gives
+    /// its transcript back, and loads it again the next time it shows.
+    fn remember_conversation(&mut self, ix: usize) {
+        self.remembered.retain(|known| *known != ix);
+        self.remembered.push(ix);
+        let open: HashSet<usize> = self.tabs.iter().map(|tab| tab.conversation).collect();
+        let conversations = &self.conversations;
+        let spare = |ix: usize| {
+            !open.contains(&ix)
+                && conversations
+                    .get(ix)
+                    .is_some_and(|c| !c.working() && c.pending.is_empty())
+        };
+        for victim in forgotten(&self.remembered, REMEMBERED_CONVERSATIONS, spare) {
+            self.remembered.retain(|known| *known != victim);
+            let conversation = &mut self.conversations[victim];
+            conversation.messages = Vec::new();
+            conversation.turns = Vec::new();
+            conversation.base = 0;
+            conversation.loaded = false;
+        }
+    }
+
     fn ensure_loaded(&mut self, ix: usize) {
+        self.remember_conversation(ix);
         let conversation = &self.conversations[ix];
         if conversation.loaded || conversation.session_id.is_empty() {
             return;
@@ -5771,6 +5799,8 @@ impl Shell {
     fn send(&mut self, cx: &mut Context<Self>) {
         self.problem = None;
         self.send_with(false, cx);
+        // "Manter" holds for one message.
+        self.context.keep = None;
     }
 
     fn respond_secret(&mut self, id: &str, value: Option<String>, cx: &mut Context<Self>) {
@@ -12370,30 +12400,8 @@ impl Shell {
                                             })),
                                     )
                                     // A heavy conversation idle past its cache compacts before
-                                    // this message; the plain arrow sends without (context_meter.rs).
-                                    .when(compact_send && has_text && !live, |d| {
-                                        d.child(
-                                            div()
-                                                .id("send-plain")
-                                                .ml(px(2.))
-                                                .size(px(26.))
-                                                .rounded(px(crate::theme::RADIUS_MD))
-                                                .flex()
-                                                .items_center()
-                                                .justify_center()
-                                                .bg(content(0.09))
-                                                .cursor_pointer()
-                                                .hover(|s| s.bg(content(0.16)))
-                                                .on_click(cx.listener(|this, _, _, cx| {
-                                                    this.context.skip_compact = true;
-                                                    this.send(cx);
-                                                    this.context.skip_compact = false;
-                                                }))
-                                                .child(
-                                                    icon("arrow-up", 15.).text_color(content(0.7)),
-                                                ),
-                                        )
-                                    })
+                                    // this message unless the chip says to keep it (context_meter.rs).
+                                    .children(self.compact_chip(live, cx))
                                     .when(live || !queueing || has_text, |d| {
                                         // One button: Stop while the agent works with nothing typed.
                                         let stopping = live && !has_text;
@@ -13424,7 +13432,6 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let open = path.to_owned();
-        let name = crate::tool_images::file_name(path).to_owned();
         let label = crate::tool_images::row_label(path, step.capture);
         let mark = if step.capture {
             // The shot itself says which one it is, without opening it.
@@ -13438,7 +13445,10 @@ impl Shell {
                 .object_fit(gpui::ObjectFit::Cover)
                 .into_any_element()
         } else {
-            crate::file_icons::file_icon(&name, false, 14.).into_any_element()
+            // A picture the agent read or wrote, in the file icons' color for images.
+            theme_icon("image", 14.)
+                .text_color(rgb(0x22c55e))
+                .into_any_element()
         };
         div()
             .id(SharedString::from(id))
@@ -16358,6 +16368,21 @@ fn dock_fit(width: f32, room: f32) -> f32 {
     width.min((room - CONVERSATION_MIN).max(DOCK_FLOOR))
 }
 
+/// How many conversations keep their transcript in memory, besides those with work under way or
+/// an open tab.
+const REMEMBERED_CONVERSATIONS: usize = 16;
+
+/// Which of the remembered conversations (oldest first) give their transcript back: as many as
+/// are over `limit`, oldest first, among those `spare` allows.
+fn forgotten(remembered: &[usize], limit: usize, spare: impl Fn(usize) -> bool) -> Vec<usize> {
+    remembered
+        .iter()
+        .copied()
+        .filter(|ix| spare(*ix))
+        .take(remembered.len().saturating_sub(limit))
+        .collect()
+}
+
 /// One project's side panel and bottom terminal. A project never opened here has them closed.
 #[derive(Clone, Default, PartialEq, Debug)]
 struct DockPlace {
@@ -17659,6 +17684,20 @@ mod composer_follow_tests {
         }
         // 13 lines of 22 px in a 100 px window: the last line stays in view.
         assert_eq!(*offsets.last().unwrap(), px(-(13. * 22. - 100.)));
+    }
+}
+
+#[cfg(test)]
+mod remembered_tests {
+    use super::*;
+
+    #[test]
+    fn the_oldest_spare_conversations_go_first() {
+        assert!(forgotten(&[1, 2, 3], 3, |_| true).is_empty());
+        assert_eq!(forgotten(&[1, 2, 3, 4], 3, |_| true), vec![1]);
+        // One still working stays, and the next oldest goes instead.
+        assert_eq!(forgotten(&[1, 2, 3, 4], 3, |ix| ix != 1), vec![2]);
+        assert!(forgotten(&[1, 2, 3, 4], 3, |_| false).is_empty());
     }
 }
 

@@ -121,6 +121,7 @@ impl AssetSource for Assets {
             "mic" => include_bytes!("../assets/mic.svg"),
             "arrow-up" => include_bytes!("../assets/arrow-up.svg"),
             "palette" => include_bytes!("../assets/palette.svg"),
+            "image" => include_bytes!("../assets/image.svg"),
             "image-plus" => include_bytes!("../assets/image-plus.svg"),
             "chevrons-up-down" => include_bytes!("../assets/chevrons-up-down.svg"),
             "folder-open" => include_bytes!("../assets/folder-open.svg"),

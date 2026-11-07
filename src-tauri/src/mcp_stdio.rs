@@ -46,6 +46,81 @@ pub fn tool_content(result: &Value) -> Value {
     json!({ "content": content })
 }
 
+/// What a JSON-RPC message from the agent's CLI asks of a server.
+pub enum Answer {
+    /// The reply, if the message wants one.
+    Reply(Option<Value>),
+    /// A tool call, for the app.
+    Call {
+        id: Option<Value>,
+        tool: String,
+        arguments: Value,
+    },
+}
+
+/// The protocol, shared by the stdio child and the host's HTTP route (`mcp_http.rs`).
+pub fn answer(server: &Server, message: &Value) -> Answer {
+    let id = message.get("id").cloned();
+    let method = message
+        .get("method")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let respond = |value: Value| {
+        id.as_ref()
+            .map(|id| json!({ "jsonrpc": "2.0", "id": id, "result": value }))
+    };
+    match method {
+        "initialize" => {
+            let requested = message
+                .pointer("/params/protocolVersion")
+                .and_then(Value::as_str)
+                .unwrap_or("2025-06-18")
+                .to_string();
+            let mut result = json!({
+                "protocolVersion": requested,
+                "capabilities": { "tools": {} },
+                "serverInfo": { "name": server.name, "version": "0.1.0" }
+            });
+            if let Some(instructions) = server.instructions {
+                result["instructions"] = json!(instructions);
+            }
+            Answer::Reply(respond(result))
+        }
+        "ping" => Answer::Reply(respond(json!({}))),
+        "tools/list" => Answer::Reply(respond(json!({ "tools": (server.tools)() }))),
+        "tools/call" => Answer::Call {
+            tool: message
+                .pointer("/params/name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            arguments: message
+                .pointer("/params/arguments")
+                .cloned()
+                .unwrap_or_else(|| json!({})),
+            id,
+        },
+        method if method.starts_with("notifications/") => Answer::Reply(None),
+        _ => Answer::Reply(id.as_ref().map(|id| {
+            json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32601, "message": "Method not found" } })
+        })),
+    }
+}
+
+/// The bridge's response to a tool call, as the JSON-RPC reply.
+pub fn call_reply(server: &Server, id: Value, response: &Value) -> Value {
+    let result = if response.get("ok").and_then(Value::as_bool) == Some(true) {
+        tool_content(response.get("result").unwrap_or(&Value::Null))
+    } else {
+        let error = response
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or(server.failure);
+        json!({ "content": [ { "type": "text", "text": error } ], "isError": true })
+    };
+    json!({ "jsonrpc": "2.0", "id": id, "result": result })
+}
+
 pub fn run(server: &Server) -> i32 {
     #[cfg(not(unix))]
     {
@@ -86,57 +161,16 @@ pub fn run(server: &Server) -> i32 {
             let Ok(message) = serde_json::from_str::<Value>(&line) else {
                 continue;
             };
-            let id = message.get("id").cloned();
-            let method = message
-                .get("method")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            let respond = |value: Value| {
-                id.as_ref()
-                    .map(|id| json!({ "jsonrpc": "2.0", "id": id, "result": value }))
-            };
-            match method {
-                "initialize" => {
-                    let requested = message
-                        .pointer("/params/protocolVersion")
-                        .and_then(Value::as_str)
-                        .unwrap_or("2025-06-18")
-                        .to_string();
-                    let mut result = json!({
-                        "protocolVersion": requested,
-                        "capabilities": { "tools": {} },
-                        "serverInfo": { "name": server.name, "version": "0.1.0" }
-                    });
-                    if let Some(instructions) = server.instructions {
-                        result["instructions"] = json!(instructions);
-                    }
-                    if let Some(payload) = respond(result) {
-                        emit(payload, &mut stdout);
-                    }
-                }
-                "notifications/initialized" | "notifications/cancelled" => {}
-                "ping" => {
-                    if let Some(payload) = respond(json!({})) {
-                        emit(payload, &mut stdout);
-                    }
-                }
-                "tools/list" => {
-                    if let Some(payload) = respond(json!({ "tools": (server.tools)() })) {
-                        emit(payload, &mut stdout);
-                    }
-                }
-                "tools/call" => {
-                    let name = message
-                        .pointer("/params/name")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_string();
-                    let arguments = message
-                        .pointer("/params/arguments")
-                        .cloned()
-                        .unwrap_or_else(|| json!({}));
+            match answer(server, &message) {
+                Answer::Reply(Some(payload)) => emit(payload, &mut stdout),
+                Answer::Reply(None) => {}
+                Answer::Call {
+                    id,
+                    tool,
+                    arguments,
+                } => {
                     counter += 1;
-                    let request = json!({ "id": counter, "token": token, "tool": name, "arguments": arguments });
+                    let request = json!({ "id": counter, "token": token, "tool": tool, "arguments": arguments });
                     let mut response = Value::Null;
                     if writeln!(writer, "{request}").is_ok() && writer.flush().is_ok() {
                         let mut response_line = String::new();
@@ -144,25 +178,8 @@ pub fn run(server: &Server) -> i32 {
                             response = serde_json::from_str(&response_line).unwrap_or(Value::Null);
                         }
                     }
-                    let result = if response.get("ok").and_then(Value::as_bool) == Some(true) {
-                        tool_content(response.get("result").unwrap_or(&Value::Null))
-                    } else {
-                        let error = response
-                            .get("error")
-                            .and_then(Value::as_str)
-                            .unwrap_or(server.failure);
-                        json!({ "content": [ { "type": "text", "text": error } ], "isError": true })
-                    };
-                    if let Some(payload) = respond(result) {
-                        emit(payload, &mut stdout);
-                    }
-                }
-                _ => {
-                    if let Some(id) = &id {
-                        emit(
-                            json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32601, "message": "method not found" } }),
-                            &mut stdout,
-                        );
+                    if let Some(id) = id {
+                        emit(call_reply(server, id, &response), &mut stdout);
                     }
                 }
             }

@@ -51,6 +51,15 @@ pub fn child_env() -> Option<(&'static str, &'static str)> {
 }
 
 pub fn tool_definitions() -> Vec<Value> {
+    definitions(std::env::var(ENV).as_deref() == Ok("1"))
+}
+
+/// As the host's HTTP route lists them: from the switch itself, not a child's environment.
+pub fn live_tool_definitions() -> Vec<Value> {
+    definitions(ENABLED.load(Ordering::SeqCst))
+}
+
+fn definitions(enabled: bool) -> Vec<Value> {
     // Delegating a task to another model is always on (ADR-111).
     let mut tools = crate::delegation::tool_definitions();
     // Inline visuals only touch the caller's own reply, so they are always on too (ADR-123).
@@ -58,7 +67,7 @@ pub fn tool_definitions() -> Vec<Value> {
     tools.extend(crate::visuals::native_tool_definitions());
     // Guided reviews only store a guide, never change code, so they are always on too (ADR-125).
     tools.extend(crate::review_guides::tool_definitions());
-    if std::env::var(ENV).as_deref() != Ok("1") {
+    if !enabled {
         return tools;
     }
     let id = || json!({ "type": "object", "properties": { "sessionId": { "type": "string" } }, "required": ["sessionId"] });

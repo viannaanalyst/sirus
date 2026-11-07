@@ -1023,7 +1023,13 @@ async fn restart_claude(
     state: &std::sync::Arc<crate::commands::AppState>,
     run: &Run,
 ) -> Result<(crate::agent::AgentProcess, crate::agent::StartedAgent, Wire)> {
-    let overrides = state.data.lock().settings.provider_paths.clone();
+    let (overrides, choices) = {
+        let data = state.data.lock();
+        (
+            data.settings.provider_paths.clone(),
+            crate::claude::LaunchChoices::of(&data.settings),
+        )
+    };
     let home = crate::provider_accounts::scope(
         state,
         &run.session.agent,
@@ -1036,6 +1042,7 @@ async fn restart_claude(
         run.prompt.clone(),
         overrides,
         home,
+        choices,
     )
     .await?;
     let input = started

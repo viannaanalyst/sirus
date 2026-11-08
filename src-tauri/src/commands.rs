@@ -952,12 +952,13 @@ pub async fn list_dir(
     state: State<'_, Arc<AppState>>,
     session_id: String,
     path: Option<String>,
+    show_ignored: Option<bool>,
 ) -> Result<Vec<FileEntry>> {
     let state = state.inner().clone();
     native_task(move || {
         let cwd = session_path(&state, &session_id)?;
         let dir = path.map(PathBuf::from).unwrap_or_else(|| cwd.clone());
-        fs_tree::list_children(&cwd, &dir)
+        fs_tree::list_children(&cwd, &dir, show_ignored.unwrap_or(false))
     })
     .await
 }

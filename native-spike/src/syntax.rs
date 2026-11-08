@@ -45,9 +45,12 @@ enum Lang {
     Go,
     Yaml,
     Toml,
+    Scss,
+    Less,
+    Zig,
 }
 
-const LANGS: usize = 13;
+const LANGS: usize = 16;
 
 /// Capture names the highlighter reports, with the group each belongs to. A capture such as
 /// `string.special.key` takes the longest name listed that is a prefix of it.
@@ -84,10 +87,12 @@ fn lang_of(name: &str) -> Option<Lang> {
     if lower == "dockerfile" || lower.starts_with("dockerfile.") {
         return None;
     }
+    // `.env` files are `KEY=value` lines, which the shell grammar reads as assignments.
     if matches!(
         lower.as_str(),
-        ".bashrc" | ".bash_profile" | ".zshrc" | ".zprofile" | ".profile"
-    ) {
+        ".bashrc" | ".bash_profile" | ".zshrc" | ".zprofile" | ".profile" | ".env" | ".envrc"
+    ) || lower.starts_with(".env.")
+    {
         return Some(Lang::Bash);
     }
     let ext = lower.rsplit_once('.').map(|(_, ext)| ext)?;
@@ -105,6 +110,11 @@ fn lang_of(name: &str) -> Option<Lang> {
         "go" => Lang::Go,
         "yml" | "yaml" => Lang::Yaml,
         "toml" => Lang::Toml,
+        // The indented Sass syntax has no grammar of its own; SCSS colors most of it.
+        "scss" | "sass" => Lang::Scss,
+        "less" => Lang::Less,
+        "zig" | "zon" => Lang::Zig,
+        "env" => Lang::Bash,
         _ => return None,
     })
 }
@@ -188,6 +198,44 @@ fn build(lang: Lang) -> Option<HighlightConfiguration> {
             "toml",
             tree_sitter_toml_ng::HIGHLIGHTS_QUERY
         ),
+        // Both grammars grow out of the CSS one, and their queries only add to its query.
+        Lang::Scss => config!(
+            tree_sitter_scss::language(),
+            "scss",
+            format!(
+                "{}\n{}",
+                tree_sitter_css::HIGHLIGHTS_QUERY,
+                tree_sitter_scss::HIGHLIGHTS_QUERY
+            )
+        )
+        .or_else(|| {
+            config!(
+                tree_sitter_scss::language(),
+                "scss",
+                tree_sitter_scss::HIGHLIGHTS_QUERY
+            )
+        }),
+        Lang::Less => config!(
+            tree_sitter_less::language(),
+            "less",
+            format!(
+                "{}\n{}",
+                tree_sitter_css::HIGHLIGHTS_QUERY,
+                tree_sitter_less::HIGHLIGHTS_QUERY
+            )
+        )
+        .or_else(|| {
+            config!(
+                tree_sitter_less::language(),
+                "less",
+                tree_sitter_less::HIGHLIGHTS_QUERY
+            )
+        }),
+        Lang::Zig => config!(
+            tree_sitter_zig::LANGUAGE,
+            "zig",
+            tree_sitter_zig::HIGHLIGHTS_QUERY
+        ),
     }?;
     let names: Vec<&str> = NAMES.iter().map(|(name, _)| *name).collect();
     config.configure(&names);
@@ -266,4 +314,27 @@ pub fn highlight(name: &str, text: &str) -> Option<Vec<LineSpans>> {
         }
     }
     Some(lines)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn groups(name: &str, text: &str) -> Vec<Group> {
+        highlight(name, text)
+            .unwrap_or_else(|| panic!("{name} is not colored"))
+            .into_iter()
+            .flatten()
+            .map(|(_, group)| group)
+            .collect()
+    }
+
+    #[test]
+    fn scss_less_zig_and_env_files_are_colored() {
+        assert!(groups("app.scss", ".card { color: red; }\n").contains(&Group::Property));
+        assert!(groups("theme.less", ".card { margin: 4px; }\n").contains(&Group::Property));
+        assert!(groups("main.zig", "const std = @import(\"std\");\n").contains(&Group::Keyword));
+        assert!(groups(".env", "API_KEY=\"abc\" # note\n").contains(&Group::Comment));
+        assert!(supports(".env.local") && supports("styles.sass") && supports("build.zig.zon"));
+    }
 }

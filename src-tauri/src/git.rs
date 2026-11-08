@@ -216,6 +216,46 @@ pub fn run_input(cwd: &Path, args: &[&str], input: &[u8]) -> Result<Output> {
     Ok(output)
 }
 
+/// Which of the NUL-separated names on `input`, relative to `cwd`, Git ignores (`check-ignore`
+/// refuses the `--literal-pathspecs` every other command carries, so it has its own command).
+/// It reads ignore files only: no hooks, filters or fsmonitor run.
+pub fn check_ignored(cwd: &Path, input: &[u8]) -> Result<Output> {
+    use std::io::Write;
+    let mut command = Command::new(git_binary());
+    command
+        .env_remove("GIT_CONFIG")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("PATH", git_path())
+        .args([
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "core.fsmonitor=false",
+            "check-ignore",
+            "-z",
+            "--stdin",
+        ])
+        .current_dir(cwd)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    let mut child = command
+        .spawn()
+        .map_err(|err| Error::git(format!("git is not available: {err}")))?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| Error::git("cannot write to git"))?;
+    let data = input.to_vec();
+    let writer = std::thread::spawn(move || stdin.write_all(&data));
+    let output = child
+        .wait_with_output()
+        .map_err(|err| Error::git(format!("git failed: {err}")))?;
+    let _ = writer.join();
+    Ok(output)
+}
+
 pub fn run_ok(cwd: &Path, args: &[&str]) -> Result<String> {
     let output = run(cwd, args)?;
     if output.status.success() {

@@ -8,19 +8,15 @@ use crate::error::{Error, Result};
 use crate::models::FileEntry;
 use crate::paths::{display_path, ensure_within, is_ignored_dir};
 
-pub fn list_children(root: &Path, dir: &Path) -> Result<Vec<FileEntry>> {
+/// One folder's entries, folders first. The heavy generated folders (`node_modules`, `target`…)
+/// are left out unless `show_ignored`; `.git` always is. Entries Git ignores come marked.
+pub fn list_children(root: &Path, dir: &Path, show_ignored: bool) -> Result<Vec<FileEntry>> {
     let dir = ensure_within(root, dir)?;
     let mut entries = Vec::new();
     for entry in fs::read_dir(&dir)? {
         let entry = entry?;
         let name = entry.file_name().to_string_lossy().to_string();
-        if name.starts_with('.') && name != ".env.example" {
-            // keep dotfiles visible except heavy/system dirs
-            if is_ignored_dir(&name) {
-                continue;
-            }
-        }
-        if is_ignored_dir(&name) {
+        if name == ".git" || (!show_ignored && is_ignored_dir(&name)) {
             continue;
         }
         let path = entry.path();
@@ -29,7 +25,12 @@ pub fn list_children(root: &Path, dir: &Path) -> Result<Vec<FileEntry>> {
             name,
             path: display_path(&path),
             is_dir,
+            ignored: false,
         });
+    }
+    let ignored = git_ignored(&dir, &entries);
+    for entry in &mut entries {
+        entry.ignored = ignored.contains(&entry.name) || is_ignored_dir(&entry.name);
     }
     entries.sort_by(|a, b| match (a.is_dir, b.is_dir) {
         (true, false) => std::cmp::Ordering::Less,
@@ -37,6 +38,31 @@ pub fn list_children(root: &Path, dir: &Path) -> Result<Vec<FileEntry>> {
         _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
     });
     Ok(entries)
+}
+
+/// The names in `dir` that Git ignores; none outside a repository or when Git cannot answer.
+fn git_ignored(dir: &Path, entries: &[FileEntry]) -> std::collections::HashSet<String> {
+    if entries.is_empty() {
+        return Default::default();
+    }
+    let mut input = Vec::new();
+    for entry in entries {
+        input.extend_from_slice(entry.name.as_bytes());
+        input.push(0);
+    }
+    let Ok(output) = crate::git::check_ignored(dir, &input) else {
+        return Default::default();
+    };
+    // 0: some are ignored, 1: none, anything else: not a repository or a failure.
+    if output.status.code() != Some(0) {
+        return Default::default();
+    }
+    output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|name| !name.is_empty())
+        .map(|name| String::from_utf8_lossy(name).into_owned())
+        .collect()
 }
 
 #[derive(Debug, Serialize)]
@@ -167,6 +193,39 @@ pub fn suggest_files(root: &Path, query: &str) -> Result<WorkspaceFiles> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_tree_hides_heavy_folders_unless_asked_and_marks_what_git_ignores() {
+        let root = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(root.path())
+                .output()
+                .unwrap()
+        };
+        git(&["init", "-q"]);
+        fs::write(root.path().join(".gitignore"), ".env\n").unwrap();
+        fs::write(root.path().join(".env"), "SECRET=1").unwrap();
+        fs::write(root.path().join("main.rs"), "fn main() {}").unwrap();
+        fs::create_dir(root.path().join("node_modules")).unwrap();
+        let names = |show: bool| {
+            list_children(root.path(), root.path(), show)
+                .unwrap()
+                .into_iter()
+                .map(|entry| (entry.name, entry.ignored))
+                .collect::<Vec<_>>()
+        };
+        let hidden = names(false);
+        assert!(hidden
+            .iter()
+            .all(|(name, _)| name != "node_modules" && name != ".git"));
+        assert!(hidden.contains(&(".env".into(), true)));
+        assert!(hidden.contains(&("main.rs".into(), false)));
+        let shown = names(true);
+        assert!(shown.contains(&("node_modules".into(), true)));
+        assert!(shown.iter().all(|(name, _)| name != ".git"));
+    }
 
     #[test]
     fn suggestions_browse_search_and_keep_relative_names() {

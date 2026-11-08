@@ -118,6 +118,34 @@ pub fn toggle_wrapping() {
     let _ = std::fs::write(wrap_file(), on.to_string());
 }
 static AUTOSAVES: std::sync::OnceLock<std::sync::atomic::AtomicBool> = std::sync::OnceLock::new();
+static IGNORED_SHOWN: std::sync::OnceLock<std::sync::atomic::AtomicBool> =
+    std::sync::OnceLock::new();
+
+fn ignored_file() -> std::path::PathBuf {
+    crate::backend::data_dir().join("files-show-ignored.json")
+}
+
+fn ignored_shown() -> &'static std::sync::atomic::AtomicBool {
+    IGNORED_SHOWN.get_or_init(|| {
+        let saved = std::fs::read(ignored_file())
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<bool>(&bytes).ok());
+        std::sync::atomic::AtomicBool::new(saved.unwrap_or(false))
+    })
+}
+
+/// Whether the file tree lists the generated folders it hides by default (`node_modules`,
+/// `target`, `dist`…). Off until it is turned on.
+pub fn showing_ignored() -> bool {
+    ignored_shown().load(std::sync::atomic::Ordering::Relaxed)
+}
+
+pub fn toggle_showing_ignored() {
+    let on = !showing_ignored();
+    ignored_shown().store(on, std::sync::atomic::Ordering::Relaxed);
+    let _ = std::fs::create_dir_all(crate::backend::data_dir());
+    let _ = std::fs::write(ignored_file(), on.to_string());
+}
 
 fn autosave_file() -> std::path::PathBuf {
     crate::backend::data_dir().join("code-autosave.json")

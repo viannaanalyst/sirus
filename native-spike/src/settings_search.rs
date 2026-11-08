@@ -7,7 +7,7 @@
 //! setting by name, so a new setting is found as soon as its page draws it. The two places that
 //! add to the data are marked `SHELL-BUILT` below.
 
-use gpui::{Bounds, Div, Pixels, canvas, prelude::*};
+use gpui::{Bounds, ParentElement, Pixels, Styled, canvas};
 use serde_json::Value;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -182,12 +182,28 @@ pub fn spans(text: &str, query: &str) -> Vec<(String, bool)> {
 /// The pages' groups as (title, rows of (title, description)).
 pub type Groups = Vec<(String, Vec<(String, String)>)>;
 
+/// One choice of a control the page draws by hand (a segment, a color, a tile): found by its own
+/// label under `group`, and a jump to it lands on the row or picker titled `target`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Choice {
+    pub group: String,
+    pub label: String,
+    pub target: String,
+}
+
+/// What a hand-drawn page reports: its groups and the choices of its controls.
+#[derive(Default)]
+pub struct Built {
+    pub groups: Groups,
+    pub choices: Vec<Choice>,
+}
+
 /// Every page of Settings as entries in the current language: the page, each group and each row.
 /// `shell_built` returns the groups of the pages the shell draws by hand (SHELL-BUILT: Aparência).
 pub fn raw_entries(
     settings: &Value,
     data: &HashMap<&'static str, Value>,
-    shell_built: &mut dyn FnMut(&str) -> Groups,
+    shell_built: &mut dyn FnMut(&str) -> Built,
 ) -> Vec<Raw> {
     let mut out = Vec::new();
     for (section, items) in crate::shell::SETTINGS_NAV {
@@ -196,18 +212,18 @@ pub fn raw_entries(
             let name: &'static str = name;
             let label = t(crate::shell::nav_label(name)).to_owned();
             let (mut about, mut groups) = crate::settings_pages::index_groups(name, settings, data);
-            let mut targets = true;
             // SHELL-BUILT: rows the shell draws itself come from the recorder, ahead of the rest.
-            let mut hand_built = shell_built(name);
+            let built = shell_built(name);
+            let mut choices = built.choices;
+            let mut hand_built = built.groups;
             if !hand_built.is_empty() {
                 hand_built.extend(groups);
                 groups = hand_built;
                 about = t("Personalize materiais e movimento.").to_owned();
             }
-            // SHELL-BUILT: the connectors' catalog is its own view, not rows to scroll to.
+            // SHELL-BUILT: the connectors' catalog is its own view; its rows are decorated by name.
             if name == "Conectores" {
                 groups.extend(crate::settings_connectors::index_groups());
-                targets = false;
             }
             let base = |kind, title: &str, about: &str, group: &str, target: Option<String>| Raw {
                 kind,
@@ -221,11 +237,17 @@ pub fn raw_entries(
             };
             out.push(base(Kind::Page, &label, &about, &section, None));
             for (group, rows) in groups {
+                let mine: Vec<Choice> = choices
+                    .iter()
+                    .filter(|c| !group.is_empty() && c.group == group)
+                    .cloned()
+                    .collect();
+                choices.retain(|c| group.is_empty() || c.group != group);
                 let first = rows
                     .iter()
                     .find(|(title, _)| !title.is_empty())
                     .map(|(title, _)| title.clone())
-                    .filter(|_| targets);
+                    .or_else(|| mine.first().map(|c| c.target.clone()));
                 if !group.is_empty() {
                     out.push(base(Kind::Group, &group, "", "", first));
                 }
@@ -239,8 +261,12 @@ pub fn raw_entries(
                     } else {
                         (title, about)
                     };
-                    let target = targets.then(|| title.clone());
+                    let target = Some(title.clone());
                     out.push(base(Kind::Row, &title, &about, &group, target));
+                }
+                for choice in mine {
+                    let target = Some(choice.target);
+                    out.push(base(Kind::Row, &choice.label, "", &group, target));
                 }
             }
         }
@@ -279,7 +305,7 @@ pub fn join(pt: Vec<Raw>, en: Vec<Raw>) -> Vec<Entry> {
 pub fn build_index(
     settings: &Value,
     data: &HashMap<&'static str, Value>,
-    shell_built: &mut dyn FnMut(&str) -> Groups,
+    shell_built: &mut dyn FnMut(&str) -> Built,
 ) -> Vec<Entry> {
     let pt = crate::i18n::with_locale(false, || raw_entries(settings, data, &mut *shell_built));
     let en = crate::i18n::with_locale(true, || raw_entries(settings, data, &mut *shell_built));
@@ -292,20 +318,39 @@ pub fn build_index(
 struct Recorder {
     pending: Vec<(String, String)>,
     groups: Groups,
+    choices: Vec<Choice>,
 }
 
 thread_local! {
     static RECORDER: RefCell<Option<Recorder>> = const { RefCell::new(None) };
 }
 
-/// Runs `draw` with the recorder on and returns the groups its `note_group` calls closed.
-pub fn collect(draw: impl FnOnce()) -> Groups {
+/// Runs `draw` with the recorder on and returns the groups its `note_group` calls closed and the
+/// choices its `note_choice` calls reported.
+pub fn collect(draw: impl FnOnce()) -> Built {
     RECORDER.with(|r| *r.borrow_mut() = Some(Recorder::default()));
     draw();
     RECORDER
         .with(|r| r.borrow_mut().take())
-        .map(|r| r.groups)
+        .map(|r| Built {
+            groups: r.groups,
+            choices: r.choices,
+        })
         .unwrap_or_default()
+}
+
+/// A choice of a control the shell is drawing (a segment, a swatch, a tile): `label` under
+/// `group`, jumping to the row or picker whose `decorate` key is `target`.
+pub fn note_choice(group: &str, label: &str, target: &str) {
+    RECORDER.with(|r| {
+        if let Some(rec) = r.borrow_mut().as_mut() {
+            rec.choices.push(Choice {
+                group: group.to_owned(),
+                label: label.to_owned(),
+                target: target.to_owned(),
+            });
+        }
+    });
 }
 
 /// A row the shell is drawing: its title and description.
@@ -405,29 +450,32 @@ pub fn animating(now: Instant) -> bool {
 
 /// Marks the row titled `title` if it is the aimed one: reports where it is drawn and washes it in
 /// the accent while it flashes.
-pub fn decorate(row: Div, title: &str) -> Div {
+pub fn decorate<E: Styled + ParentElement + Sized>(row: E, title: &str) -> E {
     let aimed =
         !title.is_empty() && JUMP.with(|j| j.borrow().as_ref().is_some_and(|j| j.title == title));
     if !aimed {
         return row;
     }
     let wash = flash(Instant::now()).map(|strength| crate::theme::accent_wash(0.18 * strength));
-    row.relative()
-        .when_some(wash, |row, color| row.bg(color))
-        .child(
-            canvas(
-                |bounds, _, _| {
-                    JUMP.with(|j| {
-                        if let Some(j) = j.borrow_mut().as_mut() {
-                            j.bounds = Some(bounds);
-                        }
-                    })
-                },
-                |_, _, _, _| {},
-            )
-            .absolute()
-            .size_full(),
+    let row = row.relative();
+    let row = match wash {
+        Some(color) => row.bg(color),
+        None => row,
+    };
+    row.child(
+        canvas(
+            |bounds, _, _| {
+                JUMP.with(|j| {
+                    if let Some(j) = j.borrow_mut().as_mut() {
+                        j.bounds = Some(bounds);
+                    }
+                })
+            },
+            |_, _, _, _| {},
         )
+        .absolute()
+        .size_full(),
+    )
 }
 
 #[cfg(test)]
@@ -542,7 +590,8 @@ mod tests {
             note_row("B", "b");
             note_group("G1");
             note_group("G2");
-        });
+        })
+        .groups;
         assert_eq!(groups.len(), 2);
         assert_eq!(groups[0].0, "G1");
         assert_eq!(groups[0].1.len(), 2);
@@ -555,7 +604,7 @@ mod tests {
     fn every_page_of_the_nav_is_searchable() {
         let settings = json!({});
         let data = HashMap::new();
-        let index = build_index(&settings, &data, &mut |_| Vec::new());
+        let index = build_index(&settings, &data, &mut |_| Built::default());
         for (_, items) in crate::shell::SETTINGS_NAV {
             for (_, name) in items {
                 let page: Vec<&Entry> = index.iter().filter(|e| e.page == *name).collect();
@@ -584,8 +633,107 @@ mod tests {
 
     #[test]
     fn every_keyboard_command_is_searchable() {
-        let index = build_index(&json!({}), &HashMap::new(), &mut |_| Vec::new());
+        let index = build_index(&json!({}), &HashMap::new(), &mut |_| Built::default());
         let atalhos: Vec<&Entry> = index.iter().filter(|e| e.page == "Atalhos").collect();
         assert!(atalhos.len() > crate::settings_pages::keybinding_count());
+    }
+
+    /// The index as the shell builds it for Aparência: the recorder fed by the real list of
+    /// choices, so the labels searched are the ones the page draws.
+    fn appearance_index() -> Vec<Entry> {
+        build_index(&json!({}), &HashMap::new(), &mut |page| {
+            if page == crate::shell::APPEARANCE {
+                collect(|| {
+                    // The page's groups, as it draws them; the choices are filed under these.
+                    for group in ["Tema", "Cores", "Materiais", "Interface", "Ícone do app"] {
+                        note_group(t(group));
+                    }
+                    crate::shell::note_appearance_choices();
+                })
+            } else {
+                Built::default()
+            }
+        })
+    }
+
+    #[test]
+    fn a_theme_mode_is_found_and_jumps_to_the_picker() {
+        let index = appearance_index();
+        let hits = search(&index, "escuro");
+        let hit = hits
+            .iter()
+            .find(|e| e.title.pt == "Escuro" && e.group.pt == "Tema")
+            .expect("the theme option is indexed");
+        assert_eq!(hit.page, crate::shell::APPEARANCE);
+        assert_eq!(hit.target().as_deref(), Some("Tema"));
+        assert!(
+            search(&index, "dark")
+                .iter()
+                .any(|e| e.title.pt == "Escuro" && e.group.pt == "Tema")
+        );
+        // The group itself jumps to its picker too.
+        let group = index
+            .iter()
+            .find(|e| e.kind == Kind::Group && e.title.pt == "Tema")
+            .unwrap();
+        assert_eq!(group.target().as_deref(), Some("Tema"));
+    }
+
+    #[test]
+    fn an_app_icon_is_found_with_or_without_the_accent() {
+        let index = appearance_index();
+        for query in ["mármore", "marmore", "marble"] {
+            let hit = search(&index, query)
+                .into_iter()
+                .find(|e| e.title.pt == "Mármore")
+                .unwrap_or_else(|| panic!("{query}"));
+            assert!(hit.target().is_some());
+            assert_eq!(hit.group.pt, "Ícone do app");
+        }
+        for icon in crate::app_icon::AppIcon::ALL {
+            let label = icon.label();
+            assert!(
+                index
+                    .iter()
+                    .any(|e| e.title.pt == label && e.target().is_some()),
+                "{label}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_choice_jumps_to_something_the_page_decorates() {
+        let index = appearance_index();
+        let choices = collect(crate::shell::note_appearance_choices).choices;
+        assert!(choices.len() > 20);
+        for choice in choices {
+            assert!(
+                index.iter().any(|e| e.title.pt == choice.label
+                    && e.target().as_deref() == Some(choice.target.as_str())),
+                "{} is not indexed",
+                choice.label
+            );
+        }
+    }
+
+    #[test]
+    fn every_connector_entry_has_a_target_the_row_answers_to() {
+        let index = build_index(&json!({}), &HashMap::new(), &mut |_| Built::default());
+        let page: Vec<&Entry> = index
+            .iter()
+            .filter(|e| e.page == "Conectores" && e.kind != Kind::Page)
+            .collect();
+        assert!(page.len() > 10);
+        for entry in &page {
+            assert!(entry.target().is_some(), "{}", entry.title.pt);
+        }
+        // A connector's row is decorated with its catalog key, which is what the entry targets.
+        for key in crate::settings_connectors::catalog_keys() {
+            assert!(
+                page.iter()
+                    .any(|e| e.kind == Kind::Row && e.target().as_deref() == Some(key)),
+                "{key}"
+            );
+        }
     }
 }

@@ -174,6 +174,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("A URL não é permitida", "URL is not allowed"),
     (
+        "A barra inferior mostra o consumo de até dois provedores escolhidos aqui. Sem nenhum, ela mostra o provedor da conversa aberta.",
+        "The bottom bar shows the usage of up to two providers chosen here. With none, it shows the open conversation's provider.",
+    ),
+    (
         "A busca atingiu seu limite. Algumas skills podem não aparecer.",
         "The search reached its limit. Some skills may not appear.",
     ),
@@ -1070,6 +1074,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Consultar Postgres, gerenciar projetos, funções e storage",
         "Query Postgres, manage projects, functions and storage",
     ),
+    ("Consumo na barra inferior", "Usage in the bottom bar"),
     ("Consumo na barra lateral", "Usage in the sidebar"),
     ("Conta", "Account"),
     ("Conta do Terminal", "Terminal account"),
@@ -2308,6 +2313,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Máximo", "Maximum"),
     ("Médio", "Medium"),
     ("Mínimo", "Minimal"),
+    (
+        "Na barra lateral, as conversas em que um agente trabalha ou espera sua aprovação ficam num grupo acima das datas.",
+        "In the sidebar, conversations where an agent is working or waiting for your approval sit in a group above the dates.",
+    ),
     ("Na fila", "Queue"),
     (
         "Na tomada, o Mac não entra em repouso e seus aparelhos sempre o alcançam. A tela continua apagando e bloqueando; na bateria, o repouso funciona normalmente. Fechar a tampa ainda põe o Mac em repouso.",
@@ -3291,6 +3300,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "Draft owner no longer exists",
     ),
     (
+        "O robô do projeto que anda sobre o campo de mensagem enquanto o agente trabalha.",
+        "The project's robot that walks above the message field while the agent works.",
+    ),
+    (
         "O serviço não enviou um token de acesso.",
         "The service sent no access token.",
     ),
@@ -3370,6 +3383,10 @@ const ENTRIES: &[(&str, &str)] = &[
     (
         "Onde seus aparelhos encontram este Mac.",
         "Where your devices find this Mac.",
+    ),
+    (
+        "Onde uma conversa nova trabalha: na pasta do projeto ou num worktree novo. Uma pasta sem Git trabalha sempre nela mesma.",
+        "Where a new conversation works: in the project's folder or in a new worktree. A folder without Git always works in place.",
     ),
     ("Onde vale", "Where it applies"),
     ("Ontem", "Yesterday"),
@@ -3505,6 +3522,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Painel Ambiente", "Environment panel"),
     ("Painel lateral", "Side panel"),
+    (
+        "Painéis, menus e listas mudam sem deslizar, e o robô do composer para. Também vale quando Reduzir movimento está ligado nos Ajustes de Acessibilidade do Mac.",
+        "Panels, menus and lists change without sliding, and the composer's robot stops. Also applies when Reduce motion is on in the Mac's Accessibility settings.",
+    ),
     ("Palavra por palavra", "Token by token"),
     ("Paleta de comandos", "Command Palette"),
     ("Parada", "Stopped"),
@@ -3732,6 +3753,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Páginas escuras", "Dark pages"),
     ("Quadros por segundo", "Frame rate"),
     ("Quadros, itens e atualizações", "Boards, items and updates"),
+    (
+        "Quando o agente da conversa aberta abre ou navega uma página, o painel do navegador abre para mostrá-la. Desligado, o painel fica como está.",
+        "When the open conversation's agent opens or navigates a page, the browser pane opens to show it. Off, the pane stays as it is.",
+    ),
     (
         "Quando os checks do PR aberto de uma sessão falham, o agente dela recebe os erros e corrige; depois o Sirus faz commit e push do branch da sessão (nunca forçado). Até 3 tentativas por falha; senão pausa e avisa.",
         "When the checks of a session's open pull request fail, its agent gets the errors and fixes them, then Sirus commits and pushes the session branch (never forced). Up to 3 attempts per failure; it pauses and notifies you otherwise.",
@@ -4177,6 +4202,14 @@ const ENTRIES: &[(&str, &str)] = &[
         "Trabalhando e não lidas primeiro",
         "Working and unread first",
     ),
+    (
+        "Trabalhando ou esperando você",
+        "Working or waiting for you",
+    ),
+    (
+        "Trabalhando ou esperando você primeiro",
+        "Working or waiting for you first",
+    ),
     ("Translucidez", "Translucency"),
     ("Trazer de volta ao painel", "Bring back to the pane"),
     ("Trocar", "Change"),
@@ -4293,6 +4326,10 @@ const ENTRIES: &[(&str, &str)] = &[
     (
         "Uma imagem atrás dos painéis de conversa. Ela fica neste Mac.",
         "An image behind the conversation panels. It stays on this Mac.",
+    ),
+    (
+        "Uma pasta sem Git trabalha sempre nela mesma.",
+        "A folder without Git always works in place.",
     ),
     ("Uma predefinição de cores.", "A color preset."),
     (

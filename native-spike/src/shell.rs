@@ -402,13 +402,25 @@ fn tilde_parent(path: &str) -> String {
 }
 
 const HEADING: f32 = 28.;
-const DATE_GROUPS: [&str; 5] = [
+const DATE_GROUPS: [&str; 6] = [
     "Hoje",
     "Ontem",
     "Últimos 7 dias",
     "Últimos 30 dias",
     "Mais antigas",
+    "Trabalhando ou esperando você",
 ];
+/// The heading above the conversations that work or wait for you, when they go first.
+const ATTENTION_GROUP: u8 = 5;
+
+/// Where a heading sits: the attention group first, then the dates from newest.
+fn group_rank(group: u8) -> u8 {
+    if group == ATTENTION_GROUP {
+        0
+    } else {
+        group + 1
+    }
+}
 
 /// What the sidebar's funnel shows.
 #[derive(Default)]
@@ -910,7 +922,9 @@ enum Waiting {
     Editors,
     Icons,
     Attached(usize),
-    Dictated,
+    Dictated(bool),
+    /// A provider_usage reply for one of the bottom bar's chosen providers.
+    BarUsage(&'static str),
     SettingsData(&'static str),
     Usage,
     CliAgents,
@@ -1223,6 +1237,8 @@ pub struct Shell {
     model_menu_anchor: Option<(f32, f32)>,
     viewport_height: f32,
     usage: Option<(String, f32)>,
+    /// The usage of each provider chosen for the bottom bar, by provider.
+    bar_usage: HashMap<&'static str, (String, f32)>,
     usage_value: Value,
     session_filter: SessionFilter,
     filter_button_at: std::rc::Rc<std::cell::Cell<Option<gpui::Bounds<Pixels>>>>,
@@ -1343,6 +1359,8 @@ pub struct Shell {
 impl Shell {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let now = Instant::now();
+        let me = cx.entity().downgrade();
+        SHELL.with(|shell| *shell.borrow_mut() = Some(me));
         let (projects, conversations) = (Vec::new(), vec![Conversation::placeholder()]);
         let (backend, incoming) = backend::start();
         crate::browser_bridge::start(backend.clone(), cx);
@@ -1591,6 +1609,7 @@ impl Shell {
             model_menu_anchor: None,
             viewport_height: 0.,
             usage: None,
+            bar_usage: HashMap::new(),
             usage_value: Value::Null,
             session_filter: SessionFilter::default(),
             filter_button_at: Default::default(),
@@ -1867,6 +1886,7 @@ impl Shell {
                 }
                 Some(Waiting::SettingsRestored) if ok => {
                     self.settings = value;
+                    self.note_settings(cx);
                     self.load_settings_page();
                 }
                 Some(Waiting::SettingsData(key)) if ok => {
@@ -1919,9 +1939,12 @@ impl Shell {
                     self.problem = Some(error_text(&value))
                 }
                 Some(Waiting::FailureContinue) => {}
-                Some(Waiting::Dictated) if ok => {
+                Some(Waiting::Dictated(send)) if ok => {
                     if let Some(text) = value.as_str().filter(|t| !t.is_empty()) {
                         self.draft().insert(text);
+                        if send {
+                            self.send(cx);
+                        }
                     }
                 }
                 Some(Waiting::Agents) if ok => {
@@ -2022,32 +2045,16 @@ impl Shell {
                     self.usage_warm(cx);
                     self.usage_refreshing = false;
                     self.usage_value = value.clone();
-                    let parts: Vec<String> = value["windows"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .filter_map(|w| {
-                            let used = w["usedPercent"].as_f64()?;
-                            let left = w["resetsAt"].as_i64().map_or(String::new(), |at| {
-                                let at = if at > 100_000_000_000 { at / 1000 } else { at };
-                                let minutes = ((at - chrono::Utc::now().timestamp()) / 60).max(0);
-                                if minutes >= 1440 {
-                                    format!(" {}d {}h", minutes / 1440, minutes % 1440 / 60)
-                                } else {
-                                    format!(" {}h {}m", minutes / 60, minutes % 60)
-                                }
-                            });
-                            Some(format!("{used:.0}%{left}"))
-                        })
-                        .collect();
-                    let tightest = value["windows"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .filter_map(|w| w["usedPercent"].as_f64())
-                        .fold(0., f64::max);
-                    self.usage = (!parts.is_empty()).then(|| (parts.join(" · "), tightest as f32));
+                    self.usage = usage_summary(&value);
                 }
+                Some(Waiting::BarUsage(provider)) => match usage_summary(&value).filter(|_| ok) {
+                    Some(summary) => {
+                        self.bar_usage.insert(provider, summary);
+                    }
+                    None => {
+                        self.bar_usage.remove(provider);
+                    }
+                },
                 Some(Waiting::Transcript(ix)) if ok => {
                     let conversation = &mut self.conversations[ix];
                     conversation.messages =
@@ -2068,6 +2075,14 @@ impl Shell {
                 Some(Waiting::Created) if ok => {
                     let ix = self.add_session(&value);
                     self.conversations[ix].loaded = true;
+                    // Settings → Geral → Permissões padrão, until the conversation picks its own.
+                    if value["execution"]["approval"].is_null()
+                        && let Some(mode) = self.settings["defaultApproval"]
+                            .as_str()
+                            .filter(|m| matches!(*m, "ask" | "auto" | "full"))
+                    {
+                        self.conversations[ix].approval = mode.to_owned();
+                    }
                     self.open(ix, cx);
                 }
                 Some(Waiting::PromptLink) => self.prompt_link_resolved(ok, &value, cx),
@@ -2135,6 +2150,7 @@ impl Shell {
         self.connected = true;
         self.problem = None;
         self.settings = state["settings"].clone();
+        self.note_settings(cx);
         self.push_phone_look(true);
         // These two fix up this Mac's own settings; another computer's are left as they are.
         let remote = self.on_remote();
@@ -2322,9 +2338,19 @@ impl Shell {
         if key == "locale" {
             crate::i18n::set_locale(self.settings["locale"].as_str().unwrap_or("pt-BR"));
         }
+        self.note_settings(cx);
+        if key == "sidebarUsageProviders" {
+            self.request_bar_usage(false);
+        }
         self.backend
             .invoke("save_settings", json!({ "settings": self.settings }));
         cx.notify();
+    }
+
+    /// The settings the other views read (prefs.rs), and Reduzir movimento for every view.
+    fn note_settings(&self, cx: &mut Context<Self>) {
+        crate::prefs::note(&self.settings);
+        cx.set_reduce_motion(crate::prefs::still());
     }
 
     /// What the open Settings page shows, fresh from the back end.
@@ -3132,8 +3158,47 @@ impl Shell {
         )
     }
 
-    /// An agent opened a page: the conversation it works for shows it in the Navegador pane.
+    /// A clicked link: in the Navegador pane of the open conversation or in the Mac's browser,
+    /// as Settings → Navegador says. `system` (⌘, Ctrl, Option or the middle button) always
+    /// takes the Mac's browser.
+    pub(crate) fn open_link(&mut self, url: String, system: bool, cx: &mut Context<Self>) {
+        let session = self.conversations[self.active_conversation()]
+            .session_id
+            .clone();
+        if system || session.is_empty() || !link_in_app(&self.settings, &url) {
+            cx.open_url(&url);
+            return;
+        }
+        let backend = self.backend.clone();
+        cx.spawn(async move |this, cx| {
+            let opened = cx.update(|app| {
+                let entity = crate::panel_browser::entity_for(&session, &backend, app);
+                if let Some(window) = app.windows().first().copied() {
+                    let _ = window.update(app, |_, window, app| {
+                        entity
+                            .read(app)
+                            .set_parent(crate::panel_browser::parent_of(window));
+                    });
+                }
+                entity.update(app, |browser, cx| {
+                    cx.notify();
+                    browser.open_link(&url)
+                })
+            });
+            let _ = this.update(cx, |this, cx| match opened {
+                Ok(()) => this.open_pane(3, cx),
+                Err(_) => cx.open_url(&url),
+            });
+        })
+        .detach();
+    }
+
+    /// An agent opened a page: the conversation it works for shows it in the Navegador pane,
+    /// unless Settings → Navegador says to leave the pane as it is.
     pub(crate) fn reveal_browser(&mut self, session: &str, cx: &mut Context<Self>) {
+        if self.settings["browserShowAgentPages"].as_bool() == Some(false) {
+            return;
+        }
         if self.conversations[self.active_conversation()].session_id == session {
             self.open_pane(3, cx);
         }
@@ -3393,6 +3458,111 @@ impl Shell {
         );
         self.waiting.insert(id, Waiting::Usage);
         self.usage_refreshing = refresh;
+        self.request_bar_usage(refresh);
+    }
+
+    /// The providers Settings → Provedores → Consumo na barra inferior puts in the bottom bar;
+    /// none means the open conversation's.
+    fn bar_providers(&self) -> Vec<&'static str> {
+        let mut chosen: Vec<&'static str> = self.settings["sidebarUsageProviders"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(data::provider_id)
+            .collect();
+        chosen.dedup();
+        chosen.truncate(2);
+        chosen
+    }
+
+    /// Asks for the usage of each provider the bottom bar shows by choice.
+    fn request_bar_usage(&mut self, refresh: bool) {
+        for provider in self.bar_providers() {
+            let id = self.backend.invoke(
+                "provider_usage",
+                json!({ "provider": provider, "refresh": refresh }),
+            );
+            self.waiting.insert(id, Waiting::BarUsage(provider));
+        }
+    }
+
+    /// What the bottom bar's usage chip holds: the open conversation's provider with its
+    /// windows (or its model while they load), or each chosen provider with its own.
+    fn usage_chip_parts(&self, provider: &'static str) -> Vec<AnyElement> {
+        let tile = |provider: &'static str| {
+            mark_tile(
+                &crate::tab_tile::TileSize {
+                    w: 14.,
+                    h: 12.,
+                    radius: 3.,
+                },
+                Face::provider(provider),
+                provider_glyph(provider, 9.),
+            )
+            .into_any_element()
+        };
+        let bar = |tightest: f32| {
+            div()
+                .w(px(32.))
+                .h(px(4.))
+                .rounded_full()
+                .bg(content(0.1))
+                .overflow_hidden()
+                .child(
+                    div()
+                        .h_full()
+                        .w(px(32. * tightest.clamp(0., 100.) / 100.))
+                        .rounded_full()
+                        .bg(usage_bar_color(f64::from(tightest))),
+                )
+                .into_any_element()
+        };
+        let chosen = self.bar_providers();
+        let mut parts = Vec::new();
+        if chosen.is_empty() {
+            parts.push(tile(provider));
+            if let Some((_, tightest)) = &self.usage {
+                parts.push(bar(*tightest));
+            }
+            parts.push(
+                div()
+                    .child(self.usage.as_ref().map_or_else(
+                        || {
+                            model_label(
+                                self.conversations[self.active_conversation()]
+                                    .model
+                                    .as_deref(),
+                                provider,
+                            )
+                        },
+                        |(text, _)| text.clone(),
+                    ))
+                    .into_any_element(),
+            );
+            return parts;
+        }
+        for (at, provider) in chosen.into_iter().enumerate() {
+            if at > 0 {
+                parts.push(
+                    div()
+                        .w(px(1.))
+                        .h(px(10.))
+                        .mx(px(2.))
+                        .bg(content(0.15))
+                        .into_any_element(),
+                );
+            }
+            parts.push(tile(provider));
+            match self.bar_usage.get(provider) {
+                Some((text, tightest)) => {
+                    parts.push(bar(*tightest));
+                    parts.push(div().child(text.clone()).into_any_element());
+                }
+                None => parts.push(div().text_color(content(0.4)).child("—").into_any_element()),
+            }
+        }
+        parts
     }
 
     fn toggle_usage_popup(&mut self, cx: &mut Context<Self>) {
@@ -4020,7 +4190,13 @@ impl Shell {
         let model = (agent == self.conversations[active].provider)
             .then(|| self.conversations[active].model.clone())
             .flatten();
-        let id = self.backend.invoke("create_session", json!({ "request": { "projectId": self.projects[project].id, "agent": agent, "isolatedWorktree": false, "model": model } }));
+        // Settings → Worktrees → Workspace padrão: a new worktree, or the project's own folder.
+        // A folder that is not a Git repository has no worktrees: it works in place.
+        let isolated = self.settings["defaultSessionWorkspace"].as_str() == Some("worktree")
+            && std::path::Path::new(&self.projects[project].path)
+                .join(".git")
+                .exists();
+        let id = self.backend.invoke("create_session", json!({ "request": { "projectId": self.projects[project].id, "agent": agent, "isolatedWorktree": isolated, "model": model } }));
         self.waiting.insert(id, Waiting::Created);
     }
 
@@ -4990,7 +5166,9 @@ impl Shell {
         self.split_release(cx);
         if self.select.release() {
             if let Some(url) = self.select.take_link() {
-                cx.open_url(&url);
+                let held = _window.modifiers();
+                let system = held.platform || held.control || held.alt;
+                self.open_link(url, system, cx);
             }
             cx.notify();
         }
@@ -5608,6 +5786,13 @@ impl Shell {
                 let next = if shift { at + live.len() - 1 } else { at + 1 } % live.len();
                 self.select(live[next], cx);
             }
+            // Enter while dictating ends the recording; Settings → Conversa says whether the
+            // words then go out by themselves.
+            (false, false, false, "enter") if self.dictating.is_some() => {
+                let send = self.settings["dictationEnterSends"].as_bool() == Some(true);
+                self.stop_or_start_dictation(send, cx);
+                cx.stop_propagation();
+            }
             (false, false, false, "enter") => {
                 self.send(cx);
                 cx.stop_propagation();
@@ -5775,10 +5960,20 @@ impl Shell {
                 .filter(|c| self.in_sidebar_list(project, *c))
                 .map(|c| (c, days_ago(&self.conversations[c])))
                 .collect();
-            listed.sort_by_key(|(_, days)| date_group(*days));
+            // Settings → Geral → Trabalhando e esperando primeiro: those go above the dates.
+            let attention_first = self.settings["sidebarAttentionFirst"].as_bool() == Some(true);
+            let group_of = |conversation: usize, days: i64| {
+                let c = &self.conversations[conversation];
+                if attention_first && (c.working() || !c.pending.is_empty()) {
+                    ATTENTION_GROUP
+                } else {
+                    date_group(days)
+                }
+            };
+            listed.sort_by_key(|(c, days)| group_rank(group_of(*c, *days)));
             let mut group = None;
             for (conversation, days) in listed {
-                let this_group = date_group(days);
+                let this_group = group_of(conversation, days);
                 if group != Some(this_group) {
                     group = Some(this_group);
                     wanted.push((Row::Heading(this_group), y, y));
@@ -6379,11 +6574,17 @@ impl Shell {
     }
 
     fn toggle_dictation(&mut self, cx: &mut Context<Self>) {
+        self.stop_or_start_dictation(false, cx);
+    }
+
+    /// Stops a recording (transcribing it into the composer, and with `send` sending it once it
+    /// is there) or starts one.
+    fn stop_or_start_dictation(&mut self, send: bool, cx: &mut Context<Self>) {
         if self.dictating.take().is_some() {
             let id = self
                 .backend
                 .invoke("stop_dictation", json!({ "cancel": false }));
-            self.waiting.insert(id, Waiting::Dictated);
+            self.waiting.insert(id, Waiting::Dictated(send));
         } else {
             self.backend
                 .invoke("start_dictation", json!({ "locale": crate::i18n::code() }));
@@ -11641,7 +11842,13 @@ impl Shell {
         let project = self.projects.get(self.project_of(ix)?)?;
         let (_, color) = crate::project_avatar::look_of(&project.name, &project.appearance);
         let clock = Instant::now().duration_since(self.epoch).as_secs_f32();
-        let (x, hop) = crate::new_tab_field::walk(self.runner_width.get(), clock);
+        // Settings → Aparência → Velocidade do corredor: Lenta is the walk it always had.
+        let pace = match self.settings["composerLineSpeed"].as_str() {
+            Some("fast") => 2.2,
+            Some("smooth") => 1.5,
+            _ => 1.,
+        };
+        let (x, hop) = crate::new_tab_field::walk(self.runner_width.get(), clock * pace);
         Some(
             div()
                 .absolute()
@@ -12582,43 +12789,7 @@ impl Shell {
                     .gap(px(6.))
                     .cursor_pointer()
                     .hover(|s| s.bg(content(0.1)).text_color(content(1.)))
-                    .child(mark_tile(
-                        &crate::tab_tile::TileSize {
-                            w: 14.,
-                            h: 12.,
-                            radius: 3.,
-                        },
-                        Face::provider(provider),
-                        provider_glyph(provider, 9.),
-                    ))
-                    .when_some(self.usage.clone(), |d, (_, tightest)| {
-                        d.child(
-                            div()
-                                .w(px(32.))
-                                .h(px(4.))
-                                .rounded_full()
-                                .bg(content(0.1))
-                                .overflow_hidden()
-                                .child(
-                                    div()
-                                        .h_full()
-                                        .w(px(32. * tightest.clamp(0., 100.) / 100.))
-                                        .rounded_full()
-                                        .bg(usage_bar_color(f64::from(tightest))),
-                                ),
-                        )
-                    })
-                    .child(self.usage.as_ref().map_or_else(
-                        || {
-                            model_label(
-                                self.conversations[self.active_conversation()]
-                                    .model
-                                    .as_deref(),
-                                provider,
-                            )
-                        },
-                        |(text, _)| text.clone(),
-                    )),
+                    .children(self.usage_chip_parts(provider)),
             )
             // Refresh sits right beside the numbers.
             .child(
@@ -12670,7 +12841,12 @@ impl Shell {
         }
         let now = Instant::now();
         let pacer = pacers.entry(key).or_insert_with(|| paced::Pacer::new(now));
-        let (text, more) = pacer.view(&turn.answer, now, turn.live);
+        let shown = if turn.live {
+            streamed(&turn.answer, self.settings["responseStreaming"].as_str())
+        } else {
+            &turn.answer
+        };
+        let (text, more) = pacer.view(shown, now, turn.live);
         if more || turn.live {
             *moving = true;
         } else {
@@ -13133,7 +13309,9 @@ impl Shell {
                         })
                     })
                 });
-            let open = found_inside || self.phase_open.get(&key).copied().unwrap_or(false);
+            // Settings → Conversa → Recolher turnos terminados: off leaves the steps open.
+            let folds = self.settings["foldFinishedTurns"].as_bool() != Some(false);
+            let open = found_inside || self.phase_open.get(&key).copied().unwrap_or(!folds);
             let openness = self
                 .phase_moved
                 .borrow()
@@ -16385,6 +16563,84 @@ fn step_line(step: &data::Step) -> crate::step_lines::Line {
 }
 
 /// What a tool acted on, in the tree: a small mono chip.
+/// A provider_usage reply as the bottom bar writes it, "42% 3h 10m · 8% 5d 2h", and its
+/// fullest window; None when it has no windows.
+fn usage_summary(value: &Value) -> Option<(String, f32)> {
+    let parts: Vec<String> = value["windows"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|w| {
+            let used = w["usedPercent"].as_f64()?;
+            let left = w["resetsAt"].as_i64().map_or(String::new(), |at| {
+                let at = if at > 100_000_000_000 { at / 1000 } else { at };
+                let minutes = ((at - chrono::Utc::now().timestamp()) / 60).max(0);
+                if minutes >= 1440 {
+                    format!(" {}d {}h", minutes / 1440, minutes % 1440 / 60)
+                } else {
+                    format!(" {}h {}m", minutes / 60, minutes % 60)
+                }
+            });
+            Some(format!("{used:.0}%{left}"))
+        })
+        .collect();
+    let tightest = value["windows"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|w| w["usedPercent"].as_f64())
+        .fold(0., f64::max);
+    (!parts.is_empty()).then(|| (parts.join(" · "), tightest as f32))
+}
+
+thread_local! {
+    /// The window's shell, for the views that open a link without reaching it.
+    static SHELL: std::cell::RefCell<Option<gpui::WeakEntity<Shell>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Opens a clicked link the way Settings → Navegador says, from a view that is not the shell.
+/// Held modifier keys take the Mac's browser.
+pub(crate) fn open_link_from(url: &str, system: bool, cx: &mut gpui::App) {
+    let shell = SHELL.with(|shell| shell.borrow().as_ref().and_then(|s| s.upgrade()));
+    match shell {
+        Some(shell) => shell.update(cx, |shell, cx| shell.open_link(url.to_owned(), system, cx)),
+        None => cx.open_url(url),
+    }
+}
+
+/// Whether a link opens in Sirus's browser: a pull request or issue on GitHub by Abrir pull
+/// requests e issues, any other web page by Abrir links no. Files and mail never do.
+fn link_in_app(settings: &Value, url: &str) -> bool {
+    let Some(rest) = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+    else {
+        return false;
+    };
+    let mut parts = rest.split(['/', '?', '#']);
+    let host = parts.next().unwrap_or("").to_ascii_lowercase();
+    let github_item = matches!(host.as_str(), "github.com" | "www.github.com")
+        && parts
+            .nth(2)
+            .is_some_and(|kind| matches!(kind, "pull" | "issues"));
+    if github_item {
+        settings["githubLinksInApp"].as_bool() != Some(false)
+    } else {
+        settings["linkOpenTarget"].as_str() != Some("system")
+    }
+}
+
+/// How much of a reply still being written to draw, by Settings → Conversa → Exibição da
+/// resposta: nothing until the turn ends, the finished paragraphs, or every word.
+fn streamed<'a>(answer: &'a str, mode: Option<&str>) -> &'a str {
+    match mode {
+        Some("turn") => "",
+        Some("paragraph") => answer.rfind("\n\n").map_or("", |at| &answer[..at + 2]),
+        _ => answer,
+    }
+}
+
 /// A prompt's text: four lines when folded, whole when not, and in between while it slides.
 fn prompt_frame(
     motion: Option<f32>,
@@ -17494,6 +17750,45 @@ impl Render for Shell {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn links_open_where_the_settings_say() {
+        let app = json!({ "linkOpenTarget": "app", "githubLinksInApp": false });
+        assert!(link_in_app(&app, "https://docs.rs/gpui"));
+        assert!(!link_in_app(&app, "https://github.com/o/r/pull/12"));
+        assert!(link_in_app(&app, "https://github.com/o/r/blob/main/x.rs"));
+        assert!(!link_in_app(&app, "file:///tmp/a.pdf"));
+        assert!(!link_in_app(&app, "mailto:a@b.c"));
+        let system = json!({ "linkOpenTarget": "system" });
+        assert!(!link_in_app(&system, "https://docs.rs/gpui"));
+        assert!(link_in_app(&system, "https://github.com/o/r/issues/3"));
+    }
+
+    #[test]
+    fn a_streaming_reply_shows_what_the_setting_allows() {
+        let answer = "One.\n\nTwo is still";
+        assert_eq!(streamed(answer, Some("token")), answer);
+        assert_eq!(streamed(answer, None), answer);
+        assert_eq!(streamed(answer, Some("paragraph")), "One.\n\n");
+        assert_eq!(streamed("Only half", Some("paragraph")), "");
+        assert_eq!(streamed(answer, Some("turn")), "");
+    }
+
+    #[test]
+    fn the_attention_group_comes_before_the_dates() {
+        let mut groups = vec![2, ATTENTION_GROUP, 0, 4];
+        groups.sort_by_key(|g| group_rank(*g));
+        assert_eq!(groups, vec![ATTENTION_GROUP, 0, 2, 4]);
+    }
+
+    #[test]
+    fn the_bottom_bar_writes_each_usage_window() {
+        let value = json!({ "windows": [{ "usedPercent": 42.0 }, { "usedPercent": 8.4 }] });
+        let (text, tightest) = usage_summary(&value).unwrap();
+        assert_eq!(text, "42% · 8%");
+        assert_eq!(tightest, 42.);
+        assert!(usage_summary(&json!({ "windows": [] })).is_none());
+    }
 
     #[test]
     fn bulk_close_keeps_pinned_tabs_and_the_kept_one() {

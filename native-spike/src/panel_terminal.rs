@@ -31,7 +31,8 @@ actions!(
 );
 
 const FONT_SIZE: f32 = 12.5;
-const SCROLLBACK: usize = 5000;
+/// The scrollback when Settings → Terminal → Limite do histórico has not loaded.
+const SCROLLBACK: u64 = 5000;
 const PAD_X: f32 = 8.;
 const PAD_Y: f32 = 4.;
 
@@ -436,7 +437,8 @@ impl Terminal {
         let (tx, rx) = async_channel::unbounded();
         let listener = Listener(tx);
         let config = Config {
-            scrolling_history: SCROLLBACK,
+            scrolling_history: crate::prefs::number("terminalScrollback", SCROLLBACK)
+                .clamp(1000, 100_000) as usize,
             ..Config::default()
         };
         let term = Arc::new(FairMutex::new(Term::new(config, &size, listener.clone())));
@@ -773,7 +775,9 @@ impl Terminal {
                 && event.click_count == 1
                 && let Some(url) = self.link_at(event.position)
             {
-                cx.open_url(&url);
+                let held = event.modifiers;
+                let system = held.platform || held.control || held.alt;
+                crate::shell::open_link_from(&url, system, cx);
             }
             cx.notify();
         }
@@ -1466,13 +1470,28 @@ impl Element for Grid {
             let y = origin.y + line_height * at.line as f32;
             cursor_bounds = Bounds::new(point(x, y), cell);
             if show_cursor && cursor_shape != CursorShape::Hidden {
-                // A thin bar while the terminal has focus, a hollow box otherwise.
-                let (rect, hollow) = if self.focused {
-                    (Bounds::new(point(x, y), size(px(2.), line_height)), false)
-                } else {
+                // Settings → Terminal → Estilo do cursor while the terminal has focus (the block
+                // is see-through, so the letter under it still reads); a hollow box otherwise.
+                let mut color = theme::accent();
+                let (rect, hollow) = if !self.focused {
                     (cursor_bounds, true)
+                } else {
+                    match crate::prefs::choice("terminalCursorStyle", "bar").as_str() {
+                        "block" => {
+                            color.a = 0.45;
+                            (cursor_bounds, false)
+                        }
+                        "underline" => (
+                            Bounds::new(
+                                point(x, y + line_height - px(2.)),
+                                size(cell_width, px(2.)),
+                            ),
+                            false,
+                        ),
+                        _ => (Bounds::new(point(x, y), size(px(2.), line_height)), false),
+                    }
                 };
-                painted.cursor = Some((rect, theme::accent(), hollow));
+                painted.cursor = Some((rect, color, hollow));
             }
         }
         self.terminal.update(cx, |t, _| {

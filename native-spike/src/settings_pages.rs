@@ -1443,59 +1443,17 @@ fn default_agent_options(
 
 fn general(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
     let sidebar_rows: &[SwitchRow] = &[(
-        t("Trabalhando e não lidas primeiro"),
+        t("Trabalhando ou esperando você primeiro"),
         t(
-            "Sessões trabalhando, esperando você ou concluídas sem serem vistas ficam acima da ordem das sessões. As listas não se mexem enquanto o ponteiro está sobre elas.",
+            "Na barra lateral, as conversas em que um agente trabalha ou espera sua aprovação ficam num grupo acima das datas.",
         ),
         top("sidebarAttentionFirst"),
     )];
-    let startup_rows: &[SwitchRow] = &[
-        (
-            t("Reabrir último projeto"),
-            t("Reabre o último projeto ativo ao iniciar o Sirus."),
-            top("openLastProject"),
-        ),
-        (
-            t("Reabrir sessão mais nova"),
-            t(
-                "Reabre a sessão criada mais recentemente no último projeto. As outras sessões continuam na barra lateral; os agentes não iniciam automaticamente.",
-            ),
-            top("restorePreviousSessions"),
-        ),
-    ];
-    let application_rows: &[SwitchRow] = &[
-        (
-            t("Confirmar fechamento de sessões em execução"),
-            t("Pede confirmação antes de fechar ou sair enquanto os agentes estão em execução."),
-            top("confirmCloseRunning"),
-        ),
-        (
-            t("Retomar sozinho quando o limite de uso liberar"),
-            t(
-                r#"Uma conversa parada pelo limite da IA envia "Continue from where you left off." quando o limite libera. Dá para cancelar em cada aviso."#,
-            ),
-            top("usageAutoResume"),
-        ),
-    ];
-    let environment_rows: &[SwitchRow] = &[
-        (
-            t("Abrir por padrão"),
-            t(
-                "Abre o painel Ambiente automaticamente. Quando desativado, ele fica fechado até você abrir. A última ação de abrir/fechar também atualiza esta preferência.",
-            ),
-            top("environmentPanelDefaultOpen"),
-        ),
-        (
-            t("Repositório"),
-            t("Exiba o link do repositório no painel Ambiente."),
-            top("showEnvironmentRepository"),
-        ),
-        (
-            "Editor",
-            t("Exiba as ações do editor no painel Ambiente."),
-            top("showEnvironmentEditor"),
-        ),
-    ];
+    let application_rows: &[SwitchRow] = &[(
+        t("Confirmar fechamento de sessões em execução"),
+        t("Pede confirmação antes de fechar ou sair enquanto os agentes estão em execução."),
+        top("confirmCloseRunning"),
+    )];
     let core = vec![
         row(
             t("Provedor padrão"),
@@ -1504,16 +1462,10 @@ fn general(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
         ),
         row(
             t("Novas sessões"),
-            t("Escolha o workspace padrão das novas sessões."),
-            vec![pick(
-                s,
-                top("defaultSessionWorkspace"),
-                &[
-                    ("ask", t("Perguntar sempre")),
-                    ("checkout", "Local"),
-                    ("worktree", t("Novo worktree")),
-                ],
-            )],
+            t(
+                "Onde uma conversa nova trabalha: na pasta do projeto ou num worktree novo. Uma pasta sem Git trabalha sempre nela mesma.",
+            ),
+            vec![workspace_pick(s)],
         ),
         row(
             t("Permissões padrão"),
@@ -1540,42 +1492,36 @@ fn general(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
             )],
         ),
     ];
-    let mut sidebar = vec![
-        row(
-            t("Ordem dos projetos"),
-            t("Projetos fixados ficam primeiro. Arrastar uma pasta ativa a ordem manual."),
-            vec![pick(
-                s,
-                top("sidebarProjectSortOrder"),
-                &[("manual", "Manual"), ("created_at", t("Criação"))],
-            )],
-        ),
-        row(
-            t("Ordem das sessões"),
-            t("Organiza as sessões dentro de cada projeto. As fixadas mantêm sua própria área."),
-            vec![pick(
-                s,
-                top("sidebarThreadSortOrder"),
-                &[
-                    ("updated_at", t("Atividade recente")),
-                    ("created_at", t("Criação")),
-                ],
-            )],
-        ),
-    ];
-    sidebar.extend(switches(s, sidebar_rows));
+    let sidebar = switches(s, sidebar_rows);
     vec![
         group(t("Preferências padrão"), core),
         group(t("Organização da sidebar"), sidebar),
-        group(t("Inicialização"), switches(s, startup_rows)),
         group(t("Aplicativo"), {
             let mut rows = switches(s, application_rows);
             rows.push(first_run_row());
             rows
         }),
         group(t("Terminal"), vec![terminal_placement_row()]),
-        group(t("Painel Ambiente"), switches(s, environment_rows)),
     ]
+}
+
+/// Where a new conversation works. "Perguntar sempre" (the old app's) has no question here, so
+/// it reads as Local.
+fn workspace_pick(s: &Value) -> Ctl {
+    let worktree = current(s, top("defaultSessionWorkspace")) == "worktree";
+    Ctl::Pick(
+        [
+            ("checkout", "Local", !worktree),
+            ("worktree", t("Novo worktree"), worktree),
+        ]
+        .into_iter()
+        .map(|(value, label, chosen)| Opt {
+            label,
+            chosen,
+            change: change(s, top("defaultSessionWorkspace"), json_of(value)),
+        })
+        .collect(),
+    )
 }
 
 /// Plays the first run again (first_run.rs).
@@ -1628,27 +1574,6 @@ fn chat(s: &Value) -> Vec<Group> {
             top("foldFinishedTurns"),
         ),
         (
-            t("Mostrar sessões trabalhando"),
-            t(
-                "Lista as sessões em que um agente está trabalhando ao lado do campo de mensagem, quando duas ou mais rodam ao mesmo tempo.",
-            ),
-            top("showWorkingPanel"),
-        ),
-        (
-            t("Autocorreção"),
-            t(
-                "Sublinhado de ortografia e correções automáticas do macOS enquanto você escreve uma mensagem, em todas as conversas.",
-            ),
-            top("composerAutocorrect"),
-        ),
-        (
-            t("Abas de conversa"),
-            t(
-                "Mostra as conversas do projeto como abas no topo da janela. Desligado, a barra mostra só a conversa atual.",
-            ),
-            top("showSessionTabs"),
-        ),
-        (
             t("Continuar conversas interrompidas após uma falha"),
             t(
                 "Se o Sirus fechar inesperadamente enquanto um agente trabalha, a conversa continua na próxima abertura, pedindo que o agente confira primeiro o que já aconteceu. No máximo três vezes seguidas; conversas paradas, adiadas ou aguardando você ficam como estão.",
@@ -1670,11 +1595,7 @@ fn chat(s: &Value) -> Vec<Group> {
             top("rotateAtContextLimit"),
         ),
     ];
-    let diffs_rows: &[SwitchRow] = &[(
-        t("Quebrar linhas nos diffs"),
-        t("Linhas longas quebram em vez de rolar para o lado."),
-        top("diffWordWrap"),
-    )];
+
     let recording_rows: &[SwitchRow] = &[
         (
             t("Mostrar teclas"),
@@ -1747,7 +1668,7 @@ fn chat(s: &Value) -> Vec<Group> {
             top("agentBrowserAccess"),
         )],
     ));
-    let mut review = vec![
+    let review = vec![
         row(
             t("Abrir links no"),
             t(
@@ -1774,7 +1695,7 @@ fn chat(s: &Value) -> Vec<Group> {
             )],
         ),
     ];
-    review.extend(switches(s, diffs_rows));
+
     let mut recording = vec![row(
         t("Quadros por segundo"),
         t(
@@ -1811,7 +1732,7 @@ fn chat(s: &Value) -> Vec<Group> {
                 &[(
                     t("Mostrar páginas que o agente abre"),
                     t(
-                        "Uma página que o agente abre ou navega aparece num player pequeno sobre a conversa. Ela fica oculta enquanto o painel do navegador mostra a sessão.",
+                        "Quando o agente da conversa aberta abre ou navega uma página, o painel do navegador abre para mostrá-la. Desligado, o painel fica como está.",
                     ),
                     top("browserShowAgentPages"),
                 )],
@@ -1843,13 +1764,6 @@ fn notifications(s: &Value) -> Vec<Group> {
             t("Avisar com o app em foco"),
             t("Mostre notificações e toque sons também enquanto o Sirus estiver ativo."),
             inner("notifications", "foreground"),
-        ),
-        (
-            t("Sons"),
-            t(
-                "Um toque suave quando um agente termina um turno ou precisa de você. Não toca para a conversa que você está vendo.",
-            ),
-            top("agentSounds"),
         ),
     ];
     // Each event: its sound, and its switch.
@@ -2249,16 +2163,8 @@ fn worktrees(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
     let mut defaults = vec![
         row(
             t("Workspace padrão da sessão"),
-            "",
-            vec![pick(
-                s,
-                top("defaultSessionWorkspace"),
-                &[
-                    ("ask", t("Perguntar sempre")),
-                    ("checkout", t("Checkout atual")),
-                    ("worktree", t("Novo worktree")),
-                ],
-            )],
+            t("Uma pasta sem Git trabalha sempre nela mesma."),
+            vec![workspace_pick(s)],
         ),
         switch_row(
             s,
@@ -2534,12 +2440,6 @@ fn advanced(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
                 ),
                 download,
                 update_row(),
-                switch_row(
-                    s,
-                    t("Mostrar o que há de novo depois de atualizar"),
-                    t("Uma vez, na primeira abertura de cada versão."),
-                    top("appUpdateWhatsNew"),
-                ),
             ],
         ),
         group(
@@ -2747,7 +2647,8 @@ fn providers(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
         }
     }
 
-    // Up to two providers in the sidebar's usage rings (`USAGE_PROVIDER_IDS`, registry order).
+    // Up to two providers whose usage the bottom bar shows (`USAGE_PROVIDER_IDS`, registry
+    // order); none shows the open conversation's provider.
     const USAGE: &[&str] = &["codex", "claude", "cursor", "opencode"];
     const SIDEBAR_USAGE_LIMIT: usize = 2;
     let chosen = strings(&s["sidebarUsageProviders"]);
@@ -2785,13 +2686,15 @@ fn providers(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
     }
     usage.push(row(
         "",
-        t("Mostra um anel de consumo de até dois provedores no rodapé da barra lateral."),
+        t(
+            "A barra inferior mostra o consumo de até dois provedores escolhidos aqui. Sem nenhum, ela mostra o provedor da conversa aberta.",
+        ),
         Vec::new(),
     ));
 
     clis.extend([
         group(t("Diagnóstico das CLIs"), diagnostics_rows(d)),
-        group(t("Consumo na barra lateral"), usage),
+        group(t("Consumo na barra inferior"), usage),
         group(
             t("Avançado"),
             vec![row(
@@ -3536,8 +3439,8 @@ pub fn commit(settings: &Value, key: &str, text: &str) -> Option<Commit> {
 }
 
 /// Settings → Aparência: the groups the native appearance page shares with the others, from
-/// `AppearanceSettings.tsx` (typography, effects and motion, chat background, sidebar, Dock).
-/// `data` may hold `host` (its `appearanceSupport` says what this Mac can do).
+/// `AppearanceSettings.tsx`: effects and motion, and the chat background. `data` is unused
+/// since the Dock and sidebar styles left (the native window has one of each).
 pub fn appearance_groups<V: 'static>(
     settings: &Value,
     data: &HashMap<&'static str, Value>,
@@ -3555,23 +3458,16 @@ pub fn appearance_groups<V: 'static>(
         edit,
         run,
     };
-    let support = &get_data(data, "host")["appearanceSupport"];
+    let _ = data;
     let s = settings;
 
     let effects = group(
         t("Efeitos e movimento"),
         vec![
-            switch_row(s, t("Animações da interface"), "", top("animations")),
-            switch_row(
-                s,
-                t("Efeito de luz nos botões"),
-                t("Os botões reagem ao ponteiro do mouse."),
-                top("pointerGlow"),
-            ),
             row(
                 t("Velocidade do corredor do composer"),
                 t(
-                    "O modelo de trabalho que percorre a borda do composer enquanto o agente trabalha.",
+                    "O robô do projeto que anda sobre o campo de mensagem enquanto o agente trabalha.",
                 ),
                 vec![pick(
                     s,
@@ -3586,7 +3482,9 @@ pub fn appearance_groups<V: 'static>(
             switch_row(
                 s,
                 t("Reduzir movimento"),
-                t("Também respeita prefers-reduced-motion do sistema."),
+                t(
+                    "Painéis, menus e listas mudam sem deslizar, e o robô do composer para. Também vale quando Reduzir movimento está ligado nos Ajustes de Acessibilidade do Mac.",
+                ),
                 top("reduceMotion"),
             ),
         ],
@@ -3680,58 +3578,7 @@ pub fn appearance_groups<V: 'static>(
     };
     let background = group(t("Fundo do chat"), background_rows);
 
-    let mut sidebar_rows = vec![row(
-        t("Estilo da barra lateral"),
-        t("Barra de ícones, com as conversas nas abas, ou uma lista com todas as conversas."),
-        vec![pick(
-            s,
-            top("sidebarMode"),
-            &[
-                ("rail", t("Barra de ícones")),
-                ("list", t("Lista de conversas")),
-            ],
-        )],
-    )];
-    if current(s, top("sidebarMode")) == "list" {
-        sidebar_rows.push(row(
-            t("Ordem da lista"),
-            "",
-            vec![pick(
-                s,
-                top("sidebarListOrder"),
-                &[("recent", t("Recentes")), ("project", t("Por projeto"))],
-            )],
-        ));
-    }
-    let sidebar = group(t("Barra lateral"), sidebar_rows);
-
-    let dock_supported = yes(&support["dockIcon"]);
-    let application = group(
-        t("Aplicativo"),
-        vec![row(
-            t("Ícone do Dock"),
-            if dock_supported {
-                t("Escolha o ícone exibido no Dock.")
-            } else {
-                t("A personalização do Dock não está disponível neste host.")
-            },
-            vec![if dock_supported {
-                pick(
-                    s,
-                    top("dockIcon"),
-                    &[
-                        ("default", t("Padrão")),
-                        ("smokedGlass", t("Vidro fumê")),
-                        ("white", t("Branco")),
-                    ],
-                )
-            } else {
-                Ctl::Read(t("Indisponível").to_string())
-            }],
-        )],
-    );
-
-    [effects, background, sidebar, application]
+    [effects, background]
         .into_iter()
         .map(|item| group_view(item, &mut ui, cx))
         .collect()

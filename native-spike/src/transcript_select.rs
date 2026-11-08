@@ -566,7 +566,11 @@ pub(crate) fn wrap_piece(
         let ranges = links.into_iter().map(|(range, _)| range).collect();
         let id = format!("link-{:x}", fingerprint(&text));
         return InteractiveText::new(SharedString::from(id), styled)
-            .on_click(ranges, move |ix, _, cx| cx.open_url(&urls[ix]))
+            .on_click(ranges, move |ix, window, cx| {
+                let held = window.modifiers();
+                let system = held.platform || held.control || held.alt;
+                crate::shell::open_link_from(&urls[ix], system, cx)
+            })
             .into_any_element();
     };
     let press = (layout.clone(), text.clone(), state.clone(), links.clone());

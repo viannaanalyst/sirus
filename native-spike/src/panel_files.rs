@@ -84,6 +84,8 @@ pub fn new(context: PanelContext, cx: &mut App) -> AnyView {
             tree_width: Default::default(),
             tabs: Vec::new(),
             active: None,
+            autosave_turns: HashMap::new(),
+            disk_times: HashMap::new(),
             search,
             search_open: false,
             index: None,
@@ -188,6 +190,11 @@ struct FilesPanel {
     folds: std::cell::RefCell<HashMap<String, Tween>>,
     folds_moving: std::cell::Cell<bool>,
     tree_width: Rc<std::cell::Cell<f32>>,
+    /// Each file's latest edit, so only the last of a burst saves.
+    autosave_turns: HashMap<String, u64>,
+    /// When each open file was last read or written here; a different time means someone else
+    /// changed it.
+    disk_times: HashMap<String, std::time::SystemTime>,
     /// The open files, in tab order.
     tabs: Vec<Opened>,
     /// The tab on screen; None while the tree is showing (no tab open, or `+` was pressed).
@@ -353,6 +360,9 @@ impl FilesPanel {
                 if let Some(tab) = this.tabs.iter_mut().find(|tab| tab.path == path) {
                     tab.viewer = viewer;
                 }
+                if let Some(time) = this.disk_time(&path) {
+                    this.disk_times.insert(path.clone(), time);
+                }
                 this.ensure_colors(&path, cx);
                 cx.notify();
             });
@@ -467,6 +477,59 @@ impl FilesPanel {
         }
     }
 
+    /// When the file was last seen by this editor; `None` when it isn't on this Mac.
+    fn disk_time(&self, path: &str) -> Option<std::time::SystemTime> {
+        std::fs::metadata(std::path::Path::new(&self.root).join(path))
+            .ok()?
+            .modified()
+            .ok()
+    }
+
+    /// Autosave: a second after the last edit. A file changed outside the editor is left alone,
+    /// with a note: ⌘S still overwrites it, on purpose.
+    fn schedule_autosave(&mut self, path: String, cx: &mut Context<Self>) {
+        if !crate::file_editor::autosaving()
+            || !self
+                .editor_of(&path)
+                .is_some_and(|editor| editor.read(cx).is_modified())
+        {
+            return;
+        }
+        let turn = self.autosave_turns.entry(path.clone()).or_insert(0);
+        *turn += 1;
+        let turn = *turn;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(AUTOSAVE_AFTER).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.autosave_turns.get(&path) != Some(&turn)
+                    || !crate::file_editor::autosaving()
+                {
+                    return;
+                }
+                let changed = match this.disk_times.get(&path) {
+                    Some(known) => this.disk_time(&path).as_ref() != Some(known),
+                    None => false,
+                };
+                if changed {
+                    if let Some(editor) = this.editor_of(&path) {
+                        editor.update(cx, |editor, cx| {
+                            editor.set_error(
+                                Some(
+                                    t("O arquivo mudou fora do editor. O salvamento automático parou; ⌘S substitui.")
+                                        .to_owned(),
+                                ),
+                                cx,
+                            );
+                        });
+                    }
+                } else {
+                    this.save(path.clone(), cx);
+                }
+            });
+        })
+        .detach();
+    }
+
     /// ⌘S: writes the file's text through the host, then marks what was written as saved. The
     /// file is not checked against the disk first: a change made outside the editor is overwritten,
     /// as the desktop app's editor does.
@@ -482,12 +545,20 @@ impl FilesPanel {
             "write_text_file",
             json!({ "sessionId": self.session_id, "path": path, "content": content }),
         );
-        cx.spawn(async move |_, cx| {
+        cx.spawn(async move |this, cx| {
             let reply = settle(rx).await;
+            let saved = reply.is_ok();
             let _ = editor.update(cx, |editor, cx| match reply {
                 Ok(_) => editor.mark_saved(revision, cx),
                 Err(error) => editor.set_error(Some(error), cx),
             });
+            if saved {
+                let _ = this.update(cx, |this, _| {
+                    if let Some(time) = this.disk_time(&path) {
+                        this.disk_times.insert(path.clone(), time);
+                    }
+                });
+            }
         })
         .detach();
     }
@@ -1253,6 +1324,13 @@ impl FilesPanel {
                 let modified = self.tab_modified(ix, cx);
                 let plate = div()
                     .id(("file-tab-button", ix))
+                    .on_mouse_down(
+                        MouseButton::Middle,
+                        cx.listener(move |this, _, window, cx| {
+                            cx.stop_propagation();
+                            this.request_close(ix, window, cx);
+                        }),
+                    )
                     .relative()
                     .h(px(theme::PLATE))
                     .w_full()
@@ -1315,6 +1393,29 @@ impl FilesPanel {
                 theme::icon("plus", 14.).group_hover("new-file-tab", |s| s.text_color(content(1.))),
             )
             .on_click(cx.listener(|this, _, _, cx| this.add_tab(cx)));
+        let autosaving = crate::file_editor::autosaving();
+        let autosave = div()
+            .id("file-autosave")
+            .cursor_pointer()
+            .size(px(26.))
+            .mr(px(2.))
+            .flex_shrink_0()
+            .rounded(px(crate::theme::RADIUS_MD))
+            .when(autosaving, |d| d.bg(content(0.08)))
+            .flex()
+            .items_center()
+            .justify_center()
+            .hover(|s| s.bg(content(0.1)))
+            .tooltip(crate::shell::message_actions::name_tip(if autosaving {
+                t("Desligar salvamento automático")
+            } else {
+                t("Salvar automaticamente")
+            }))
+            .child(theme::icon("save", 14.).text_color(content(if autosaving { 0.9 } else { 0.6 })))
+            .on_click(cx.listener(|_, _, _, cx| {
+                crate::file_editor::toggle_autosaving();
+                cx.notify();
+            }));
         let wrapping = crate::file_editor::wrapping();
         let wrap = div()
             .id("file-wrap")
@@ -1368,6 +1469,7 @@ impl FilesPanel {
                     .children(tabs)
                     .child(add),
             )
+            .child(autosave)
             .child(wrap)
             .into_any_element()
     }
@@ -1535,10 +1637,48 @@ fn nodes(value: &Value) -> Vec<Node> {
     nodes.sort_by(|a, b| {
         b.is_dir
             .cmp(&a.is_dir)
-            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+            .then_with(|| natural_cmp(&a.name, &b.name))
     });
     nodes
 }
+
+/// Name order as a person reads it: without case, and a run of digits by its value, so
+/// `chapter-2` comes before `chapter-10`.
+fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    let (a, b) = (a.to_lowercase(), b.to_lowercase());
+    let (mut left, mut right) = (a.as_str(), b.as_str());
+    loop {
+        let (Some(x), Some(y)) = (left.chars().next(), right.chars().next()) else {
+            return left.len().cmp(&right.len());
+        };
+        if x.is_ascii_digit() && y.is_ascii_digit() {
+            let digits = |text: &str| {
+                text.find(|c: char| !c.is_ascii_digit())
+                    .unwrap_or(text.len())
+            };
+            let (m, n) = (digits(left), digits(right));
+            let (l, r) = (&left[..m], &right[..n]);
+            let (lv, rv) = (l.trim_start_matches('0'), r.trim_start_matches('0'));
+            // More digits without the leading zeros is the bigger number.
+            let order = lv.len().cmp(&rv.len()).then_with(|| lv.cmp(rv));
+            if order != Ordering::Equal {
+                return order;
+            }
+            left = &left[m..];
+            right = &right[n..];
+            continue;
+        }
+        if x != y {
+            return x.cmp(&y);
+        }
+        left = &left[x.len_utf8()..];
+        right = &right[y.len_utf8()..];
+    }
+}
+
+/// How long typing must stop before an edited file saves itself.
+const AUTOSAVE_AFTER: std::time::Duration = std::time::Duration::from_secs(1);
 
 fn root_name(root: &str) -> String {
     root.trim_end_matches('/')
@@ -1646,7 +1786,10 @@ fn text_viewer(path: &str, text: &str, cx: &mut Context<FilesPanel>) -> Viewer {
             &editor,
             move |this: &mut FilesPanel, _, event: &EditorEvent, cx| match event {
                 EditorEvent::Save => this.save(path.clone(), cx),
-                EditorEvent::Changed => cx.notify(),
+                EditorEvent::Changed => {
+                    this.schedule_autosave(path.clone(), cx);
+                    cx.notify();
+                }
             },
         );
         (Some(editor), Some(events))
@@ -2261,6 +2404,34 @@ impl EntityInputHandler for TextField {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn names_sort_as_a_person_reads_them() {
+        let mut names = vec![
+            "chapter-10",
+            "Chapter-2",
+            "chapter-1",
+            "b",
+            "a",
+            "07",
+            "7",
+            "100",
+        ];
+        names.sort_by(|a, b| natural_cmp(a, b));
+        assert_eq!(
+            names,
+            vec![
+                "07",
+                "7",
+                "100",
+                "a",
+                "b",
+                "chapter-1",
+                "Chapter-2",
+                "chapter-10"
+            ]
+        );
+    }
 
     #[test]
     fn a_trashed_folder_takes_its_files_but_not_its_namesakes() {

@@ -395,6 +395,8 @@ struct Terminal {
     master_fd: i32,
     exited: bool,
     selecting: bool,
+    /// The pointer rests on a web address, which a click opens.
+    over_link: bool,
     scroll_remainder: f32,
     marked: Option<String>,
     _events: gpui::Task<()>,
@@ -522,6 +524,7 @@ impl Terminal {
             shell_pid,
             master_fd,
             selecting: false,
+            over_link: false,
             scroll_remainder: 0.,
             marked: None,
             _events: events,
@@ -698,8 +701,50 @@ impl Terminal {
         self.selecting = true;
         cx.notify();
     }
+    /// The web address under `position`, across a line the terminal wrapped.
+    fn link_at(&self, position: gpui::Point<gpui::Pixels>) -> Option<String> {
+        let (at, _) = self.grid_point(position)?;
+        let term = self.term.lock();
+        let grid = term.grid();
+        let columns = grid.columns();
+        let wrapped = |line: alacritty_terminal::index::Line| {
+            grid[line][Column(columns - 1)]
+                .flags
+                .contains(alacritty_terminal::term::cell::Flags::WRAPLINE)
+        };
+        let (top, bottom) = (grid.topmost_line(), grid.bottommost_line());
+        let mut first = at.line;
+        while first > top && wrapped(first - 1) {
+            first = first - 1;
+        }
+        let mut last = at.line;
+        while last < bottom && wrapped(last) {
+            last = last + 1;
+        }
+        let mut text = String::new();
+        let mut under = None;
+        let mut line = first;
+        loop {
+            for column in 0..columns {
+                if line == at.line && column == at.column.0 {
+                    under = Some(text.len());
+                }
+                text.push(grid[line][Column(column)].c);
+            }
+            if line == last {
+                break;
+            }
+            line = line + 1;
+        }
+        url_at(&text, under?).map(str::to_owned)
+    }
     fn mouse_move(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
         if !self.selecting {
+            let over = self.link_at(event.position).is_some();
+            if over != self.over_link {
+                self.over_link = over;
+                cx.notify();
+            }
             return;
         }
         if event.pressed_button != Some(MouseButton::Left) {
@@ -713,15 +758,23 @@ impl Terminal {
             cx.notify();
         }
     }
-    fn mouse_up(&mut self, _: &MouseUpEvent, cx: &mut Context<Self>) {
+    fn mouse_up(&mut self, event: &MouseUpEvent, cx: &mut Context<Self>) {
         if self.selecting {
             self.selecting = false;
             // A click without a drag leaves no selection behind.
             let mut term = self.term.lock();
-            if term.selection.as_ref().is_some_and(|s| s.is_empty()) {
+            let clicked = term.selection.as_ref().is_some_and(|s| s.is_empty());
+            if clicked {
                 term.selection = None;
             }
             drop(term);
+            // That same click on a web address opens it; a drag across one still selects it.
+            if clicked
+                && event.click_count == 1
+                && let Some(url) = self.link_at(event.position)
+            {
+                cx.open_url(&url);
+            }
             cx.notify();
         }
     }
@@ -1081,7 +1134,11 @@ impl Render for Terminal {
             .key_context("SirusTerminal")
             .track_focus(&self.focus)
             .size_full()
-            .cursor(gpui::CursorStyle::IBeam)
+            .cursor(if self.over_link {
+                gpui::CursorStyle::PointingHand
+            } else {
+                gpui::CursorStyle::IBeam
+            })
             .on_key_down(cx.listener(|this, event, _, cx| this.key_down(event, cx)))
             .on_action(cx.listener(|this, _: &SendTab, _, cx| this.input(b"\t".to_vec(), cx)))
             .on_action(
@@ -1103,6 +1160,48 @@ impl Render for Terminal {
                 focused,
             })
     }
+}
+
+/// The http(s) address around byte `at` of `text`: it ends at a space, a quote or a bracket that
+/// the address didn't open, and sentence punctuation after it is left out.
+fn url_at(text: &str, at: usize) -> Option<&str> {
+    for scheme in ["https://", "http://"] {
+        let mut from = 0;
+        while let Some(found) = text[from..].find(scheme) {
+            let start = from + found;
+            let rest = &text[start..];
+            let mut end = rest
+                .find(|c: char| {
+                    c.is_whitespace()
+                        || c.is_control()
+                        || matches!(c, '"' | '\'' | '<' | '>' | '`' | '│')
+                })
+                .unwrap_or(rest.len());
+            let mut url = &rest[..end];
+            loop {
+                let trimmed = url.trim_end_matches(['.', ',', ';', ':', '!', '?']);
+                let closes = |open: char, close: char| {
+                    trimmed.ends_with(close)
+                        && trimmed.matches(close).count() > trimmed.matches(open).count()
+                };
+                let cut = if closes('(', ')') || closes('[', ']') || closes('{', '}') {
+                    &trimmed[..trimmed.len() - 1]
+                } else {
+                    trimmed
+                };
+                if cut.len() == url.len() {
+                    break;
+                }
+                url = cut;
+            }
+            end = url.len();
+            if url.len() > scheme.len() && (start..start + end).contains(&at) {
+                return Some(url);
+            }
+            from = start + scheme.len();
+        }
+    }
+    None
 }
 
 struct Painted {
@@ -1733,5 +1832,24 @@ mod close_tests {
         assert_eq!(running_names(&all), vec!["app 1", "app 3"]);
         assert!(running_names(&all[1..2]).is_empty());
         assert!(running_names(&[]).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod url_tests {
+    use super::url_at;
+
+    #[test]
+    fn a_web_address_is_found_around_the_click() {
+        let line = "Local: (http://127.0.0.1:3000/a_(b)), then https://x.dev.  end";
+        let local = line.find("127").unwrap();
+        assert_eq!(url_at(line, local), Some("http://127.0.0.1:3000/a_(b)"));
+        assert_eq!(
+            url_at(line, line.find("x.dev").unwrap()),
+            Some("https://x.dev")
+        );
+        assert_eq!(url_at(line, line.find("then").unwrap()), None);
+        assert_eq!(url_at(line, line.find("Local").unwrap()), None);
+        assert_eq!(url_at("https://", 2), None);
     }
 }

@@ -1,5 +1,7 @@
 import { NavigationContainer } from "@react-navigation/native";
 import { useEffect } from "react";
+
+import { useAgentLiveActivity } from "./data/live-activity";
 import { Alert, Linking } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
@@ -69,6 +71,7 @@ const FORM_SHEET = { presentation: "formSheet", sheetAllowedDetents: [1], sheetG
 
 /** Sirus's iPhone app (ADR-135). */
 export default function App() {
+  useAgentLiveActivity();
   useEffect(() => { void useSirus.getState().start().then(() => checkForAppUpdate()); }, []);
   // `sirus://pair?address=…&code=…` pairs at once (a computer's QR code can carry it).
   useEffect(() => {

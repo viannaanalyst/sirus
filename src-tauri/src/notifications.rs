@@ -304,6 +304,17 @@ fn notice_body(project: &str, session: &str) -> String {
     }
 }
 
+/// Whether a project is silenced at `now`, in milliseconds.
+fn muted(
+    muted_projects: &std::collections::BTreeMap<String, i64>,
+    project: &str,
+    now: i64,
+) -> bool {
+    muted_projects
+        .get(project)
+        .is_some_and(|until| *until > now)
+}
+
 pub fn announce(app: &AppHandle, state: &Arc<AppState>, title: String, body: String) {
     let (prefs, foreground) = {
         let data = state.data.lock();
@@ -367,6 +378,13 @@ pub fn remind(app: &AppHandle, state: &Arc<AppState>, session_id: &str) {
         let Some(key) = reminder_key(session) else {
             return;
         };
+        if muted(
+            &data.settings.muted_projects,
+            &project.id,
+            chrono::Utc::now().timestamp_millis(),
+        ) {
+            return;
+        }
         let prefs = data.settings.notifications.clone();
         let portuguese = data.settings.locale == "pt-BR";
         let notice = Notice {
@@ -423,6 +441,13 @@ pub fn publish(app: &AppHandle, state: &Arc<AppState>, snapshot: &Session) {
         else {
             return;
         };
+        if muted(
+            &data.settings.muted_projects,
+            &project.id,
+            chrono::Utc::now().timestamp_millis(),
+        ) {
+            return;
+        }
         let current = candidates(session);
         let prefs = data.settings.notifications.clone();
         let body = notice_body(&project.name, &session.title);
@@ -738,6 +763,14 @@ pub async fn notification_action(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_project_is_muted_only_until_its_moment() {
+        let list = std::collections::BTreeMap::from([("p".to_string(), 100)]);
+        assert!(muted(&list, "p", 99));
+        assert!(!muted(&list, "p", 100));
+        assert!(!muted(&list, "other", 99));
+    }
 
     #[test]
     fn a_session_named_like_its_project_shows_the_name_once() {

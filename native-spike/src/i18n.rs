@@ -231,6 +231,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "The conversation is too large to export.",
     ),
     (
+        "A correção exige um conjunto preparado completo e sem conflitos neste espaço de trabalho.",
+        "Amend requires a complete, conflict-free staged set inside this workspace",
+    ),
+    (
         "A criação de espaço de trabalho não está disponível nesta plataforma.",
         "Workspace creation is unavailable on this platform.",
     ),
@@ -1122,7 +1126,9 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Cores", "Colors"),
     ("Cores do diff", "Diff colors"),
     ("Cores do tema", "Theme colors"),
+    ("Corrigir", "Amend"),
     ("Corrigir CI automaticamente", "Fix CI automatically"),
+    ("Corrigir o último", "Amend last"),
     ("Criando…", "Creating…"),
     ("Criar", "Create"),
     ("Criar PR", "Create PR"),
@@ -1208,6 +1214,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Desligada", "Off"),
     ("Desligado", "Off"),
     ("Desligar", "Turn off"),
+    ("Desligar salvamento automático", "Turn autosave off"),
     ("Despreparar", "Unstage"),
     (
         "Destino do espaço de trabalho inválido.",
@@ -2678,6 +2685,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Não foi possível verificar", "Could not check"),
     (
+        "Não há commit para corrigir.",
+        "There is no commit to amend.",
+    ),
+    (
         "Não há mensagem para enviar novamente.",
         "There is no message to send again.",
     ),
@@ -2902,6 +2913,10 @@ const ENTRIES: &[(&str, &str)] = &[
     (
         "O arquivo está danificado, protegido por senha ou usa um formato não suportado.",
         "This file is damaged, encrypted or uses an unsupported format.",
+    ),
+    (
+        "O arquivo mudou fora do editor. O salvamento automático parou; ⌘S substitui.",
+        "The file changed outside the editor. Autosave stopped; ⌘S overwrites it.",
     ),
     (
         "O branch desta conversa não tem um pull request aberto no GitHub.",
@@ -3234,6 +3249,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "The agent itself stops with the conversation's Stop.",
     ),
     (
+        "O próximo commit substitui o último, que ainda não foi enviado. Sem título, mantém a mensagem dele.",
+        "The next commit replaces the last one, which isn't pushed yet. With no title, it keeps its message.",
+    ),
+    (
         "O pull request mudou no GitHub. Atualize e revise-o novamente.",
         "The pull request changed on GitHub. Refresh and review it again.",
     ),
@@ -3330,6 +3349,10 @@ const ENTRIES: &[(&str, &str)] = &[
     (
         "O worktree desta conversa não existe mais.",
         "That session's worktree no longer exists.",
+    ),
+    (
+        "O último commit já está em um remoto, então não pode ser corrigido.",
+        "The last commit is already on a remote, so it can't be amended.",
     ),
     ("Objetivo inválido.", "Invalid goal."),
     ("Observou", "Read"),
@@ -3766,6 +3789,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Reabrir sessão mais nova", "Reopen newest session"),
     ("Reabrir {}?", "Reopen {}?"),
     ("Reabrir último projeto", "Reopen last project"),
+    ("Reativar avisos", "Turn alerts back on"),
     ("Rebase e mesclar", "Rebase and merge"),
     ("Recarregar sem cache", "Reload without cache"),
     ("Recarregou", "Reloaded"),
@@ -3887,6 +3911,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Stores bounded lifecycle counts locally. Prompts, output, paths and credentials are excluded.",
     ),
     ("Salvar", "Save"),
+    ("Salvar automaticamente", "Save automatically"),
     ("Salvar login", "Save login"),
     ("Salvar login de {}?", "Save login for {}?"),
     ("Salvar scripts", "Save scripts"),
@@ -3988,6 +4013,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "Your coding agents side by side, with conversations and changes in one place.",
     ),
     ("Shell padrão", "Default shell"),
+    ("Silenciar até reativar", "Mute until turned back on"),
+    ("Silenciar por 1 hora", "Mute for 1 hour"),
+    ("Silenciar por 4 horas", "Mute for 4 hours"),
+    ("Silenciar por 8 horas", "Mute for 8 hours"),
     ("Sim", "Yes"),
     ("Simulador", "Simulator"),
     (
@@ -4788,6 +4817,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("saída {}", "exit {}"),
     ("sem preço", "no price"),
     ("tarefa da equipe não encontrada", "team task not found"),
+    ("texto-colado.txt", "pasted-text.txt"),
     ("trabalhando", "working"),
     (
         "worktrees isolados exigem um repositório Git",

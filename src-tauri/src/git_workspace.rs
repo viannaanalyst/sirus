@@ -661,6 +661,23 @@ pub fn commit_guard(cwd: &Path, expected: Option<&str>) -> Result<()> {
     }
     Ok(())
 }
+/// As `commit_guard`, but nothing staged is fine: an amend may change only the message.
+pub fn amend_guard(cwd: &Path, expected: Option<&str>) -> Result<()> {
+    let current = snapshot(cwd)?;
+    if current.truncated
+        || current.conflicts
+        || current.outside_scope
+        || current.staged.iter().any(|f| !f.actionable)
+    {
+        return Err(Error::git(
+            "Amend requires a complete, conflict-free staged set inside this workspace",
+        ));
+    }
+    if let Some(expected) = expected {
+        verify_token(&std::fs::canonicalize(cwd)?, expected)?;
+    }
+    Ok(())
+}
 pub fn diff(cwd: &Path, path: &str, staged: bool, expected: &str) -> Result<String> {
     let cwd = std::fs::canonicalize(cwd)?;
     let current = snapshot(&cwd)?;
@@ -755,6 +772,36 @@ mod tests {
     use super::*;
     use crate::git::{run_ok, tests::Repo};
     use std::fs;
+
+    #[test]
+    fn amend_replaces_an_unpushed_commit_and_refuses_a_pushed_one() {
+        let repo = Repo::new();
+        std::fs::write(repo.cwd().join("a.txt"), "one").unwrap();
+        run_ok(&repo.cwd(), &["add", "a.txt"]).unwrap();
+        run_ok(&repo.cwd(), &["commit", "-qm", "first title\n\nfirst body"]).unwrap();
+        // Nothing staged and no message: the commit stays as it was, body included.
+        crate::git::amend_checked(&repo.cwd(), "", None, || Ok(())).unwrap();
+        assert_eq!(
+            run_ok(&repo.cwd(), &["log", "-1", "--format=%B"])
+                .unwrap()
+                .trim(),
+            "first title\n\nfirst body"
+        );
+        let result = crate::git::amend_checked(&repo.cwd(), "new title", None, || Ok(())).unwrap();
+        assert_eq!(result.summary, "new title");
+        assert_eq!(
+            run_ok(&repo.cwd(), &["rev-list", "--count", "HEAD"])
+                .unwrap()
+                .trim(),
+            "2"
+        );
+        run_ok(
+            &repo.cwd(),
+            &["update-ref", "refs/remotes/origin/main", "HEAD"],
+        )
+        .unwrap();
+        assert!(crate::git::amend_checked(&repo.cwd(), "later", None, || Ok(())).is_err());
+    }
 
     #[test]
     fn title_context_supports_unborn_head_and_refuses_conflicts() {

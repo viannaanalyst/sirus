@@ -156,7 +156,7 @@ pub struct Project {
     pub scripts: crate::project_scripts::Saved,
 }
 
-fn provider_id(agent: &str) -> &'static str {
+pub(crate) fn provider_id(agent: &str) -> &'static str {
     match agent {
         "claude" => "claude",
         "codex" => "codex",

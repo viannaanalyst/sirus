@@ -13,7 +13,7 @@ use crate::local_git::{self, CommitFiles};
 use crate::panel_files::{TextField, TextFieldEvent};
 use crate::panels::PanelContext;
 use crate::project_files::run_blocking;
-use crate::theme::{accent, content, diff_colors, on_accent};
+use crate::theme::{accent, accent_wash, content, diff_colors, on_accent};
 use gpui::{
     AnyElement, AnyView, App, Context, Div, Entity, Hsla, Render, Subscription, Window, div,
     prelude::*, px, rgb, svg, uniform_list,
@@ -51,6 +51,7 @@ pub fn new(context: PanelContext, cx: &mut App) -> AnyView {
             error: None,
             opened: None,
             commit_view: None,
+            amending: false,
             older: None,
             loading_older: false,
             commit,
@@ -71,6 +72,9 @@ pub fn new(context: PanelContext, cx: &mut App) -> AnyView {
 #[derive(Clone)]
 struct Commit {
     hash: String,
+    parents: Vec<String>,
+    /// Its branches and tags, as `git log` decorates it.
+    refs: Vec<String>,
     subject: String,
     author: String,
     /// The author's date as the back end sends it (RFC 3339).
@@ -157,6 +161,8 @@ struct ChangesPanel {
     opened: Option<Opened>,
     /// The commit opened from the Histórico; shown instead of the list while it is Some.
     commit_view: Option<CommitView>,
+    /// The next commit replaces the last one.
+    amending: bool,
     older: Option<Older>,
     loading_older: bool,
     commit: Entity<TextField>,
@@ -390,7 +396,8 @@ impl ChangesPanel {
             return;
         };
         let message = self.commit.read(cx).text().trim().to_owned();
-        if message.is_empty() || self.committing || snapshot.staged.is_empty() {
+        let amend = self.amending;
+        if self.committing || (!amend && (message.is_empty() || snapshot.staged.is_empty())) {
             return;
         }
         let token = snapshot.token.clone();
@@ -400,7 +407,7 @@ impl ChangesPanel {
         self.push.result = None;
         let rx = self.backend.request(
             "git_commit",
-            json!({ "sessionId": self.session_id, "message": message, "expectedIndex": token }),
+            json!({ "sessionId": self.session_id, "message": message, "expectedIndex": token, "amend": amend }),
         );
         cx.spawn(async move |this, cx| {
             let reply = settle(rx).await;
@@ -409,6 +416,7 @@ impl ChangesPanel {
                 match reply {
                     Ok(_) => {
                         this.commit.update(cx, |field, cx| field.set_text("", cx));
+                        this.amending = false;
                         this.push.confirm = then_push;
                     }
                     Err(error) => this.error = Some(error),
@@ -1022,9 +1030,24 @@ impl ChangesPanel {
         if commits.is_empty() {
             section = section.child(note(t("Nenhum commit ainda."), false));
         }
+        let graph = crate::git_graph::rows(
+            commits
+                .iter()
+                .map(|commit| (commit.hash.as_str(), commit.parents.as_slice())),
+        );
+        let lanes = graph
+            .iter()
+            .flat_map(|row| {
+                row.above
+                    .iter()
+                    .chain(&row.below)
+                    .flat_map(|(from, to)| [*from, *to])
+                    .chain([row.lane])
+            })
+            .max()
+            .map_or(1, |lane| lane + 1)
+            .min(MAX_LANES);
         for (index, commit) in commits.iter().enumerate() {
-            let first = index == 0;
-            let last = index + 1 == count && !truncated;
             let picked = (*commit).clone();
             section = section.child(
                 div()
@@ -1037,8 +1060,8 @@ impl ChangesPanel {
                     .child(commit_row(
                         commit,
                         snapshot.head.as_deref() == Some(commit.hash.as_str()),
-                        first,
-                        last,
+                        &graph[index],
+                        lanes,
                     )),
             );
         }
@@ -1075,8 +1098,13 @@ impl ChangesPanel {
     /// The commit title and its button, under the lists; shown when there are staged files.
     fn footer(&self, snapshot: &Snapshot, cx: &mut Context<Self>) -> AnyElement {
         let typed = !self.commit.read(cx).text().trim().is_empty();
-        let enabled =
-            typed && !self.committing && !snapshot.staged.is_empty() && !snapshot.token.is_empty();
+        let can_amend =
+            snapshot.ahead.is_none_or(|ahead| ahead > 0) && !snapshot.history.is_empty();
+        let amending = self.amending && can_amend;
+        let enabled = (amending || typed)
+            && !self.committing
+            && (amending || !snapshot.staged.is_empty())
+            && !snapshot.token.is_empty();
         let button = div()
             .id("commit-button")
             .h(px(28.))
@@ -1090,6 +1118,8 @@ impl ChangesPanel {
             .text_color(on_accent())
             .child(if self.committing {
                 t("Enviando…")
+            } else if amending {
+                t("Corrigir")
             } else {
                 "Commit"
             });
@@ -1175,12 +1205,24 @@ impl ChangesPanel {
             sparkle.opacity(0.4)
         };
         let both_on = enabled && can_push;
+        let amend_toggle = can_amend.then(|| {
+            small("commit-amend", t("Corrigir o último"), true)
+                .when(amending, |b| b.bg(accent_wash(0.18)).text_color(accent()))
+                .tooltip(crate::shell::message_actions::name_tip(t(
+                    "O próximo commit substitui o último, que ainda não foi enviado. Sem título, mantém a mensagem dele.",
+                )))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.amending = !this.amending;
+                    cx.notify();
+                }))
+        });
         let push_row = div()
             .flex()
             .items_center()
             .gap(px(6.))
             .px(px(8.))
             .pb(px(8.))
+            .children(amend_toggle)
             .child(
                 small("commit-push", t("Commit e Push"), both_on).when(both_on, |b| {
                     b.on_click(cx.listener(|this, _, _, cx| this.commit_with(true, cx)))
@@ -1872,6 +1914,14 @@ pub(crate) fn note(text: &str, failed: bool) -> AnyElement {
         .into_any_element()
 }
 
+fn strings_of(list: &Value) -> Vec<String> {
+    list.as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.as_str().map(str::to_owned))
+        .collect()
+}
+
 /// Commits from a history list (the snapshot's, or a `history` page's).
 fn commits_of(list: &Value) -> Vec<Commit> {
     list.as_array()
@@ -1880,6 +1930,8 @@ fn commits_of(list: &Value) -> Vec<Commit> {
         .filter_map(|entry| {
             Some(Commit {
                 hash: entry["hash"].as_str()?.to_owned(),
+                parents: strings_of(&entry["parents"]),
+                refs: strings_of(&entry["refs"]),
                 subject: entry["subject"].as_str().unwrap_or("").to_owned(),
                 author: entry["author"].as_str().unwrap_or("").to_owned(),
                 when: entry["authoredAt"].as_str().unwrap_or("").to_owned(),
@@ -1904,37 +1956,88 @@ pub(crate) fn age(when: &str) -> String {
 
 /// Height of one Histórico row; the graph's dot sits 14.5 px down, on the first line's middle.
 const COMMIT_ROW: f32 = 44.;
+/// The lanes drawn side by side; further ones share the last, so the subject keeps its room.
+const MAX_LANES: usize = 6;
+const LANE: f32 = 11.;
 const DOT_CENTER: f32 = 14.5;
 
 /// One commit: a dot on a line that joins it to the next row, the title, the short hash, and the
 /// author with the age. The head's dot is filled in the accent color.
-fn commit_row(commit: &Commit, head: bool, first: bool, last: bool) -> AnyElement {
-    let line_top = if first { DOT_CENTER } else { 0. };
-    let line_bottom = if last { COMMIT_ROW - DOT_CENTER } else { 0. };
-    let dot = if head { accent() } else { content(0.45) };
-    let graph = div()
-        .w(px(10.))
-        .h_full()
+/// A lane's colour. The first keeps the quiet rail; a side branch is told apart by its own.
+fn lane_color(lane: usize) -> gpui::Hsla {
+    const SIDE: [u32; 5] = [0x5b8def, 0x4ade80, 0xfb923c, 0xc084fc, 0x2dd4bf];
+    match lane {
+        0 => content(0.3),
+        _ => gpui::rgb(SIDE[(lane - 1) % SIDE.len()]).into(),
+    }
+}
+
+/// The graph beside a commit: its lanes' lines through the row, and its dot.
+fn graph_cell(row: crate::git_graph::Row, head: bool, lanes: usize) -> impl IntoElement {
+    let x = |lane: usize| 4.5 + lane.min(MAX_LANES - 1) as f32 * LANE;
+    let (dot_x, dot_lane) = (x(row.lane), row.lane);
+    let width = x(lanes - 1) + 5.;
+    let dot = if head { accent() } else { lane_color(dot_lane) };
+    div()
         .relative()
+        .w(px(width))
+        .h_full()
         .flex_shrink_0()
         .child(
-            div()
-                .absolute()
-                .left(px(4.))
-                .w(px(1.))
-                .top(px(line_top))
-                .bottom(px(line_bottom))
-                .bg(content(0.14)),
+            gpui::canvas(
+                |_, _, _| {},
+                move |bounds, _, window, _| {
+                    let at = |lane_x: f32, y: f32| bounds.origin + gpui::point(px(lane_x), px(y));
+                    let mut draw = |from: usize, to: usize, top: f32, bottom: f32, color| {
+                        let mut path = gpui::PathBuilder::stroke(px(1.25));
+                        path.move_to(at(x(from), top));
+                        if from == to {
+                            path.line_to(at(x(to), bottom));
+                        } else {
+                            // Bends in the middle, leaving and arriving straight.
+                            let middle = (top + bottom) / 2.;
+                            path.curve_to(at((x(from) + x(to)) / 2., middle), at(x(from), middle));
+                            path.curve_to(at(x(to), bottom), at(x(to), middle));
+                        }
+                        if let Ok(path) = path.build() {
+                            window.paint_path(path, color);
+                        }
+                    };
+                    for (from, to) in &row.above {
+                        draw(*from, *to, 0., DOT_CENTER, lane_color(*from));
+                    }
+                    for (from, to) in &row.below {
+                        draw(
+                            *from,
+                            *to,
+                            DOT_CENTER,
+                            COMMIT_ROW,
+                            lane_color((*from).max(*to)),
+                        );
+                    }
+                },
+            )
+            .absolute()
+            .size_full(),
         )
         .child(
             div()
                 .absolute()
-                .left(px(0.))
+                .left(px(dot_x - 4.5))
                 .top(px(DOT_CENTER - 4.5))
                 .size(px(9.))
                 .rounded_full()
                 .bg(dot),
-        );
+        )
+}
+
+fn commit_row(
+    commit: &Commit,
+    head: bool,
+    row: &crate::git_graph::Row,
+    lanes: usize,
+) -> AnyElement {
+    let graph = graph_cell(row.clone(), head, lanes);
     let short: String = commit.hash.chars().take(7).collect();
     let by = match (commit.author.is_empty(), age(&commit.when)) {
         (true, age) => age,
@@ -1981,10 +2084,29 @@ fn commit_row(commit: &Commit, head: bool, first: bool, last: bool) -> AnyElemen
                 )
                 .child(
                     div()
-                        .truncate()
+                        .flex()
+                        .items_center()
+                        .gap(px(4.))
                         .text_size(px(11.))
-                        .text_color(content(0.4))
-                        .child(by),
+                        .children(commit.refs.iter().take(2).map(|name| {
+                            div()
+                                .flex_shrink_0()
+                                .max_w(px(110.))
+                                .truncate()
+                                .h(px(14.))
+                                .px(px(4.))
+                                .rounded(px(crate::theme::RADIUS_SM))
+                                .bg(content(0.08))
+                                .text_color(content(0.7))
+                                .child(name.clone())
+                        }))
+                        .child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .text_color(content(0.4))
+                                .child(by),
+                        ),
                 ),
         )
         .into_any_element()

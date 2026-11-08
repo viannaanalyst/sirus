@@ -1415,6 +1415,23 @@ impl Shell {
         );
     }
 
+    /// Pasted text too long for the composer, as a text file.
+    pub(super) fn attach_pasted_text(&mut self, text: String, cx: &mut Context<Self>) {
+        let existing = self
+            .attachments
+            .get(&self.active_conversation())
+            .map_or(0, Vec::len);
+        self.attach_with(
+            move || {
+                check_limits(&[text.len() as u64], existing).map_err(str::to_owned)?;
+                Ok(vec![
+                    json!({ "name": t("texto-colado.txt"), "data": base64(text.as_bytes()) }),
+                ])
+            },
+            cx,
+        );
+    }
+
     /// Runs `prepare` on a thread, then hands its files to the host for the active conversation.
     fn attach_with(
         &mut self,

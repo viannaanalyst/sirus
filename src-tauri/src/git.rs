@@ -239,9 +239,30 @@ pub fn commit_checked(
     expected: Option<&str>,
     admit: impl FnOnce() -> Result<()>,
 ) -> Result<GitCommitResult> {
+    commit_or_amend(cwd, message, expected, false, admit)
+}
+
+/// Replaces the last commit with what is staged. An empty message keeps the commit's own. It
+/// refuses a commit already on a remote, whose replacement could not be pushed without force.
+pub fn amend_checked(
+    cwd: &Path,
+    message: &str,
+    expected: Option<&str>,
+    admit: impl FnOnce() -> Result<()>,
+) -> Result<GitCommitResult> {
+    commit_or_amend(cwd, message, expected, true, admit)
+}
+
+fn commit_or_amend(
+    cwd: &Path,
+    message: &str,
+    expected: Option<&str>,
+    amend: bool,
+    admit: impl FnOnce() -> Result<()>,
+) -> Result<GitCommitResult> {
     let _write = crate::git_workspace::INDEX_WRITE.lock();
     let message = message.trim();
-    if message.is_empty() {
+    if message.is_empty() && !amend {
         return Err(Error::new("invalid", "commit message is empty"));
     }
     if message.len() > MAX_COMMIT_MESSAGE_BYTES {
@@ -250,9 +271,31 @@ pub fn commit_checked(
             "commit message exceeds the 8 KiB limit",
         ));
     }
-    crate::git_workspace::commit_guard(cwd, expected)?;
+    if amend {
+        crate::git_workspace::amend_guard(cwd, expected)?;
+        let on_remote = bounded_run(cwd, &["branch", "-r", "--contains", "HEAD"])?;
+        if !on_remote.status.success() {
+            return Err(Error::git("There is no commit to amend."));
+        }
+        if !String::from_utf8_lossy(&on_remote.stdout).trim().is_empty() {
+            return Err(Error::git(
+                "The last commit is already on a remote, so it can't be amended.",
+            ));
+        }
+    } else {
+        crate::git_workspace::commit_guard(cwd, expected)?;
+    }
     admit()?;
-    let output = bounded_run(cwd, &["commit", "-m", message])?;
+    let mut args = vec!["commit"];
+    if amend {
+        args.push("--amend");
+    }
+    if message.is_empty() {
+        args.push("--no-edit");
+    } else {
+        args.extend(["-m", message]);
+    }
+    let output = bounded_run(cwd, &args)?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(Error::git(if stderr.is_empty() {

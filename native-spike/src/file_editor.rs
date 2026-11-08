@@ -117,6 +117,33 @@ pub fn toggle_wrapping() {
     let _ = std::fs::create_dir_all(crate::backend::data_dir());
     let _ = std::fs::write(wrap_file(), on.to_string());
 }
+static AUTOSAVES: std::sync::OnceLock<std::sync::atomic::AtomicBool> = std::sync::OnceLock::new();
+
+fn autosave_file() -> std::path::PathBuf {
+    crate::backend::data_dir().join("code-autosave.json")
+}
+
+fn autosaves() -> &'static std::sync::atomic::AtomicBool {
+    AUTOSAVES.get_or_init(|| {
+        let saved = std::fs::read(autosave_file())
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<bool>(&bytes).ok());
+        std::sync::atomic::AtomicBool::new(saved.unwrap_or(false))
+    })
+}
+
+/// Whether an edited file saves itself a moment after typing stops. Off until it is turned on.
+pub fn autosaving() -> bool {
+    autosaves().load(std::sync::atomic::Ordering::Relaxed)
+}
+
+pub fn toggle_autosaving() {
+    let on = !autosaving();
+    autosaves().store(on, std::sync::atomic::Ordering::Relaxed);
+    let _ = std::fs::create_dir_all(crate::backend::data_dir());
+    let _ = std::fs::write(autosave_file(), on.to_string());
+}
+
 /// Quiet time after the last edit before the colors are parsed again.
 const HIGHLIGHT_DEBOUNCE_MS: u64 = 150;
 /// Lines a page key moves the caret by.

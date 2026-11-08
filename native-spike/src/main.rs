@@ -31,6 +31,7 @@ mod file_editor;
 mod file_icons;
 mod folder_icon_data;
 mod fonts;
+mod git_graph;
 mod git_sync;
 mod hover_track;
 mod i18n;

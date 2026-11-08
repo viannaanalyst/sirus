@@ -3974,6 +3974,20 @@ impl Shell {
         conversation.rebuild_last();
     }
 
+    /// The provider a new session starts with: "Provedor padrão", or the open conversation's when
+    /// that one was turned off.
+    fn new_session_agent(&self, active: usize) -> &'static str {
+        let saved = self.settings["defaultAgent"].as_str().unwrap_or("");
+        let off = self.settings["disabledProviders"]
+            .as_array()
+            .is_some_and(|list| list.iter().any(|id| id.as_str() == Some(saved)));
+        if saved.is_empty() || off {
+            self.conversations[active].provider
+        } else {
+            data::provider_id(saved)
+        }
+    }
+
     fn new_conversation(&mut self, project: Option<usize>, cx: &mut Context<Self>) {
         let active = self.active_conversation();
         let project = project
@@ -4001,8 +4015,11 @@ impl Shell {
             self.select(id, cx);
             return;
         }
-        let agent = self.conversations[active].provider;
-        let model = self.conversations[active].model.clone();
+        let agent = self.new_session_agent(active);
+        // The model goes with its provider; another provider starts on its own default.
+        let model = (agent == self.conversations[active].provider)
+            .then(|| self.conversations[active].model.clone())
+            .flatten();
         let id = self.backend.invoke("create_session", json!({ "request": { "projectId": self.projects[project].id, "agent": agent, "isolatedWorktree": false, "model": model } }));
         self.waiting.insert(id, Waiting::Created);
     }
@@ -5705,12 +5722,26 @@ impl Shell {
                 } else if let Some(text) = clipboard.and_then(|item| item.text()) {
                     match self.query_target() {
                         Some(query) => query.push_str(&text),
+                        // Long text goes as a file: the agent reads it without the composer
+                        // holding it all. ⇧⌘V keeps it as text.
+                        None if text.len() >= PASTE_AS_FILE => self.attach_pasted_text(text, cx),
                         None => self.draft().insert(&text),
                     }
                     self.palette_query_changed(cx);
                 }
                 cx.stop_propagation();
                 cx.notify();
+            }
+            (true, true, false, "v") => {
+                if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+                    match self.query_target() {
+                        Some(query) => query.push_str(&text),
+                        None => self.draft().insert(&text),
+                    }
+                    self.palette_query_changed(cx);
+                    cx.stop_propagation();
+                    cx.notify();
+                }
             }
             _ => {}
         }
@@ -6416,6 +6447,14 @@ impl Shell {
         div()
             .id(("tab", id))
             .group(group.clone())
+            // The middle button closes a tab, as in a browser.
+            .on_mouse_down(
+                MouseButton::Middle,
+                cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.close(id, cx);
+                }),
+            )
             .absolute()
             .left(px(tab.x.at(now)))
             .top(px((TITLE_BAR - PLATE) / 2.))
@@ -7805,6 +7844,33 @@ impl Shell {
                                 }),
                             ),
                         )
+                        .children(if self.project_muted(index) {
+                            vec![
+                                item("menu-project-unmute", "bell", "Reativar avisos", None)
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        close(this);
+                                        this.mute_project(index, Some(0), cx);
+                                    }))
+                                    .into_any_element(),
+                            ]
+                        } else {
+                            [
+                                ("menu-project-mute-1", "Silenciar por 1 hora", Some(1)),
+                                ("menu-project-mute-4", "Silenciar por 4 horas", Some(4)),
+                                ("menu-project-mute-8", "Silenciar por 8 horas", Some(8)),
+                                ("menu-project-mute", "Silenciar até reativar", None),
+                            ]
+                            .into_iter()
+                            .map(|(id, label, hours)| {
+                                item(id, "bell", label, None)
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        close(this);
+                                        this.mute_project(index, hours, cx);
+                                    }))
+                                    .into_any_element()
+                            })
+                            .collect()
+                        })
                         .child(
                             item("menu-project-rename", "pencil", "Renomear", Some("F2")).on_click(
                                 cx.listener(move |this, _, _, cx| {
@@ -9152,7 +9218,7 @@ impl Shell {
                 let create = div().id("checkout-create").h(px(34.)).px(px(8.)).mt(px(2.)).rounded(px(crate::theme::RADIUS_MD)).flex().items_center().gap(px(9.)).text_size(px(13.)).text_color(content(0.72)).cursor_pointer().hover(|s| s.bg(content(0.07)))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         let active = this.active_conversation();
-                        let agent = this.conversations[active].provider;
+                        let agent = this.new_session_agent(active);
                         let mut request = json!({ "projectId": this.projects[project_for_new].id, "agent": agent, "isolatedWorktree": true });
                         if !title.is_empty() {
                             request["title"] = json!(title);
@@ -16518,6 +16584,9 @@ const DOCK_FLOOR: f32 = 280.;
 /// How many of the window's 33 ms ticks between readings of what the agents use: about 5 s.
 const RESOURCE_TICKS: u32 = 150;
 
+/// From this many bytes, pasted text becomes an attachment instead of the composer's text.
+const PASTE_AS_FILE: usize = 32 * 1024;
+
 /// The bars on each side of the listening robot.
 const LISTEN_BARS: usize = 14;
 
@@ -17400,7 +17469,6 @@ impl Render for Shell {
             .children(actions_menu)
             .children(action_dialog)
             .children(attachment_modal)
-            .children(confirm_dialog)
             .children(term_plus_menu)
             .children(menu)
             .children(composer_menu)
@@ -17414,6 +17482,7 @@ impl Render for Shell {
             .children(panel)
             .children(usage_page)
             // Over Settings and Usage too, whose pages would cover them.
+            .children(confirm_dialog)
             .children(activity_cards)
             .children(problem_toast)
             .children(palette_view)

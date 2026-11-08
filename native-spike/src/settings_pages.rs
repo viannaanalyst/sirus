@@ -163,7 +163,7 @@ type SwitchRow = (&'static str, &'static str, Field);
 /// What a page reads from the backend: (key in `data`, command, args). Called when the page opens.
 pub fn loads(page: &str) -> Vec<(&'static str, &'static str, Value)> {
     match page {
-        "Provedores" => vec![("agents", "detect_agents", json!({}))],
+        "Geral" | "Provedores" => vec![("agents", "detect_agents", json!({}))],
         "Agent skills" => vec![("skills", "skill_action", skills_catalog())],
         "Conectores" => vec![
             (
@@ -405,7 +405,7 @@ fn build(page: &str, s: &Value, d: &HashMap<&'static str, Value>) -> Page {
         "Geral" => page_of(
             t("Geral"),
             t("Escolha os padrões para novas sessões, navegação e o painel Ambiente."),
-            general(s),
+            general(s, d),
         ),
         "Comportamento do chat" => page_of(
             t("Comportamento do chat"),
@@ -729,8 +729,9 @@ fn local_when(stamp: &str, style: &str) -> String {
 
 fn group_view<V: 'static>(group: Group, ui: &mut Ui<'_, V>, cx: &mut Context<V>) -> AnyElement {
     let mut rows = Vec::new();
-    for item in group.rows {
-        rows.push(row_view(item, ui, cx));
+    let count = group.rows.len();
+    for (at, item) in group.rows.into_iter().enumerate() {
+        rows.push(row_view(item, at + 1 == count, ui, cx));
     }
     let mut block = div().mb(px(32.));
     if !group.title.is_empty() {
@@ -755,7 +756,14 @@ fn group_view<V: 'static>(group: Group, ui: &mut Ui<'_, V>, cx: &mut Context<V>)
         .into_any_element()
 }
 
-fn row_view<V: 'static>(item: Row, ui: &mut Ui<'_, V>, cx: &mut Context<V>) -> AnyElement {
+/// A row of a card. The last has no rule of its own: the card's border already closes it, and a
+/// rule there runs past the card's rounded corners.
+fn row_view<V: 'static>(
+    item: Row,
+    last: bool,
+    ui: &mut Ui<'_, V>,
+    cx: &mut Context<V>,
+) -> AnyElement {
     let mut controls = Vec::new();
     for ctl in item.controls {
         controls.push(control_view(ctl, ui, cx));
@@ -785,8 +793,7 @@ fn row_view<V: 'static>(item: Row, ui: &mut Ui<'_, V>, cx: &mut Context<V>) -> A
         .items_center()
         .justify_between()
         .gap(px(20.))
-        .border_b_1()
-        .border_color(content(0.07))
+        .when(!last, |d| d.border_b_1().border_color(content(0.07)))
         .when(item.faded, |d| d.opacity(0.5))
         .child(
             div()
@@ -1411,8 +1418,30 @@ fn origin_label(origin: &str) -> String {
     }
 }
 
-fn general(s: &Value) -> Vec<Group> {
-    let provider = provider_name(&current(s, top("defaultAgent")));
+/// The providers a new session can start with: those installed and on, and the one saved, so
+/// the control always shows it. Until the list arrives, only the one saved.
+fn default_agent_options(
+    s: &Value,
+    d: &HashMap<&'static str, Value>,
+) -> Vec<(&'static str, &'static str)> {
+    let agents = get_data(d, "agents");
+    let disabled = strings(&s["disabledProviders"]);
+    let saved = current(s, top("defaultAgent"));
+    PROVIDER_LIST
+        .iter()
+        .filter(|&&(id, _)| {
+            let installed = agents.as_array().is_some_and(|items| {
+                items.iter().any(|item| {
+                    item["id"].as_str() == Some(id) && item["installed"].as_bool() == Some(true)
+                })
+            });
+            id == saved || (installed && !has(&disabled, id))
+        })
+        .copied()
+        .collect()
+}
+
+fn general(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
     let sidebar_rows: &[SwitchRow] = &[(
         t("Trabalhando e não lidas primeiro"),
         t(
@@ -1471,7 +1500,7 @@ fn general(s: &Value) -> Vec<Group> {
         row(
             t("Provedor padrão"),
             t("Escolha o provedor das novas sessões. As sessões atuais mantêm seu provedor."),
-            vec![Ctl::Read(provider)],
+            vec![pick(s, top("defaultAgent"), &default_agent_options(s, d))],
         ),
         row(
             t("Novas sessões"),

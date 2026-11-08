@@ -810,12 +810,13 @@ pub async fn git_commit(
     session_id: String,
     message: String,
     expected_index: Option<String>,
+    amend: Option<bool>,
 ) -> Result<GitCommitResult> {
     let state = state.inner().clone();
     native_task(move || {
         let cwd = session_path(&state, &session_id)?;
         state.ensure_running()?;
-        let result = git::commit_checked(&cwd, &message, expected_index.as_deref(), || {
+        let admit = || {
             state.ensure_running()?;
             if session_path(&state, &session_id)? != cwd {
                 return Err(Error::invalid_path(
@@ -823,7 +824,12 @@ pub async fn git_commit(
                 ));
             }
             Ok(())
-        })?;
+        };
+        let result = if amend.unwrap_or(false) {
+            git::amend_checked(&cwd, &message, expected_index.as_deref(), admit)?
+        } else {
+            git::commit_checked(&cwd, &message, expected_index.as_deref(), admit)?
+        };
         if session_path(&state, &session_id)? != cwd {
             return Err(Error::invalid_path(
                 "Workspace changed. Refresh before continuing.",

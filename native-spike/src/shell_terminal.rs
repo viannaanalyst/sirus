@@ -976,6 +976,13 @@ impl Shell {
                     now,
                 )
                 .on_mouse_down(
+                    MouseButton::Middle,
+                    cx.listener(move |this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.close_title_tab(id, window, cx);
+                    }),
+                )
+                .on_mouse_down(
                     MouseButton::Right,
                     cx.listener(move |this, event: &MouseDownEvent, _, cx| {
                         cx.stop_propagation();

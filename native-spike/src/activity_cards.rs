@@ -301,6 +301,45 @@ impl Shell {
         sessions
     }
 
+    /// Whether a project is silenced now: no cards, no sounds, no badge. What it left unread stays.
+    pub(super) fn project_muted(&self, project: usize) -> bool {
+        self.projects
+            .get(project)
+            .and_then(|project| self.settings["mutedProjects"][project.id.as_str()].as_i64())
+            .is_some_and(|until| until > chrono::Utc::now().timestamp_millis())
+    }
+
+    /// Silences a project for `hours`, or until it is turned back on with `None`; `Some(0)` lifts it.
+    pub(super) fn mute_project(
+        &mut self,
+        project: usize,
+        hours: Option<i64>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(id) = self.projects.get(project).map(|project| project.id.clone()) else {
+            return;
+        };
+        let now = chrono::Utc::now().timestamp_millis();
+        let mut list = self.settings["mutedProjects"].clone();
+        if !list.is_object() {
+            list = json!({});
+        }
+        let kept = list.as_object_mut().expect("just made an object");
+        kept.retain(|_, until| until.as_i64().is_some_and(|until| until > now));
+        match hours {
+            Some(0) => {
+                kept.remove(&id);
+            }
+            Some(hours) => {
+                kept.insert(id, json!(now + hours * 3_600_000));
+            }
+            None => {
+                kept.insert(id, json!(i64::MAX));
+            }
+        }
+        self.save_setting("mutedProjects", list, cx);
+    }
+
     /// `notification-activity` from the host.
     pub(super) fn activity_event(&mut self, payload: &Value, cx: &mut Context<Self>) {
         let Some(event) = Event::parse(payload) else {
@@ -367,7 +406,7 @@ impl Shell {
     /// The badge of a project row: waiting requests and unseen results of conversations that are
     /// not on screen. Nothing with "Avisos no app" off.
     pub(super) fn project_badge(&self, project: usize) -> Option<Badge> {
-        if !toasts_on(&self.settings) {
+        if !toasts_on(&self.settings) || self.project_muted(project) {
             return None;
         }
         let visible = if self.window_active {

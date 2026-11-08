@@ -794,6 +794,8 @@ pub struct AppSettings {
     pub restore_previous_sessions: bool,
     pub check_for_updates: bool,
     pub disabled_providers: Vec<AgentProviderId>,
+    /// Projects silenced, by id, until this moment in milliseconds (ADR-198).
+    pub muted_projects: std::collections::BTreeMap<String, i64>,
     pub provider_paths: std::collections::HashMap<AgentProviderId, String>,
     pub theme: ThemePref,
     pub dark_window_translucent: bool,
@@ -998,6 +1000,7 @@ impl Default for AppSettings {
             restore_previous_sessions: true,
             check_for_updates: false,
             disabled_providers: Vec::new(),
+            muted_projects: std::collections::BTreeMap::new(),
             provider_paths: std::collections::HashMap::new(),
             theme: ThemePref::Dark,
             dark_window_translucent: false,

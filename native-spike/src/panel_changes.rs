@@ -15,16 +15,30 @@ use crate::panels::PanelContext;
 use crate::project_files::run_blocking;
 use crate::theme::{accent, accent_wash, content, diff_colors, on_accent};
 use gpui::{
-    AnyElement, AnyView, App, Context, Div, Entity, Hsla, Render, Subscription, Window, div,
-    prelude::*, px, rgb, svg, uniform_list,
+    AnyElement, AnyView, App, Context, Div, Entity, Hsla, Render, Stateful, Subscription, Window,
+    div, prelude::*, px, rgb, svg, uniform_list,
 };
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::rc::Rc;
 
+/// The Alterações tab: the branch and its history.
 pub fn new(context: PanelContext, cx: &mut App) -> AnyView {
+    build(context, Mode::History, cx)
+}
+
+/// The changes view the top bar's +N −N opens: message, Commit and the changed files.
+pub fn new_review(context: PanelContext, cx: &mut App) -> AnyView {
+    build(context, Mode::Review, cx)
+}
+
+fn build(context: PanelContext, mode: Mode, cx: &mut App) -> AnyView {
     cx.new(|cx| {
-        let commit = cx.new(|cx| TextField::new(t("Título do commit"), cx));
+        let commit = cx.new(|cx| {
+            let mut field = TextField::new(t("Mensagem (⌘↩ para commit)"), cx);
+            field.set_bare(true);
+            field
+        });
         let commit_events = cx.subscribe(
             &commit,
             |this: &mut ChangesPanel, _, event: &TextFieldEvent, cx| match event {
@@ -40,6 +54,10 @@ pub fn new(context: PanelContext, cx: &mut App) -> AnyView {
             cx,
         );
         let mut panel = ChangesPanel {
+            mode,
+            menu: None,
+            staged_open: true,
+            changes_open: true,
             _follow: follow,
             backend: context.backend,
             session_id: context.session_id,
@@ -144,7 +162,33 @@ struct CommitDiff {
     lines: Lines,
 }
 
+/// Which half of the old Alterações tab a panel shows.
+#[derive(Clone, Copy, PartialEq)]
+enum Mode {
+    /// The branch row and the Histórico.
+    History,
+    /// The message, the Commit button and the changed files.
+    Review,
+}
+
+/// The menu open over the changes view.
+#[derive(Clone, Copy, PartialEq)]
+enum Menu {
+    /// The "⋯" of the branch row.
+    Branch,
+    /// The "▾" of the Commit button.
+    Commit,
+}
+
+/// The header bar's height, and where the Commit button's menu starts under it.
+const TITLE: f32 = 34.;
+const COMMIT_BAR: f32 = 8. + 34. + 8. + 32. + 4.;
+
 struct ChangesPanel {
+    mode: Mode,
+    menu: Option<Menu>,
+    staged_open: bool,
+    changes_open: bool,
     /// Reads the status again when files change on disk; stops with the panel.
     _follow: crate::workspace_follow::Follow,
     backend: Backend,
@@ -820,30 +864,8 @@ impl ChangesPanel {
             }
             row = row.child(line);
         }
-        let has_open = self
-            .pr
-            .found
-            .as_ref()
-            .and_then(|found| found.request.as_ref())
-            .is_some_and(|request| request.state == "open");
-        if !self.pr.open && has_open {
-            return row.into_any_element();
-        }
         if !self.pr.open {
-            return row
-                .child(
-                    div()
-                        .flex()
-                        .child(small("pr-create", create_label, false, true).on_click(
-                            cx.listener(|this, _, _, cx| {
-                                this.pr.open = true;
-                                this.pr.result = None;
-                                this.pr.title.update(cx, |field, cx| field.focus(cx));
-                                cx.notify();
-                            }),
-                        )),
-                )
-                .into_any_element();
+            return row.into_any_element();
         }
         let typed = !self.pr.title.read(cx).text().trim().is_empty();
         let enabled = typed && !self.pr.creating;
@@ -1044,28 +1066,85 @@ impl ChangesPanel {
         cx.notify();
     }
 
+    /// One changed file, as Monocode draws it: its icon, name, the folder dimmed and cut to fit,
+    /// the line counts and the status letter. A click opens the diff; the end button moves the
+    /// file between Preparadas and Alterações.
     fn change_row(&self, entry: &Entry, staged: bool, cx: &mut Context<Self>) -> AnyElement {
         let (added, removed) = diff_colors(0);
         let (add, remove) = self.counts.get(&entry.path).copied().unwrap_or((0, 0));
-        let (dir, name) = match entry.path.rsplit_once('/') {
-            Some((dir, name)) => (dir.to_owned(), name.to_owned()),
-            None => (String::new(), entry.path.clone()),
-        };
+        let (dir, name) = split_path(&entry.path);
         let (letter, letter_color) = kind_mark(&entry.kind, added, removed);
         let (open_path, stage_path) = (entry.path.clone(), entry.path.clone());
-        let info = div()
+        let enabled = entry.actionable && !self.busy;
+        let icon = crate::file_icons::file_icon(&name, false, 14.);
+        let mut mover = div()
+            .id(format!("move:{staged}:{}", entry.path))
+            .size(px(20.))
+            .rounded(px(crate::theme::RADIUS_SM))
+            .flex()
+            .items_center()
+            .justify_center()
+            .flex_shrink_0()
+            .tooltip(crate::shell::message_actions::name_tip(if staged {
+                t("Despreparar")
+            } else {
+                t("Preparar")
+            }))
+            .child(
+                svg()
+                    .path(if staged { "minus" } else { "plus" })
+                    .size(px(12.))
+                    .text_color(content(0.6))
+                    .flex_shrink_0(),
+            );
+        mover =
+            if enabled {
+                mover
+                    .cursor_pointer()
+                    .hover(|style| style.bg(content(0.1)))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.move_path(stage_path.clone(), staged, cx)
+                    }))
+            } else {
+                mover.opacity(0.35)
+            };
+        div()
             .id(format!("open:{staged}:{}", entry.path))
-            .flex_1()
-            .min_w_0()
             .flex()
             .items_center()
             .gap(px(8.))
-            .px(px(12.))
+            .px(px(14.))
             .py(px(4.))
+            .whitespace_nowrap()
             .cursor_pointer()
             .hover(|style| style.bg(content(0.05)))
             .on_click(
                 cx.listener(move |this, _, _, cx| this.open_diff(open_path.clone(), staged, cx)),
+            )
+            .child(icon)
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .text_size(px(12.5))
+                    .text_color(content(0.9))
+                    .child(name),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(11.5))
+                    .text_color(content(0.38))
+                    .child(dir),
+            )
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .font_family("Menlo")
+                    .text_size(px(11.))
+                    .text_color(content(0.45))
+                    .child(counts_text(add, remove)),
             )
             .child(
                 div()
@@ -1076,104 +1155,81 @@ impl ChangesPanel {
                     .text_color(letter_color)
                     .child(letter),
             )
-            .child(
-                div()
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .child(
-                        div()
-                            .truncate()
-                            .text_size(px(12.5))
-                            .text_color(content(0.9))
-                            .child(name),
-                    )
-                    .child(
-                        div()
-                            .truncate()
-                            .text_size(px(11.))
-                            .text_color(content(0.4))
-                            .child(dir),
-                    ),
-            )
-            .child(
-                div()
-                    .ml_auto()
-                    .flex_shrink_0()
-                    .flex()
-                    .gap(px(5.))
-                    .font_family("Menlo")
-                    .text_size(px(11.))
-                    .child(div().text_color(added).child(format!("+{add}")))
-                    .child(div().text_color(removed).child(format!("−{remove}"))),
-            );
-        let enabled = entry.actionable && !self.busy;
-        let mut button = div()
-            .id(format!("move:{staged}:{}", entry.path))
-            .h(px(24.))
-            .px(px(8.))
-            .ml(px(6.))
-            .rounded(px(crate::theme::RADIUS_SM))
-            .border_1()
-            .border_color(content(0.12))
-            .flex()
-            .items_center()
-            .flex_shrink_0()
-            .text_size(px(12.))
-            .text_color(content(0.85))
-            .child(if staged {
-                t("Despreparar")
-            } else {
-                t("Preparar")
-            });
-        button =
-            if enabled {
-                button
-                    .cursor_pointer()
-                    .hover(|style| style.bg(content(0.08)))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.move_path(stage_path.clone(), staged, cx)
-                    }))
-            } else {
-                button.opacity(0.45)
-            };
-        div()
-            .flex()
-            .items_center()
-            .pr(px(8.))
-            .child(info)
-            .child(button)
+            .child(mover)
             .into_any_element()
     }
 
-    fn group(
+    /// A section header of the changes view: a fold arrow, the name, a count pill and, on the
+    /// right, the section's buttons.
+    fn section_header(
         &self,
+        id: &'static str,
         title: &str,
-        entries: &[Entry],
-        staged: bool,
+        count: usize,
+        open: bool,
+        tools: Vec<AnyElement>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         div()
             .flex()
-            .flex_col()
-            .pb(px(6.))
+            .items_center()
+            .gap(px(6.))
+            .px(px(14.))
+            .py(px(6.))
             .child(
                 div()
-                    .px(px(12.))
-                    .pt(px(8.))
-                    .pb(px(4.))
-                    .text_size(px(12.))
-                    .text_color(content(0.5))
-                    .child(format!("{title} · {}", entries.len())),
+                    .id(id)
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .cursor_pointer()
+                    .child(
+                        svg()
+                            .path(if open {
+                                "chevron-down"
+                            } else {
+                                "chevron-right"
+                            })
+                            .size(px(12.))
+                            .text_color(content(0.5))
+                            .flex_shrink_0(),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .text_color(content(0.6))
+                            .child(title.to_owned()),
+                    )
+                    .child(
+                        div()
+                            .px(px(7.))
+                            .rounded(px(99.))
+                            .bg(accent_wash(0.25))
+                            .text_size(px(10.5))
+                            .text_color(content(0.85))
+                            .child(count.to_string()),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        match id {
+                            "fold-staged" => this.staged_open = !this.staged_open,
+                            _ => this.changes_open = !this.changes_open,
+                        }
+                        cx.notify();
+                    })),
             )
-            .children(
-                entries
-                    .iter()
-                    .map(|entry| self.change_row(entry, staged, cx)),
+            .child(
+                div()
+                    .ml_auto()
+                    .flex()
+                    .items_center()
+                    .gap(px(4.))
+                    .children(tools),
             )
             .into_any_element()
     }
 
+    /// The history tab's body: only the Histórico.
     fn list(&self, cx: &mut Context<Self>) -> AnyElement {
         let mut blocks = Vec::new();
         match &self.snapshot {
@@ -1181,27 +1237,7 @@ impl ChangesPanel {
             Some(snapshot) if !snapshot.repo => {
                 blocks.push(note(t("Esta pasta não é um repositório Git."), false))
             }
-            Some(snapshot) => {
-                if snapshot.staged.is_empty() && snapshot.unstaged.is_empty() {
-                    blocks.push(note(t("Nenhuma alteração."), false));
-                }
-                if !snapshot.staged.is_empty() {
-                    blocks.push(self.group(t("Preparados"), &snapshot.staged, true, cx));
-                }
-                if !snapshot.unstaged.is_empty() {
-                    blocks.push(self.group(t("Alterações"), &snapshot.unstaged, false, cx));
-                }
-                if snapshot.conflicts {
-                    blocks.push(note(t("Há conflitos: resolva-os antes de preparar."), true));
-                }
-                if snapshot.truncated {
-                    blocks.push(note(
-                        t("A lista está incompleta: há mais arquivos do que o limite."),
-                        false,
-                    ));
-                }
-                blocks.push(self.history(snapshot, cx));
-            }
+            Some(snapshot) => blocks.push(self.history(snapshot, cx)),
         }
         div()
             .id("changes-list")
@@ -1213,6 +1249,162 @@ impl ChangesPanel {
             .flex_col()
             .children(blocks)
             .into_any_element()
+    }
+
+    /// The changes view's body, under the message field and the Commit button: Preparadas and
+    /// Alterações, each foldable, or "Nenhuma alteração".
+    fn review_list(&self, cx: &mut Context<Self>) -> AnyElement {
+        let mut blocks = Vec::new();
+        match &self.snapshot {
+            None => blocks.push(note(t("Carregando…"), false)),
+            Some(snapshot) if !snapshot.repo => {
+                blocks.push(note(t("Esta pasta não é um repositório Git."), false))
+            }
+            Some(snapshot) => {
+                if snapshot.staged.is_empty() && snapshot.unstaged.is_empty() {
+                    blocks.push(note(t("Nenhuma alteração"), false));
+                }
+                if !snapshot.staged.is_empty() {
+                    let unstage_all = self.tool_button(
+                        "unstage-all",
+                        "minus",
+                        t("Despreparar tudo"),
+                        !self.busy && !actionable_paths(&snapshot.staged).is_empty(),
+                        cx.listener(|this, _, _, cx| this.move_all(true, cx)),
+                    );
+                    blocks.push(self.section_header(
+                        "fold-staged",
+                        t("PREPARADAS"),
+                        snapshot.staged.len(),
+                        self.staged_open,
+                        vec![unstage_all],
+                        cx,
+                    ));
+                    if self.staged_open {
+                        blocks.extend(
+                            snapshot
+                                .staged
+                                .iter()
+                                .map(|entry| self.change_row(entry, true, cx)),
+                        );
+                    }
+                }
+                if !snapshot.unstaged.is_empty() {
+                    let stage_all = self.tool_button(
+                        "stage-all",
+                        "square-plus",
+                        t("Preparar tudo"),
+                        !self.busy && !actionable_paths(&snapshot.unstaged).is_empty(),
+                        cx.listener(|this, _, _, cx| this.move_all(false, cx)),
+                    );
+                    blocks.push(self.section_header(
+                        "fold-changes",
+                        t("ALTERAÇÕES"),
+                        snapshot.unstaged.len(),
+                        self.changes_open,
+                        vec![stage_all],
+                        cx,
+                    ));
+                    if self.changes_open {
+                        blocks.extend(
+                            snapshot
+                                .unstaged
+                                .iter()
+                                .map(|entry| self.change_row(entry, false, cx)),
+                        );
+                    }
+                }
+                if snapshot.conflicts {
+                    blocks.push(note(t("Há conflitos: resolva-os antes de preparar."), true));
+                }
+                if snapshot.truncated {
+                    blocks.push(note(
+                        t("A lista está incompleta: há mais arquivos do que o limite."),
+                        false,
+                    ));
+                }
+            }
+        }
+        div()
+            .id("review-list")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .pb(px(8.))
+            .flex()
+            .flex_col()
+            .children(blocks)
+            .into_any_element()
+    }
+
+    /// A small icon button of a section header.
+    fn tool_button(
+        &self,
+        id: &'static str,
+        glyph: &'static str,
+        tip: &'static str,
+        enabled: bool,
+        on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> AnyElement {
+        let button = div()
+            .id(id)
+            .size(px(22.))
+            .rounded(px(crate::theme::RADIUS_SM))
+            .flex()
+            .items_center()
+            .justify_center()
+            .tooltip(crate::shell::message_actions::name_tip(tip))
+            .child(
+                svg()
+                    .path(glyph)
+                    .size(px(14.))
+                    .text_color(content(0.55))
+                    .flex_shrink_0(),
+            );
+        if enabled {
+            button
+                .cursor_pointer()
+                .hover(|style| style.bg(content(0.08)))
+                .on_click(on_click)
+                .into_any_element()
+        } else {
+            button.opacity(0.35).into_any_element()
+        }
+    }
+
+    /// Stages every actionable unstaged file, or unstages every staged one, in one request.
+    fn move_all(&mut self, staged: bool, cx: &mut Context<Self>) {
+        let Some(snapshot) = self.snapshot.as_ref() else {
+            return;
+        };
+        let paths = actionable_paths(if staged {
+            &snapshot.staged
+        } else {
+            &snapshot.unstaged
+        });
+        if paths.is_empty() || self.busy {
+            return;
+        }
+        let token = snapshot.token.clone();
+        self.busy = true;
+        self.error = None;
+        let action = if staged { "unstage" } else { "stage" };
+        let rx = self.backend.request(
+            "git_workspace_action",
+            json!({ "action": { "type": action, "sessionId": self.session_id, "paths": paths, "expectedIndex": token } }),
+        );
+        cx.spawn(async move |this, cx| {
+            let reply = settle(rx).await;
+            let _ = this.update(cx, |this, cx| {
+                this.busy = false;
+                if let Err(error) = reply {
+                    this.error = Some(error);
+                }
+                this.refresh(cx);
+            });
+        })
+        .detach();
+        cx.notify();
     }
 
     /// The Histórico: the snapshot's commits, then the pages loaded since, one graph row each.
@@ -1229,11 +1421,27 @@ impl ChangesPanel {
         let count = commits.len();
         let mut section = div().flex().flex_col().pt(px(8.)).pb(px(6.)).child(
             div()
-                .px(px(12.))
-                .pb(px(4.))
-                .text_size(px(12.))
-                .text_color(content(0.5))
-                .child(tf("Histórico · {}", &[&count])),
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .px(px(14.))
+                .pb(px(6.))
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .text_color(content(0.6))
+                        .child(t("HISTÓRICO")),
+                )
+                .child(
+                    div()
+                        .px(px(7.))
+                        .rounded(px(99.))
+                        .bg(accent_wash(0.25))
+                        .text_size(px(10.5))
+                        .text_color(content(0.85))
+                        .child(count.to_string()),
+                ),
         );
         if commits.is_empty() {
             section = section.child(note(t("Nenhum commit ainda."), false));
@@ -1303,80 +1511,192 @@ impl ChangesPanel {
         section.into_any_element()
     }
 
-    /// The commit title and its button, under the lists; shown when there are staged files.
-    fn footer(&self, snapshot: &Snapshot, cx: &mut Context<Self>) -> AnyElement {
+    /// A row of a floating menu.
+    fn menu_item(
+        &self,
+        id: &'static str,
+        label: &str,
+        checked: bool,
+        enabled: bool,
+    ) -> Stateful<Div> {
+        let row = div()
+            .id(id)
+            .px(px(9.))
+            .py(px(6.))
+            .rounded(px(crate::theme::RADIUS_SM))
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .text_size(px(12.5))
+            .text_color(content(0.85))
+            .child(div().flex_1().child(label.to_owned()))
+            .when(checked, |d| {
+                d.child(
+                    svg()
+                        .path("check")
+                        .size(px(12.))
+                        .text_color(accent())
+                        .flex_shrink_0(),
+                )
+            });
+        if enabled {
+            row.cursor_pointer().hover(|style| style.bg(content(0.08)))
+        } else {
+            row.opacity(0.4)
+        }
+    }
+
+    /// The branch's "⋯" menu or the Commit button's "▾" menu, floating over the view, with a
+    /// backdrop that closes it.
+    fn menu_overlay(&self, snapshot: &Snapshot, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let menu = self.menu?;
         let typed = !self.commit.read(cx).text().trim().is_empty();
         let can_amend =
             snapshot.ahead.is_none_or(|ahead| ahead > 0) && !snapshot.history.is_empty();
         let amending = self.amending && can_amend;
-        let enabled = (amending || typed)
-            && !self.committing
-            && (amending || !snapshot.staged.is_empty())
-            && !snapshot.token.is_empty();
-        let button = div()
-            .id("commit-button")
-            .h(px(28.))
-            .px(px(12.))
-            .rounded(px(crate::theme::RADIUS_MD))
-            .flex()
-            .items_center()
-            .flex_shrink_0()
-            .text_size(px(12.))
-            .bg(accent())
-            .text_color(on_accent())
-            .child(if self.committing {
-                t("Enviando…")
-            } else if amending {
-                t("Corrigir")
-            } else {
-                "Commit"
-            });
-        let button = if enabled {
-            button
-                .cursor_pointer()
-                .hover(|style| style.opacity(0.9))
-                .on_click(cx.listener(|this, _, _, cx| this.commit(cx)))
-                .into_any_element()
-        } else {
-            button.opacity(0.4).into_any_element()
-        };
-        let mut footer = div()
-            .flex_shrink_0()
-            .flex()
-            .flex_col()
-            .border_t_1()
-            .border_color(content(0.07));
-        if let Some(error) = &self.error {
-            footer = footer.child(note(error, true));
-        }
-        if let Some(text) = &self.title_note {
-            footer = footer.child(note(text, false));
-        }
+        let ready = commit_ready(
+            typed,
+            amending,
+            self.committing,
+            snapshot.staged.is_empty(),
+            snapshot.token.is_empty(),
+        );
         let can_push = can_push(snapshot.repo, snapshot.detached, &snapshot.head);
-        let small = |id: &'static str, label: &'static str, on: bool| {
-            let base = div()
-                .id(id)
-                .h(px(26.))
-                .px(px(10.))
-                .rounded(px(crate::theme::RADIUS_MD))
-                .flex()
-                .items_center()
-                .flex_shrink_0()
-                .text_size(px(12.))
-                .bg(content(0.07))
-                .text_color(content(0.85))
-                .child(label);
-            if on {
-                base.cursor_pointer().hover(|style| style.opacity(0.9))
-            } else {
-                base.opacity(0.4)
+        let has_open = self
+            .pr
+            .found
+            .as_ref()
+            .and_then(|found| found.request.as_ref())
+            .is_some_and(|request| request.state == "open");
+        let merge_request = self.pr.found.as_ref().is_some_and(Found::merge_request);
+        let mut items: Vec<AnyElement> = Vec::new();
+        let top;
+        match menu {
+            Menu::Branch => {
+                top = TITLE + 4.;
+                items.push(
+                    self.menu_item("menu-refresh", t("Atualizar"), false, true)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.menu = None;
+                            this.refresh(cx);
+                        }))
+                        .into_any_element(),
+                );
             }
-        };
+            Menu::Commit => {
+                top = TITLE + COMMIT_BAR;
+                let both_on = ready && can_push;
+                items.push(
+                    self.menu_item("menu-commit-push", t("Commit e Push"), false, both_on)
+                        .when(both_on, |d| {
+                            d.on_click(cx.listener(|this, _, _, cx| {
+                                this.menu = None;
+                                this.commit_with(true, cx);
+                            }))
+                        })
+                        .into_any_element(),
+                );
+                let push_on = can_push && !self.push.pushing;
+                items.push(
+                    self.menu_item("menu-push", t("Push"), false, push_on)
+                        .when(push_on, |d| {
+                            d.on_click(cx.listener(|this, _, _, cx| {
+                                this.menu = None;
+                                this.push.confirm = true;
+                                this.push.result = None;
+                                cx.notify();
+                            }))
+                        })
+                        .into_any_element(),
+                );
+                let pr_on = snapshot.branch.is_some() && !has_open && !self.pr.open;
+                items.push(
+                    self.menu_item(
+                        "menu-pr",
+                        if merge_request {
+                            t("Criar MR")
+                        } else {
+                            t("Criar PR")
+                        },
+                        false,
+                        pr_on,
+                    )
+                    .when(pr_on, |d| {
+                        d.on_click(cx.listener(|this, _, _, cx| {
+                            this.menu = None;
+                            this.pr.open = true;
+                            this.pr.result = None;
+                            this.pr.title.update(cx, |field, cx| field.focus(cx));
+                            cx.notify();
+                        }))
+                    })
+                    .into_any_element(),
+                );
+                if can_amend {
+                    items.push(
+                        self.menu_item("menu-amend", t("Corrigir o último"), amending, true)
+                            .tooltip(crate::shell::message_actions::name_tip(t(
+                                "O próximo commit substitui o último, que ainda não foi enviado. Sem título, mantém a mensagem dele.",
+                            )))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.menu = None;
+                                this.amending = !this.amending;
+                                cx.notify();
+                            }))
+                            .into_any_element(),
+                    );
+                }
+            }
+        }
+        Some(
+            div()
+                .id("changes-menu-backdrop")
+                .absolute()
+                .inset_0()
+                .occlude()
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.menu = None;
+                    cx.notify();
+                }))
+                .child(
+                    div()
+                        .absolute()
+                        .top(px(top))
+                        .right(px(12.))
+                        .w(px(200.))
+                        .p(px(5.))
+                        .rounded(px(crate::theme::RADIUS_MD))
+                        .bg(crate::theme::opaque_floating())
+                        .border_1()
+                        .border_color(content(0.1))
+                        .shadow_lg()
+                        .flex()
+                        .flex_col()
+                        .children(items),
+                )
+                .into_any_element(),
+        )
+    }
+
+    /// The changes view's top: the message field with its ✦, the split Commit button, and what
+    /// the last commit, push or pull request said.
+    fn commit_bar(&self, snapshot: &Snapshot, cx: &mut Context<Self>) -> AnyElement {
+        let typed = !self.commit.read(cx).text().trim().is_empty();
+        let can_amend =
+            snapshot.ahead.is_none_or(|ahead| ahead > 0) && !snapshot.history.is_empty();
+        let amending = self.amending && can_amend;
+        let ready = commit_ready(
+            typed,
+            amending,
+            self.committing,
+            snapshot.staged.is_empty(),
+            snapshot.token.is_empty(),
+        );
         let busy_title = self.title_job.is_some();
         let sparkle_on = !busy_title && !self.committing && !snapshot.staged.is_empty();
         let sparkle = div()
             .id("commit-generate")
-            .size(px(26.))
+            .size(px(24.))
             .rounded(px(crate::theme::RADIUS_SM))
             .flex()
             .items_center()
@@ -1384,7 +1704,7 @@ impl ChangesPanel {
             .flex_shrink_0()
             .child(
                 svg()
-                    .path(if busy_title { "square" } else { "zap" })
+                    .path(if busy_title { "square" } else { "sparkles" })
                     .size(px(14.))
                     .text_color(content(0.6))
                     .flex_shrink_0(),
@@ -1412,63 +1732,130 @@ impl ChangesPanel {
         } else {
             sparkle.opacity(0.4)
         };
-        let both_on = enabled && can_push;
-        let amend_toggle = can_amend.then(|| {
-            small("commit-amend", t("Corrigir o último"), true)
-                .when(amending, |b| b.bg(accent_wash(0.18)).text_color(accent()))
-                .tooltip(crate::shell::message_actions::name_tip(t(
-                    "O próximo commit substitui o último, que ainda não foi enviado. Sem título, mantém a mensagem dele.",
-                )))
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.amending = !this.amending;
-                    cx.notify();
-                }))
-        });
-        let push_row = div()
+        let field = div()
+            .mx(px(12.))
+            .mt(px(8.))
+            .h(px(34.))
+            .px(px(10.))
+            .rounded(px(crate::theme::RADIUS_MD))
+            .bg(content(0.05))
+            .border_1()
+            .border_color(content(0.08))
             .flex()
             .items_center()
             .gap(px(6.))
-            .px(px(8.))
-            .pb(px(8.))
-            .children(amend_toggle)
+            .child(div().flex_1().min_w_0().child(self.commit.clone()))
+            .child(sparkle);
+        let main = div()
+            .id("commit-button")
+            .flex_1()
+            .h_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .gap(px(6.))
+            .text_size(px(13.))
+            .font_weight(gpui::FontWeight::BOLD)
+            .bg(accent())
+            .text_color(on_accent())
             .child(
-                small("commit-push", t("Commit e Push"), both_on).when(both_on, |b| {
-                    b.on_click(cx.listener(|this, _, _, cx| this.commit_with(true, cx)))
-                }),
+                svg()
+                    .path("check")
+                    .size(px(14.))
+                    .text_color(on_accent())
+                    .flex_shrink_0(),
             )
+            .child(if self.committing {
+                t("Enviando…")
+            } else if amending {
+                t("Corrigir")
+            } else {
+                "Commit"
+            });
+        let main = if ready {
+            main.cursor_pointer()
+                .hover(|style| style.opacity(0.9))
+                .on_click(cx.listener(|this, _, _, cx| this.commit(cx)))
+        } else {
+            main.opacity(0.45)
+        };
+        let dropdown = div()
+            .id("commit-menu")
+            .w(px(34.))
+            .h_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(accent())
+            .border_l_1()
+            .border_color(gpui::hsla(0., 0., 0., 0.2))
+            .cursor_pointer()
+            .hover(|style| style.opacity(0.9))
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.menu = if this.menu == Some(Menu::Commit) {
+                    None
+                } else {
+                    Some(Menu::Commit)
+                };
+                cx.notify();
+            }))
             .child(
-                small("push-only", t("Push"), can_push && !self.push.pushing).when(
-                    can_push && !self.push.pushing,
-                    |b| {
-                        b.on_click(cx.listener(|this, _, _, cx| {
-                            this.push.confirm = true;
-                            this.push.result = None;
-                            cx.notify();
-                        }))
-                    },
-                ),
+                svg()
+                    .path("chevron-down")
+                    .size(px(14.))
+                    .text_color(on_accent())
+                    .flex_shrink_0(),
             );
-        footer = footer
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .p(px(8.))
-                    .child(div().flex_1().min_w_0().child(self.commit.clone()))
-                    .child(sparkle)
-                    .child(button),
-            )
-            .child(push_row);
+        let split = div()
+            .mx(px(12.))
+            .mt(px(8.))
+            .mb(px(8.))
+            .h(px(32.))
+            .rounded(px(crate::theme::RADIUS_MD))
+            .overflow_hidden()
+            .flex()
+            .child(main)
+            .child(dropdown);
+        let mut bar = div()
+            .flex_shrink_0()
+            .flex()
+            .flex_col()
+            .child(field)
+            .child(split);
+        if let Some(error) = &self.error {
+            bar = bar.child(note(error, true));
+        }
+        if let Some(text) = &self.title_note {
+            bar = bar.child(note(text, false));
+        }
         if self.push.confirm {
             let branch = snapshot.branch.clone().unwrap_or_default();
             let pushing = self.push.pushing;
-            footer = footer.child(
+            let button = |id: &'static str, label: &'static str, enabled: bool| {
+                let base = div()
+                    .id(id)
+                    .h(px(26.))
+                    .px(px(10.))
+                    .rounded(px(crate::theme::RADIUS_MD))
+                    .flex()
+                    .items_center()
+                    .flex_shrink_0()
+                    .text_size(px(12.))
+                    .bg(content(0.07))
+                    .text_color(content(0.85))
+                    .child(label);
+                if enabled {
+                    base.cursor_pointer().hover(|style| style.opacity(0.9))
+                } else {
+                    base.opacity(0.4)
+                }
+            };
+            bar = bar.child(
                 div()
                     .flex()
                     .flex_col()
                     .gap(px(6.))
-                    .px(px(8.))
+                    .px(px(12.))
                     .pb(px(8.))
                     .child(
                         div()
@@ -1481,7 +1868,7 @@ impl ChangesPanel {
                             .flex()
                             .justify_end()
                             .gap(px(6.))
-                            .child(small("push-cancel", t("Cancelar"), !pushing).when(
+                            .child(button("push-cancel", t("Cancelar"), !pushing).when(
                                 !pushing,
                                 |b| {
                                     b.on_click(cx.listener(|this, _, _, cx| {
@@ -1491,7 +1878,7 @@ impl ChangesPanel {
                                 },
                             ))
                             .child(
-                                small(
+                                button(
                                     "push-confirm",
                                     if pushing {
                                         t("Enviando…")
@@ -1508,13 +1895,12 @@ impl ChangesPanel {
             );
         }
         if let Some((text, failed)) = &self.push.result {
-            footer = footer.child(note(text, *failed));
+            bar = bar.child(note(text, *failed));
         }
-        footer
-            .when(snapshot.branch.is_some(), |footer| {
-                footer.child(self.pull_request_row(cx))
-            })
-            .into_any_element()
+        bar.when(snapshot.branch.is_some(), |bar| {
+            bar.child(self.pull_request_row(cx))
+        })
+        .into_any_element()
     }
 
     /// An opened commit: who and when, a summary of its lines, and its files, each opening its diff.
@@ -1745,6 +2131,72 @@ impl Render for ChangesPanel {
                     );
                 (header.into_any_element(), self.diff(&opened.lines))
             }
+            (None, None) if self.mode == Mode::Review => {
+                let name = self
+                    .snapshot
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.branch.clone())
+                    .unwrap_or_else(|| t("Alterações").into());
+                let more = div()
+                    .id("branch-menu")
+                    .size(px(24.))
+                    .rounded(px(crate::theme::RADIUS_SM))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .flex_shrink_0()
+                    .cursor_pointer()
+                    .hover(|style| style.bg(content(0.08)))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.menu = if this.menu == Some(Menu::Branch) {
+                            None
+                        } else {
+                            Some(Menu::Branch)
+                        };
+                        cx.notify();
+                    }))
+                    .child(
+                        svg()
+                            .path("more-horizontal")
+                            .size(px(14.))
+                            .text_color(content(0.6))
+                            .flex_shrink_0(),
+                    );
+                let header = div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .min_w_0()
+                    .child(
+                        svg()
+                            .path("branch")
+                            .size(px(14.))
+                            .text_color(content(0.6))
+                            .flex_shrink_0(),
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(px(12.5))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(content(0.85))
+                            .child(name),
+                    )
+                    .child(div().ml_auto().child(more));
+                let bar = match &self.snapshot {
+                    Some(snapshot) if snapshot.repo => self.commit_bar(snapshot, cx),
+                    _ => div().into_any_element(),
+                };
+                let body = div()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .child(bar)
+                    .child(self.review_list(cx));
+                (header.into_any_element(), body.into_any_element())
+            }
             (None, None) => {
                 let branch = self
                     .snapshot
@@ -1806,27 +2258,27 @@ impl Render for ChangesPanel {
                             )
                             .child(refresh),
                     );
-                let footer = match &self.snapshot {
-                    Some(snapshot) if snapshot.repo => self.footer(snapshot, cx),
-                    _ => div().into_any_element(),
-                };
                 let body = div()
                     .flex_1()
                     .min_h_0()
                     .flex()
                     .flex_col()
-                    .child(self.list(cx))
-                    .child(footer);
+                    .child(self.list(cx));
                 (header.into_any_element(), body.into_any_element())
             }
         };
+        let overlay = match (&self.snapshot, self.mode, self.menu) {
+            (Some(snapshot), Mode::Review, Some(_)) => self.menu_overlay(snapshot, cx),
+            _ => None,
+        };
         div()
             .size_full()
+            .relative()
             .flex()
             .flex_col()
             .child(
                 div()
-                    .h(px(34.))
+                    .h(px(TITLE))
                     .px(px(8.))
                     .flex()
                     .items_center()
@@ -1836,6 +2288,7 @@ impl Render for ChangesPanel {
                     .child(header),
             )
             .child(body)
+            .children(overlay)
     }
 }
 
@@ -1996,15 +2449,65 @@ fn counts_of(status: &Value) -> HashMap<String, (u64, u64)> {
         .collect()
 }
 
-/// The one-letter mark of a change kind and its color.
-fn kind_mark(kind: &str, added: Hsla, removed: Hsla) -> (&'static str, Hsla) {
+/// The one-letter mark of a change kind.
+fn kind_letter(kind: &str) -> &'static str {
     match kind {
-        "added" => ("A", added),
-        "untracked" => ("U", added),
-        "deleted" => ("D", removed),
-        "renamed" => ("R", accent()),
-        _ => ("M", content(0.6)),
+        "added" => "A",
+        "untracked" => "U",
+        "deleted" => "D",
+        "renamed" => "R",
+        _ => "M",
     }
+}
+
+/// The one-letter mark of a change kind and its color: M yellow, A green, D red, R blue.
+fn kind_mark(kind: &str, added: Hsla, removed: Hsla) -> (&'static str, Hsla) {
+    let color = match kind_letter(kind) {
+        "A" | "U" => added,
+        "D" => removed,
+        "R" => rgb(0x58a6ff).into(),
+        _ => rgb(0xe9c46a).into(),
+    };
+    (kind_letter(kind), color)
+}
+
+/// A path as its folder and its file name.
+fn split_path(path: &str) -> (String, String) {
+    match path.rsplit_once('/') {
+        Some((dir, name)) => (dir.to_owned(), name.to_owned()),
+        None => (String::new(), path.to_owned()),
+    }
+}
+
+/// The small "+a −d" of a row: a side with nothing on it is left out.
+fn counts_text(added: u64, removed: u64) -> String {
+    match (added, removed) {
+        (0, 0) => String::new(),
+        (a, 0) => format!("+{a}"),
+        (0, d) => format!("−{d}"),
+        (a, d) => format!("+{a} −{d}"),
+    }
+}
+
+/// The paths Preparar tudo or Despreparar tudo moves: the ones the host lets be moved.
+fn actionable_paths(entries: &[Entry]) -> Vec<String> {
+    entries
+        .iter()
+        .filter(|entry| entry.actionable)
+        .map(|entry| entry.path.clone())
+        .collect()
+}
+
+/// Whether Commit can run: something typed (or amending, which keeps the old message) and
+/// staged files (amending needs none), nothing already sending, and an index to commit from.
+fn commit_ready(
+    typed: bool,
+    amending: bool,
+    committing: bool,
+    nothing_staged: bool,
+    no_token: bool,
+) -> bool {
+    (amending || typed) && !committing && (amending || !nothing_staged) && !no_token
 }
 
 /// One line of a diff: additions green, removals red on a faint wash, hunk headers muted.
@@ -2438,5 +2941,64 @@ mod tests {
         );
         assert_eq!(created_url(&json!({ "type": "done" })), None);
         assert_eq!(created_url(&json!({ "type": "created" })), None);
+    }
+
+    #[test]
+    fn status_letters_and_colors_follow_the_kind() {
+        let (green, red) = diff_colors(0);
+        assert_eq!(kind_letter("modified"), "M");
+        assert_eq!(kind_letter("added"), "A");
+        assert_eq!(kind_letter("untracked"), "U");
+        assert_eq!(kind_letter("deleted"), "D");
+        assert_eq!(kind_letter("renamed"), "R");
+        assert_eq!(kind_mark("added", green, red).1, green);
+        assert_eq!(kind_mark("deleted", green, red).1, red);
+        assert_eq!(
+            kind_mark("renamed", green, red).1,
+            Hsla::from(rgb(0x58a6ff))
+        );
+        assert_eq!(
+            kind_mark("modified", green, red).1,
+            Hsla::from(rgb(0xe9c46a))
+        );
+    }
+
+    #[test]
+    fn a_row_shows_folder_name_and_only_the_counts_that_exist() {
+        assert_eq!(
+            split_path("native-spike/src/shell.rs"),
+            ("native-spike/src".to_owned(), "shell.rs".to_owned())
+        );
+        assert_eq!(
+            split_path("README.md"),
+            (String::new(), "README.md".to_owned())
+        );
+        assert_eq!(counts_text(92, 11), "+92 \u{2212}11");
+        assert_eq!(counts_text(120, 0), "+120");
+        assert_eq!(counts_text(0, 3), "\u{2212}3");
+        assert_eq!(counts_text(0, 0), "");
+    }
+
+    #[test]
+    fn stage_all_takes_only_what_the_host_lets_move() {
+        let entry = |path: &str, actionable| Entry {
+            path: path.into(),
+            kind: "modified".into(),
+            actionable,
+        };
+        let list = [entry("a", true), entry("b", false), entry("c", true)];
+        assert_eq!(actionable_paths(&list), ["a", "c"]);
+        assert!(actionable_paths(&[]).is_empty());
+    }
+
+    #[test]
+    fn commit_needs_a_message_and_staged_files_unless_amending() {
+        assert!(commit_ready(true, false, false, false, false));
+        assert!(!commit_ready(false, false, false, false, false));
+        assert!(!commit_ready(true, false, false, true, false));
+        assert!(!commit_ready(true, false, true, false, false));
+        assert!(!commit_ready(true, false, false, false, true));
+        assert!(commit_ready(false, true, false, true, false));
+        assert!(!commit_ready(false, true, true, true, false));
     }
 }

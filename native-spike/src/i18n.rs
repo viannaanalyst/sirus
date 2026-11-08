@@ -851,6 +851,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Branch não encontrado", "Branch not found"),
     ("Branco", "White"),
     ("Brasa", "Ember"),
+    ("Busca do Finder", "Finder search"),
     ("Busca na web", "Web search"),
     (
         "Busca o branch padrão do origin e baseia novos worktrees nele, e não no branch local. Sem origin ou sem rede, eles começam do branch local.",
@@ -930,8 +931,22 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Cancelar geração do título", "Cancel title generation"),
     ("Captura", "Screenshot"),
     ("Captura da tela", "Screenshot"),
+    ("Captura da tela inteira", "Full-screen screenshot"),
+    (
+        "Captura da tela inteira (para a área de transferência)",
+        "Full-screen screenshot (to the clipboard)",
+    ),
     ("Captura de anexo inválida.", "Invalid attachment snapshot."),
     ("Captura de janela", "Window snap"),
+    ("Captura de uma seleção", "Selection screenshot"),
+    (
+        "Captura de uma seleção (para a área de transferência)",
+        "Selection screenshot (to the clipboard)",
+    ),
+    (
+        "Captura e gravação de tela",
+        "Screenshot and screen recording",
+    ),
     ("Captura salva em {}", "Screenshot saved to {}"),
     ("Capturar a página", "Capture the page"),
     ("Capturar uma janela aberta", "Capture an open app window"),
@@ -1028,7 +1043,9 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Comportamento", "Behavior"),
     ("Comportamento do agente", "Agent behavior"),
     ("Comportamento do chat", "Chat behavior"),
+    ("Composer rápido", "Quick composer"),
     ("Composer rápido (⌥Espaço)", "Quick composer (⌥Space)"),
+    ("Composer rápido do Sirus ({})", "Sirus quick composer ({})"),
     (
         "Composer rápido do Sirus (⌥Espaço)",
         "Sirus quick composer (⌥Space)",
@@ -1549,6 +1566,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Esforço gerenciado pelo provedor; esta CLI/modelo não expõe ajuste manual.",
         "Provider-managed effort; this CLI/model exposes no manual adjustment.",
     ),
+    ("Espaço", "Space"),
     (
         "Espaço de trabalho temporário do título do commit indisponível",
         "Commit title temporary workspace unavailable",
@@ -1934,6 +1952,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Fonte da interface", "UI font"),
     ("Fonte de código", "Code font"),
+    ("Fonte de entrada anterior", "Previous input source"),
     ("Fonte do terminal", "Terminal font"),
     ("Forte", "Strong"),
     (
@@ -1966,6 +1985,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Girar", "Rotate"),
     ("Git detectado", "Git detected"),
     ("GitLab e Bitbucket", "GitLab and Bitbucket"),
+    (
+        "Globais (funcionam fora do Sirus)",
+        "Global (work outside Sirus)",
+    ),
     ("Gravar a página", "Record the page"),
     ("Gravação de Tela", "Screen Recording"),
     (
@@ -2145,6 +2168,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Invalid workspace entry.",
     ),
     ("Janela flutuante", "Floating window"),
+    ("Janelas do app", "App windows"),
     (
         "Já existe um branch com esse nome.",
         "A branch with this name already exists.",
@@ -2325,6 +2349,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Mexa o mouse e clique no fundo",
         "Move the mouse and click the background",
     ),
+    ("Mission Control", "Mission Control (macOS)"),
     ("Modelo", "Model"),
     ("Modelos do Cursor", "Cursor models"),
     ("Modelos, datasets e Spaces", "Models, datasets and Spaces"),
@@ -2347,6 +2372,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Show a usage ring for up to two providers at the bottom of the sidebar.",
     ),
     ("Mostrar / ocultar barra lateral", "Toggle Sidebar"),
+    ("Mostrar a mesa", "Show desktop"),
     ("Mostrar arquivos ignorados", "Show ignored files"),
     ("Mostrar arquivos não rastreados", "Show untracked files"),
     ("Mostrar cliques", "Show clicks"),
@@ -2386,6 +2412,14 @@ const ENTRIES: &[(&str, &str)] = &[
     (
         "Mover para a Lixeira não está disponível nesta plataforma.",
         "Moving to the Trash is unavailable on this platform.",
+    ),
+    (
+        "Mover para o espaço à direita",
+        "Move to the space on the right",
+    ),
+    (
+        "Mover para o espaço à esquerda",
+        "Move to the space on the left",
     ),
     ("Mover para {}", "Move to {}"),
     (
@@ -3295,6 +3329,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "The GitHub sign-in did not finish.",
     ),
     ("O login não foi concluído.", "Sign-in was not completed."),
+    ("O macOS já usa para {}", "macOS already uses this for {}"),
     (
         "O modelo de trabalho que percorre a borda do composer enquanto o agente trabalha.",
         "The working pattern that runs along the composer edge while the agent works.",
@@ -3667,6 +3702,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "Another session still works in this worktree; delete without removing it.",
     ),
     (
+        "Outro app já usa esse atalho",
+        "Another app already uses this shortcut",
+    ),
+    (
         "Outro documento está carregando. Tente novamente em instantes.",
         "Another document is loading. Try again in a moment.",
     ),
@@ -3889,6 +3928,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Provedor padrão", "Default provider"),
     ("Provedores", "Providers"),
     ("Prévia em HTML", "HTML preview"),
+    ("Próxima fonte de entrada", "Next input source"),
     ("Próximo projeto", "Next project"),
     ("Pular", "Skip"),
     ("Pull exige confirmação.", "Pull requires confirmation."),
@@ -4271,6 +4311,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Sons", "Sounds"),
     ("Sons de notificação", "Notification sounds"),
     ("Sortear visual", "Draw another look"),
+    ("Spotlight", "Spotlight (macOS)"),
     ("Squash e mesclar", "Squash and merge"),
     ("Status do Git inválido", "Invalid Git status"),
     (
@@ -4566,6 +4607,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Use um único emoji.", "Use a single emoji."),
     ("Use uma imagem PNG ou JPEG.", "Use a PNG or JPEG image."),
+    (
+        "Use ⌃, ⌥ ou ⌘ com Espaço ou uma letra.",
+        "Use ⌃, ⌥ or ⌘ with Space or a letter.",
+    ),
     (
         "Use ⌘ com uma letra ou número livre.",
         "Use ⌘ with a free letter or number.",
@@ -5084,6 +5129,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "{} entradas anteriores não são mais guardadas",
         "{} earlier entries are no longer kept",
     ),
+    (
+        "{} está instalado e costuma usar {}",
+        "{} is installed and usually uses {}",
+    ),
     ("{} falharam", "{} failed"),
     ("{} ferramentas", "{} tools"),
     (
@@ -5124,6 +5173,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("{} · Encontrada em: {}", "{} · Found in: {}"),
     ("{}% restante", "{}% left"),
     ("{}% usado", "{}% used"),
+    (
+        "{}, de qualquer app, ou o ícone do Sirus na barra de menus abre um campo para começar uma conversa sem abrir a janela. O atalho muda em Atalhos.",
+        "{}, from any app, or the Sirus icon in the menu bar opens a field to start a conversation without opening the window. Change the shortcut in Shortcuts.",
+    ),
     ("À direita", "On the right"),
     ("À esquerda", "On the left"),
     (

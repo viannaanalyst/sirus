@@ -2387,6 +2387,7 @@ impl Shell {
     /// The settings the other views read (prefs.rs), and Reduzir movimento for every view.
     fn note_settings(&self, cx: &mut Context<Self>) {
         crate::prefs::note(&self.settings);
+        crate::quick_composer::rebind(&self.settings);
         cx.set_reduce_motion(crate::prefs::still());
     }
 
@@ -5243,7 +5244,19 @@ impl Shell {
             cx.notify();
             return true;
         }
-        match crate::settings_pages::recorded_shortcut(&self.settings, id, keys) {
+        let id = id.to_owned();
+        match crate::settings_pages::recorded_shortcut(&self.settings, &id, keys).and_then(
+            |custom| {
+                // A global hotkey must be one no other app holds; the old one stays otherwise.
+                if id == crate::settings_pages::QUICK_COMPOSER {
+                    let combo = crate::settings_pages::combo_of(keys);
+                    if !crate::quick_composer::can_register(&combo, &self.settings) {
+                        return Err(t("Outro app já usa esse atalho").to_owned());
+                    }
+                }
+                Ok(custom)
+            },
+        ) {
             Ok(custom) => {
                 self.setting_edit = None;
                 self.save_setting("customShortcuts", custom, cx);
@@ -6086,7 +6099,12 @@ impl Shell {
         cx.notify();
     }
 
-    /// Settings → Geral → "Composer rápido (⌥Espaço)", on unless turned off.
+    /// The settings as they are now, for the quick composer's first hotkey.
+    pub(crate) fn settings_snapshot(&self) -> Value {
+        self.settings.clone()
+    }
+
+    /// Settings → Geral → "Composer rápido", on unless turned off.
     pub(crate) fn quick_composer_enabled(&self) -> bool {
         self.settings["quickComposer"] != json!(false)
     }

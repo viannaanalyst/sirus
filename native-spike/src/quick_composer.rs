@@ -1,7 +1,7 @@
-//! The quick composer: ⌥Space from any app, or the Sirus icon in the menu bar, opens a small
+//! The quick composer: ⌃⌥Space (changeable in Settings → Atalhos) from any app, or the Sirus icon in the menu bar, opens a small
 //! floating field. Enter starts a new conversation with the text in the chosen project and the
 //! field goes away; the conversation runs in Sirus behind whatever app was in front. Escape or
-//! clicking elsewhere closes it. Settings → Geral → "Composer rápido (⌥Espaço)" turns it off.
+//! clicking elsewhere closes it. Settings → Geral → "Composer rápido" turns it off.
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -10,7 +10,7 @@ use gpui::{
     WindowKind, WindowOptions, div, point, px, size,
 };
 
-use crate::i18n::t;
+use crate::i18n::{t, tf};
 use crate::panel_files::{TextField, TextFieldEvent};
 use crate::shell::Shell;
 use crate::theme::content;
@@ -56,31 +56,173 @@ fn tray_image() -> tray_icon::Icon {
     tray_icon::Icon::from_rgba(rgba, S as u32, S as u32).expect("a fixed icon")
 }
 
-/// Registers ⌥Space and puts the icon in the menu bar. Both live as long as the app.
+/// The registered hotkey's id, read by the event handler (which runs off the main thread).
+static WANTED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// The hotkey manager, the hotkey it holds now and the menu bar icon. Main thread only, like the
+/// manager itself.
+struct Hotkeys {
+    manager: global_hotkey::GlobalHotKeyManager,
+    current: Option<global_hotkey::hotkey::HotKey>,
+}
+
+thread_local! {
+    static HOTKEYS: std::cell::RefCell<Option<Hotkeys>> = const { std::cell::RefCell::new(None) };
+    static TRAY: std::cell::RefCell<Option<tray_icon::TrayIcon>> = const { std::cell::RefCell::new(None) };
+}
+
+/// A combo in the settings' form (`ctrl+alt+space`) as a hotkey.
+fn hotkey_of(combo: &str) -> Option<global_hotkey::hotkey::HotKey> {
+    use global_hotkey::hotkey::{Code, HotKey, Modifiers};
+    let parsed = crate::hotkey_conflicts::Combo::parse(combo)?;
+    let mut modifiers = Modifiers::empty();
+    for (on, flag) in [
+        (parsed.ctrl, Modifiers::CONTROL),
+        (parsed.alt, Modifiers::ALT),
+        (parsed.shift, Modifiers::SHIFT),
+        (parsed.meta, Modifiers::SUPER),
+    ] {
+        if on {
+            modifiers |= flag;
+        }
+    }
+    let code = if parsed.key == "space" {
+        Code::Space
+    } else {
+        parsed.key.parse::<Code>().ok().or_else(|| {
+            let letter = parsed
+                .key
+                .chars()
+                .next()
+                .filter(|_| parsed.key.len() == 1)?;
+            format!("Key{}", letter.to_ascii_uppercase())
+                .parse::<Code>()
+                .ok()
+        })?
+    };
+    Some(HotKey::new(Some(modifiers), code))
+}
+
+/// The combo the settings ask for, and whether the hotkey should be registered at all.
+fn wanted(settings: &serde_json::Value) -> (String, bool) {
+    (
+        crate::settings_pages::quick_composer_combo(settings).to_owned(),
+        settings["quickComposer"] != serde_json::json!(false),
+    )
+}
+
+/// Whether `combo` can be registered now, without keeping it: macOS refuses a hotkey another app
+/// holds. The hotkey the settings keep stays registered (or comes back) either way.
+pub(crate) fn can_register(combo: &str, settings: &serde_json::Value) -> bool {
+    let Some(hotkey) = hotkey_of(combo) else {
+        return false;
+    };
+    let (current, enabled) = wanted(settings);
+    if current == combo && enabled {
+        return true;
+    }
+    HOTKEYS.with(|hotkeys| {
+        let mut hotkeys = hotkeys.borrow_mut();
+        let Some(state) = hotkeys.as_mut() else {
+            return true;
+        };
+        let held = state.current;
+        if let Some(old) = held {
+            let _ = state.manager.unregister(old);
+        }
+        let free = state.manager.register(hotkey).is_ok();
+        if free {
+            let _ = state.manager.unregister(hotkey);
+        }
+        if let Some(old) = held {
+            let _ = state.manager.register(old);
+        }
+        free
+    })
+}
+
+/// Makes the registered hotkey match the settings: the old one is unregistered, the new one
+/// registered, and with the switch off none is. When the new one cannot be registered the old one
+/// stays. Returns whether the settings' hotkey is the one registered now.
+pub(crate) fn rebind(settings: &serde_json::Value) -> bool {
+    let (combo, enabled) = wanted(settings);
+    let tooltip = tf(
+        "Composer rápido do Sirus ({})",
+        &[&crate::settings_pages::quick_composer_label(settings)],
+    );
+    TRAY.with(|tray| {
+        if let Some(tray) = tray.borrow().as_ref() {
+            let _ = tray.set_tooltip(Some(tooltip));
+        }
+    });
+    HOTKEYS.with(|hotkeys| {
+        let mut hotkeys = hotkeys.borrow_mut();
+        let Some(state) = hotkeys.as_mut() else {
+            return false;
+        };
+        if !enabled {
+            if let Some(old) = state.current.take() {
+                let _ = state.manager.unregister(old);
+            }
+            WANTED.store(0, std::sync::atomic::Ordering::Relaxed);
+            return true;
+        }
+        let Some(hotkey) = hotkey_of(&combo) else {
+            return false;
+        };
+        if state.current == Some(hotkey) {
+            return true;
+        }
+        let old = state.current.take();
+        if let Some(old) = old {
+            let _ = state.manager.unregister(old);
+        }
+        match state.manager.register(hotkey) {
+            Ok(()) => {
+                state.current = Some(hotkey);
+                WANTED.store(hotkey.id(), std::sync::atomic::Ordering::Relaxed);
+                true
+            }
+            Err(_) => {
+                if let Some(old) = old
+                    && state.manager.register(old).is_ok()
+                {
+                    state.current = Some(old);
+                }
+                false
+            }
+        }
+    })
+}
+
+/// Registers the hotkey from the settings and puts the icon in the menu bar. Both live as long as
+/// the app; `rebind` moves the hotkey when the settings change.
 pub(crate) fn start(shell: WindowHandle<Shell>, cx: &mut App) {
     let (tx, rx) = async_channel::unbounded::<()>();
-    let hotkey = global_hotkey::hotkey::HotKey::new(
-        Some(global_hotkey::hotkey::Modifiers::ALT),
-        global_hotkey::hotkey::Code::Space,
-    );
-    if let Ok(manager) = global_hotkey::GlobalHotKeyManager::new()
-        && manager.register(hotkey).is_ok()
-    {
-        let wanted = hotkey.id();
+    if let Ok(manager) = global_hotkey::GlobalHotKeyManager::new() {
+        HOTKEYS.with(|hotkeys| {
+            *hotkeys.borrow_mut() = Some(Hotkeys {
+                manager,
+                current: None,
+            });
+        });
         let sender = tx.clone();
         global_hotkey::GlobalHotKeyEvent::set_event_handler(Some(
             move |event: global_hotkey::GlobalHotKeyEvent| {
-                if event.id == wanted && event.state == global_hotkey::HotKeyState::Pressed {
+                if event.id == WANTED.load(std::sync::atomic::Ordering::Relaxed)
+                    && event.state == global_hotkey::HotKeyState::Pressed
+                {
                     let _ = sender.try_send(());
                 }
             },
         ));
-        std::mem::forget(manager);
     }
+    let settings = shell
+        .update(cx, |shell, _, _| shell.settings_snapshot())
+        .unwrap_or_default();
     if let Ok(tray) = tray_icon::TrayIconBuilder::new()
         .with_icon(tray_image())
         .with_icon_as_template(true)
-        .with_tooltip(t("Composer rápido do Sirus (⌥Espaço)"))
         .build()
     {
         let sender = tx;
@@ -96,8 +238,9 @@ pub(crate) fn start(shell: WindowHandle<Shell>, cx: &mut App) {
                 }
             },
         ));
-        std::mem::forget(tray);
+        TRAY.with(|slot| *slot.borrow_mut() = Some(tray));
     }
+    rebind(&settings);
     cx.spawn(async move |cx| {
         while rx.recv().await.is_ok() {
             let _ = cx.update(|cx| toggle(shell, cx));

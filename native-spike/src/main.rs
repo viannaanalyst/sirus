@@ -35,6 +35,7 @@ mod fonts;
 mod freeze_watch;
 mod git_graph;
 mod git_sync;
+mod hotkey_conflicts;
 mod hover_track;
 mod i18n;
 mod image_markup;

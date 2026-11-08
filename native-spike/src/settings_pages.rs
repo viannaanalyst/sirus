@@ -1011,14 +1011,26 @@ fn shortcut_view<V: 'static>(
 
 /// A combo's label split into one cap per key: "⌥⌘↩" is three.
 fn shortcut_caps(combo: &str) -> Vec<String> {
-    shortcut_label(combo).chars().map(String::from).collect()
+    let label = shortcut_label(combo);
+    let space = t("Espaço").to_uppercase();
+    match label.strip_suffix(space.as_str()) {
+        Some(mods) => mods
+            .chars()
+            .map(String::from)
+            .chain([space.clone()])
+            .collect(),
+        None => label.chars().map(String::from).collect(),
+    }
 }
 
 /// The keys a keystroke makes, in the host's form: `meta+alt+shift+k`.
-fn combo_of(keys: &gpui::Keystroke) -> String {
+pub(crate) fn combo_of(keys: &gpui::Keystroke) -> String {
     let mut parts = Vec::new();
     if keys.modifiers.platform {
         parts.push("meta");
+    }
+    if keys.modifiers.control {
+        parts.push("ctrl");
     }
     if keys.modifiers.alt {
         parts.push("alt");
@@ -1035,6 +1047,14 @@ fn combo_of(keys: &gpui::Keystroke) -> String {
 fn shortcut_allowed(id: &str, combo: &str) -> bool {
     let mut parts: Vec<&str> = combo.split('+').collect();
     let key = parts.pop().unwrap_or_default();
+    if id == QUICK_COMPOSER {
+        // A global key: any of ⌃ ⌥ ⇧ ⌘, at least one of ⌃ ⌥ ⌘, with Space or a letter.
+        return parts
+            .iter()
+            .all(|m| ["meta", "ctrl", "alt", "shift"].contains(m))
+            && parts.iter().any(|m| ["meta", "ctrl", "alt"].contains(m))
+            && (key == "space" || (key.len() == 1 && key.chars().all(|c| c.is_ascii_lowercase())));
+    }
     if id == "cycle-effort" && key == "tab" && !parts.is_empty() {
         return true;
     }
@@ -1069,7 +1089,12 @@ pub fn recorded_shortcut(
 ) -> Result<Value, String> {
     let combo = combo_of(keys);
     if !shortcut_allowed(id, &combo) {
-        return Err(t("Use ⌘ com uma letra ou número livre.").to_owned());
+        return Err(if id == QUICK_COMPOSER {
+            t("Use ⌃, ⌥ ou ⌘ com Espaço ou uma letra.")
+        } else {
+            t("Use ⌘ com uma letra ou número livre.")
+        }
+        .to_owned());
     }
     // Keys the window answers to that the list above does not show.
     const UNLISTED: [(&str, &str); 5] = [
@@ -1091,9 +1116,10 @@ pub fn recorded_shortcut(
     if !map.is_object() {
         map = json!({});
     }
-    if KEYBINDINGS
-        .iter()
-        .any(|(known, _, _, fallback)| *known == id && *fallback == combo)
+    if (id == QUICK_COMPOSER && combo == QUICK_COMPOSER_DEFAULT)
+        || KEYBINDINGS
+            .iter()
+            .any(|(known, _, _, fallback)| *known == id && *fallback == combo)
     {
         if let Some(entries) = map.as_object_mut() {
             entries.remove(id);
@@ -1467,13 +1493,6 @@ fn general(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
             ),
             top("keepAwakeWhileWorking"),
         ),
-        (
-            t("Composer rápido (⌥Espaço)"),
-            t(
-                "⌥Espaço, de qualquer app, ou o ícone do Sirus na barra de menus abre um campo para começar uma conversa sem abrir a janela.",
-            ),
-            top("quickComposer"),
-        ),
     ];
     let core = vec![
         row(
@@ -1519,6 +1538,15 @@ fn general(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
         group(t("Organização da sidebar"), sidebar),
         group(t("Aplicativo"), {
             let mut rows = switches(s, application_rows);
+            rows.push(switch_row(
+                s,
+                t("Composer rápido"),
+                &tf(
+                    "{}, de qualquer app, ou o ícone do Sirus na barra de menus abre um campo para começar uma conversa sem abrir a janela. O atalho muda em Atalhos.",
+                    &[&quick_composer_label(s)],
+                ),
+                top("quickComposer"),
+            ));
             rows.push(first_run_row());
             rows
         }),
@@ -1935,31 +1963,82 @@ const KEYBINDINGS: &[(&str, &str, &str, &str)] = &[
     ),
 ];
 
+/// The id of the quick composer's global hotkey in `customShortcuts`. Not in `KEYBINDINGS`: it is
+/// not a key of the window, so `shortcut_route` never sees it.
+pub(crate) const QUICK_COMPOSER: &str = "quickComposer";
+pub(crate) const QUICK_COMPOSER_DEFAULT: &str = "ctrl+alt+space";
+
+/// The quick composer's hotkey now, in the combo form.
+pub(crate) fn quick_composer_combo(settings: &Value) -> &str {
+    effective_combo(settings, QUICK_COMPOSER, QUICK_COMPOSER_DEFAULT)
+}
+
+/// The quick composer's hotkey as people read it (⌃⌥ESPAÇO).
+pub(crate) fn quick_composer_label(settings: &Value) -> String {
+    shortcut_label(quick_composer_combo(settings))
+}
+
+/// What may already own a global combo: macOS shortcuts and known apps. Warnings, not errors.
+fn global_warnings(combo: &str) -> Vec<String> {
+    let mut out: Vec<String> = crate::hotkey_conflicts::system_conflicts(
+        crate::hotkey_conflicts::load_symbolic_hotkeys(),
+        combo,
+    )
+    .into_iter()
+    .map(|name| tf("O macOS já usa para {}", &[&t(name)]))
+    .collect();
+    out.extend(
+        crate::hotkey_conflicts::app_conflicts(combo, crate::hotkey_conflicts::bundle_installed)
+            .into_iter()
+            .map(|(name, usual)| {
+                tf(
+                    "{} está instalado e costuma usar {}",
+                    &[&name, &shortcut_label(usual)],
+                )
+            }),
+    );
+    out
+}
+
 const SHORTCUT_GROUPS: &[&str] = &["Sessão", "Aplicativo", "Projeto", "Visualização"];
 
 /// The shortcut as the app shows it (lilac ⌘ ⌥ ⇧ glyphs), as `shortcutLabel` in keybindings.ts.
 fn shortcut_label(combo: &str) -> String {
-    let mut s = combo.to_string();
-    if let Some(rest) = s.strip_suffix("enter") {
-        s = format!("{rest}↩");
+    let mut parts: Vec<&str> = combo.split('+').collect();
+    let key = parts.pop().unwrap_or_default();
+    // The glyph order macOS uses: ⌃ ⌥ ⇧ ⌘.
+    let mut label = String::new();
+    for (name, glyph) in [("ctrl", '⌃'), ("alt", '⌥'), ("shift", '⇧'), ("meta", '⌘')] {
+        if parts.contains(&name) {
+            label.push(glyph);
+        }
     }
-    if let Some(rest) = s.strip_suffix("tab") {
-        s = format!("{rest}⇥");
+    match key {
+        "enter" => label.push('↩'),
+        "tab" => label.push('⇥'),
+        "space" => label.push_str(&t("Espaço").to_uppercase()),
+        _ => label.push_str(&key.to_uppercase()),
     }
-    s = s
-        .replacen("meta+", "⌘", 1)
-        .replacen("alt+", "⌥", 1)
-        .replacen("shift+", "⇧", 1);
-    if let Some(rest) = s.strip_prefix('⌘') {
-        let (alt, rest) = rest.strip_prefix('⌥').map_or(("", rest), |r| ("⌥", r));
-        let (shift, rest) = rest.strip_prefix('⇧').map_or(("", rest), |r| ("⇧", r));
-        s = format!("{alt}{shift}⌘{rest}");
-    }
-    s.to_uppercase()
+    label
 }
 
 fn keybindings(s: &Value) -> Vec<Group> {
     let custom = s.get("customShortcuts");
+    let combo = quick_composer_combo(s);
+    let saved = custom.and_then(|c| c.get(QUICK_COMPOSER)).is_some();
+    let warning = global_warnings(combo).join(" ");
+    let globals = group(
+        t("Globais (funcionam fora do Sirus)"),
+        vec![row(
+            t("Composer rápido"),
+            warning,
+            vec![Ctl::Shortcut {
+                id: QUICK_COMPOSER,
+                combo: combo.to_owned(),
+                custom: saved,
+            }],
+        )],
+    );
     SHORTCUT_GROUPS
         .iter()
         .map(|&name| {
@@ -1982,6 +2061,7 @@ fn keybindings(s: &Value) -> Vec<Group> {
             group(t(name), rows)
         })
         .filter(|item| !item.rows.is_empty())
+        .chain([globals])
         .collect()
 }
 
@@ -3766,5 +3846,24 @@ mod shortcut_tests {
     #[test]
     fn caps_are_one_per_key() {
         assert_eq!(shortcut_caps("meta+alt+enter").len(), 3);
+    }
+
+    #[test]
+    fn the_quick_composer_takes_global_combos() {
+        let settings = json!({});
+        let map = recorded_shortcut(&settings, QUICK_COMPOSER, &keys("ctrl-alt-j")).unwrap();
+        assert_eq!(map[QUICK_COMPOSER], json!("ctrl+alt+j"));
+        // The default is not stored.
+        let map = recorded_shortcut(&settings, QUICK_COMPOSER, &keys("ctrl-alt-space")).unwrap();
+        assert!(map.get(QUICK_COMPOSER).is_none());
+        let map = recorded_shortcut(&settings, QUICK_COMPOSER, &keys("alt-space")).unwrap();
+        assert_eq!(map[QUICK_COMPOSER], json!("alt+space"));
+        // Shift alone, or a key the global rule does not take, is out.
+        assert!(recorded_shortcut(&settings, QUICK_COMPOSER, &keys("shift-space")).is_err());
+        assert!(recorded_shortcut(&settings, QUICK_COMPOSER, &keys("ctrl-enter")).is_err());
+        // ⌃ is not an in-window modifier.
+        assert!(recorded_shortcut(&settings, "palette", &keys("ctrl-cmd-k")).is_err());
+        assert_eq!(shortcut_label("ctrl+alt+space"), "⌃⌥ESPAÇO");
+        assert_eq!(shortcut_caps("ctrl+alt+space").len(), 3);
     }
 }

@@ -570,6 +570,14 @@ pub enum Action {
 pub async fn secret_action(state: State<'_, Arc<AppState>>, action: Action) -> IpcResult<Snapshot> {
     state.ensure_running()?;
     if let Action::Respond { request_id, value } = action {
+        respond(&request_id, value)?;
+    }
+    Ok(snapshot())
+}
+
+/// Answers a waiting request: the value goes to the agent's side and the card closes.
+pub(crate) fn respond(request_id: &str, value: Option<String>) -> IpcResult<()> {
+    {
         let value = match value {
             Some(value) if value.is_empty() || value.len() > MAX_VALUE || value.contains('\0') => {
                 return Err(Error::agent("Enter a value up to 16 KB."));
@@ -590,7 +598,7 @@ pub async fn secret_action(state: State<'_, Arc<AppState>>, action: Action) -> I
             .send(value)
             .map_err(|_| Error::agent("That request is no longer waiting."))?;
     }
-    Ok(snapshot())
+    Ok(())
 }
 
 #[cfg(test)]

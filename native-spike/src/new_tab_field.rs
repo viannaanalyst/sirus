@@ -5,8 +5,8 @@ use std::cell::OnceCell;
 use std::time::Instant;
 
 use gpui::{
-    AnyElement, App, Bounds, DispatchPhase, FontId, GlyphId, Hsla, MouseDownEvent, MouseMoveEvent,
-    Pixels, Point, Rgba, Window, point, prelude::*, px,
+    AnyElement, App, Bounds, DispatchPhase, FontId, GlyphId, Hsla, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, Pixels, Point, Rgba, Window, point, prelude::*, px,
 };
 
 const CELL_W: f32 = 7.;
@@ -15,6 +15,9 @@ const FONT_SIZE: f32 = 10.;
 /// How long a click's wave runs.
 const WAVE_S: f32 = 2.4;
 const WAVE_SPEED: f32 = 420.;
+/// How long a stroke of ink stays before it has faded away.
+const INK_S: f32 = 1.6;
+const INK_POINTS: usize = 600;
 /// From faint to dense.
 const RAMP: &str = ".,:;-=+*#%@";
 
@@ -22,6 +25,9 @@ const RAMP: &str = ".,:;-=+*#%@";
 pub struct State {
     mouse: Option<Point<Pixels>>,
     waves: Vec<(Point<Pixels>, Instant)>,
+    /// Ink drawn by dragging over the field: strokes of points, each fading on its own.
+    ink: Vec<Vec<(Point<Pixels>, Instant)>>,
+    drawing: bool,
 }
 
 impl State {
@@ -29,7 +35,38 @@ impl State {
     pub fn moving(&mut self, now: Instant) -> bool {
         self.waves
             .retain(|(_, at)| now.duration_since(*at).as_secs_f32() < WAVE_S);
-        !self.waves.is_empty()
+        for stroke in &mut self.ink {
+            stroke.retain(|(_, at)| now.duration_since(*at).as_secs_f32() < INK_S);
+        }
+        let drawing = self.drawing;
+        let last = self.ink.len().saturating_sub(1);
+        let mut at = 0;
+        self.ink.retain(|stroke| {
+            let keep = !stroke.is_empty() || (drawing && at == last);
+            at += 1;
+            keep
+        });
+        !self.waves.is_empty() || self.ink.iter().any(|stroke| !stroke.is_empty())
+    }
+
+    /// A press starts a stroke; moving with the button down extends it.
+    fn ink_start(&mut self, at: Point<Pixels>, now: Instant) {
+        self.drawing = true;
+        self.ink.push(vec![(at, now)]);
+    }
+
+    fn ink_to(&mut self, at: Point<Pixels>, now: Instant) -> bool {
+        if !self.drawing {
+            return false;
+        }
+        if self.ink.iter().map(Vec::len).sum::<usize>() >= INK_POINTS {
+            return false;
+        }
+        match self.ink.last_mut() {
+            Some(stroke) => stroke.push((at, now)),
+            None => self.ink.push(vec![(at, now)]),
+        }
+        true
     }
 
     fn point_at(&mut self, position: Option<Point<Pixels>>) -> bool {
@@ -235,6 +272,7 @@ pub fn field_with<V: 'static>(
     } else {
         state.waves.clone()
     };
+    let ink = if still { Vec::new() } else { state.ink.clone() };
     let tint = Rgba {
         r: ((color >> 16) & 0xff) as f32 / 255.,
         g: ((color >> 8) & 0xff) as f32 / 255.,
@@ -249,8 +287,13 @@ pub fn field_with<V: 'static>(
                 window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
                     if phase == DispatchPhase::Capture {
                         let inside = bounds.contains(&event.position).then_some(event.position);
+                        let held = event.pressed_button == Some(MouseButton::Left);
                         let _ = moved.update(cx, |this, cx| {
-                            if set(this).point_at(inside) {
+                            let mut changed = set(this).point_at(inside);
+                            if held && let Some(at) = inside {
+                                changed |= set(this).ink_to(at, Instant::now());
+                            }
+                            if changed {
                                 cx.notify();
                             }
                         });
@@ -262,10 +305,41 @@ pub fn field_with<V: 'static>(
                         let at = event.position;
                         let _ = clicked.update(cx, |this, cx| {
                             set(this).click(at, Instant::now());
+                            if event.button == MouseButton::Left {
+                                set(this).ink_start(at, Instant::now());
+                            }
                             cx.notify();
                         });
                     }
                 });
+                let lifted = view.clone();
+                window.on_mouse_event(move |_: &MouseUpEvent, phase, _, cx| {
+                    if phase == DispatchPhase::Capture {
+                        let _ = lifted.update(cx, |this, _| set(this).drawing = false);
+                    }
+                });
+            }
+            let now_ink = Instant::now();
+            for stroke in &ink {
+                for pair in stroke.windows(2) {
+                    let ((from, _), (to, at)) = (pair[0], pair[1]);
+                    let fade = 1. - now_ink.duration_since(at).as_secs_f32() / INK_S;
+                    if fade <= 0. {
+                        continue;
+                    }
+                    let mut path = gpui::PathBuilder::stroke(px(2.5 + 1.5 * fade));
+                    path.move_to(from);
+                    path.line_to(to);
+                    if let Ok(path) = path.build() {
+                        window.paint_path(
+                            path,
+                            Hsla {
+                                a: 0.85 * fade * fade,
+                                ..Hsla::from(tint)
+                            },
+                        );
+                    }
+                }
             }
             let (font_id, ids) = GLYPHS.with(|cell| cell.get_or_init(|| glyphs(window)).clone());
             if ids.is_empty() {
@@ -380,6 +454,19 @@ mod tests {
         }
         assert_eq!(state.waves.len(), 4);
         assert!(state.moving(start));
+    }
+
+    #[test]
+    fn ink_fades_and_stops_asking_for_frames() {
+        let mut state = State::default();
+        let start = Instant::now();
+        state.ink_start(point(px(1.), px(1.)), start);
+        assert!(state.ink_to(point(px(5.), px(5.)), start));
+        assert!(state.moving(start));
+        state.drawing = false;
+        assert!(!state.ink_to(point(px(9.), px(9.)), start));
+        assert!(!state.moving(start + std::time::Duration::from_secs(2)));
+        assert!(state.ink.is_empty());
     }
 
     #[test]

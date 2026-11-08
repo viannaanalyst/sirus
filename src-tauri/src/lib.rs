@@ -70,6 +70,7 @@ mod memory;
 mod models;
 mod new_project;
 mod notifications;
+mod onepassword;
 mod opencode;
 mod output_batch;
 mod paths;

@@ -92,6 +92,9 @@ mod issue_chip;
 /// The row of actions under a finished reply: copy, try again, undo, side chat (ADR-187).
 #[path = "message_actions.rs"]
 pub(crate) mod message_actions;
+/// A secret card's 1Password list (onepassword_pick.rs).
+#[path = "onepassword_pick.rs"]
+mod onepassword_pick;
 /// A failure as a toast that leaves by itself (problem_toast.rs).
 #[path = "problem_toast.rs"]
 mod problem_toast;
@@ -1231,6 +1234,8 @@ pub struct Shell {
     secrets: Vec<Value>,
     /// The secret being typed: its request and value, shown masked and sent once.
     secret_entry: Option<(String, String)>,
+    /// A secret card's 1Password list while it is open (onepassword_pick.rs).
+    op_pick: Option<onepassword_pick::OpPick>,
     mention_selected: usize,
     /// A token whose completion the person dismissed.
     mention_dismissed: Option<usize>,
@@ -1614,6 +1619,7 @@ impl Shell {
             skills: Vec::new(),
             secrets: Vec::new(),
             secret_entry: None,
+            op_pick: None,
             mention_selected: 0,
             mention_dismissed: None,
             switch_anim: None,
@@ -12432,6 +12438,11 @@ impl Shell {
                         "•".repeat(value.chars().count())
                     });
                 let (open_id, decline_id) = (id.clone(), id.clone());
+                let (op_id, op_label) = (id.clone(), label.clone());
+                let d = match self.op_pick_view(&id, cx) {
+                    Some(list) => d.child(list),
+                    None => d,
+                };
                 d.child(
                     div()
                         .mb(px(8.))
@@ -12484,6 +12495,24 @@ impl Shell {
                                         this.respond_secret(&decline_id, None, cx)
                                     }))
                                     .child(t("Recusar")),
+                            )
+                            .child(
+                                div()
+                                    .id("secret-onepassword")
+                                    .h(px(26.))
+                                    .px(px(10.))
+                                    .rounded(px(crate::theme::RADIUS_MD))
+                                    .flex()
+                                    .items_center()
+                                    .text_size(px(12.5))
+                                    .text_color(content(0.85))
+                                    .bg(content(0.08))
+                                    .cursor_pointer()
+                                    .hover(|s| s.bg(content(0.12)))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.start_op_pick(op_id.clone(), op_label.clone(), cx)
+                                    }))
+                                    .child("1Password"),
                             )
                             .child(
                                 div()

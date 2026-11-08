@@ -461,7 +461,8 @@ impl StartedAgent {
     pub fn monitor(mut self, app: AppHandle, state: Arc<AppState>, session_id: String) {
         // Every provider's turn passes here: the Mac stays awake until the turn's
         // monitor ends (ADR-100). Agents already started lowered (ADR-143).
-        let awake = crate::keep_awake::hold();
+        let wanted = state.data.lock().settings.keep_awake_while_working;
+        let awake = crate::keep_awake::hold_if(wanted);
         if let Some(run) = self.codex.take() {
             crate::codex::monitor(self, run, app, state, session_id, awake);
             return;

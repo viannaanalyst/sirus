@@ -796,6 +796,10 @@ pub struct AppSettings {
     pub disabled_providers: Vec<AgentProviderId>,
     /// Projects silenced, by id, until this moment in milliseconds (ADR-198).
     pub muted_projects: std::collections::BTreeMap<String, i64>,
+    /// The Mac does not idle-sleep while an agent works (ADR-100); on unless turned off.
+    pub keep_awake_while_working: bool,
+    /// ⌥Space and the menu bar icon open the Mac's quick composer; on unless turned off.
+    pub quick_composer: bool,
     pub provider_paths: std::collections::HashMap<AgentProviderId, String>,
     pub theme: ThemePref,
     pub dark_window_translucent: bool,
@@ -1001,6 +1005,8 @@ impl Default for AppSettings {
             check_for_updates: false,
             disabled_providers: Vec::new(),
             muted_projects: std::collections::BTreeMap::new(),
+            keep_awake_while_working: true,
+            quick_composer: true,
             provider_paths: std::collections::HashMap::new(),
             theme: ThemePref::Dark,
             dark_window_translucent: false,

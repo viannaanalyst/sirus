@@ -95,6 +95,9 @@ pub(crate) mod message_actions;
 /// A failure as a toast that leaves by itself (problem_toast.rs).
 #[path = "problem_toast.rs"]
 mod problem_toast;
+/// The ⌥Tab switcher's cards (project_switch.rs).
+#[path = "project_switch.rs"]
+mod project_switch;
 /// Several conversations picked in the sidebar (sidebar_pick.rs).
 #[path = "sidebar_pick.rs"]
 mod sidebar_pick;
@@ -8755,41 +8758,20 @@ impl Shell {
         if switch.since.elapsed().as_secs_f32() < SWITCH_SHOWS_AFTER {
             return None;
         }
-        let tiles = switch.order.iter().enumerate().map(|(at, project)| {
-            let target = *project;
-            div()
-                .id(("project-switch", at))
-                .cursor_pointer()
-                // The pointer picks too, while the keys stay down.
-                .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                    if *hovered && let Some(switch) = this.project_switch.as_mut() {
-                        switch.at = at;
-                        cx.notify();
-                    }
-                }))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.project_switch = None;
-                    this.switch_project(target, cx);
-                }))
-                .w(px(76.))
-                .px(px(4.))
-                .py(px(8.))
-                .rounded(px(crate::theme::RADIUS_MD))
-                .flex()
-                .flex_col()
-                .items_center()
-                .gap(px(6.))
-                .when(at == switch.at, |d| d.bg(content(0.14)))
-                .child(self.project_avatar_for(*project, 24.))
-                .child(
-                    div()
-                        .max_w_full()
-                        .truncate()
-                        .text_size(px(11.))
-                        .text_color(content(if at == switch.at { 1. } else { 0.65 }))
-                        .child(self.projects[*project].name.clone()),
-                )
-        });
+        // Five cards at most, the picked one kept in view.
+        const SHOWN: usize = 5;
+        let first = switch
+            .at
+            .saturating_sub(SHOWN / 2)
+            .min(switch.order.len().saturating_sub(SHOWN));
+        let tiles: Vec<AnyElement> = switch
+            .order
+            .iter()
+            .enumerate()
+            .skip(first)
+            .take(SHOWN)
+            .map(|(at, project)| self.switch_card(*project, at, at == switch.at, cx))
+            .collect();
         Some(
             div()
                 .absolute()
@@ -8802,15 +8784,15 @@ impl Shell {
                     div()
                         .relative()
                         .max_w(px(self.viewport_width - 80.))
-                        .p(px(6.))
+                        .p(px(12.))
                         .flex()
-                        .flex_wrap()
                         .justify_center()
-                        .gap(px(4.))
-                        .rounded(px(crate::theme::RADIUS_LG))
+                        .gap(px(10.))
+                        .overflow_hidden()
+                        .rounded(px(22.))
                         .border_1()
                         .border_color(content(0.12))
-                        .child(crate::theme::floating_surface(crate::theme::RADIUS_LG))
+                        .child(crate::theme::floating_surface(22.))
                         .shadow_lg()
                         .occlude()
                         .children(tiles),

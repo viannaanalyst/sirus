@@ -1454,11 +1454,27 @@ fn general(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
         ),
         top("sidebarAttentionFirst"),
     )];
-    let application_rows: &[SwitchRow] = &[(
-        t("Confirmar fechamento de sessões em execução"),
-        t("Pede confirmação antes de fechar ou sair enquanto os agentes estão em execução."),
-        top("confirmCloseRunning"),
-    )];
+    let application_rows: &[SwitchRow] = &[
+        (
+            t("Confirmar fechamento de sessões em execução"),
+            t("Pede confirmação antes de fechar ou sair enquanto os agentes estão em execução."),
+            top("confirmCloseRunning"),
+        ),
+        (
+            t("Manter o Mac acordado enquanto um agente trabalha"),
+            t(
+                "O Mac não entra em repouso sozinho enquanto uma conversa trabalha. A tela ainda apaga e bloqueia, e fechar a tampa ainda põe o Mac em repouso.",
+            ),
+            top("keepAwakeWhileWorking"),
+        ),
+        (
+            t("Composer rápido (⌥Espaço)"),
+            t(
+                "⌥Espaço, de qualquer app, ou o ícone do Sirus na barra de menus abre um campo para começar uma conversa sem abrir a janela.",
+            ),
+            top("quickComposer"),
+        ),
+    ];
     let core = vec![
         row(
             t("Provedor padrão"),

@@ -154,18 +154,28 @@ static COUNTER: Mutex<Counter<platform::Power>> = Mutex::new(Counter::new(platfo
 
 /// Held for the life of one agent turn.
 #[must_use]
-pub struct Hold(());
+pub struct Hold(bool);
 
 impl Drop for Hold {
     fn drop(&mut self) {
-        COUNTER.lock().drop_one();
+        if self.0 {
+            COUNTER.lock().drop_one();
+        }
     }
 }
 
 /// Starts keeping the Mac awake (if not already) until the returned hold drops.
 pub fn hold() -> Hold {
-    COUNTER.lock().acquire();
-    Hold(())
+    hold_if(true)
+}
+
+/// A hold that keeps the Mac awake only when `wanted` (Settings → "Manter o Mac acordado
+/// enquanto um agente trabalha"); otherwise it holds nothing.
+pub fn hold_if(wanted: bool) -> Hold {
+    if wanted {
+        COUNTER.lock().acquire();
+    }
+    Hold(wanted)
 }
 
 /// App quit: release the assertion now; later holds no longer take one.

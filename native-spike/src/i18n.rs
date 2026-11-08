@@ -1027,6 +1027,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Comportamento", "Behavior"),
     ("Comportamento do agente", "Agent behavior"),
     ("Comportamento do chat", "Chat behavior"),
+    ("Composer rápido (⌥Espaço)", "Quick composer (⌥Space)"),
     (
         "Composer rápido do Sirus (⌥Espaço)",
         "Sirus quick composer (⌥Space)",
@@ -2254,6 +2255,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Manter", "Keep"),
     ("Manter agentes prontos", "Keep agents ready"),
     (
+        "Manter o Mac acordado enquanto um agente trabalha",
+        "Keep the Mac awake while an agent works",
+    ),
+    (
         "Manter o Mac acordado para o celular",
         "Keep the Mac awake for the phone",
     ),
@@ -2930,6 +2935,10 @@ const ENTRIES: &[(&str, &str)] = &[
     (
         "O Keychain só existe no macOS.",
         "The Keychain only exists on macOS.",
+    ),
+    (
+        "O Mac não entra em repouso sozinho enquanto uma conversa trabalha. A tela ainda apaga e bloqueia, e fechar a tampa ainda põe o Mac em repouso.",
+        "The Mac does not sleep on its own while a conversation works. The screen still dims and locks, and closing the lid still puts the Mac to sleep.",
     ),
     (
         "O Open VSX está indisponível no momento.",
@@ -5099,6 +5108,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("últimas 24 horas", "last 24 hours"),
     ("últimos {} dias", "last {} days"),
     ("… {} linhas a mais", "… {} more lines"),
+    (
+        "⌥Espaço, de qualquer app, ou o ícone do Sirus na barra de menus abre um campo para começar uma conversa sem abrir a janela.",
+        "⌥Space from any app, or the Sirus icon in the menu bar, opens a field to start a conversation without opening the window.",
+    ),
 ];
 
 #[cfg(test)]

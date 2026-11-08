@@ -3689,7 +3689,7 @@ impl Shell {
                     if page == APPEARANCE {
                         self.appearance_index(cx)
                     } else {
-                        Vec::new()
+                        crate::settings_search::Built::default()
                     }
                 },
             );
@@ -16041,12 +16041,7 @@ impl Shell {
 
     /// Settings → Aparência → Ícone do app: the six looks as tiles, the chosen one ringed.
     fn app_icon_picker(&self, cx: &mut Context<Self>) -> AnyElement {
-        crate::settings_search::note_row(
-            "",
-            t(
-                "O ícone muda na Dock enquanto o Sirus está aberto; com o app fechado, a Dock mostra o padrão.",
-            ),
-        );
+        crate::settings_search::note_row("", icon_note());
         let accent_bytes = crate::app_icon::accent_bytes(&crate::theme::accent_hex(&self.look));
         let tiles = crate::app_icon::AppIcon::ALL.into_iter().map(|icon| {
             let chosen = icon == self.look.app_icon;
@@ -16082,22 +16077,19 @@ impl Shell {
                         .child(icon.label()),
                 )
         });
-        div()
-            .px(px(16.))
-            .py(px(14.))
-            .flex()
-            .flex_col()
-            .gap(px(12.))
-            .child(div().flex().flex_wrap().gap(px(8.)).children(tiles))
-            .child(
-                div()
-                    .text_size(px(12.))
-                    .text_color(content(0.5))
-                    .child(t(
-                        "O ícone muda na Dock enquanto o Sirus está aberto; com o app fechado, a Dock mostra o padrão.",
-                    )),
-            )
-            .into_any_element()
+        // The picker answers to the note's text: what the search jumps to for the tiles and the note.
+        crate::settings_search::decorate(
+            div().px(px(16.)).py(px(14.)).flex().flex_col().gap(px(12.)),
+            icon_note(),
+        )
+        .child(div().flex().flex_wrap().gap(px(8.)).children(tiles))
+        .child(
+            div()
+                .text_size(px(12.))
+                .text_color(content(0.5))
+                .child(icon_note()),
+        )
+        .into_any_element()
     }
 
     fn appearance_page(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -16106,7 +16098,7 @@ impl Shell {
 
     /// The groups the Aparência page draws by hand, for the settings search: the page is drawn
     /// once with the recorder on, with the custom-color rows showing, and its rows are read back.
-    fn appearance_index(&self, cx: &mut Context<Self>) -> crate::settings_search::Groups {
+    fn appearance_index(&self, cx: &mut Context<Self>) -> crate::settings_search::Built {
         let mut look = self.look;
         look.custom.get_or_insert((200., 0.6));
         crate::settings_search::collect(|| {
@@ -16117,6 +16109,7 @@ impl Shell {
     /// Settings → Aparência, drawn for `look` (what the rows show).
     fn appearance_page_for(&self, look: Look, cx: &mut Context<Self>) -> AnyElement {
         crate::settings_search::note_group(t("Tema"));
+        note_appearance_choices();
         let row = |title: &'static str, about: &'static str, control: AnyElement| {
             crate::settings_search::note_row(title, about);
             crate::settings_search::decorate(
@@ -16223,12 +16216,13 @@ impl Shell {
                 .into_any_element()
         }
         // Theme, as ThemeModePicker: three small windows to choose from.
+        let [system, light_mode, dark_mode] = mode_labels();
         let modes = segmented_icons(
             "theme-mode",
             &[
-                ("monitor", t("Sistema")),
-                ("sun", t("Claro")),
-                ("moon", t("Escuro")),
+                ("monitor", system),
+                ("sun", light_mode),
+                ("moon", dark_mode),
             ],
             [0, 2, 1].iter().position(|m| *m == look.mode).unwrap_or(0),
             cx,
@@ -16514,13 +16508,7 @@ impl Shell {
         colors.push(row(
             t("Cores do diff"),
             t("Daltônico e alto contraste usam azul e laranja."),
-            segmented(
-                "diff",
-                &[t("Padrão"), t("Daltônico"), t("Alto contraste")],
-                look.diff,
-                cx,
-                |l, ix| l.diff = ix,
-            ),
+            segmented("diff", &diff_labels(), look.diff, cx, |l, ix| l.diff = ix),
         ));
         colors.push(row(
             t("Matiz do fundo"),
@@ -16532,7 +16520,7 @@ impl Shell {
             t("Quanto da cor aparece no fundo."),
             segmented(
                 "saturation",
-                &[t("Do tema"), t("Sem"), t("Suave"), t("Forte")],
+                &saturation_labels(),
                 saturation,
                 cx,
                 |l, ix| l.saturation = [None, Some(0.), Some(0.12), Some(0.35)][ix],
@@ -16552,7 +16540,16 @@ impl Shell {
                             .text_color(content(0.5))
                             .child(t("Tema")),
                     )
-                    .child(modes),
+                    // The picker answers to the group's name for the search's jump.
+                    .child(
+                        div().flex().child(
+                            crate::settings_search::decorate(
+                                div().rounded(px(crate::theme::RADIUS_MD)),
+                                t("Tema"),
+                            )
+                            .child(modes),
+                        ),
+                    ),
             )
             .child(group(t("Cores"), colors))
             .child(group(
@@ -16562,7 +16559,7 @@ impl Shell {
                     t("Deixa o fundo da janela aparecer através do app."),
                     segmented(
                         "glass",
-                        &[t("Ligada"), t("Desligada")],
+                        &glass_labels(),
                         if look.glass { 0 } else { 1 },
                         cx,
                         |l, ix| l.glass = ix == 0,
@@ -16576,7 +16573,7 @@ impl Shell {
                     t("Aumenta ou diminui tudo."),
                     segmented(
                         "scale",
-                        &["90%", "100%", "110%", "125%"],
+                        &SCALE_LABELS,
                         [0.9f32, 1., 1.1, 1.25]
                             .iter()
                             .position(|s| (*s - look.scale).abs() < 0.01)
@@ -18570,6 +18567,64 @@ fn segmented_icons(
                     .child(*label)
             })),
     )
+}
+
+/// The options of the hand-drawn controls on Aparência, shared by what is drawn and what the
+/// settings search lists, so a label cannot be in one and not the other.
+fn mode_labels() -> [&'static str; 3] {
+    [t("Sistema"), t("Claro"), t("Escuro")]
+}
+
+fn diff_labels() -> [&'static str; 3] {
+    [t("Padrão"), t("Daltônico"), t("Alto contraste")]
+}
+
+fn saturation_labels() -> [&'static str; 4] {
+    [t("Do tema"), t("Sem"), t("Suave"), t("Forte")]
+}
+
+fn glass_labels() -> [&'static str; 2] {
+    [t("Ligada"), t("Desligada")]
+}
+
+const SCALE_LABELS: [&str; 4] = ["90%", "100%", "110%", "125%"];
+
+/// The note under the app icon tiles; the picker is found by it.
+fn icon_note() -> &'static str {
+    t(
+        "O ícone muda na Dock enquanto o Sirus está aberto; com o app fechado, a Dock mostra o padrão.",
+    )
+}
+
+/// Reports to the settings search the choices of Aparência's hand-drawn controls: the theme
+/// modes, the workspace themes, the accent colors, the segments and the six app icons. Each jumps
+/// to the row (or picker) that holds it.
+pub fn note_appearance_choices() {
+    use crate::settings_search::note_choice;
+    for label in mode_labels() {
+        note_choice(t("Tema"), label, t("Tema"));
+    }
+    for preset in PRESETS {
+        note_choice(t("Cores"), t(preset.name), t("Tema do workspace"));
+    }
+    for (name, _) in ACCENTS {
+        note_choice(t("Cores"), t(name), t("Cor de destaque"));
+    }
+    for label in diff_labels() {
+        note_choice(t("Cores"), label, t("Cores do diff"));
+    }
+    for label in saturation_labels() {
+        note_choice(t("Cores"), label, t("Saturação do fundo"));
+    }
+    for label in glass_labels() {
+        note_choice(t("Materiais"), label, t("Translucidez"));
+    }
+    for label in SCALE_LABELS {
+        note_choice(t("Interface"), label, t("Tamanho da interface"));
+    }
+    for icon in crate::app_icon::AppIcon::ALL {
+        note_choice(t("Ícone do app"), &icon.label(), icon_note());
+    }
 }
 
 #[cfg(test)]

@@ -839,6 +839,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Avisar com o app em foco", "Notify while app is in focus"),
     ("Avisos de atividade", "Activity alerts"),
     ("Avisos no app", "Activity toasts"),
+    ("Azul", "Blue"),
     ("Ações", "Actions"),
     ("Ações recentes", "Recent actions"),
     ("Baixando a versão {}…", "Downloading version {}…"),
@@ -980,6 +981,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Chat lateral", "Side chat"),
     ("Chave conectada · {}", "Key connected · {}"),
     ("Checkout atual", "Current checkout"),
+    ("Ciano", "Cyan"),
     ("Claro", "Light"),
     ("Clicar de novo para liberar", "Click again to free up"),
     ("Clicar de novo para limpar", "Click again to clean up"),
@@ -2254,6 +2256,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Ligando {}…", "Booting {}…"),
     ("Ligar", "Turn on"),
+    ("Lilás", "Lilac"),
     ("Limite de 5 horas", "5-hour limit"),
     (
         "Limite de armazenamento de anexos atingido. Remova os anexos não utilizados.",
@@ -4175,6 +4178,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Rode comandos no projeto.", "Run commands in the project."),
     ("Rode o app num aparelho.", "Run the app on a device."),
     ("Rolou", "Scrolled"),
+    ("Rosa", "Pink"),
     ("Rosto", "Face"),
     ("Rápida", "Fast"),
     ("Rótulo da conta", "Account label"),
@@ -4684,6 +4688,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Ver página", "Show page"),
     ("Ver saída", "Show output"),
     ("Ver uso do provedor", "View provider usage"),
+    ("Verde", "Green"),
     (
         "Verifica em segundo plano se Codex, Claude e outras CLIs têm versões mais novas.",
         "Check Codex, Claude and other provider CLIs for newer versions in the background.",
@@ -5214,6 +5219,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("À direita", "On the right"),
     ("À esquerda", "On the left"),
+    ("Âmbar", "Amber"),
     (
         "É rascunho: marque como pronto antes de mesclar.",
         "It is a draft: mark it ready before merging.",

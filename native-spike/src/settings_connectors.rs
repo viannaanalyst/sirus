@@ -510,6 +510,26 @@ fn entry(
     CATALOG.iter().find(|entry| entry.0 == id)
 }
 
+/// How a catalog row is named for the jump from the settings search: the name it draws.
+fn catalog_key(
+    entry: &(
+        &'static str,
+        &'static str,
+        &'static str,
+        &'static str,
+        &'static str,
+        &'static str,
+    ),
+) -> &'static str {
+    entry.1
+}
+
+/// The keys the catalog rows answer to, for the search's tests.
+#[cfg(test)]
+pub fn catalog_keys() -> Vec<&'static str> {
+    CATALOG.iter().map(catalog_key).collect()
+}
+
 /// The page's content for the settings search, from the same catalog and sections it draws: the
 /// controls first, then each category with its services (name and description).
 pub fn index_groups() -> Vec<(String, Vec<(String, String)>)> {
@@ -524,7 +544,7 @@ pub fn index_groups() -> Vec<(String, Vec<(String, String)>)> {
         let rows = CATALOG
             .iter()
             .filter(|entry| entry.2 == *category)
-            .map(|entry| (entry.1.to_string(), t(entry.3).to_string()))
+            .map(|entry| (catalog_key(entry).to_string(), t(entry.3).to_string()))
             .collect();
         groups.push((t(title).to_string(), rows));
     }
@@ -973,8 +993,14 @@ pub fn view<V: 'static>(
             .flex()
             .items_center()
             .gap(px(10.))
-            .child(search)
-            .child(add_custom),
+            .child(crate::settings_search::decorate(
+                search,
+                &t("Buscar conectores"),
+            ))
+            .child(crate::settings_search::decorate(
+                add_custom,
+                &t("Adicionar personalizado"),
+            )),
     );
 
     // The scope filter, when a project is open.
@@ -1131,6 +1157,7 @@ pub fn view<V: 'static>(
                     t(desc).to_string(),
                     false,
                     vec![button],
+                    catalog_key(e),
                 )
             })
             .collect();
@@ -1261,45 +1288,50 @@ fn item(
     description: String,
     off: bool,
     actions: Vec<AnyElement>,
+    key: &str,
 ) -> AnyElement {
-    div()
-        .id(id)
-        .w_full()
-        .min_w_0()
-        .px(px(8.))
-        .py(px(8.))
-        .rounded(px(crate::theme::RADIUS_LG))
-        .flex()
-        .items_center()
-        .gap(px(11.))
-        .hover(|s| s.bg(content(0.07)))
-        .child(div().when(off, |d| d.opacity(0.5)).child(mark))
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .gap(px(1.))
-                .when(off, |d| d.opacity(0.5))
-                .child(
-                    div()
-                        .min_w_0()
-                        .flex()
-                        .items_center()
-                        .gap(px(6.))
-                        .children(name_line),
-                )
-                .child(
-                    div()
-                        .text_size(px(12.))
-                        .text_color(content(0.5))
-                        .truncate()
-                        .child(description),
-                ),
-        )
-        .children(actions)
-        .into_any_element()
+    // `key` is what the settings search jumps to; empty for rows it does not list.
+    crate::settings_search::decorate(
+        div()
+            .id(id)
+            .w_full()
+            .min_w_0()
+            .px(px(8.))
+            .py(px(8.))
+            .rounded(px(crate::theme::RADIUS_LG))
+            .flex()
+            .items_center()
+            .gap(px(11.))
+            .hover(|s| s.bg(content(0.07))),
+        key,
+    )
+    .child(div().when(off, |d| d.opacity(0.5)).child(mark))
+    .child(
+        div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .gap(px(1.))
+            .when(off, |d| d.opacity(0.5))
+            .child(
+                div()
+                    .min_w_0()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .children(name_line),
+            )
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(content(0.5))
+                    .truncate()
+                    .child(description),
+            ),
+    )
+    .children(actions)
+    .into_any_element()
 }
 
 fn tag(text: String, project: bool) -> AnyElement {
@@ -1510,6 +1542,7 @@ fn connected_item<V: 'static>(
         description,
         !c.enabled,
         actions,
+        "",
     )
 }
 

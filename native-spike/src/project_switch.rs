@@ -123,7 +123,6 @@ impl Shell {
             .flex()
             .child(sidebar)
             .child(body);
-        let state = self.project_avatar_state_of(project);
         let reduce = cx.reduce_motion();
         let tile = mark_tile(
             &crate::tab_tile::TileSize {
@@ -192,9 +191,6 @@ impl Shell {
                     .flex()
                     .items_center()
                     .gap(px(6.))
-                    .when(state != crate::project_avatar::AvatarState::Idle, |d| {
-                        d.child(self.project_avatar_in(project, 16., state))
-                    })
                     .child(
                         div()
                             .min_w_0()

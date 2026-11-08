@@ -50,6 +50,8 @@ pub struct Look {
     pub saturation: Option<f32>,
     pub glass: bool,
     pub scale: f32,
+    /// The Dock icon (app_icon.rs); it lives with the look, in this Mac's own file.
+    pub app_icon: crate::app_icon::AppIcon,
 }
 
 impl Default for Look {
@@ -65,6 +67,7 @@ impl Default for Look {
             saturation: None,
             glass: true,
             scale: 1.,
+            app_icon: crate::app_icon::AppIcon::default(),
         }
     }
 }
@@ -457,6 +460,7 @@ pub fn look_to_json(look: &Look) -> serde_json::Value {
         "saturation": look.saturation,
         "glass": look.glass,
         "scale": look.scale,
+        "appIcon": look.app_icon.key(),
     })
 }
 /// Anything missing or out of range keeps the default.
@@ -485,6 +489,7 @@ pub fn look_from_json(value: &serde_json::Value) -> Look {
     look.saturation = value["saturation"].as_f64().map(|v| v as f32);
     look.glass = value["glass"].as_bool().unwrap_or(look.glass);
     look.scale = value["scale"].as_f64().map_or(look.scale, |v| v as f32);
+    look.app_icon = crate::app_icon::AppIcon::parse(&value["appIcon"]);
     look
 }
 

@@ -750,6 +750,16 @@ impl Shell {
                     .border_color(content(0.08))
                     .overflow_y_scroll()
                     .track_scroll(&feed.scroll)
+                    // The wheel scrolls the feed alone, never the conversation behind it, while
+                    // the feed has more than it shows.
+                    .on_scroll_wheel({
+                        let scroll = feed.scroll.clone();
+                        move |_: &gpui::ScrollWheelEvent, _, cx| {
+                            if scroll.max_offset().y > px(0.) {
+                                cx.stop_propagation();
+                            }
+                        }
+                    })
                     .flex()
                     .flex_col()
                     .gap(px(4.))

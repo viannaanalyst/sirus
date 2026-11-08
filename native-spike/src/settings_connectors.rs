@@ -510,6 +510,27 @@ fn entry(
     CATALOG.iter().find(|entry| entry.0 == id)
 }
 
+/// The page's content for the settings search, from the same catalog and sections it draws: the
+/// controls first, then each category with its services (name and description).
+pub fn index_groups() -> Vec<(String, Vec<(String, String)>)> {
+    let mut groups = vec![(
+        String::new(),
+        vec![
+            (t("Buscar conectores").to_string(), String::new()),
+            (t("Adicionar personalizado").to_string(), String::new()),
+        ],
+    )];
+    for (category, title) in CONNECTOR_GROUPS {
+        let rows = CATALOG
+            .iter()
+            .filter(|entry| entry.2 == *category)
+            .map(|entry| (entry.1.to_string(), t(entry.3).to_string()))
+            .collect();
+        groups.push((t(title).to_string(), rows));
+    }
+    groups
+}
+
 // Small helpers.
 
 fn success() -> Hsla {

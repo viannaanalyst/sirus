@@ -2174,6 +2174,8 @@ pub struct TextField {
     focus_pending: bool,
     /// Shows bullets instead of the text and never copies it (a password).
     masked: bool,
+    /// No fill and no side padding: the field sits inside a box the caller draws.
+    bare: bool,
 }
 
 impl EventEmitter<TextFieldEvent> for TextField {}
@@ -2189,7 +2191,13 @@ impl TextField {
             focus: cx.focus_handle(),
             focus_pending: false,
             masked: false,
+            bare: false,
         }
+    }
+
+    /// Draws the field without its own fill, for a box the caller draws around it.
+    pub fn set_bare(&mut self, bare: bool) {
+        self.bare = bare;
     }
 
     /// The field's focus handle, to tell whether it is being typed in.
@@ -2390,13 +2398,15 @@ impl Render for TextField {
             .relative()
             .w_full()
             .h(px(26.))
-            .px(px(9.))
-            .rounded(px(crate::theme::RADIUS_MD))
-            .bg(theme::field_fill())
+            .when(!self.bare, |d| {
+                d.px(px(9.))
+                    .rounded(px(crate::theme::RADIUS_MD))
+                    .bg(theme::field_fill())
+            })
             .overflow_hidden()
             .flex()
             .items_center()
-            .text_size(px(12.5))
+            .text_size(px(if self.bare { 13. } else { 12.5 }))
             .text_color(content(0.9))
             .child(body)
             .child(

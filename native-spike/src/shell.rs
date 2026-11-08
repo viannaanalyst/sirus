@@ -997,6 +997,14 @@ struct PaletteState {
     follow: std::cell::Cell<bool>,
 }
 
+/// The settings search's index and what it was built from, to know when it is out of date.
+struct SearchIndex {
+    settings: Value,
+    loaded: usize,
+    english: bool,
+    entries: Vec<crate::settings_search::Entry>,
+}
+
 /// A collapsed sidebar sliding out over the workspace.
 struct Peek {
     open: bool,
@@ -1027,7 +1035,7 @@ const PEEK_INSET: f32 = 6.;
 const PEEK_DRIFT: f32 = 12.;
 const PEEK_CLOSE: Duration = Duration::from_millis(180);
 /// Settings, same pages in the same order as Sirus's SettingsSidebar.
-const SETTINGS_NAV: [(&str, &[(&str, &str)]); 3] = [
+pub(crate) const SETTINGS_NAV: [(&str, &[(&str, &str)]); 3] = [
     (
         "Pessoal",
         &[
@@ -1055,7 +1063,7 @@ const SETTINGS_NAV: [(&str, &[(&str, &str)]); 3] = [
         &[("smartphone", "Conexões"), ("sliders", "Avançado")],
     ),
 ];
-const APPEARANCE: &str = "Aparência";
+pub(crate) const APPEARANCE: &str = "Aparência";
 const TAB_MAX: f32 = 224.;
 const TAB_MIN: f32 = 64.;
 const SELECTED_MIN: f32 = 112.;
@@ -1352,6 +1360,14 @@ pub struct Shell {
     settings_page: &'static str,
     settings_since: Instant,
     settings_direction: f32,
+    /// The search box at the top of Settings, its selected result, and the index it searches.
+    settings_search: gpui::Entity<crate::panel_files::TextField>,
+    settings_hit: usize,
+    search_index: std::cell::RefCell<Option<SearchIndex>>,
+    _search_events: gpui::Subscription,
+    /// The scroll of the settings page, to bring a found row into view.
+    settings_scroll: gpui::ScrollHandle,
+    search_scroll: gpui::ScrollHandle,
     slider_drag: Option<usize>,
     slider_bounds: std::rc::Rc<std::cell::RefCell<[Option<gpui::Bounds<Pixels>>; 3]>>,
     peek: Option<Peek>,
@@ -1459,6 +1475,23 @@ impl Shell {
         .detach();
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
+        let settings_search = cx.new(|cx| {
+            let mut field = crate::panel_files::TextField::new(t("Buscar configurações"), cx);
+            field.set_bare(true);
+            field
+        });
+        let search_events =
+            cx.subscribe(
+                &settings_search,
+                |this: &mut Shell, _, event, cx| match event {
+                    crate::panel_files::TextFieldEvent::Changed => {
+                        this.settings_hit = 0;
+                        cx.notify();
+                    }
+                    crate::panel_files::TextFieldEvent::Submit => this.open_search_hit(cx),
+                    crate::panel_files::TextFieldEvent::Cancel => this.clear_search(cx),
+                },
+            );
         cx.observe_window_activation(window, |_, _, cx| cx.notify())
             .detach();
         // Loops (spinners, shimmers, streaming text) tick together at 30 Hz
@@ -1704,6 +1737,12 @@ impl Shell {
             settings_page: APPEARANCE,
             settings_since: now,
             settings_direction: 1.,
+            settings_search,
+            settings_hit: 0,
+            search_index: Default::default(),
+            _search_events: search_events,
+            settings_scroll: gpui::ScrollHandle::new(),
+            search_scroll: gpui::ScrollHandle::new(),
             slider_drag: None,
             slider_bounds: Default::default(),
             peek: None,
@@ -3625,6 +3664,93 @@ impl Shell {
         cx.notify();
     }
 
+    /// What the search box says.
+    fn search_query(&self, cx: &Context<Self>) -> String {
+        self.settings_search.read(cx).text().trim().to_owned()
+    }
+
+    /// The results for the query, best first. The index is rebuilt when the settings, what the
+    /// pages loaded or the language changed since it was.
+    fn search_hits(&self, cx: &mut Context<Self>) -> Vec<crate::settings_search::Entry> {
+        let query = self.search_query(cx);
+        if query.is_empty() {
+            return Vec::new();
+        }
+        let stale = self.search_index.borrow().as_ref().is_none_or(|index| {
+            index.settings != self.settings
+                || index.loaded != self.settings_data.len()
+                || index.english != crate::i18n::is_en()
+        });
+        if stale {
+            let entries = crate::settings_search::build_index(
+                &self.settings,
+                &self.settings_data,
+                &mut |page| {
+                    if page == APPEARANCE {
+                        self.appearance_index(cx)
+                    } else {
+                        Vec::new()
+                    }
+                },
+            );
+            *self.search_index.borrow_mut() = Some(SearchIndex {
+                settings: self.settings.clone(),
+                loaded: self.settings_data.len(),
+                english: crate::i18n::is_en(),
+                entries,
+            });
+        }
+        let index = self.search_index.borrow();
+        let entries = index.as_ref().map_or(&[][..], |i| &i.entries[..]);
+        crate::settings_search::search(entries, &query)
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
+    /// Enter or a click on a result: opens its page, brings the row into view and flashes it.
+    fn open_search_hit(&mut self, cx: &mut Context<Self>) {
+        let hits = self.search_hits(cx);
+        let Some(hit) = hits.get(self.settings_hit.min(hits.len().saturating_sub(1))) else {
+            return;
+        };
+        self.open_search_entry(hit, cx);
+    }
+
+    fn open_search_entry(&mut self, hit: &crate::settings_search::Entry, cx: &mut Context<Self>) {
+        let name = hit.page;
+        if self.settings_page != name {
+            let order = |n: &str| {
+                SETTINGS_NAV
+                    .iter()
+                    .flat_map(|(_, items)| items.iter())
+                    .position(|(_, i)| *i == n)
+                    .unwrap_or(0)
+            };
+            self.settings_direction = if order(name) > order(self.settings_page) {
+                1.
+            } else {
+                -1.
+            };
+            self.settings_page = name;
+            self.settings_since = Instant::now();
+            self.theme_menu = None;
+            self.load_settings_page();
+        }
+        self.settings_scroll.set_offset(Point::default());
+        crate::settings_search::aim(hit.target(), Instant::now());
+        cx.notify();
+    }
+
+    /// Esc in the search box: clears the text and hands the keys back to the window.
+    fn clear_search(&mut self, cx: &mut Context<Self>) {
+        self.settings_search
+            .update(cx, |field, cx| field.set_text("", cx));
+        self.settings_hit = 0;
+        self.refocus = true;
+        cx.notify();
+    }
+
     fn open_settings_page(&mut self, name: &'static str, cx: &mut Context<Self>) {
         self.usage_popup = None;
         // The settings have their own column, which the peeking sidebar would lie over.
@@ -5271,6 +5397,43 @@ impl Shell {
         true
     }
 
+    /// In Settings: ⌘F focuses the search box, and ↑/↓ move through its results while it is typed in.
+    fn search_keys(
+        &mut self,
+        keys: &gpui::Keystroke,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.appearance.is_none() {
+            return false;
+        }
+        let m = keys.modifiers;
+        if keys.key == "f" && m.platform && !m.shift && !m.alt && !m.control {
+            self.settings_search.update(cx, |field, cx| field.focus(cx));
+            return true;
+        }
+        if !matches!(keys.key.as_str(), "up" | "down")
+            || m.platform
+            || !self
+                .settings_search
+                .read(cx)
+                .focus_handle()
+                .is_focused(window)
+        {
+            return false;
+        }
+        let count = self.search_hits(cx).len();
+        let last = count.saturating_sub(1);
+        self.settings_hit = if keys.key == "down" {
+            (self.settings_hit + 1).min(last)
+        } else {
+            self.settings_hit.saturating_sub(1)
+        };
+        self.search_scroll.scroll_to_item(self.settings_hit);
+        cx.notify();
+        true
+    }
+
     fn key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         // ⌥Tab goes back to the last project; held, it steps through them (project_switch_view).
         if event.keystroke.modifiers.alt
@@ -5286,6 +5449,10 @@ impl Shell {
             return;
         }
         if self.record_shortcut(&event.keystroke, cx) {
+            cx.stop_propagation();
+            return;
+        }
+        if self.search_keys(&event.keystroke, window, cx) {
             cx.stop_propagation();
             return;
         }
@@ -15512,6 +15679,24 @@ impl Shell {
         } else {
             eased(since / 0.28, Curve::Expo)
         };
+        let query = self.search_query(cx);
+        let hits = self.search_hits(cx);
+        let hit_at = self.settings_hit.min(hits.len().saturating_sub(1));
+        // The row a search jump aims at is scrolled into view once the page has settled.
+        if (since >= 0.28 || reduced) && crate::settings_search::waiting(now) {
+            if let Some(row) = crate::settings_search::take_bounds() {
+                let view = self.settings_scroll.bounds();
+                let mut offset = self.settings_scroll.offset();
+                let delta = view.origin.y + px(72.) - row.origin.y;
+                let most = self.settings_scroll.max_offset().y.abs();
+                offset.y = (offset.y + delta).clamp(-most, px(0.));
+                self.settings_scroll.set_offset(offset);
+                crate::settings_search::land(now);
+            }
+        }
+        if crate::settings_search::animating(now) {
+            *moving = true;
+        }
         // Back and search stay put: only the page list scrolls, so Back never slides under the
         // window's traffic lights.
         let nav_head = div()
@@ -15556,7 +15741,33 @@ impl Shell {
                     .text_size(px(13.))
                     .text_color(content(0.4))
                     .child(icon("search", 14.).text_color(content(0.45)))
-                    .child(t("Buscar configurações")),
+                    .child(div().flex_1().min_w_0().child(self.settings_search.clone()))
+                    .when(!query.is_empty(), |d| {
+                        d.child(
+                            div()
+                                .id("settings-search-clear")
+                                .flex_shrink_0()
+                                .size(px(18.))
+                                .rounded_full()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .cursor_pointer()
+                                .text_size(px(14.))
+                                .text_color(content(0.5))
+                                .hover(|s| s.bg(content(0.1)).text_color(content(0.9)))
+                                .tooltip(message_actions::name_tip(t("Limpar busca")))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.settings_search
+                                        .update(cx, |field, cx| field.set_text("", cx));
+                                    this.settings_hit = 0;
+                                    this.settings_search.update(cx, |field, cx| field.focus(cx));
+                                    let _ = window;
+                                    cx.notify();
+                                }))
+                                .child("×"),
+                        )
+                    }),
             );
         let nav_list = div()
             .id("settings-nav")
@@ -15626,6 +15837,11 @@ impl Shell {
                         )
                     }))
             }));
+        let nav_list = if query.is_empty() {
+            nav_list.into_any_element()
+        } else {
+            self.search_results_view(&query, &hits, hit_at, cx)
+        };
         let (bar, body): (AnyElement, AnyElement) = if self.settings_page == APPEARANCE {
             (
                 crate::settings_pages::title_bar(
@@ -15709,6 +15925,7 @@ impl Shell {
                             div().flex_1().min_h_0().flex().child(
                                 div()
                                     .id("settings-main")
+                                    .track_scroll(&self.settings_scroll)
                                     .flex_1()
                                     .min_w_0()
                                     .h_full()
@@ -15748,8 +15965,88 @@ impl Shell {
         )
     }
 
+    /// The results that replace the page list while there is a query: each row's title with the
+    /// match in the accent and "Página › Grupo" under it.
+    fn search_results_view(
+        &self,
+        query: &str,
+        hits: &[crate::settings_search::Entry],
+        chosen: usize,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let marked = |text: &str, size: f32, base: f32| {
+            div()
+                .flex()
+                .overflow_hidden()
+                .text_size(px(size))
+                .text_color(content(base))
+                .children(crate::settings_search::spans(text, query).into_iter().map(
+                    |(piece, on)| {
+                        div()
+                            .flex_shrink_0()
+                            .whitespace_nowrap()
+                            .when(on, |d| d.text_color(accent()))
+                            .child(piece)
+                    },
+                ))
+        };
+        let body = if hits.is_empty() {
+            div()
+                .px(px(10.))
+                .py(px(12.))
+                .text_size(px(12.5))
+                .text_color(content(0.45))
+                .child(t("Nenhuma configuração encontrada"))
+                .into_any_element()
+        } else {
+            div()
+                .children(hits.iter().enumerate().map(|(ix, hit)| {
+                    let target = hit.clone();
+                    div()
+                        .id(("settings-hit", ix))
+                        .px(px(10.))
+                        .py(px(6.))
+                        .rounded(px(crate::theme::RADIUS_MD))
+                        .flex()
+                        .flex_col()
+                        .gap(px(1.))
+                        .cursor_pointer()
+                        .when(ix == chosen, |d| d.bg(content(0.1)))
+                        .when(ix != chosen, |d| d.hover(|s| s.bg(content(0.05))))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.settings_hit = ix;
+                            this.open_search_entry(&target, cx);
+                        }))
+                        .child(marked(hit.title.shown(), 13., 0.92))
+                        .child(
+                            div()
+                                .truncate()
+                                .text_size(px(11.5))
+                                .text_color(content(0.45))
+                                .child(hit.subtitle()),
+                        )
+                }))
+                .into_any_element()
+        };
+        div()
+            .id("settings-results")
+            .flex_1()
+            .min_h_0()
+            .px(px(8.))
+            .overflow_y_scroll()
+            .track_scroll(&self.search_scroll)
+            .child(body)
+            .into_any_element()
+    }
+
     /// Settings → Aparência → Ícone do app: the six looks as tiles, the chosen one ringed.
     fn app_icon_picker(&self, cx: &mut Context<Self>) -> AnyElement {
+        crate::settings_search::note_row(
+            "",
+            t(
+                "O ícone muda na Dock enquanto o Sirus está aberto; com o app fechado, a Dock mostra o padrão.",
+            ),
+        );
         let accent_bytes = crate::app_icon::accent_bytes(&crate::theme::accent_hex(&self.look));
         let tiles = crate::app_icon::AppIcon::ALL.into_iter().map(|icon| {
             let chosen = icon == self.look.app_icon;
@@ -15804,42 +16101,62 @@ impl Shell {
     }
 
     fn appearance_page(&self, cx: &mut Context<Self>) -> AnyElement {
-        let look = self.look;
+        self.appearance_page_for(self.look, cx)
+    }
+
+    /// The groups the Aparência page draws by hand, for the settings search: the page is drawn
+    /// once with the recorder on, with the custom-color rows showing, and its rows are read back.
+    fn appearance_index(&self, cx: &mut Context<Self>) -> crate::settings_search::Groups {
+        let mut look = self.look;
+        look.custom.get_or_insert((200., 0.6));
+        crate::settings_search::collect(|| {
+            let _ = self.appearance_page_for(look, cx);
+        })
+    }
+
+    /// Settings → Aparência, drawn for `look` (what the rows show).
+    fn appearance_page_for(&self, look: Look, cx: &mut Context<Self>) -> AnyElement {
+        crate::settings_search::note_group(t("Tema"));
         let row = |title: &'static str, about: &'static str, control: AnyElement| {
-            div()
-                .px(px(16.))
-                .py(px(14.))
-                .flex()
-                .items_center()
-                .justify_between()
-                .gap(px(20.))
-                .border_b_1()
-                .border_color(content(0.07))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .flex()
-                        .flex_col()
-                        .gap(px(2.))
-                        .child(
-                            div()
-                                .text_size(px(13.))
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(content(0.95))
-                                .child(title),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(12.))
-                                .text_color(content(0.5))
-                                .child(about),
-                        ),
-                )
-                .child(control)
-                .into_any_element()
+            crate::settings_search::note_row(title, about);
+            crate::settings_search::decorate(
+                div()
+                    .px(px(16.))
+                    .py(px(14.))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(20.))
+                    .border_b_1()
+                    .border_color(content(0.07)),
+                title,
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(content(0.95))
+                            .child(title),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(content(0.5))
+                            .child(about),
+                    ),
+            )
+            .child(control)
+            .into_any_element()
         };
         let group = |title: &'static str, rows: Vec<AnyElement>| {
+            crate::settings_search::note_group(title);
             div()
                 .mb(px(32.))
                 .child(
@@ -16693,7 +17010,7 @@ fn claude_catalog(mut models: Vec<ModelInfo>) -> Vec<ModelInfo> {
 }
 
 /// A settings page's name in the menu, where the full title does not fit.
-fn nav_label(page: &'static str) -> &'static str {
+pub(crate) fn nav_label(page: &'static str) -> &'static str {
     if page == "Comportamento do chat" {
         "Comportamento"
     } else {

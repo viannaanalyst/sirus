@@ -769,6 +769,7 @@ fn row_view<V: 'static>(
     ui: &mut Ui<'_, V>,
     cx: &mut Context<V>,
 ) -> AnyElement {
+    let title = item.title.clone();
     let mut controls = Vec::new();
     for ctl in item.controls {
         controls.push(control_view(ctl, ui, cx));
@@ -791,43 +792,46 @@ fn row_view<V: 'static>(
                 .child(line.to_owned()),
         );
     }
-    div()
-        .px(px(16.))
-        .py(px(14.))
-        .flex()
-        .items_center()
-        .justify_between()
-        .gap(px(20.))
-        .when(!last, |d| d.border_b_1().border_color(content(0.07)))
-        .when(item.faded, |d| d.opacity(0.5))
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .items_center()
-                .gap(px(10.))
-                .when_some(item.provider, |d, provider| {
-                    d.child(crate::tab_tile::mark_tile(
-                        &crate::tab_tile::ACTIVITY_TILE,
-                        crate::tab_tile::Face::provider(provider),
-                        crate::theme::provider_glyph(provider, 12.),
-                    ))
-                })
-                .when_some(item.mark, |d, id| {
-                    d.child(crate::settings_connectors::logo(Some(id), id, 26.))
-                })
-                .child(text),
-        )
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(8.))
-                .flex_shrink_0()
-                .children(controls),
-        )
-        .into_any_element()
+    crate::settings_search::decorate(
+        div()
+            .px(px(16.))
+            .py(px(14.))
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap(px(20.))
+            .when(!last, |d| d.border_b_1().border_color(content(0.07)))
+            .when(item.faded, |d| d.opacity(0.5)),
+        &title,
+    )
+    .child(
+        div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .when_some(item.provider, |d, provider| {
+                d.child(crate::tab_tile::mark_tile(
+                    &crate::tab_tile::ACTIVITY_TILE,
+                    crate::tab_tile::Face::provider(provider),
+                    crate::theme::provider_glyph(provider, 12.),
+                ))
+            })
+            .when_some(item.mark, |d, id| {
+                d.child(crate::settings_connectors::logo(Some(id), id, 26.))
+            })
+            .child(text),
+    )
+    .child(
+        div()
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .flex_shrink_0()
+            .children(controls),
+    )
+    .into_any_element()
 }
 
 fn next_id(ids: &mut usize) -> usize {
@@ -1998,6 +2002,12 @@ fn global_warnings(combo: &str) -> Vec<String> {
             }),
     );
     out
+}
+
+/// How many commands Atalhos lists, for the search's completeness test.
+#[cfg(test)]
+pub fn keybinding_count() -> usize {
+    KEYBINDINGS.len()
 }
 
 const SHORTCUT_GROUPS: &[&str] = &["Sessão", "Aplicativo", "Projeto", "Visualização"];
@@ -3631,6 +3641,14 @@ pub fn appearance_groups<V: 'static>(
         run,
     };
     let _ = data;
+    appearance_data_groups(settings)
+        .into_iter()
+        .map(|item| group_view(item, &mut ui, cx))
+        .collect()
+}
+
+/// The groups of `appearance_groups` as data, which the settings search reads too.
+fn appearance_data_groups(settings: &Value) -> Vec<Group> {
     let s = settings;
 
     let effects = group(
@@ -3750,10 +3768,49 @@ pub fn appearance_groups<V: 'static>(
     };
     let background = group(t("Fundo do chat"), background_rows);
 
-    [effects, background]
-        .into_iter()
-        .map(|item| group_view(item, &mut ui, cx))
-        .collect()
+    vec![effects, background]
+}
+
+/// What the settings search reads of a page: its description and its groups as (title, rows of
+/// (title, description)). It is the same data the page draws, so a new row is found without
+/// touching the search.
+pub fn index_groups(
+    page: &str,
+    settings: &Value,
+    data: &HashMap<&'static str, Value>,
+) -> (String, Vec<(String, Vec<(String, String)>)>) {
+    let plain = |groups: Vec<Group>| -> Vec<(String, Vec<(String, String)>)> {
+        groups
+            .into_iter()
+            .map(|g| {
+                let rows = g.rows.into_iter().map(|r| (r.title, r.about)).collect();
+                (g.title, rows)
+            })
+            .collect()
+    };
+    if page == crate::shell::APPEARANCE {
+        // The rows the chat background adds only exist with an image: index both states.
+        let mut with_image = settings.clone();
+        if with_image["chatBackground"].is_null() {
+            with_image["chatBackground"] = json!("imagem.png");
+        }
+        let mut groups = plain(appearance_data_groups(settings));
+        for (title, rows) in plain(appearance_data_groups(&with_image)) {
+            match groups.iter_mut().find(|(t, _)| *t == title) {
+                Some((_, known)) => {
+                    for row in rows {
+                        if !known.iter().any(|(t, _)| *t == row.0) {
+                            known.push(row);
+                        }
+                    }
+                }
+                None => groups.push((title, rows)),
+            }
+        }
+        return (String::new(), groups);
+    }
+    let shown = build(page, settings, data);
+    (shown.about.clone(), plain(shown.groups))
 }
 
 #[cfg(test)]

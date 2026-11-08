@@ -29,7 +29,23 @@ pub fn set_locale(code: &str) {
 
 /// True while the interface is in English.
 pub fn is_en() -> bool {
-    ENGLISH.load(Ordering::Relaxed)
+    FORCED
+        .with(std::cell::Cell::get)
+        .unwrap_or_else(|| ENGLISH.load(Ordering::Relaxed))
+}
+
+thread_local! {
+    /// A language forced on this thread only, for `with_locale`.
+    static FORCED: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// Runs `build` with `t` answering in English (or Portuguese) on this thread, whatever the app's
+/// language is: the settings search indexes both languages from the pages' own builders.
+pub fn with_locale<R>(english: bool, build: impl FnOnce() -> R) -> R {
+    let before = FORCED.with(|forced| forced.replace(Some(english)));
+    let out = build();
+    FORCED.with(|forced| forced.set(before));
+    out
 }
 
 /// The locale code the host takes for dictation: "en" or "pt-BR".
@@ -2245,6 +2261,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Limite mensal", "Monthly limit"),
     ("Limite semanal", "Weekly limit"),
     ("Limites", "Limits"),
+    ("Limpar busca", "Clear search"),
     ("Limpar cache", "Clear cache"),
     ("Limpar cookies", "Clear cookies"),
     ("Limpar desenho", "Clear drawing"),
@@ -2531,6 +2548,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Nenhuma alteração.", "No changes."),
     ("Nenhuma atividade ainda.", "No activity yet."),
     ("Nenhuma ação ainda.", "No actions yet."),
+    ("Nenhuma configuração encontrada", "No settings found"),
     (
         "Nenhuma conta do GitHub conectada.",
         "No GitHub account signed in.",

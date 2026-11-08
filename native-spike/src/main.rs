@@ -74,6 +74,7 @@ mod send_morph;
 mod settings_connectors;
 mod settings_pages;
 mod settings_pair;
+mod settings_search;
 mod shell;
 mod sidebar_items;
 mod simulator;

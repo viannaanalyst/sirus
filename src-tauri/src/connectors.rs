@@ -26,7 +26,7 @@ use crate::runtime::{AppHandle, State};
 
 pub const MAX_CONNECTORS: usize = 64;
 const MAX_URL: usize = 2048;
-const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(300);
+const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(120);
 /// A token this close to expiring is refreshed before a session starts.
 const REFRESH_MARGIN_SECS: i64 = 120;
 
@@ -930,10 +930,43 @@ pub enum Action {
     Status,
     /// Signs in through the service's page in the browser (the Mac only).
     SignIn { id: String },
+    /// Stops waiting for the browser of a sign-in that is under way.
+    CancelSignIn { id: String },
     /// Keeps a pasted token for a connector that uses one.
     SetToken { id: String, token: String },
     /// Forgets the connector's sign-in.
     SignOut { id: String },
+}
+
+type SignIns = std::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Notify>>>;
+
+/// The sign-ins waiting for the browser, each with what stops it.
+fn sign_ins() -> &'static SignIns {
+    static WAITING: OnceLock<SignIns> = OnceLock::new();
+    WAITING.get_or_init(Default::default)
+}
+
+/// Starting stops an earlier sign-in of the same connector and returns the new one's stop.
+fn start_sign_in(id: &str) -> Arc<tokio::sync::Notify> {
+    let stop = Arc::new(tokio::sync::Notify::new());
+    if let Ok(mut map) = sign_ins().lock() {
+        if let Some(earlier) = map.insert(id.to_owned(), stop.clone()) {
+            earlier.notify_one();
+        }
+    }
+    stop
+}
+
+/// Forgets a finished sign-in unless a newer one already took its place.
+fn end_sign_in(id: &str, stop: &Arc<tokio::sync::Notify>) {
+    if let Ok(mut map) = sign_ins().lock() {
+        if map
+            .get(id)
+            .is_some_and(|current| Arc::ptr_eq(current, stop))
+        {
+            map.remove(id);
+        }
+    }
 }
 
 fn find(state: &AppState, id: &str) -> Result<Connector> {
@@ -964,7 +997,20 @@ pub async fn connector_action(
         Action::Status => {}
         Action::SignIn { id } => {
             let connector = find(&state, &id)?;
-            sign_in(&connector, |url| open_browser(&app, url)).await?;
+            let stop = start_sign_in(&id);
+            let outcome = tokio::select! {
+                outcome = sign_in(&connector, |url| open_browser(&app, url)) => Some(outcome),
+                _ = stop.notified() => None,
+            };
+            end_sign_in(&id, &stop);
+            if let Some(outcome) = outcome {
+                outcome?;
+            }
+        }
+        Action::CancelSignIn { id } => {
+            if let Some(stop) = sign_ins().lock().ok().and_then(|map| map.get(&id).cloned()) {
+                stop.notify_one();
+            }
         }
         Action::SetToken { id, token } => {
             let connector = find(&state, &id)?;

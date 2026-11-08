@@ -1433,6 +1433,7 @@ fn connected_item<V: 'static>(
         let id = c.id.clone();
         let raw = c.raw.clone();
         let oauth = c.auth == "oauth";
+        let cancel_id = c.id.clone();
         actions.push(if waiting {
             button.opacity(0.6).into_any_element()
         } else {
@@ -1456,6 +1457,28 @@ fn connected_item<V: 'static>(
                 }))
                 .into_any_element()
         });
+        if waiting {
+            actions.push(
+                div()
+                    .id(format!("cn-signin-cancel-{}", c.id))
+                    .h(px(28.))
+                    .px(px(11.))
+                    .flex_shrink_0()
+                    .rounded(px(crate::theme::RADIUS_MD))
+                    .flex()
+                    .items_center()
+                    .text_size(px(12.5))
+                    .text_color(content(0.85))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(content(0.07)))
+                    .child(t("Cancelar"))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cancel_sign_in(this, &cancel_id, run, cx);
+                        cx.notify();
+                    }))
+                    .into_any_element(),
+            );
+        }
     }
     actions.push(more_menu(c, MenuAt::Row, menu, list, save, run, cx));
     let mark = logo(c.catalog.as_deref(), &c.name, 28.);
@@ -1835,6 +1858,21 @@ fn sign_in<V: 'static>(view: &mut V, id: &str, run: Run<V>, cx: &mut Context<V>)
             this,
             "connector_action",
             json!({"action": {"type": "signIn", "id": id}}),
+            cx,
+        )
+    });
+}
+
+/// Stops waiting for the browser: the row offers Entrar again at once.
+fn cancel_sign_in<V: 'static>(view: &mut V, id: &str, run: Run<V>, cx: &mut Context<V>) {
+    let _ = view;
+    state().signing.retain(|waiting| waiting != id);
+    let id = id.to_string();
+    after(cx, 0, move |this, cx| {
+        run(
+            this,
+            "connector_action",
+            json!({"action": {"type": "cancelSignIn", "id": id}}),
             cx,
         )
     });

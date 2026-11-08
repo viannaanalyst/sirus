@@ -145,14 +145,18 @@ const MORPH: f32 = 0.3;
 const DOCK_MIN: f32 = 280.;
 const DOCK_MAX_WIDTH: f32 = 900.;
 /// The side panel's six options, as Sirus's RightDock: icon, name, what it does, its key.
-const PANES: [(&str, &str, &str); 6] = [
+const PANES: [(&str, &str, &str); 7] = [
     ("square-terminal", "Terminal", "Rode comandos no projeto."),
     ("files", "Arquivos", "Abra os arquivos do projeto."),
     ("git-compare", "Alterações", "Revise o diff e faça commit."),
     ("globe", "Navegador", "Abra um app ou qualquer site."),
     ("messages", "Chat lateral", "Uma conversa à parte."),
     ("smartphone", "Simulador", "Rode o app num aparelho."),
+    // The changes view the top bar's +N −N opens: it has no tab button of its own.
+    ("git-compare", "Alterações", "Revise o diff e faça commit."),
 ];
+/// The pane id of the changes view.
+const CHANGES_PANE: usize = 6;
 /// The Simulator is built but hidden for now: the owner doesn't need it yet.
 const VISIBLE_PANES: usize = 5;
 const COMMANDS: [&str; 17] = [
@@ -7055,6 +7059,7 @@ impl Shell {
         let controls = (80. + 28. * open_dock + 72.).max(width - dock_edge - 16. + 6.);
         let (added, removed) = self.diff_stat();
         let (add_color, remove_color) = diff_colors(self.look.diff);
+        let changes_open = self.dock_open && self.dock_active == Some(CHANGES_PANE);
         let strip = width - strip_left - 12. - PLATE - 6. - controls - 10.;
         *moving |= self.layout_tabs(strip, now, reduced);
         let tabs: Vec<AnyElement> = {
@@ -7128,15 +7133,44 @@ impl Shell {
                                 .h(px(24.))
                                 .px(px(6.))
                                 .rounded(px(crate::theme::RADIUS_SM))
+                                .border_1()
+                                .border_color(gpui::transparent_black())
                                 .flex()
                                 .items_center()
                                 .gap(px(6.))
                                 .text_size(px(12.))
                                 .cursor_pointer()
-                                .hover(|s| s.bg(content(0.07)))
-                                .on_click(cx.listener(|this, _, _, cx| this.open_pane(2, cx)))
+                                // Dimmed with nothing changed; green-tinted with a ring while
+                                // the changes view is open.
+                                .when(added == 0 && removed == 0, |d| d.opacity(0.5))
+                                .when(changes_open, |d| {
+                                    d.bg(gpui::Hsla {
+                                        a: 0.11,
+                                        ..add_color
+                                    })
+                                    .border_color(
+                                        gpui::Hsla {
+                                            a: 0.33,
+                                            ..add_color
+                                        },
+                                    )
+                                })
+                                .when(!changes_open, |d| d.hover(|s| s.bg(content(0.07))))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    let open =
+                                        this.dock_open && this.dock_active == Some(CHANGES_PANE);
+                                    if open {
+                                        this.open_pane(2, cx);
+                                    } else {
+                                        this.open_pane(CHANGES_PANE, cx);
+                                    }
+                                }))
                                 .child(div().text_color(add_color).child(format!("+{added}")))
-                                .child(div().text_color(remove_color).child(format!("-{removed}"))),
+                                .child(
+                                    div()
+                                        .text_color(remove_color)
+                                        .child(format!("\u{2212}{removed}")),
+                                ),
                         )
                     })
                     .child(
@@ -14242,7 +14276,7 @@ impl Shell {
 
     fn open_pane(&mut self, kind: usize, cx: &mut Context<Self>) {
         // Terminal, Files and Changes work on this Mac's folders.
-        if kind <= 2 && self.this_mac_only(cx) {
+        if (kind <= 2 || kind == CHANGES_PANE) && self.this_mac_only(cx) {
             return;
         }
         if kind == 0 && self.term_redirect(cx) {
@@ -15163,7 +15197,7 @@ impl Shell {
             row("env-changes", "git-compare", t("Alterações").into())
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.environment = None;
-                    this.open_pane(2, cx);
+                    this.open_pane(CHANGES_PANE, cx);
                 }))
                 .child(
                     div()

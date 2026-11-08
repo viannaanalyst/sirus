@@ -21,6 +21,7 @@ pub fn open(kind: usize, context: PanelContext, cx: &mut App) -> Option<AnyView>
         3 => Some(crate::panel_browser::new(context, cx)),
         4 => Some(crate::panel_sidechat::new(context, cx)),
         5 => Some(crate::panel_simulator::new(context, cx)),
+        6 => Some(crate::panel_changes::new_review(context, cx)),
         _ => None,
     }
 }

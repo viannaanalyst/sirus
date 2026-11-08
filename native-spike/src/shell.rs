@@ -4431,7 +4431,7 @@ impl Shell {
     /// A search field, while one is up; otherwise typing goes to the composer's draft.
     fn query_target(&mut self) -> Option<&mut String> {
         // The find bar takes the typing while it is up (transcript_find.rs).
-        if self.find.shown() {
+        if self.find.typing() {
             return Some(&mut self.find.query);
         }
         if let Some((_, value)) = self.secret_entry.as_mut() {
@@ -4496,7 +4496,7 @@ impl Shell {
     /// Whether a popup's search or name field takes the keys instead of the composer.
     fn grabs_typing(&self) -> bool {
         self.actions.dialog.is_some()
-            || self.find.shown()
+            || self.find.typing()
             || self.queues.is_editing()
             || self.subagents.composing(&self.active_session_id())
             || matches!(self.add_menu, Some((AddPage::Skills | AddPage::Goal, _)))
@@ -18258,6 +18258,14 @@ impl Render for Shell {
             }))
             .on_mouse_move(cx.listener(Self::mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
+            // A click anywhere takes the typing from the find bar (the bar's own click, which
+            // runs after this, gives it back); the bar stays up with its marks.
+            .capture_any_mouse_down(cx.listener(|this, _, _, cx| {
+                if this.find.focused {
+                    this.find.focused = false;
+                    cx.notify();
+                }
+            }))
             .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
                 if this.select.clear_unless_claimed() {
                     cx.notify();

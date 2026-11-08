@@ -391,6 +391,15 @@ pub fn floating_surface(radius: f32) -> impl IntoElement {
     // A light film, so a popup reads a step above whatever sits beneath, even over black.
     frosted(radius, content(0.08), floating_fill(), 30.)
 }
+/// The ⌥Tab switcher's panel: dark glass over a strong 40 px frost.
+pub fn glass_surface(radius: f32) -> impl IntoElement {
+    frosted(
+        radius,
+        gpui::hsla(240. / 360., 0.08, 0.1, 0.6),
+        floating_fill(),
+        40.,
+    )
+}
 /// The sidebar opened over the workspace: a faint wash over a 24 px frost.
 pub fn peek_surface(radius: f32) -> impl IntoElement {
     frosted(radius, content(0.05), floating_fill(), 24.)

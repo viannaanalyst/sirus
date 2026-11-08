@@ -8695,6 +8695,11 @@ impl Shell {
     }
 
     fn project_avatar_for(&self, index: usize, side: f32) -> AnyElement {
+        self.project_avatar_in(index, side, self.project_avatar_state_of(index))
+    }
+
+    /// What the project's avatar is doing: waiting on an approval, working, or resting.
+    fn project_avatar_state_of(&self, index: usize) -> crate::project_avatar::AvatarState {
         let project = &self.projects[index];
         let among = || {
             project
@@ -8702,13 +8707,22 @@ impl Shell {
                 .iter()
                 .map(|c| &self.conversations[*c])
         };
-        let state = if among().any(|c| !c.pending.is_empty()) {
+        if among().any(|c| !c.pending.is_empty()) {
             crate::project_avatar::AvatarState::Waiting
         } else if among().any(Conversation::working) {
             crate::project_avatar::AvatarState::Working
         } else {
             crate::project_avatar::AvatarState::Idle
-        };
+        }
+    }
+
+    fn project_avatar_in(
+        &self,
+        index: usize,
+        side: f32,
+        state: crate::project_avatar::AvatarState,
+    ) -> AnyElement {
+        let project = &self.projects[index];
         crate::project_avatar::project_avatar_state(
             &project.name,
             &project.appearance,
@@ -8944,7 +8958,7 @@ impl Shell {
     }
 
     /// The row of projects while ⌥Tab is held.
-    fn project_switch_view(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn project_switch_view(&self, moving: &mut bool, cx: &mut Context<Self>) -> Option<AnyElement> {
         let switch = self.project_switch.as_ref()?;
         if switch.since.elapsed().as_secs_f32() < SWITCH_SHOWS_AFTER {
             return None;
@@ -8963,6 +8977,10 @@ impl Shell {
             .take(SHOWN)
             .map(|(at, project)| self.switch_card(*project, at, at == switch.at, cx))
             .collect();
+        // The working avatars move while the row is up.
+        *moving |= switch.order.iter().any(|project| {
+            self.project_avatar_state_of(*project) != crate::project_avatar::AvatarState::Idle
+        });
         Some(
             div()
                 .absolute()
@@ -8973,20 +8991,48 @@ impl Shell {
                 .justify_center()
                 .child(
                     div()
-                        .relative()
-                        .max_w(px(self.viewport_width - 80.))
-                        .p(px(12.))
                         .flex()
-                        .justify_center()
-                        .gap(px(10.))
-                        .overflow_hidden()
-                        .rounded(px(22.))
-                        .border_1()
-                        .border_color(content(0.12))
-                        .child(crate::theme::floating_surface(22.))
-                        .shadow_lg()
-                        .occlude()
-                        .children(tiles),
+                        .flex_col()
+                        .items_center()
+                        .gap(px(12.))
+                        .child(
+                            div()
+                                .relative()
+                                .max_w(px(self.viewport_width - 80.))
+                                .p(px(12.))
+                                .flex()
+                                .justify_center()
+                                .gap(px(10.))
+                                .overflow_hidden()
+                                .rounded(px(22.))
+                                .border_1()
+                                .border_color(gpui::hsla(0., 0., 1., 0.13))
+                                .child(crate::theme::glass_surface(22.))
+                                .shadow(vec![gpui::BoxShadow {
+                                    color: gpui::black().opacity(0.55),
+                                    offset: gpui::point(px(0.), px(30.)),
+                                    blur_radius: px(80.),
+                                    spread_radius: px(0.),
+                                    inset: false,
+                                }])
+                                .occlude()
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .top_0()
+                                        .left(px(22.))
+                                        .right(px(22.))
+                                        .h(px(1.))
+                                        .bg(gpui::hsla(0., 0., 1., 0.11)),
+                                )
+                                .children(tiles),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.5))
+                                .text_color(content(0.6))
+                                .child(t("⌥Tab próximo · ⌥⇧Tab anterior · solte ⌥ para abrir")),
+                        ),
                 )
                 .into_any_element(),
         )
@@ -18122,7 +18168,7 @@ impl Render for Shell {
         let bottom_terminal = self.bottom_view(cx);
         let attachment_modal = self.attachment_view(now, &mut moving, cx);
         let trail_card = self.trail_card();
-        let project_switch = self.project_switch_view(cx);
+        let project_switch = self.project_switch_view(&mut moving, cx);
         let quit_notice = self.press_notice(Press::Quit, cx).map(|notice| {
             div()
                 .absolute()

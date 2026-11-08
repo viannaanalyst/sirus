@@ -15748,6 +15748,61 @@ impl Shell {
         )
     }
 
+    /// Settings → Aparência → Ícone do app: the six looks as tiles, the chosen one ringed.
+    fn app_icon_picker(&self, cx: &mut Context<Self>) -> AnyElement {
+        let accent_bytes = crate::app_icon::accent_bytes(&crate::theme::accent_hex(&self.look));
+        let tiles = crate::app_icon::AppIcon::ALL.into_iter().map(|icon| {
+            let chosen = icon == self.look.app_icon;
+            div()
+                .id(("app-icon", icon as usize))
+                .w(px(76.))
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap(px(6.))
+                .cursor_pointer()
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.set_look(|l| l.app_icon = icon, cx);
+                }))
+                .child(
+                    div()
+                        .size(px(60.))
+                        .p(px(1.))
+                        .rounded(px(15.))
+                        .border_2()
+                        .border_color(if chosen { accent() } else { transparent() })
+                        .when(!chosen, |d| d.hover(|s| s.bg(content(0.06))))
+                        .child(
+                            gpui::img(crate::app_icon::tile_image(icon, accent_bytes))
+                                .size_full()
+                                .object_fit(gpui::ObjectFit::Contain),
+                        ),
+                )
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(if chosen { accent() } else { content(0.6) })
+                        .child(icon.label()),
+                )
+        });
+        div()
+            .px(px(16.))
+            .py(px(14.))
+            .flex()
+            .flex_col()
+            .gap(px(12.))
+            .child(div().flex().flex_wrap().gap(px(8.)).children(tiles))
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(content(0.5))
+                    .child(t(
+                        "O ícone muda na Dock enquanto o Sirus está aberto; com o app fechado, a Dock mostra o padrão.",
+                    )),
+            )
+            .into_any_element()
+    }
+
     fn appearance_page(&self, cx: &mut Context<Self>) -> AnyElement {
         let look = self.look;
         let row = |title: &'static str, about: &'static str, control: AnyElement| {
@@ -16214,6 +16269,7 @@ impl Shell {
                     ),
                 )],
             ))
+            .child(group(t("Ícone do app"), vec![self.app_icon_picker(cx)]))
             .children(crate::settings_pages::appearance_groups(
                 &self.settings,
                 &self.settings_data,
@@ -17636,6 +17692,11 @@ impl Render for Shell {
             palette(&self.look, self.system_dark),
             self.palette_t.at(now),
         ));
+        // The Dock icon follows the look: its variant, and the accent for the accent variant.
+        crate::app_icon::apply(
+            self.look.app_icon,
+            crate::app_icon::accent_bytes(&crate::theme::accent_hex(&self.look)),
+        );
         // The interface size applies after this frame, so layout never sees it change mid-draw.
         if (window.content_zoom() - self.look.scale).abs() > f32::EPSILON {
             let scale = self.look.scale;

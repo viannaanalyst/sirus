@@ -988,6 +988,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Clique para manter o histórico nesta mensagem",
         "Click to keep the history for this message",
     ),
+    ("Clássico", "Classic"),
     ("Colar token", "Paste token"),
     (
         "Cole email:token (um API token da Atlassian) ou um access token do repositório. Sem token, o Sirus usa as credenciais do Git para bitbucket.org.",
@@ -2427,6 +2428,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Moving a conversation pushes a branch to GitHub and needs confirmation.",
     ),
     ("Mover “{}” para a Lixeira?", "Move “{}” to the Trash?"),
+    ("Mármore", "Marble"),
     ("Máximo", "Maximum"),
     ("Médio", "Medium"),
     ("Mínimo", "Minimal"),
@@ -3564,6 +3566,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "That session's worktree no longer exists.",
     ),
     (
+        "O ícone muda na Dock enquanto o Sirus está aberto; com o app fechado, a Dock mostra o padrão.",
+        "The icon changes in the Dock while Sirus is open; when the app is closed, the Dock shows the default.",
+    ),
+    (
         "O último commit já está em um remoto, então não pode ser corrigido.",
         "The last commit is already on a remote, so it can't be amended.",
     ),
@@ -4143,6 +4149,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Rode comandos no projeto.", "Run commands in the project."),
     ("Rode o app num aparelho.", "Run the app on a device."),
     ("Rolou", "Scrolled"),
+    ("Rosto", "Face"),
     ("Rápida", "Fast"),
     ("Rótulo da conta", "Account label"),
     ("Sair", "Sign out"),
@@ -4330,6 +4337,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Substituindo imagem…", "Replacing image…"),
     ("Substituir", "Replace"),
     ("Substituir original", "Replace original"),
+    ("Sírius", "Sirius"),
     (
         "Só aparece nas listas do Sirus. Os agentes continuam usando o mesmo identificador.",
         "Only shown in Sirus lists. Agents keep using the same identifier.",
@@ -4662,6 +4670,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Versão", "Version"),
     ("Versão {}", "Version {}"),
     ("Versão {}.", "Version {}."),
+    ("Vidro", "Glass"),
     ("Vidro fumê", "Smoked glass"),
     ("Visibilidade na sessão", "Session visibility"),
     ("Visibilidade no chat vazio", "Empty chat visibility"),
@@ -5186,6 +5195,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Ícone", "Icon"),
     ("Ícone de projeto desconhecido.", "Unknown project icon."),
     ("Ícone do Dock", "Dock icon"),
+    ("Ícone do app", "App icon"),
     (
         "Ícone ou estilo do Astro desconhecido.",
         "Unknown Astro icon or style.",

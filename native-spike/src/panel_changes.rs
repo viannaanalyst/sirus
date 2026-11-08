@@ -1662,7 +1662,14 @@ fn snapshot_of(value: &Value) -> Option<Snapshot> {
         history: commits_of(&snapshot["history"]),
         history_truncated: snapshot["historyTruncated"].as_bool().unwrap_or(false),
         staged: entries(&snapshot["staged"]),
-        unstaged: entries(&snapshot["unstaged"]),
+        unstaged: {
+            let mut unstaged = entries(&snapshot["unstaged"]);
+            // Settings → Git → Mostrar arquivos não rastreados.
+            if !crate::prefs::flag("gitShowUntracked", true) {
+                unstaged.retain(|entry| entry.kind != "untracked");
+            }
+            unstaged
+        },
         conflicts: snapshot["conflicts"].as_bool().unwrap_or(false),
         truncated: snapshot["truncated"].as_bool().unwrap_or(false),
     })

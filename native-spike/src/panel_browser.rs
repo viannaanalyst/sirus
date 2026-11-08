@@ -738,6 +738,19 @@ impl Browser {
         self.shared.apply();
     }
 
+    /// A link the person clicked (Settings → Navegador → Abrir links no): a new tab, or the
+    /// first one when none is open.
+    pub fn open_link(&mut self, url: &str) -> Result<(), String> {
+        if self.tabs.is_empty() {
+            self.ensure_open()?;
+            self.navigate_active(url);
+        } else {
+            self.new_tab(Some(url), &default_profile())?;
+            self.open = true;
+        }
+        Ok(())
+    }
+
     pub fn ensure_open(&mut self) -> Result<(), String> {
         if self.tabs.is_empty() {
             self.new_tab(None, &default_profile())?;

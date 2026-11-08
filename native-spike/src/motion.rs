@@ -44,6 +44,11 @@ pub fn eased(t: f32, curve: Curve) -> f32 {
     }
 }
 
+/// A motion's length, or none with Reduzir movimento (Settings → Aparência or the Mac's own).
+fn calm(duration: f32) -> f32 {
+    if crate::prefs::still() { 0. } else { duration }
+}
+
 #[derive(Clone, Copy)]
 pub struct Tween {
     from: f32,
@@ -68,7 +73,7 @@ impl Tween {
             from,
             to,
             start: now,
-            duration,
+            duration: calm(duration),
             curve,
         }
     }
@@ -92,7 +97,7 @@ impl Tween {
             from: self.at(now),
             to,
             start: now,
-            duration,
+            duration: calm(duration),
             curve,
         };
     }
@@ -146,7 +151,7 @@ impl Count {
                 from: self.value(now),
                 to: target,
                 start: now,
-                duration,
+                duration: calm(duration),
             };
         }
         self.value(now)

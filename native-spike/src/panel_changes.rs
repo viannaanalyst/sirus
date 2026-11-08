@@ -203,7 +203,112 @@ struct PullRequestForm {
     creating: bool,
     /// The last try: a message, whether it failed, and the new pull request's address.
     result: Option<(String, bool, Option<String>)>,
+    /// What `session_pull_request` last said about this branch, and when it was asked.
+    found: Option<Found>,
+    asked: Option<std::time::Instant>,
     _events: Vec<Subscription>,
+}
+
+/// The branch's pull request (GitHub, Bitbucket) or merge request (GitLab) as the footer shows it.
+#[derive(Debug, Clone, PartialEq)]
+struct Found {
+    /// `github`, `gitlab` or `bitbucket`.
+    forge: String,
+    /// The request, when the branch has one: number, state, draft, address and its checks.
+    request: Option<FoundRequest>,
+    /// Why there is none to show: the CLI is missing or signed out (GitLab, Bitbucket only).
+    hint: Option<&'static str>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct FoundRequest {
+    number: u64,
+    state: String,
+    draft: bool,
+    url: String,
+    passed: usize,
+    failed: usize,
+    pending: usize,
+    total: usize,
+}
+
+impl Found {
+    fn merge_request(&self) -> bool {
+        self.forge == "gitlab"
+    }
+}
+
+/// A `session_pull_request` reply, read for the footer.
+fn found_of(value: &Value) -> Option<Found> {
+    let forge = value["forge"].as_str().unwrap_or("github").to_owned();
+    let pr = &value["pullRequest"];
+    let request = pr["number"].as_u64().and_then(|number| {
+        let checks = pr["checks"].as_array().cloned().unwrap_or_default();
+        let count = |status: &str| checks.iter().filter(|c| c["status"] == status).count();
+        Some(FoundRequest {
+            number,
+            state: pr["state"].as_str()?.to_owned(),
+            draft: pr["draft"].as_bool().unwrap_or(false),
+            url: pr["url"].as_str()?.to_owned(),
+            passed: count("passed"),
+            failed: count("failed"),
+            pending: count("pending"),
+            total: checks.len(),
+        })
+    });
+    let other = forge != "github";
+    let hint = match (value["status"].as_str().unwrap_or_default(), forge.as_str()) {
+        ("cliMissing", "gitlab") => Some(t(
+            "Instale o GitLab CLI (`brew install glab`) e rode `glab auth login` para ver e criar merge requests.",
+        )),
+        ("authRequired", "gitlab") => Some(t(
+            "Rode `glab auth login` no terminal para ver e criar merge requests.",
+        )),
+        ("authRequired", "bitbucket") => Some(t(
+            "Adicione um token do Bitbucket em Configurações → Git para ver e criar pull requests.",
+        )),
+        _ => None,
+    };
+    (request.is_some() || hint.is_some() || other).then_some(Found {
+        forge,
+        request,
+        hint,
+    })
+}
+
+/// "PR #12 · Aberto · 2 de 3 checks passaram", or "MR !12" on GitLab.
+fn found_line(found: &Found, request: &FoundRequest) -> String {
+    let name = if found.merge_request() {
+        format!("MR !{}", request.number)
+    } else {
+        format!("PR #{}", request.number)
+    };
+    let state = match (request.state.as_str(), request.draft) {
+        ("merged", _) => t("Mesclado"),
+        ("closed", _) => t("Fechado"),
+        (_, true) => t("Rascunho"),
+        _ => t("Aberto"),
+    };
+    let mut parts = vec![name, state.to_owned()];
+    if request.total > 0 {
+        parts.push(if request.failed > 0 {
+            tf(
+                "{} de {} checks falharam",
+                &[&request.failed, &request.total],
+            )
+        } else if request.pending > 0 {
+            tf(
+                "{} de {} checks rodando",
+                &[&request.pending, &request.total],
+            )
+        } else {
+            tf(
+                "{} de {} checks passaram",
+                &[&request.passed, &request.total],
+            )
+        });
+    }
+    parts.join(" · ")
 }
 
 impl PullRequestForm {
@@ -235,6 +340,8 @@ impl PullRequestForm {
             draft: false,
             creating: false,
             result: None,
+            found: None,
+            asked: None,
             _events: events,
         }
     }
@@ -536,6 +643,7 @@ impl ChangesPanel {
                     Ok(value) => (pushed_text(&value), false),
                     Err(error) => (error, true),
                 });
+                this.pr.asked = None;
                 this.refresh(cx);
             });
         })
@@ -562,7 +670,13 @@ impl ChangesPanel {
                 this.pr.creating = false;
                 match reply.map(|value| created_url(&value)) {
                     Ok(Some(url)) => {
-                        this.pr.result = Some((t("Pull request criado").into(), false, Some(url)));
+                        let made = if this.pr.found.as_ref().is_some_and(Found::merge_request) {
+                            t("Merge request criado")
+                        } else {
+                            t("Pull request criado")
+                        };
+                        this.pr.result = Some((made.into(), false, Some(url)));
+                        this.check_pull_request(true, cx);
                         this.pr.open = false;
                         this.pr.draft = false;
                         this.pr.title.update(cx, |field, cx| field.set_text("", cx));
@@ -570,7 +684,7 @@ impl ChangesPanel {
                     }
                     Ok(None) => {
                         this.pr.result =
-                            Some((t("Resposta inesperada do GitHub.").into(), true, None))
+                            Some((t("Resposta inesperada do serviço.").into(), true, None))
                     }
                     Err(error) => this.pr.result = Some((error, true, None)),
                 }
@@ -581,8 +695,45 @@ impl ChangesPanel {
         cx.notify();
     }
 
+    /// Asks which pull request (or merge request) the branch has, at most once a minute unless
+    /// `now` (after a push or a new request).
+    fn check_pull_request(&mut self, now: bool, cx: &mut Context<Self>) {
+        if !now
+            && self
+                .pr
+                .asked
+                .is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(60))
+        {
+            return;
+        }
+        self.pr.asked = Some(std::time::Instant::now());
+        let rx = self.backend.request(
+            "session_pull_request",
+            json!({ "sessionId": self.session_id }),
+        );
+        cx.spawn(async move |this, cx| {
+            let reply = settle(rx).await;
+            let _ = this.update(cx, |this, cx| {
+                if let Ok(value) = reply {
+                    let found = found_of(&value);
+                    if found != this.pr.found {
+                        this.pr.found = found;
+                        cx.notify();
+                    }
+                }
+            });
+        })
+        .detach();
+    }
+
     /// The Criar PR row under the commit field: a button, then its form.
     fn pull_request_row(&self, cx: &mut Context<Self>) -> AnyElement {
+        let merge_request = self.pr.found.as_ref().is_some_and(Found::merge_request);
+        let create_label = if merge_request {
+            t("Criar MR")
+        } else {
+            t("Criar PR")
+        };
         let small = |id: &'static str, label: &'static str, main: bool, enabled: bool| {
             let base = div()
                 .id(id)
@@ -606,6 +757,40 @@ impl ChangesPanel {
             }
         };
         let mut row = div().flex().flex_col().gap(px(6.)).px(px(8.)).pb(px(8.));
+        if let Some(found) = &self.pr.found {
+            if let Some(request) = &found.request {
+                let mut line = div().flex().items_center().gap(px(8.)).child(
+                    div()
+                        .min_w_0()
+                        .text_size(px(12.))
+                        .text_color(if request.failed > 0 {
+                            rgb(0xe08a8a).into()
+                        } else {
+                            content(0.6)
+                        })
+                        .child(found_line(found, request)),
+                );
+                if let Some(url) = crate::markdown::web_url(&request.url) {
+                    line = line.child(
+                        div()
+                            .id("pr-current-open")
+                            .text_size(px(12.))
+                            .text_color(accent())
+                            .cursor_pointer()
+                            .on_click(move |_, _, cx| cx.open_url(&url))
+                            .child(t("Abrir")),
+                    );
+                }
+                row = row.child(line);
+            } else if let Some(hint) = found.hint {
+                row = row.child(
+                    div()
+                        .text_size(px(11.5))
+                        .text_color(content(0.5))
+                        .child(hint),
+                );
+            }
+        }
         if let Some((text, failed, url)) = &self.pr.result {
             let mut line = div().flex().items_center().gap(px(8.)).child(
                 div()
@@ -626,17 +811,30 @@ impl ChangesPanel {
                         .text_color(accent())
                         .cursor_pointer()
                         .on_click(move |_, _, cx| cx.open_url(&url))
-                        .child(t("Abrir PR")),
+                        .child(if merge_request {
+                            t("Abrir MR")
+                        } else {
+                            t("Abrir PR")
+                        }),
                 );
             }
             row = row.child(line);
+        }
+        let has_open = self
+            .pr
+            .found
+            .as_ref()
+            .and_then(|found| found.request.as_ref())
+            .is_some_and(|request| request.state == "open");
+        if !self.pr.open && has_open {
+            return row.into_any_element();
         }
         if !self.pr.open {
             return row
                 .child(
                     div()
                         .flex()
-                        .child(small("pr-create", t("Criar PR"), false, true).on_click(
+                        .child(small("pr-create", create_label, false, true).on_click(
                             cx.listener(|this, _, _, cx| {
                                 this.pr.open = true;
                                 this.pr.result = None;
@@ -680,9 +878,16 @@ impl ChangesPanel {
         row.child(self.pr.title.clone())
             .child(self.pr.body.clone())
             .child(toggle)
-            .child(div().text_size(px(11.)).text_color(content(0.4)).child(t(
-                "Envia este branch e abre o pull request para o branch padrão.",
-            )))
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(content(0.4))
+                    .child(if merge_request {
+                        t("Envia este branch e abre o merge request para o branch padrão.")
+                    } else {
+                        t("Envia este branch e abre o pull request para o branch padrão.")
+                    }),
+            )
             .child(
                 div()
                     .flex()
@@ -704,7 +909,7 @@ impl ChangesPanel {
                             if self.pr.creating {
                                 t("Criando…")
                             } else {
-                                t("Criar PR")
+                                create_label
                             },
                             true,
                             enabled,
@@ -750,6 +955,9 @@ impl ChangesPanel {
                 }
                 if let Some(counts) = counts {
                     this.counts = counts_of(&counts);
+                }
+                if this.snapshot.as_ref().is_some_and(|s| s.branch.is_some()) {
+                    this.check_pull_request(false, cx);
                 }
                 cx.notify();
             });
@@ -1919,6 +2127,37 @@ pub(crate) fn note(text: &str, failed: bool) -> AnyElement {
         .text_color(color)
         .child(text.to_owned())
         .into_any_element()
+}
+
+#[cfg(test)]
+mod found_tests {
+    use super::*;
+
+    #[test]
+    fn gitlab_merge_request_reads_as_mr_with_its_checks() {
+        let reply = json!({"forge": "gitlab", "status": "ready", "pullRequest": {
+            "number": 12, "state": "open", "draft": false, "url": "https://gitlab.com/g/p/-/merge_requests/12",
+            "checks": [{"status": "passed"}, {"status": "failed"}, {"status": "pending"}]}});
+        let found = found_of(&reply).unwrap();
+        assert!(found.merge_request());
+        let request = found.request.clone().unwrap();
+        assert_eq!((request.passed, request.failed, request.pending), (1, 1, 1));
+        assert!(found_line(&found, &request).starts_with("MR !12 · "));
+    }
+
+    #[test]
+    fn hints_only_for_the_other_services() {
+        let gitlab = found_of(&json!({"forge": "gitlab", "status": "cliMissing"})).unwrap();
+        assert!(gitlab.hint.is_some() && gitlab.request.is_none());
+        let bitbucket = found_of(&json!({"forge": "bitbucket", "status": "authRequired"})).unwrap();
+        assert!(bitbucket.hint.is_some());
+        assert!(found_of(&json!({"forge": "github", "status": "cliMissing"})).is_none());
+        let github = found_of(&json!({"forge": "github", "status": "ready",
+            "pullRequest": {"number": 3, "state": "merged", "url": "https://github.com/o/r/pull/3", "checks": []}}))
+        .unwrap();
+        assert!(!github.merge_request());
+        assert!(found_line(&github, github.request.as_ref().unwrap()).starts_with("PR #3 · "));
+    }
 }
 
 fn strings_of(list: &Value) -> Vec<String> {

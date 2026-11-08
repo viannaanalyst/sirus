@@ -920,7 +920,10 @@ pub async fn session_pull_request(
     let initial_state = state.clone();
     let initial_id = session_id.clone();
     let context = native_task(move || pull_request_context(&initial_state, &initial_id)).await?;
-    let snapshot = crate::pull_requests::load(session_id.clone(), &context).await;
+    let snapshot = match &context.forge {
+        Some(remote) => crate::forge::load(session_id.clone(), &context, remote).await,
+        None => crate::pull_requests::load(session_id.clone(), &context).await,
+    };
     native_task(move || {
         // Never publish another branch/repository's result after selection or Git changes.
         validate_pull_request_context(&state, &session_id, &context)?;

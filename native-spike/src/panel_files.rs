@@ -21,11 +21,11 @@ use crate::theme::Sinks as _;
 use crate::theme::{self, accent, content, is_light};
 use crate::tool_images;
 use gpui::{
-    AnyElement, AnyView, App, Background, Context, ElementInputHandler, Entity, EntityInputHandler,
-    EventEmitter, FocusHandle, FontWeight, HighlightStyle, Hsla, KeyDownEvent, ListAlignment,
-    ListState, MouseButton, ObjectFit, Pixels, Point, Render, StyledText, Subscription,
-    Transformation, UTF16Selection, Window, canvas, div, img, linear_color_stop, linear_gradient,
-    list, prelude::*, px, radians, rgb, svg,
+    AnyElement, AnyView, App, Background, ClickEvent, Context, ElementInputHandler, Entity,
+    EntityInputHandler, EventEmitter, FocusHandle, FontWeight, HighlightStyle, Hsla, KeyDownEvent,
+    ListAlignment, ListState, MouseButton, ObjectFit, Pixels, Point, Render, StyledText,
+    Subscription, Transformation, UTF16Selection, Window, canvas, div, img, linear_color_stop,
+    linear_gradient, list, prelude::*, px, radians, rgb, svg,
 };
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
@@ -108,6 +108,8 @@ struct Node {
     path: String,
     name: String,
     is_dir: bool,
+    /// Git ignores it, or it is a generated folder: drawn dimmed.
+    ignored: bool,
 }
 
 enum Listing {
@@ -161,6 +163,9 @@ struct Opened {
     name: String,
     mode: Mode,
     viewer: Viewer,
+    /// A preview tab (title in italics): the next file opened from the tree takes its place.
+    /// Editing the file or a double click keeps it.
+    preview: bool,
 }
 
 /// An entry being created: a row in the tree, under `parent`, with its name typed in `field`.
@@ -219,10 +224,11 @@ struct FilesPanel {
 impl FilesPanel {
     /// Lists `path` from the back end; the answer replaces the folder's listing when it arrives.
     fn list(&mut self, path: String, cx: &mut Context<Self>) {
+        let show = crate::file_editor::showing_ignored();
         let args = if path == self.root {
-            json!({ "sessionId": self.session_id })
+            json!({ "sessionId": self.session_id, "showIgnored": show })
         } else {
-            json!({ "sessionId": self.session_id, "path": path.clone() })
+            json!({ "sessionId": self.session_id, "path": path.clone(), "showIgnored": show })
         };
         self.folders.entry(path.clone()).or_insert(Listing::Loading);
         let rx = self.backend.request("list_dir", args);
@@ -253,17 +259,37 @@ impl FilesPanel {
         cx.notify();
     }
 
-    fn select(&mut self, path: String, is_dir: bool, cx: &mut Context<Self>) {
+    /// A click on a tree row: a folder opens or shuts, a file shows in the preview tab. A double
+    /// click on a file keeps its tab.
+    fn select(&mut self, path: String, is_dir: bool, clicks: usize, cx: &mut Context<Self>) {
         self.selected = Some((path.clone(), is_dir));
         if is_dir {
-            if !self.open.remove(&path) {
+            if clicks < 2 && !self.open.remove(&path) {
                 self.open.insert(path.clone());
                 self.list(path, cx);
             }
         } else {
-            self.open_file(path, cx);
+            self.open_tab(path, clicks < 2, cx);
         }
         cx.notify();
+    }
+
+    /// Lists the shown folders again with or without the ignored entries.
+    fn toggle_ignored(&mut self, cx: &mut Context<Self>) {
+        crate::file_editor::toggle_showing_ignored();
+        self.disk_changed(cx);
+    }
+
+    /// The preview tab stays: it no longer gives its place to the next file.
+    fn keep_tab(&mut self, path: &str, cx: &mut Context<Self>) {
+        if let Some(tab) = self
+            .tabs
+            .iter_mut()
+            .find(|tab| tab.path == path && tab.preview)
+        {
+            tab.preview = false;
+            cx.notify();
+        }
     }
 
     fn reveal_folder(&mut self, path: String, cx: &mut Context<Self>) {
@@ -307,9 +333,18 @@ impl FilesPanel {
 
     /// Shows `path` in a tab: the one already open for it, or a new one at the end.
     fn open_file(&mut self, path: String, cx: &mut Context<Self>) {
+        self.open_tab(path, false, cx);
+    }
+
+    /// Shows `path` in its tab. A `preview` takes the place of the preview tab already open
+    /// instead of adding one; an existing tab opened without `preview` is kept.
+    fn open_tab(&mut self, path: String, preview: bool, cx: &mut Context<Self>) {
         self.selected = Some((path.clone(), false));
         if let Some(ix) = self.tabs.iter().position(|tab| tab.path == path) {
             self.active = Some(ix);
+            if !preview {
+                self.tabs[ix].preview = false;
+            }
             // A file that failed to load gets another try.
             if matches!(self.tabs[ix].viewer, Viewer::Failed(_)) {
                 self.tabs[ix].viewer = Viewer::Loading;
@@ -328,13 +363,25 @@ impl FilesPanel {
         } else {
             Mode::Source
         };
-        self.tabs.push(Opened {
+        let opened = Opened {
             path: path.clone(),
             name,
             mode,
             viewer: Viewer::Loading,
-        });
-        self.active = Some(self.tabs.len() - 1);
+            preview,
+        };
+        let replaced = preview
+            .then(|| preview_slot(&self.tabs, |ix| self.tab_modified(ix, cx)))
+            .flatten();
+        if let Some(ix) = replaced {
+            let old = std::mem::replace(&mut self.tabs[ix], opened);
+            self.autosave_turns.remove(&old.path);
+            self.disk_times.remove(&old.path);
+            self.active = Some(ix);
+        } else {
+            self.tabs.push(opened);
+            self.active = Some(self.tabs.len() - 1);
+        }
         self.load(path, cx);
         cx.notify();
     }
@@ -916,7 +963,13 @@ impl FilesPanel {
     }
 
     /// The tree below `dir`: its rows, and each open folder's rows fading in beneath it.
-    fn tree_rows(&self, dir: &str, depth: usize, cx: &mut Context<Self>) -> Vec<AnyElement> {
+    fn tree_rows(
+        &self,
+        dir: &str,
+        depth: usize,
+        dimmed: bool,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
         let nodes = match self.folders.get(dir) {
             Some(Listing::Ready(nodes)) => nodes,
             Some(Listing::Failed(error)) => return vec![note(error, depth, true)],
@@ -934,10 +987,12 @@ impl FilesPanel {
             let open = node.is_dir && self.open.contains(&node.path);
             // A folder slides open once its listing is here, and slides shut with its rows.
             let fold = self.fold_of(node, open, cx);
-            rows.push(self.row(node, depth, fold.unwrap_or(0.), open, cx));
+            // Inside an ignored folder everything is ignored too.
+            let dim = dimmed || node.ignored;
+            rows.push(self.row(node, depth, fold.unwrap_or(0.), open, dim, cx));
             let Some(fold) = fold.filter(|fold| *fold > 0.001 || open) else {
                 if open {
-                    rows.extend(self.tree_rows(&node.path, depth + 1, cx));
+                    rows.extend(self.tree_rows(&node.path, depth + 1, dim, cx));
                 }
                 continue;
             };
@@ -945,7 +1000,7 @@ impl FilesPanel {
                 div()
                     .flex()
                     .flex_col()
-                    .children(self.tree_rows(&node.path, depth + 1, cx));
+                    .children(self.tree_rows(&node.path, depth + 1, dim, cx));
             let width = self.tree_width.get();
             rows.push(if fold >= 0.999 || width <= 0. {
                 children.into_any_element()
@@ -1003,6 +1058,7 @@ impl FilesPanel {
         depth: usize,
         fold: f32,
         open: bool,
+        dimmed: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let selected = self
@@ -1025,7 +1081,9 @@ impl FilesPanel {
             .text_size(px(12.5))
             .text_color(content(if selected { 1. } else { 0.85 }))
             .cursor_pointer()
-            .on_click(cx.listener(move |this, _, _, cx| this.select(path.clone(), is_dir, cx)));
+            .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                this.select(path.clone(), is_dir, event.click_count(), cx)
+            }));
         let row = if selected {
             row.bg(content(0.08))
         } else {
@@ -1042,8 +1100,20 @@ impl FilesPanel {
                 .flex_shrink_0()
                 .when(is_dir, |column| column.child(chevron(fold))),
         )
-        .child(icon)
-        .child(div().min_w_0().flex_1().truncate().child(node.name.clone()))
+        .child(
+            div()
+                .flex_shrink_0()
+                .when(dimmed, |d| d.opacity(0.45))
+                .child(icon),
+        )
+        .child(
+            div()
+                .min_w_0()
+                .flex_1()
+                .truncate()
+                .when(dimmed, |d| d.text_color(content(0.42)))
+                .child(node.name.clone()),
+        )
         .child(
             div()
                 .id(format!("trash:{}", node.path))
@@ -1090,12 +1160,14 @@ impl FilesPanel {
     fn tool(
         id: &'static str,
         icon: &'static str,
+        tip: &'static str,
         active: bool,
         cx: &mut Context<Self>,
         on_click: fn(&mut Self, &mut Context<Self>),
     ) -> AnyElement {
         div()
             .id(id)
+            .tooltip(crate::shell::message_actions::name_tip(tip))
             .flex_1()
             .h_full()
             .flex()
@@ -1134,22 +1206,46 @@ impl FilesPanel {
             .border_b_1()
             .border_color(content(0.07))
             .children([
-                Self::tool("files-new-file", "plus", false, cx, |this, cx| {
-                    this.start_create("file", cx)
-                }),
-                Self::tool("files-new-folder", "folder-plus", false, cx, |this, cx| {
-                    this.start_create("directory", cx)
-                }),
+                Self::tool(
+                    "files-new-file",
+                    "plus",
+                    t("Novo arquivo"),
+                    false,
+                    cx,
+                    |this, cx| this.start_create("file", cx),
+                ),
+                Self::tool(
+                    "files-new-folder",
+                    "folder-plus",
+                    t("Nova pasta"),
+                    false,
+                    cx,
+                    |this, cx| this.start_create("directory", cx),
+                ),
                 Self::tool(
                     "files-collapse",
                     "chevrons-down-up",
+                    t("Recolher tudo"),
                     false,
                     cx,
                     |this, cx| this.collapse_all(cx),
                 ),
                 Self::tool(
+                    "files-ignored",
+                    "eye",
+                    if crate::file_editor::showing_ignored() {
+                        t("Esconder arquivos ignorados")
+                    } else {
+                        t("Mostrar arquivos ignorados")
+                    },
+                    crate::file_editor::showing_ignored(),
+                    cx,
+                    |this, cx| this.toggle_ignored(cx),
+                ),
+                Self::tool(
                     "files-search",
                     "search",
+                    t("Buscar arquivos"),
                     self.search_open,
                     cx,
                     |this, cx| this.toggle_search(cx),
@@ -1191,7 +1287,7 @@ impl FilesPanel {
     fn tree(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let width = self.tree_width.clone();
         let mut rows = if self.root_open {
-            self.tree_rows(&self.root, 0, cx)
+            self.tree_rows(&self.root, 0, false, cx)
         } else {
             Vec::new()
         };
@@ -1350,7 +1446,14 @@ impl FilesPanel {
                         Face::Neutral,
                         file_icon(&tab.name, false, 12.),
                     ))
-                    .child(div().flex_1().min_w_0().truncate().child(tab.name.clone()))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .when(tab.preview, |d| d.italic())
+                            .child(tab.name.clone()),
+                    )
                     .when(modified, |d| {
                         d.child(
                             div()
@@ -1361,7 +1464,14 @@ impl FilesPanel {
                         )
                     })
                     .child(close)
-                    .on_click(cx.listener(move |this, _, _, cx| this.select_tab(ix, cx)));
+                    .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                        this.select_tab(ix, cx);
+                        if event.click_count() >= 2
+                            && let Some(path) = this.tabs.get(ix).map(|tab| tab.path.clone())
+                        {
+                            this.keep_tab(&path, cx);
+                        }
+                    }));
                 div()
                     .id(("file-tab", ix))
                     .group(group)
@@ -1620,6 +1730,14 @@ fn message(error: &Value) -> String {
         .unwrap_or_else(|| error.to_string())
 }
 
+/// The preview tab a new preview takes the place of: the one in italics, unless it holds unsaved
+/// edits (it then stays and the new file gets its own tab).
+fn preview_slot(tabs: &[Opened], modified: impl Fn(usize) -> bool) -> Option<usize> {
+    tabs.iter()
+        .position(|tab| tab.preview)
+        .filter(|ix| !modified(*ix))
+}
+
 /// A folder's entries: folders first, then by name.
 fn nodes(value: &Value) -> Vec<Node> {
     let mut nodes: Vec<Node> = value
@@ -1631,6 +1749,7 @@ fn nodes(value: &Value) -> Vec<Node> {
                 path: entry["path"].as_str()?.to_owned(),
                 name: entry["name"].as_str()?.to_owned(),
                 is_dir: entry["isDir"].as_bool().unwrap_or(false),
+                ignored: entry["ignored"].as_bool().unwrap_or(false),
             })
         })
         .collect();
@@ -1787,6 +1906,7 @@ fn text_viewer(path: &str, text: &str, cx: &mut Context<FilesPanel>) -> Viewer {
             move |this: &mut FilesPanel, _, event: &EditorEvent, cx| match event {
                 EditorEvent::Save => this.save(path.clone(), cx),
                 EditorEvent::Changed => {
+                    this.keep_tab(&path, cx);
                     this.schedule_autosave(path.clone(), cx);
                     cx.notify();
                 }

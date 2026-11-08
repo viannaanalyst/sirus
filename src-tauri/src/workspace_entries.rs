@@ -267,6 +267,7 @@ mod unix {
             name: name.into(),
             path: display_path(&path),
             is_dir: matches!(kind, WorkspaceEntryKind::Directory),
+            ignored: false,
         })
     }
 

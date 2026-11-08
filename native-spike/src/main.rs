@@ -85,11 +85,12 @@ mod terminal_place;
 mod theme;
 mod tool_images;
 mod visuals;
+mod window_place;
 mod workspace_follow;
 
 use gpui::{
-    App, AssetSource, Bounds, Result, SharedString, TitlebarOptions, WindowBounds, WindowOptions,
-    point, prelude::*, px, size,
+    App, AssetSource, Result, SharedString, TitlebarOptions, WindowOptions, point, prelude::*, px,
+    size,
 };
 use std::borrow::Cow;
 
@@ -250,14 +251,18 @@ fn main() {
     });
     app.run(move |cx: &mut App| {
         cx.on_window_closed(|cx, _| cx.quit()).detach();
-        cx.on_app_quit(|_| async { backend::stop_host() }).detach();
+        cx.on_app_quit(|_| async {
+            window_place::flush();
+            backend::stop_host()
+        })
+        .detach();
         freeze_watch::start(cx);
-        let bounds = Bounds::centered(None, size(px(1320.), px(860.)), cx);
+        let bounds = window_place::opening(cx);
         let window = cx
             .open_window(
                 WindowOptions {
-                    window_bounds: Some(WindowBounds::Windowed(bounds)),
-                    window_min_size: Some(size(px(820.), px(520.))),
+                    window_bounds: Some(bounds),
+                    window_min_size: Some(size(px(window_place::MIN.0), px(window_place::MIN.1))),
                     app_id: Some("com.siruscode.native".into()),
                     window_background: gpui::WindowBackgroundAppearance::Blurred,
                     app_owns_titlebar_drag: true,
@@ -282,7 +287,13 @@ fn main() {
                             cx.quit();
                         }
                     });
-                    cx.new(|cx| shell::Shell::new(window, cx))
+                    cx.new(|cx| {
+                        cx.observe_window_bounds(window, |_, window, _| {
+                            window_place::remember(window.window_bounds())
+                        })
+                        .detach();
+                        shell::Shell::new(window, cx)
+                    })
                 },
             )
             .expect("open window");

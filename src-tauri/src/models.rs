@@ -1846,6 +1846,9 @@ pub struct FileEntry {
     pub name: String,
     pub path: String,
     pub is_dir: bool,
+    /// Git ignores it (or it is a generated folder the tree hides by default).
+    #[serde(default)]
+    pub ignored: bool,
 }
 
 /// One matching line from the Files pane text search (ADR-095). `line` and

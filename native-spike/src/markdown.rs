@@ -549,37 +549,101 @@ fn search_fill(flags: u8) -> Option<gpui::Hsla> {
     }
 }
 
+/// What ⌘F marks in the turn being drawn: the query, which occurrence of the turn is the current
+/// one (the prompt's come first, then the reply's, in drawing order), and how many the prompt has.
+struct Find {
+    query: String,
+    current: Option<usize>,
+    prompt: usize,
+    prompt_seen: usize,
+    reply_seen: usize,
+}
+
 thread_local! {
-    static FIND: std::cell::RefCell<Option<(String, bool)>> = const { std::cell::RefCell::new(None) };
+    static FIND: std::cell::RefCell<Option<Find>> = const { std::cell::RefCell::new(None) };
     /// The reply being drawn, for the file chips in its text.
     static RICH: std::cell::RefCell<Option<Rich>> = const { std::cell::RefCell::new(None) };
 }
 
-/// What ⌘F marks in the text drawn next: the query, and whether this is the current turn.
-pub fn set_search(query: Option<(&str, bool)>) {
-    FIND.with_borrow_mut(|find| *find = query.map(|(text, now)| (text.to_owned(), now)));
+/// What ⌘F marks in the text drawn next: the query, the turn's current occurrence (an index among
+/// the turn's occurrences, if the current hit is in this turn) and the prompt's occurrence count.
+pub fn set_search(query: Option<(&str, Option<usize>, usize)>) {
+    FIND.with_borrow_mut(|find| {
+        *find = query.map(|(text, current, prompt)| Find {
+            query: text.to_owned(),
+            current,
+            prompt,
+            prompt_seen: 0,
+            reply_seen: 0,
+        })
+    });
 }
 
-/// A found word's fill for text drawn outside the markdown, as the prompt's bubble.
+/// The flag of the next occurrence drawn: the current one is stronger than the rest.
+fn next_flag(find: &mut Find, prompt: bool) -> u8 {
+    let nth = if prompt {
+        find.prompt_seen += 1;
+        find.prompt_seen - 1
+    } else {
+        find.reply_seen += 1;
+        find.prompt + find.reply_seen - 1
+    };
+    if find.current == Some(nth) {
+        SEARCH_NOW
+    } else {
+        SEARCH
+    }
+}
+
+/// Every occurrence of `query` the reply `source` draws, in drawing order (what `mark_search` and
+/// `code_block` will mark).
+pub fn count_matches(source: &str, query: &str) -> usize {
+    fn walk(blocks: &[Block], query: &str) -> usize {
+        blocks
+            .iter()
+            .map(|block| match block {
+                Block::Para(p) | Block::Heading(_, p) => {
+                    crate::shell::transcript_find::ranges(&p.text, query).len()
+                }
+                Block::Code(code) => {
+                    crate::shell::transcript_find::ranges(code.trim_end_matches('\n'), query).len()
+                }
+                Block::Quote(inner) => walk(inner, query),
+                Block::List(_, items) => items.iter().map(|item| walk(item, query)).sum(),
+                Block::Table(head, rows) => head
+                    .iter()
+                    .chain(rows.iter().flatten())
+                    .map(|cell| crate::shell::transcript_find::ranges(&cell.text, query).len())
+                    .sum(),
+                _ => 0,
+            })
+            .sum()
+    }
+    walk(&parsed(source), query)
+}
+
+/// A found word's fill for the prompt's text, drawn outside the markdown.
 pub fn search_ranges(text: &str) -> Vec<(Range<usize>, gpui::Hsla)> {
-    FIND.with_borrow(|find| {
-        let Some((query, now)) = find else {
+    FIND.with_borrow_mut(|find| {
+        let Some(find) = find else {
             return Vec::new();
         };
-        let flags = if *now { SEARCH_NOW } else { SEARCH };
-        crate::shell::transcript_find::ranges(text, query)
+        crate::shell::transcript_find::ranges(text, &find.query)
             .into_iter()
-            .filter_map(|range| search_fill(flags).map(|fill| (range, fill)))
+            .filter_map(|range| {
+                let flag = next_flag(find, true);
+                search_fill(flag).map(|fill| (range, fill))
+            })
             .collect()
     })
 }
 
 fn mark_search(inl: &mut Inline) {
-    FIND.with_borrow(|find| {
-        if let Some((query, now)) = find {
-            let flags = if *now { SEARCH_NOW } else { SEARCH };
-            for range in crate::shell::transcript_find::ranges(&inl.text, query) {
-                inl.spans.push((range, flags));
+    FIND.with_borrow_mut(|find| {
+        if let Some(find) = find {
+            for range in crate::shell::transcript_find::ranges(&inl.text, &find.query) {
+                let flag = next_flag(find, false);
+                inl.spans.push((range, flag));
             }
         }
     });
@@ -867,11 +931,11 @@ fn block(b: Block, rich: Option<&Rich>) -> AnyElement {
         Block::HtmlFile(url) => {
             view::html_file(&url, rich).unwrap_or_else(|| div().into_any_element())
         }
-        Block::Diagram(source) => view::diagram(&source, code_block(&source), rich),
-        Block::Html(source) => view::html_block(&source, code_block(&source), rich),
+        Block::Diagram(source) => view::diagram(&source, code_block_marked(&source, false), rich),
+        Block::Html(source) => view::html_block(&source, code_block_marked(&source, false), rich),
         Block::Math(tex) => {
             let fallback = format!("$$\n{}\n$$", tex.trim());
-            view::math_block(&tex, code_block(&fallback), rich)
+            view::math_block(&tex, code_block_marked(&fallback, false), rich)
         }
         Block::Quote(inner) => div()
             .ml(px(4.))
@@ -943,6 +1007,11 @@ fn block(b: Block, rich: Option<&Rich>) -> AnyElement {
 }
 
 fn code_block(code: &str) -> AnyElement {
+    code_block_marked(code, true)
+}
+
+/// `marked` is false for a code block that only stands in for something else (a diagram's source).
+fn code_block_marked(code: &str, marked: bool) -> AnyElement {
     div()
         .rounded(px(crate::theme::RADIUS_MD))
         .bg(content(0.05))
@@ -954,7 +1023,32 @@ fn code_block(code: &str) -> AnyElement {
         .line_height(px(20.))
         .child({
             let code = SharedString::from(code.trim_end_matches('\n').to_string());
-            crate::shell::transcript_select::wrap(StyledText::new(code.clone()), code)
+            let found: Vec<(Range<usize>, HighlightStyle)> = if marked {
+                FIND.with_borrow_mut(|find| {
+                    let Some(find) = find else {
+                        return Vec::new();
+                    };
+                    crate::shell::transcript_find::ranges(&code, &find.query)
+                        .into_iter()
+                        .map(|range| {
+                            let flag = next_flag(find, false);
+                            (
+                                range,
+                                HighlightStyle {
+                                    background_color: search_fill(flag),
+                                    ..Default::default()
+                                },
+                            )
+                        })
+                        .collect()
+                })
+            } else {
+                Vec::new()
+            };
+            crate::shell::transcript_select::wrap(
+                StyledText::new(code.clone()).with_highlights(found),
+                code,
+            )
         })
         .into_any_element()
 }

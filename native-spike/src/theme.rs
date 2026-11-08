@@ -359,6 +359,12 @@ pub fn field_fill() -> Hsla {
 pub fn floating_fill() -> Hsla {
     current().floating
 }
+/// The floating fill with no translucency, for small surfaces that must not show what is beneath.
+pub fn opaque_floating() -> Hsla {
+    let mut fill = current().floating;
+    fill.a = 1.;
+    fill
+}
 /// A frosted surface: `tint` over a backdrop blur, or `opaque` in light themes. Put it first
 /// inside a card with the same corners; it fills the card and paints under the children.
 fn frosted(radius: f32, tint: Hsla, opaque: Hsla, blur: f32) -> impl IntoElement {

@@ -539,11 +539,13 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         // ⌘F marks the words while this turn is drawn.
-        crate::markdown::set_search(
-            self.find
-                .query()
-                .map(|query| (query, self.find.current() == Some(index))),
-        );
+        crate::markdown::set_search(self.find.query().map(|query| {
+            (
+                query,
+                self.find.current_occurrence(index),
+                transcript_find::ranges(&turn.user, query).len(),
+            )
+        }));
         let body = self.turn_body(conversation, index, turn, now, moving, cx);
         crate::markdown::set_search(None);
         let conv = &self.conversations[conversation];

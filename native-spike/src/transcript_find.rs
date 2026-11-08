@@ -71,18 +71,26 @@ pub(crate) fn ranges(text: &str, query: &str) -> Vec<Range<usize>> {
     out
 }
 
-/// The indices of the turns whose (user text, answer) holds the query. A blank query matches nothing.
-pub(crate) fn hits<'a>(turns: impl Iterator<Item = (&'a str, &'a str)>, query: &str) -> Vec<usize> {
-    let needle = fold(query.trim());
-    if needle.is_empty() {
+/// How many times `query` is drawn in a turn: in the prompt, then in the reply's markdown (text,
+/// inline code and code blocks).
+pub(crate) fn occurrences(user: &str, answer: &str, query: &str) -> usize {
+    ranges(user, query).len() + crate::markdown::count_matches(answer, query)
+}
+
+/// Every occurrence of the query as (turn, nth occurrence in that turn), in reading order. A blank
+/// query matches nothing.
+pub(crate) fn hits<'a>(
+    turns: impl Iterator<Item = (&'a str, &'a str)>,
+    query: &str,
+) -> Vec<(usize, usize)> {
+    if fold(query.trim()).is_empty() {
         return Vec::new();
     }
     turns
         .enumerate()
-        .filter(|(_, (user, answer))| {
-            fold(user).contains(&needle) || fold(answer).contains(&needle)
+        .flat_map(|(ix, (user, answer))| {
+            (0..occurrences(user, answer, query)).map(move |nth| (ix, nth))
         })
-        .map(|(ix, _)| ix)
         .collect()
 }
 
@@ -109,7 +117,9 @@ pub(crate) struct State {
     searched: String,
     /// The conversation the hits belong to, and its turn count when they were found.
     scope: Option<(usize, usize)>,
-    hits: Vec<usize>,
+    hits: Vec<(usize, usize)>,
+    /// Whether the bar's field has the typing; a click elsewhere (the composer) takes it away.
+    pub(super) focused: bool,
     /// The current hit: an index into `hits`.
     at: Option<usize>,
 }
@@ -123,6 +133,7 @@ impl Default for State {
             searched: String::new(),
             scope: None,
             hits: Vec::new(),
+            focused: false,
             at: None,
         }
     }
@@ -133,7 +144,11 @@ impl State {
         self.shown
     }
 
-    /// The turn of the current hit, while the bar is up (the wash marks it).
+    /// Whether the bar's field takes the typing: it is up and was not clicked away from.
+    pub(crate) fn typing(&self) -> bool {
+        self.shown && self.focused
+    }
+
     /// The query while the bar is up with something typed.
     pub(crate) fn query(&self) -> Option<&str> {
         (self.shown() && !self.query.trim().is_empty()).then_some(self.query.as_str())
@@ -143,7 +158,18 @@ impl State {
         if !self.shown {
             return None;
         }
-        self.at.and_then(|at| self.hits.get(at).copied())
+        self.at.and_then(|at| self.hits.get(at).map(|hit| hit.0))
+    }
+
+    /// Which occurrence of `turn` is the current hit, if the current hit is in that turn.
+    pub(crate) fn current_occurrence(&self, turn: usize) -> Option<usize> {
+        if !self.shown {
+            return None;
+        }
+        self.at
+            .and_then(|at| self.hits.get(at))
+            .filter(|hit| hit.0 == turn)
+            .map(|hit| hit.1)
     }
 
     /// "3 de 12" as (3, 12); with no hits (0, 0).
@@ -154,7 +180,7 @@ impl State {
     /// Moves to the next or previous hit, wrapping. Returns the turn to reveal.
     fn step(&mut self, forward: bool) -> Option<usize> {
         self.at = wrap(self.at, self.hits.len(), forward);
-        self.at.map(|at| self.hits[at])
+        self.at.map(|at| self.hits[at].0)
     }
 
     /// Brings the hits up to date with the query and the conversation. Runs each frame, but only
@@ -218,6 +244,7 @@ impl Shell {
         self.context.close();
         let duration = Self::find_duration(cx);
         self.find.shown = true;
+        self.find.focused = true;
         self.find
             .phase
             .set(1., Instant::now(), duration, Curve::Expo);
@@ -258,7 +285,7 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if !self.find.shown || keys.modifiers.platform {
+        if !self.find.typing() || keys.modifiers.platform {
             return false;
         }
         match keys.key.as_str() {
@@ -295,7 +322,7 @@ impl Shell {
         let (at, count) = self.find.position();
         let query = self.find.query.clone();
         let placeholder = query.is_empty();
-        let shown = self.find.shown;
+        let typing = self.find.typing();
         Some(
             div()
                 .id("transcript-find")
@@ -308,14 +335,25 @@ impl Shell {
                 .items_center()
                 .gap(px(4.))
                 .h(px(34.))
-                .pl(px(10.))
+                .pl(px(12.))
                 .pr(px(4.))
-                .rounded(px(crate::theme::RADIUS_MD))
+                // A pill on an opaque fill: a frosted film let the text under it show through
+                // and its square blur edge peeked out past the corners.
+                .rounded(px(17.))
+                .overflow_hidden()
+                .bg(crate::theme::opaque_floating())
                 .border_1()
-                .border_color(content(0.12))
-                .child(crate::theme::floating_surface(crate::theme::RADIUS_LG))
-                .shadow_lg()
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .border_color(content(0.1))
+                .shadow_md()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, cx| {
+                        // A click on the bar gives it the typing back.
+                        this.find.focused = true;
+                        cx.stop_propagation();
+                        cx.notify();
+                    }),
+                )
                 .child(icon("search", 13.).text_color(content(0.5)))
                 .child(
                     div()
@@ -337,7 +375,7 @@ impl Shell {
                                 query
                             },
                         ))
-                        .when(shown, |d| {
+                        .when(typing, |d| {
                             d.child(div().flex_shrink_0().w(px(1.5)).h(px(15.)).bg(content(0.8)))
                         }),
                 )
@@ -379,6 +417,71 @@ mod tests {
     }
 
     #[test]
+    fn ranges_cover_exactly_the_matched_characters_with_multibyte_text() {
+        // "ç", "ã" and "é" are two bytes each; "日本" three. Offsets are bytes of the original.
+        let text = "ação é ÁÇÃO, 日本 ação";
+        let found = ranges(text, "acao");
+        assert_eq!(found.len(), 3);
+        for range in &found {
+            assert_eq!(fold(&text[range.clone()]), "acao");
+            assert!(text.is_char_boundary(range.start) && text.is_char_boundary(range.end));
+        }
+        assert_eq!(&text[found[0].clone()], "ação");
+        assert_eq!(&text[found[1].clone()], "ÁÇÃO");
+        assert_eq!(&text[found[2].clone()], "ação");
+        assert_eq!(&text[ranges(text, "日本")[0].clone()], "日本");
+        // Several matches, none overlapping, none the whole line.
+        assert_eq!(ranges("aXa xa XA", "xa"), vec![1..3, 4..6, 7..9]);
+        // A decomposed accent stays with its letter.
+        let decomposed = "cafe\u{301} cafe";
+        assert_eq!(
+            &decomposed[ranges(decomposed, "café")[0].clone()],
+            "cafe\u{301}"
+        );
+        assert_eq!(ranges(decomposed, "cafe").len(), 2);
+        // Matches at the very start and end.
+        assert_eq!(ranges("éé", "e"), vec![0..2, 2..4]);
+    }
+
+    #[test]
+    fn hits_count_every_occurrence_in_a_turn_including_code() {
+        let answer = "Veja `Ação` aqui e ação de novo.\n\n```rust\nlet ACAO = 1; // ação\n```\n\n- outra ação";
+        let turns = [("sem nada", "nada"), ("Ação!", answer)];
+        let found = hits(turns.iter().copied(), "acao");
+        // Prompt: 1; reply: inline code 1 + text 1 + code block 2 + list 1.
+        assert_eq!(occurrences("Ação!", answer, "acao"), 6);
+        assert_eq!(found, (0..6).map(|n| (1, n)).collect::<Vec<_>>());
+        // The count the bar shows is the number of marks drawn.
+        let mut state = State {
+            shown: true,
+            query: "acao".into(),
+            ..Default::default()
+        };
+        state.sync(0, 2, |i| turns[i]);
+        assert_eq!(state.position(), (1, 6));
+        assert_eq!(state.current_occurrence(1), Some(0));
+        assert_eq!(state.current_occurrence(0), None);
+        state.step(true);
+        assert_eq!(state.current_occurrence(1), Some(1));
+        state.step(false);
+        state.step(false);
+        assert_eq!(state.current_occurrence(1), Some(5), "wraps to the last");
+    }
+
+    #[test]
+    fn typing_needs_the_bar_up_and_focused() {
+        let mut state = State::default();
+        assert!(!state.typing());
+        state.shown = true;
+        assert!(!state.typing());
+        state.focused = true;
+        assert!(state.typing());
+        state.focused = false;
+        assert!(!state.typing());
+        assert_eq!(state.query(), None, "nothing typed yet");
+    }
+
+    #[test]
     fn fold_lowercases_and_drops_accents() {
         assert_eq!(fold("Ação"), "acao");
         assert_eq!(fold("ÉPOCA çãõ"), "epoca cao");
@@ -396,10 +499,10 @@ mod tests {
             ("Mais uma pergunta", "Resposta sobre configuracao"),
         ];
         let pairs = || turns.iter().map(|(u, a)| (*u, *a));
-        assert_eq!(hits(pairs(), "configuracao"), vec![0, 1, 3]);
-        assert_eq!(hits(pairs(), "AJUSTES"), vec![0]);
-        assert_eq!(hits(pairs(), "  olá  "), vec![1]);
-        assert_eq!(hits(pairs(), "inexistente"), Vec::<usize>::new());
+        assert_eq!(hits(pairs(), "configuracao"), vec![(0, 0), (1, 0), (3, 0)]);
+        assert_eq!(hits(pairs(), "AJUSTES"), vec![(0, 0)]);
+        assert_eq!(hits(pairs(), "  olá  "), vec![(1, 0)]);
+        assert!(hits(pairs(), "inexistente").is_empty());
     }
 
     #[test]

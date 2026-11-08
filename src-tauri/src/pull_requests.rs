@@ -253,7 +253,7 @@ pub(crate) fn hardened(binary: &OsStr) -> tokio::process::Command {
     }
     command
 }
-async fn api(
+pub(crate) async fn api(
     binary: &OsStr,
     endpoint: &str,
 ) -> std::result::Result<serde_json::Value, LookupStatus> {

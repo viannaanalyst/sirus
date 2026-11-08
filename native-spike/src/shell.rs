@@ -80,15 +80,24 @@ pub(crate) mod activity_cards;
 /// The first run: a full-window welcome over the letters robot (first_run.rs).
 #[path = "first_run.rs"]
 pub(crate) mod first_run;
+/// `/stage` and `/commit` typed in the composer (git_slash.rs).
+#[path = "git_slash.rs"]
+mod git_slash;
 /// All-conversation search: ⌘⇧F and the palette's message results (global_search.rs).
 #[path = "global_search.rs"]
 pub(crate) mod global_search;
+/// The issue or pull request the first message names (issue_chip.rs).
+#[path = "issue_chip.rs"]
+mod issue_chip;
 /// The row of actions under a finished reply: copy, try again, undo, side chat (ADR-187).
 #[path = "message_actions.rs"]
 pub(crate) mod message_actions;
 /// A failure as a toast that leaves by itself (problem_toast.rs).
 #[path = "problem_toast.rs"]
 mod problem_toast;
+/// Several conversations picked in the sidebar (sidebar_pick.rs).
+#[path = "sidebar_pick.rs"]
+mod sidebar_pick;
 /// ⌘F: the find bar over the open conversation (transcript_find.rs).
 #[path = "transcript_find.rs"]
 pub(crate) mod transcript_find;
@@ -929,6 +938,8 @@ enum Waiting {
     PromptLinkCopy,
     /// The conversation a prompt link asked for, and the prompt that goes in its composer.
     LinkCreated(String),
+    /// The quick composer's conversation exists: its text goes out (quick_composer.rs).
+    QuickCreated(String),
     Session(usize),
     /// A queued request sent to the host: its session and queue item.
     Queued(String, String),
@@ -1270,6 +1281,14 @@ pub struct Shell {
     problem: Option<String>,
     /// The problem whose toast is on screen, so its timer starts once (problem_toast.rs).
     problem_shown: Option<String>,
+    /// Set with the problem when the toast reports instead of warning.
+    notice: Option<String>,
+    /// Conversations picked with ⌘ or ⇧ in the sidebar (sidebar_pick.rs).
+    picked: Vec<usize>,
+    /// The composer's right-click menu (edit_menu.rs).
+    edit_menu: Option<crate::edit_menu::Open>,
+    /// Each conversation's issue or pull request chip: null while unknown or none.
+    issue_refs: std::rc::Rc<std::cell::RefCell<HashMap<String, Value>>>,
     connected: bool,
     files: (String, Vec<(String, String)>),
     diffs: HashMap<String, (u32, u32)>,
@@ -1624,6 +1643,10 @@ impl Shell {
             marked: None,
             problem: None,
             problem_shown: None,
+            notice: None,
+            picked: Vec::new(),
+            edit_menu: None,
+            issue_refs: Default::default(),
             connected: false,
             files: (String::new(), Vec::new()),
             diffs: HashMap::new(),
@@ -2073,6 +2096,8 @@ impl Shell {
                 Some(Waiting::PromptLink) => self.prompt_link_resolved(ok, &value, cx),
                 Some(Waiting::PromptLinkCopy) => self.prompt_link_copied(ok, &value, cx),
                 Some(Waiting::LinkCreated(prompt)) if ok => self.link_created(prompt, &value, cx),
+                Some(Waiting::QuickCreated(prompt)) if ok => self.quick_created(prompt, &value, cx),
+                Some(Waiting::QuickCreated(_)) => self.problem = Some(error_text(&value)),
                 Some(Waiting::Queued(session, item)) => {
                     self.queued_reply(&session, &item, ok, &value, cx)
                 }
@@ -5850,6 +5875,50 @@ impl Shell {
         cx.notify();
     }
 
+    /// Settings → Geral → "Composer rápido (⌥Espaço)", on unless turned off.
+    pub(crate) fn quick_composer_enabled(&self) -> bool {
+        self.settings["quickComposer"] != json!(false)
+    }
+
+    /// The projects the quick composer offers, the open one first.
+    pub(crate) fn quick_projects(&self) -> Vec<(String, String)> {
+        let mut order: Vec<usize> = self.current_project.into_iter().collect();
+        order.extend(
+            self.project_order
+                .iter()
+                .copied()
+                .filter(|p| Some(*p) != self.current_project),
+        );
+        order
+            .into_iter()
+            .filter_map(|p| self.projects.get(p))
+            .map(|p| (p.id.clone(), p.name.clone()))
+            .collect()
+    }
+
+    /// The quick composer's Enter: a new conversation in the project, which sends the text as soon
+    /// as it exists.
+    pub(crate) fn quick_send(&mut self, project: &str, text: String, cx: &mut Context<Self>) {
+        let active = self.active_conversation();
+        let agent = self.new_session_agent(active);
+        let call = self.backend.invoke(
+            "create_session",
+            json!({ "request": { "projectId": project, "agent": agent, "isolatedWorktree": false } }),
+        );
+        self.waiting.insert(call, Waiting::QuickCreated(text));
+        cx.notify();
+    }
+
+    fn quick_created(&mut self, prompt: String, value: &Value, cx: &mut Context<Self>) {
+        let ix = self.add_session(value);
+        self.conversations[ix].loaded = true;
+        self.open(ix, cx);
+        self.drafts.insert(ix, Draft::with_text(prompt));
+        self.touch_drafts();
+        self.send(cx);
+        cx.notify();
+    }
+
     /// Sends files to the back end, which keeps them for this conversation's next message.
     pub(crate) fn attach_paths(&mut self, paths: Vec<std::path::PathBuf>, cx: &mut Context<Self>) {
         self.attach_files(paths, cx);
@@ -7711,6 +7780,60 @@ impl Shell {
                 .into_any_element()
         } else {
             match menu.target {
+                MenuTarget::Session(index) if self.picked_menu(index) => div()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .h(px(26.))
+                            .px(px(8.))
+                            .flex()
+                            .items_center()
+                            .text_size(px(11.5))
+                            .text_color(content(0.5))
+                            .child(
+                                crate::i18n::t("{n} conversas selecionadas")
+                                    .replace("{n}", &self.picked.len().to_string()),
+                            ),
+                    )
+                    .child(
+                        item("menu-picked-open", "layout-grid", "Abrir em abas", None).on_click(
+                            cx.listener(move |this, _, _, cx| {
+                                close(this);
+                                this.open_picked(cx);
+                            }),
+                        ),
+                    )
+                    .child(
+                        item("menu-picked-pin", "pin", "Fixar todas", None).on_click(cx.listener(
+                            move |this, _, _, cx| {
+                                close(this);
+                                this.pin_picked(cx);
+                            },
+                        )),
+                    )
+                    .child(divider())
+                    .child(
+                        div()
+                            .id("menu-picked-delete")
+                            .h(px(30.))
+                            .px(px(8.))
+                            .rounded(px(crate::theme::RADIUS_MD))
+                            .flex()
+                            .items_center()
+                            .gap(px(9.))
+                            .text_size(px(13.))
+                            .text_color(danger)
+                            .cursor_pointer()
+                            .hover(move |s| s.bg(gpui::Hsla { a: 0.12, ..danger }))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                close(this);
+                                this.ask_delete_picked(cx);
+                            }))
+                            .child(icon("trash", 14.).text_color(danger))
+                            .child(div().flex_1().child(crate::i18n::t("Excluir todas"))),
+                    )
+                    .into_any_element(),
                 MenuTarget::Session(index) => {
                     let conversation = &self.conversations[index];
                     let tab = self
@@ -9123,6 +9246,7 @@ impl Shell {
                             chosen: bool,
                             focus: bool,
                             target: Option<String>,
+                            start: Option<Value>,
                             cx: &mut Context<Self>| {
                     crate::hover_track::list("checkout-list").row(
                         div()
@@ -9169,6 +9293,41 @@ impl Shell {
                                             .child(about),
                                     ),
                             )
+                            .when_some(start, |d, start| {
+                                d.child(
+                                    div()
+                                        .id(("checkout-start", id))
+                                        .flex_shrink_0()
+                                        .size(px(22.))
+                                        .rounded(px(crate::theme::RADIUS_SM))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .hover(|s| s.bg(content(0.1)))
+                                        .tooltip(message_actions::name_tip(crate::i18n::t(
+                                            "Nova conversa aqui",
+                                        )))
+                                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                            cx.stop_propagation()
+                                        })
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            cx.stop_propagation();
+                                            let active = this.active_conversation();
+                                            let mut request = start.clone();
+                                            request["projectId"] = json!(this.projects[index].id);
+                                            request["agent"] =
+                                                json!(this.new_session_agent(active));
+                                            let call = this.backend.invoke(
+                                                "create_session",
+                                                json!({ "request": request }),
+                                            );
+                                            this.waiting.insert(call, Waiting::Created);
+                                            this.close_project_menu();
+                                            cx.notify();
+                                        }))
+                                        .child(icon("plus", 12.).text_color(content(0.6))),
+                                )
+                            })
                             .child(
                                 div()
                                     .text_size(px(12.))
@@ -9192,12 +9351,27 @@ impl Shell {
                         filter.is_none(),
                         selected == 0,
                         None,
+                        None,
                         cx,
                     )
                     .into_any_element(),
                 ];
                 for (at, (path, name, about, count)) in rows.iter().cloned().enumerate() {
                     let chosen = filter.as_deref() == Some(path.as_str());
+                    // The project's folder starts a plain conversation; a worktree is shared
+                    // through a conversation already working in it.
+                    let start = if path == project_path {
+                        Some(json!({ "isolatedWorktree": false }))
+                    } else {
+                        self.projects[index]
+                            .conversations
+                            .iter()
+                            .map(|c| &self.conversations[*c])
+                            .find(|c| {
+                                !c.session_id.is_empty() && checkout_of(c, &project_path) == path
+                            })
+                            .map(|c| json!({ "isolatedWorktree": true, "shareWorktreeOf": c.session_id }))
+                    };
                     list.push(
                         line(
                             at + 1,
@@ -9208,6 +9382,7 @@ impl Shell {
                             chosen,
                             selected == at + 1,
                             Some(path),
+                            start,
                             cx,
                         )
                         .into_any_element(),
@@ -10148,6 +10323,9 @@ impl Shell {
             .items_center()
             .gap(px(8.))
             .when(active, |d| d.bg(content(0.09)))
+            .when(self.picked.contains(&index), |d| {
+                d.bg(crate::theme::accent_wash(0.18))
+            })
             .when(editing, |d| {
                 d.bg(content(0.05))
                     .border_1()
@@ -10156,7 +10334,11 @@ impl Shell {
             })
             .when(!editing, |d| {
                 d.cursor_pointer()
-                    .on_click(cx.listener(move |this, _, _, cx| this.open(index, cx)))
+                    .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+                        if !this.pick_click(index, event.modifiers(), cx) {
+                            this.open(index, cx)
+                        }
+                    }))
                     .on_drag(
                         split_panes::ConvDrag {
                             session: conversation.session_id.clone(),
@@ -12336,6 +12518,20 @@ impl Shell {
                             .child(
                                 div()
                                     .id("composer-text")
+                                    .on_mouse_down(
+                                        MouseButton::Right,
+                                        cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                                            cx.stop_propagation();
+                                            this.keep_typing_focus(window, cx);
+                                            let selection = !this.draft().selection().is_empty();
+                                            this.edit_menu = Some(crate::edit_menu::Open {
+                                                at: event.position,
+                                                selection,
+                                                editable: true,
+                                            });
+                                            cx.notify();
+                                        }),
+                                    )
                                     .px(px(8.))
                                     .h(px(box_height))
                                     .overflow_y_scroll()
@@ -12421,6 +12617,7 @@ impl Shell {
                                             })),
                                     )
                                     .children(ring)
+                                    .children(self.issue_chip(ix, cx))
                                     .child(div().flex_1().min_w_0())
                                     .child(
                                         shelf_button("composer-model")
@@ -13058,6 +13255,10 @@ impl Shell {
             .provider
             .unwrap_or(self.conversations[conversation].provider);
         let live = turn.live;
+        let editable_here = {
+            let conv = &self.conversations[conversation];
+            index + 1 == conv.turns.len() && !conv.working() && !conv.side_chat && !live
+        };
         let failed_here = {
             let conv = &self.conversations[conversation];
             message_actions::can_retry(
@@ -13339,6 +13540,9 @@ impl Shell {
                         .gap(px(2.))
                         .when(failed_here, |d| {
                             d.child(self.retry_button(index, conversation_session.clone(), cx))
+                        })
+                        .when(editable_here && !failed_here, |d| {
+                            d.child(self.edit_button(index, conversation, cx))
                         })
                         .child(
                             div().flex().justify_end().child(
@@ -16933,7 +17137,7 @@ fn nav_button(
         )
 }
 
-fn icon(name: &'static str, side: f32) -> gpui::Svg {
+pub(crate) fn icon(name: &'static str, side: f32) -> gpui::Svg {
     theme_icon(name, side).text_color(content(0.8))
 }
 
@@ -17220,6 +17424,25 @@ impl Render for Shell {
         let sidebar_card = self.sidebar_card_view(now, &mut moving, cx);
         let activity_cards = self.cards_view(cx);
         let problem_toast = self.problem_toast(cx);
+        let edit_menu = self.edit_menu.map(|open| {
+            let (pick, dismiss) = (cx.entity(), cx.entity());
+            crate::edit_menu::view(
+                open,
+                move |shortcut, window, cx| {
+                    pick.update(cx, |this, cx| {
+                        this.edit_menu = None;
+                        this.key(&crate::edit_menu::keystroke(shortcut), window, cx);
+                        cx.notify();
+                    })
+                },
+                move |_, cx| {
+                    dismiss.update(cx, |this, cx| {
+                        this.edit_menu = None;
+                        cx.notify();
+                    })
+                },
+            )
+        });
         let project_menu = self.project_menu_view(now, &mut moving, cx);
         let filter_menu = self.filter_menu_view(now, &mut moving, cx);
         let sidebar_options = self.sidebar_options_view(now, &mut moving, cx);
@@ -17485,6 +17708,7 @@ impl Render for Shell {
             .children(confirm_dialog)
             .children(activity_cards)
             .children(problem_toast)
+            .children(edit_menu)
             .children(palette_view)
             .children(first_run)
             .children(stats)

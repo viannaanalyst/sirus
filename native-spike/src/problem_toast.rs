@@ -24,6 +24,11 @@ impl Shell {
             }
         }
         let problem = self.problem.clone()?;
+        let color = if self.notice == self.problem {
+            content(0.9)
+        } else {
+            rgb(0xe08a8a).into()
+        };
         Some(
             div()
                 .absolute()
@@ -56,7 +61,7 @@ impl Shell {
                                 .text_size(px(13.))
                                 .line_height(px(18.))
                                 .line_clamp(3)
-                                .text_color(rgb(0xe08a8a))
+                                .text_color(color)
                                 .child(problem),
                         )
                         .child(

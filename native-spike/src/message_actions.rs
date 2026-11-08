@@ -195,7 +195,7 @@ pub(crate) fn can_retry(status: &str, error: &str, latest: bool, working: bool) 
 }
 
 /// A small label shown on hover of a row button, through gpui's tooltip.
-struct NameTip(&'static str);
+struct NameTip(SharedString);
 
 impl Render for NameTip {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
@@ -208,13 +208,19 @@ impl Render for NameTip {
             .bg(floating_fill())
             .text_size(px(12.))
             .text_color(content(0.92))
-            .child(self.0)
+            .child(self.0.clone())
     }
+}
+
+/// A tooltip of text made at run time, up to a few lines.
+pub(crate) fn text_tip(text: String) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
+    let text = SharedString::from(text);
+    move |_, cx| cx.new(|_| NameTip(text.clone())).into()
 }
 
 /// The tooltip builder for a button's name: the label, shown on hover.
 pub(crate) fn name_tip(name: &'static str) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
-    move |_, cx| cx.new(|_| NameTip(name)).into()
+    move |_, cx| cx.new(|_| NameTip(name.into())).into()
 }
 
 /// One click's work, carried into the handlers.
@@ -497,6 +503,77 @@ impl Shell {
                 )
             }))
             .into_any_element()
+    }
+
+    /// Under the last sent message, on hover: takes it back into the composer and drops it and
+    /// its reply, so sending answers the edited text (turn_edit.rs on the host).
+    pub(super) fn edit_button(
+        &self,
+        index: usize,
+        conversation: usize,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        div()
+            .id(("turn-edit", index))
+            .h(px(24.))
+            .px(px(8.))
+            .rounded(px(crate::theme::RADIUS_SM))
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .text_size(px(12.))
+            .text_color(content(0.6))
+            .invisible()
+            .group_hover(format!("turn-actions-{index}"), |s| s.visible())
+            .cursor_pointer()
+            .sinks()
+            .hover(|s| s.bg(content(0.07)).text_color(content(0.9)))
+            .tooltip(name_tip(t(
+                "Volta a mensagem para o composer e apaga a resposta",
+            )))
+            .child(icon("pencil", 12.))
+            .child(t("Editar"))
+            .on_click(cx.listener(move |this, _, _, cx| this.edit_last(conversation, cx)))
+            .into_any_element()
+    }
+
+    fn edit_last(&mut self, ix: usize, cx: &mut Context<Self>) {
+        let session = self.conversations[ix].session_id.clone();
+        if session.is_empty() || self.conversations[ix].working() {
+            return;
+        }
+        let rx = self
+            .backend
+            .request("rewind_last_turn", json!({ "sessionId": session }));
+        cx.spawn(async move |this, cx| {
+            let result = settle(rx).await;
+            let _ = this.update(cx, |this, cx| {
+                match result {
+                    Ok(reply) => {
+                        let prompt = reply["prompt"].as_str().unwrap_or("").to_owned();
+                        let conversation = &mut this.conversations[ix];
+                        conversation.loaded = false;
+                        conversation.messages.clear();
+                        conversation.turns.clear();
+                        conversation.base = 0;
+                        this.ensure_loaded(ix);
+                        let draft = this.drafts.entry(ix).or_default();
+                        if draft.text.trim().is_empty() {
+                            draft.text = prompt;
+                        } else {
+                            draft.text = format!("{prompt}\n\n{}", draft.text);
+                        }
+                        let end = draft.text.len();
+                        draft.cursor = end;
+                        draft.anchor = end;
+                        this.touch_drafts();
+                    }
+                    Err(problem) => this.problem = Some(problem),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// A reply action's icon in the turn's row; a dimmed one takes no press.

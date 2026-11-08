@@ -53,6 +53,7 @@ mod github_inbox;
 mod goals;
 mod html_preview;
 mod idle_compaction;
+mod issue_ref;
 mod keep_awake;
 #[cfg(target_os = "macos")]
 mod keychain_scope;
@@ -113,6 +114,7 @@ mod tool_output;
 mod transcript;
 mod transcript_store;
 mod transcript_view;
+mod turn_edit;
 mod turn_review;
 mod turn_undo;
 mod usage_history;

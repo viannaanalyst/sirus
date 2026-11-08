@@ -25,12 +25,14 @@ mod computers;
 mod connector_marks;
 mod data;
 mod disclosure;
+mod edit_menu;
 mod effort_energy;
 mod file_chips;
 mod file_editor;
 mod file_icons;
 mod folder_icon_data;
 mod fonts;
+mod freeze_watch;
 mod git_graph;
 mod git_sync;
 mod hover_track;
@@ -40,6 +42,7 @@ mod local_git;
 mod markdown;
 mod marks;
 mod mascots;
+mod memory_trim;
 mod motion;
 mod native_actions;
 mod native_notify;
@@ -58,6 +61,7 @@ mod project_scripts;
 mod project_scripts_view;
 mod provider_masks;
 mod pull_requests_page;
+mod quick_composer;
 mod remote_tls;
 mod reply_render;
 mod reply_rich;
@@ -246,6 +250,7 @@ fn main() {
     app.run(move |cx: &mut App| {
         cx.on_window_closed(|cx, _| cx.quit()).detach();
         cx.on_app_quit(|_| async { backend::stop_host() }).detach();
+        freeze_watch::start(cx);
         let bounds = Bounds::centered(None, size(px(1320.), px(860.)), cx);
         let window = cx
             .open_window(
@@ -280,6 +285,8 @@ fn main() {
                 },
             )
             .expect("open window");
+        memory_trim::start(window.into(), cx);
+        quick_composer::start(window, cx);
         cx.spawn(async move |cx| {
             while let Ok(url) = link_events.recv().await {
                 let _ = window.update(cx, |shell, window, cx| {

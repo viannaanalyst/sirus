@@ -441,6 +441,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Abaixo", "Below"),
     ("Abas de conversa", "Conversation tabs"),
+    ("Aberta", "Open"),
     ("Aberto", "Open"),
     ("Abertos", "Open"),
     ("Abra os arquivos do projeto.", "Open the project files."),
@@ -477,6 +478,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Abrir diretório de dados do Sirus",
         "Open Sirus data directory",
     ),
+    ("Abrir em abas", "Open in tabs"),
     ("Abrir links no", "Open links in"),
     ("Abrir no GitHub", "Open on GitHub"),
     ("Abrir no editor", "Open in the editor"),
@@ -705,6 +707,10 @@ const ENTRIES: &[(&str, &str)] = &[
     (
         "As leituras do GitHub foram pausadas após o limite de requisições",
         "GitHub reads are paused after a rate limit",
+    ),
+    (
+        "As mensagens desta conversa não podem ser editadas.",
+        "This conversation's messages cannot be edited.",
     ),
     (
         "As notas de atualização não são válidas.",
@@ -974,6 +980,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Começar", "Get started"),
     ("Commit do Git inválido", "Invalid Git commit"),
     ("Commit e Push", "Commit and Push"),
+    ("Commit feito: {title}", "Committed: {title}"),
     ("Commit inválido.", "Invalid commit."),
     ("Commit não encontrado.", "Commit not found."),
     ("Commit, push e PR", "Commit, push and PR"),
@@ -1002,6 +1009,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Comportamento", "Behavior"),
     ("Comportamento do agente", "Agent behavior"),
     ("Comportamento do chat", "Chat behavior"),
+    (
+        "Composer rápido do Sirus (⌥Espaço)",
+        "Sirus quick composer (⌥Space)",
+    ),
     ("Computador", "Computer"),
     ("Computador pareado.", "Computer paired."),
     ("Computadores", "Computers"),
@@ -1339,6 +1350,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Endereço inválido.", "Invalid address."),
     ("Entendi", "Got it"),
     ("Enter durante o ditado", "Enter while dictating"),
+    ("Enter envia · Esc fecha", "Enter sends · Esc closes"),
     ("Entrada", "Input"),
     ("Entrada em cache", "Cached input"),
     (
@@ -1605,6 +1617,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "This conversation stopped on an error",
     ),
     (
+        "Esta conversa é longa demais para editar a última mensagem. Envie uma mensagem nova.",
+        "This conversation is too long to edit its last message. Send a new message instead.",
+    ),
+    (
         "Esta equipe não está em execução.",
         "This team is not running.",
     ),
@@ -1798,8 +1814,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Eventos e sons", "Events and sounds"),
     ("Excluir", "Delete"),
     ("Excluir conversa?", "Delete conversation?"),
+    ("Excluir conversas?", "Delete conversations?"),
     ("Excluir o login de {}?", "Delete the login for {}?"),
     ("Excluir perfil", "Delete profile"),
+    ("Excluir todas", "Delete all"),
     ("Excluir {}?", "Delete {}?"),
     ("Executar: {}", "Run: {}"),
     ("Executou", "Ran"),
@@ -1843,6 +1861,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Fazer deploy e gerenciar serviços",
         "Deploy and manage services",
     ),
+    ("Fechada", "Closed"),
     ("Fechado", "Closed"),
     ("Fechados", "Closed"),
     ("Fechar", "Close"),
@@ -1862,6 +1881,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Fixar", "Pin"),
     ("Fixar aba", "Pin tab"),
     ("Fixar ou desafixar a aba", "Pin or unpin the tab"),
+    ("Fixar todas", "Pin all"),
     ("Fixo", "Fixed"),
     ("Floresta", "Forest"),
     (
@@ -2059,6 +2079,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Isso não é um nome de domínio.",
         "That is not a domain name.",
     ),
+    ("Issue", "Issue"),
     (
         "Issues do Jira e páginas do Confluence",
         "Jira issues and Confluence pages",
@@ -2217,6 +2238,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Mensagem do commit", "Commit message"),
     ("Mensagem durante a resposta", "Message during a reply"),
     ("Mensagem para este subagente", "Message for this subagent"),
+    ("Mergeado", "Merged"),
     ("Mesclado", "Merged"),
     ("Mesclados", "Merged"),
     (
@@ -2318,6 +2340,11 @@ const ENTRIES: &[(&str, &str)] = &[
     (
         "Nada foi registrado para este subagente.",
         "Nothing was recorded for this subagent.",
+    ),
+    ("Nada novo para preparar.", "Nothing new to stage."),
+    (
+        "Nada para o commit: não há alterações.",
+        "Nothing to commit: there are no changes.",
     ),
     ("Nada por aqui.", "Nothing here."),
     ("Nada sobrando", "Nothing left over"),
@@ -2452,6 +2479,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Nova aba", "New tab"),
     ("Nova aba privada", "New private tab"),
     ("Nova conversa", "New conversation"),
+    ("Nova conversa aqui", "New conversation here"),
     (
         "Nova conversa em worktree",
         "New conversation in a worktree",
@@ -2478,6 +2506,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "Could not prepare the data copy.",
     ),
     ("Não detectado", "Not detected"),
+    (
+        "Não deu para escrever o título. Use /commit seguido da mensagem.",
+        "Could not write the title. Use /commit followed by the message.",
+    ),
     ("Não encontrado", "Not found"),
     ("Não encontrado no GitHub.", "Not found on GitHub."),
     ("Não encontrados {}", "Not found {}"),
@@ -2689,6 +2721,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "There is no commit to amend.",
     ),
     (
+        "Não há mensagem para editar.",
+        "There is no message to edit.",
+    ),
+    (
         "Não há mensagem para enviar novamente.",
         "There is no message to send again.",
     ),
@@ -2756,6 +2792,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "O Claude resume a conversa ao chegar perto deste total de tokens, de 100000 a 1000000. Vazio segue o padrão do Claude Code. Muda quando compacta, não o tamanho da janela do modelo.",
         "Claude summarizes the conversation near this many tokens, from 100000 to 1000000. Empty follows Claude Code's default. This changes when it compacts, not the model's window.",
     ),
+    ("O Git não respondeu.", "Git did not answer."),
     (
         "O GitHub CLI (gh) não está instalado. Instale com `brew install gh` e depois adicione uma conta aqui.",
         "GitHub CLI (gh) is not installed. Install it with `brew install gh`, then add an account here.",
@@ -3605,6 +3642,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Período", "Time"),
     ("Pesquisar por \"{}\"", "Search for \"{}\""),
     ("Pessoal", "Personal"),
+    ("Peça algo ao agente…", "Ask the agent something…"),
     ("Peça qualquer coisa", "Ask for anything"),
     ("Planejamento", "Planning"),
     ("Planejamento é só leitura", "Planning stays read-only"),
@@ -3705,6 +3743,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Próximo projeto", "Next project"),
     ("Pular", "Skip"),
     ("Pull exige confirmação.", "Pull requires confirmation."),
+    ("Pull request", "Pull request"),
     ("Pull request criado", "Pull request created"),
     ("Pull request mesclado.", "Pull request merged."),
     (
@@ -4417,6 +4456,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "Você pode recuperar pela Lixeira no Finder. Tudo que estiver dentro da pasta vai junto.",
         "You can restore it from the Trash in Finder. Anything inside a folder goes with it.",
     ),
+    (
+        "Volta a mensagem para o composer e apaga a resposta",
+        "Takes the message back to the composer and drops the reply",
+    ),
     ("Voltar", "Back"),
     ("Voltar ao app", "Back to app"),
     ("Voltar ao último projeto", "Back to the last project"),
@@ -4822,6 +4865,20 @@ const ENTRIES: &[(&str, &str)] = &[
     (
         "worktrees isolados exigem um repositório Git",
         "isolated worktrees require a Git repository",
+    ),
+    (
+        "{files} preparados para o commit.",
+        "{files} staged for the commit.",
+    ),
+    ("{n} arquivos", "{n} files"),
+    ("{n} conversas selecionadas", "{n} conversations selected"),
+    (
+        "{n} conversas serão apagadas para sempre.",
+        "{n} conversations will be gone for good.",
+    ),
+    (
+        "{n} conversas serão apagadas para sempre. As que estão trabalhando ficam.",
+        "{n} conversations will be gone for good. The ones working stay.",
     ),
     ("{} agentes", "{} agents"),
     ("{} ainda não está pronto", "{} is not ready yet"),

@@ -26,7 +26,7 @@ fn settled_answer(session: &Session, id: &str) -> Result<usize> {
 }
 
 // No silent history loss: a reconstructed first turn must fit the context budget.
-fn reconstructed_context(messages: &[Message], prompt: &str) -> Result<String> {
+pub(crate) fn reconstructed_context(messages: &[Message], prompt: &str) -> Result<String> {
     let mut entries = Vec::new();
     let mut bytes = 0;
     for message in messages.iter().filter(|message| {

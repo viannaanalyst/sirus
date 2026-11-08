@@ -3131,6 +3131,37 @@ impl App {
         self.platform.can_select_mixed_files_and_dirs()
     }
 
+    /// Forgets every decoded image the asset cache holds (files, URLs and bytes shown with
+    /// `img`) and frees their atlas tiles on all windows. One still on screen decodes again on
+    /// its next frame. Returns how many were dropped.
+    pub fn trim_images(&mut self) -> usize {
+        let kinds = [
+            TypeId::of::<crate::ImageAssetLoader>(),
+            TypeId::of::<crate::ImageDecoder>(),
+        ];
+        let keys: Vec<(TypeId, u64)> = self
+            .loading_assets
+            .keys()
+            .filter(|(kind, _)| kinds.contains(kind))
+            .copied()
+            .collect();
+        let mut dropped = 0;
+        for key in keys {
+            let Some(entry) = self.loading_assets.remove(&key) else {
+                continue;
+            };
+            if let Ok(load) = entry.downcast::<CachedLoad<
+                std::result::Result<Arc<RenderImage>, crate::ImageCacheError>,
+            >>() {
+                if let Some(Ok(image)) = load.get() {
+                    self.drop_image(image, None);
+                    dropped += 1;
+                }
+            }
+        }
+        dropped
+    }
+
     /// Removes an image from the sprite atlas on all windows.
     ///
     /// If the current window is being updated, it will be removed from `App.windows`, you can use `current_window` to specify the current window.

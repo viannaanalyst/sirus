@@ -397,6 +397,8 @@ struct Terminal {
     selecting: bool,
     /// The pointer rests on a web address, which a click opens.
     over_link: bool,
+    /// The right-click menu (edit_menu.rs).
+    edit_menu: Option<crate::edit_menu::Open>,
     scroll_remainder: f32,
     marked: Option<String>,
     _events: gpui::Task<()>,
@@ -525,6 +527,7 @@ impl Terminal {
             master_fd,
             selecting: false,
             over_link: false,
+            edit_menu: None,
             scroll_remainder: 0.,
             marked: None,
             _events: events,
@@ -1154,11 +1157,52 @@ impl Render for Terminal {
                     this.mouse_down(event, window, cx)
                 }),
             )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
+                    window.focus(&this.focus, cx);
+                    let selection = this
+                        .term
+                        .lock()
+                        .selection_to_string()
+                        .is_some_and(|t| !t.is_empty());
+                    this.edit_menu = Some(crate::edit_menu::Open {
+                        at: event.position,
+                        selection,
+                        editable: !this.exited,
+                    });
+                    cx.notify();
+                }),
+            )
             .on_scroll_wheel(cx.listener(|this, event, _, cx| this.scroll(event, cx)))
             .child(Grid {
                 terminal: cx.entity(),
                 focused,
             })
+            .children(self.edit_menu.map(|open| {
+                let (pick, dismiss) = (cx.entity(), cx.entity());
+                crate::edit_menu::view(
+                    open,
+                    move |shortcut, _, cx| {
+                        pick.update(cx, |this, cx| {
+                            this.edit_menu = None;
+                            match shortcut {
+                                "cmd-c" | "cmd-x" => this.copy(cx),
+                                "cmd-v" => this.paste(cx),
+                                _ => this.select_all(cx),
+                            }
+                            cx.notify();
+                        })
+                    },
+                    move |_, cx| {
+                        dismiss.update(cx, |this, cx| {
+                            this.edit_menu = None;
+                            cx.notify();
+                        })
+                    },
+                )
+            }))
     }
 }
 

@@ -603,6 +603,9 @@ impl Shell {
         if self.typed_compact(ix, &typed, files, cx) {
             return;
         }
+        if self.typed_git(ix, &typed, files, cx) {
+            return;
+        }
         let conversation = &self.conversations[ix];
         if conversation.session_id.is_empty() {
             return;

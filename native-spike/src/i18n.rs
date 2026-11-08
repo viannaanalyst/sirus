@@ -461,6 +461,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Abrir Alterações", "Open Changes"),
     ("Abrir Arquivos", "Open Files"),
     ("Abrir Chat lateral", "Open Side chat"),
+    ("Abrir MR", "Show MR"),
     ("Abrir Navegador", "Open Browser"),
     ("Abrir PR", "Open PR"),
     ("Abrir Pull Requests", "Open Pull Requests"),
@@ -523,6 +524,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Adicionar login", "Add login"),
     ("Adicionar perfil", "Add profile"),
     ("Adicionar personalizado", "Add custom"),
+    ("Adicionar token", "Add token"),
     ("Adicionar um computador", "Add a computer"),
     (
         "Adicione pastas com SKILL.md aqui. Skills invocadas funcionam entre provedores; a cópia do próprio provedor tem prioridade.",
@@ -531,6 +533,10 @@ const ENTRIES: &[(&str, &str)] = &[
     (
         "Adicione um projeto para abrir links de prompt.",
         "Add a project to open prompt links.",
+    ),
+    (
+        "Adicione um token do Bitbucket em Configurações → Git para ver e criar pull requests.",
+        "Add a Bitbucket token in Settings → Git to see and open pull requests.",
     ),
     (
         "Adicione uma pasta com SKILL.md no diretório acima ou na pasta de skills de um provedor e atualize.",
@@ -958,6 +964,14 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Colar token", "Paste token"),
     (
+        "Cole email:token (um API token da Atlassian) ou um access token do repositório. Sem token, o Sirus usa as credenciais do Git para bitbucket.org.",
+        "Paste email:token (an Atlassian API token) or a repository access token. Without one, Sirus uses Git's credentials for bitbucket.org.",
+    ),
+    (
+        "Cole o token sem espaços, como email:token ou um access token.",
+        "Paste the token without spaces, as email:token or an access token.",
+    ),
+    (
         "Cole um token do serviço; ele fica no Keychain, nunca nos ajustes.",
         "Paste a token from the service; it is kept in the Keychain, never in settings.",
     ),
@@ -1019,6 +1033,11 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Conectadas", "Connected"),
     ("Conectado", "Connected"),
     ("Conectado como {}", "Signed in as {}"),
+    (
+        "Conectado pelo glab em {}.",
+        "Signed in through glab on {}.",
+    ),
+    ("Conectado pelo glab.", "Signed in through glab."),
     ("Conectados", "Connected"),
     ("Conectando a {}…", "Connecting to {}…"),
     ("Conectando à tela…", "Connecting to the screen…"),
@@ -1131,6 +1150,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Corrigir o último", "Amend last"),
     ("Criando…", "Creating…"),
     ("Criar", "Create"),
+    ("Criar MR", "Open MR"),
     ("Criar PR", "Create PR"),
     ("Criar branch…", "Create branch…"),
     ("Criar merge commit", "Create a merge commit"),
@@ -1367,6 +1387,10 @@ const ENTRIES: &[(&str, &str)] = &[
     (
         "Entre nos conectores pelo app do Mac; um token funciona aqui.",
         "Sign in to connectors from the Mac app; a token works here.",
+    ),
+    (
+        "Envia este branch e abre o merge request para o branch padrão.",
+        "Pushes this branch and opens the merge request into the default branch.",
     ),
     (
         "Envia este branch e abre o pull request para o branch padrão.",
@@ -1901,6 +1925,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Gerenciar perfis…", "Manage profiles…"),
     ("Girar", "Rotate"),
     ("Git detectado", "Git detected"),
+    ("GitLab e Bitbucket", "GitLab and Bitbucket"),
     ("Gravar a página", "Record the page"),
     ("Gravação de Tela", "Screen Recording"),
     (
@@ -2008,6 +2033,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "Install the GitHub CLI (gh) to list pull requests.",
     ),
     (
+        "Instale o GitLab CLI (`brew install glab`) e rode `glab auth login` para ver e criar merge requests.",
+        "Install the GitLab CLI (`brew install glab`) and run `glab auth login` to see and open merge requests.",
+    ),
+    (
         "Instale o Node.js {} ou mais novo, com npm, e verifique de novo.",
         "Install Node.js {} or newer, with npm, and check again.",
     ),
@@ -2079,6 +2108,10 @@ const ENTRIES: &[(&str, &str)] = &[
     (
         "Já existe um item com este nome.",
         "An entry with this name already exists.",
+    ),
+    (
+        "Já existe um merge request para este branch.",
+        "A merge request already exists for this branch.",
     ),
     (
         "Já existe um pull request para este branch.",
@@ -2217,6 +2250,11 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Mensagem do commit", "Commit message"),
     ("Mensagem durante a resposta", "Message during a reply"),
     ("Mensagem para este subagente", "Message for this subagent"),
+    ("Merge request criado", "Merge request opened"),
+    (
+        "Merge requests do GitLab e pull requests do Bitbucket aparecem no painel de alterações, com os checks, e podem ser criados por lá.",
+        "GitLab merge requests and Bitbucket pull requests show in the Changes panel with their checks, and can be opened from there.",
+    ),
     ("Mesclado", "Merged"),
     ("Mesclados", "Merged"),
     (
@@ -2553,6 +2591,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "Could not run git: {}",
     ),
     (
+        "Não foi possível guardar o token do Bitbucket.",
+        "The Bitbucket token could not be saved.",
+    ),
+    (
         "Não foi possível iniciar a verificação de atualização do provedor.",
         "Cannot start the provider update check.",
     ),
@@ -2733,6 +2775,22 @@ const ENTRIES: &[(&str, &str)] = &[
         "Invalid number of agents to keep ready.",
     ),
     (
+        "O Bitbucket não devolveu o novo pedido.",
+        "Bitbucket did not return the new request.",
+    ),
+    (
+        "O Bitbucket não respondeu. Tente de novo.",
+        "Bitbucket did not answer. Try again.",
+    ),
+    (
+        "O Bitbucket precisa de login. Adicione um token em Configurações → Git.",
+        "Bitbucket needs a sign-in. Add a token in Settings → Git.",
+    ),
+    (
+        "O Bitbucket recusou: esta conta não pode abrir pull requests neste repositório.",
+        "Bitbucket refused: this account cannot open pull requests in this repository.",
+    ),
+    (
         "O Chrome não tem cookies para esse perfil.",
         "Chrome has no cookies for that profile.",
     ),
@@ -2791,6 +2849,26 @@ const ENTRIES: &[(&str, &str)] = &[
     (
         "O GitHub recusou este pull request (o branch foi enviado e é diferente da base?).",
         "GitHub refused this pull request (is the branch pushed and different from the base?).",
+    ),
+    (
+        "O GitLab CLI (glab) não está instalado. Instale com `brew install glab` e rode `glab auth login`.",
+        "The GitLab CLI (glab) is not installed. Install it with `brew install glab` and run `glab auth login`.",
+    ),
+    (
+        "O GitLab CLI não está conectado. Rode `glab auth login` no terminal.",
+        "GitLab CLI is not signed in. Run `glab auth login` in a terminal.",
+    ),
+    (
+        "O GitLab não devolveu o novo pedido.",
+        "GitLab did not return the new request.",
+    ),
+    (
+        "O GitLab não respondeu. Tente de novo.",
+        "GitLab did not answer. Try again.",
+    ),
+    (
+        "O GitLab recusou: esta conta não pode abrir merge requests neste projeto.",
+        "GitLab refused: this account cannot open merge requests in this project.",
     ),
     (
         "O HEAD do Git mudou desde esta resposta ({} para {}): houve commit, checkout, rebase ou pull. Nada será desfeito. Abra o diff e reverta à mão, ou use git revert no novo commit.",
@@ -3070,6 +3148,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "The background already changes as you choose. You can change it later in Settings.",
     ),
     ("O git falhou.", "Git failed."),
+    (
+        "O glab não está conectado. Rode `glab auth login` no terminal.",
+        "glab is not signed in. Run `glab auth login` in a terminal.",
+    ),
     ("O host da URL não é permitido", "URL host is not allowed"),
     (
         "O item do espaço de trabalho está fora desta conversa.",
@@ -3830,6 +3912,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "Unexpected reply from GitHub.",
     ),
     (
+        "Resposta inesperada do serviço.",
+        "Unexpected reply from the service.",
+    ),
+    (
         "Resposta inesperada do título do commit.",
         "Unexpected commit title response.",
     ),
@@ -3900,6 +3986,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Rodar ao terminar", "Run on finish"),
     ("Rodar de novo", "Run again"),
     ("Rodar preparação", "Run setup"),
+    (
+        "Rode `glab auth login` no terminal para ver e criar merge requests.",
+        "Run `glab auth login` in a terminal to see and open merge requests.",
+    ),
     ("Rode comandos no projeto.", "Run commands in the project."),
     ("Rode o app num aparelho.", "Run the app on a device."),
     ("Rolou", "Scrolled"),
@@ -4166,6 +4256,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Todos", "All"),
     ("Todos os checkouts", "All checkouts"),
     ("Todos os projetos", "All projects"),
+    ("Token guardado no Keychain.", "Token kept in the Keychain."),
     ("Tokens acumulados", "Cumulative tokens"),
     ("Tokens por tipo", "Tokens by type"),
     (
@@ -4837,6 +4928,9 @@ const ENTRIES: &[(&str, &str)] = &[
     ("{} commits novos em {}", "{} new commits on {}"),
     ("{} contas", "{} accounts"),
     ("{} de {}", "{} of {}"),
+    ("{} de {} checks falharam", "{} of {} checks failed"),
+    ("{} de {} checks passaram", "{} of {} checks passed"),
+    ("{} de {} checks rodando", "{} of {} checks running"),
     ("{} de {} concluídos", "{} of {} done"),
     (
         "{} de {} skills ativas · Em todas as origens",

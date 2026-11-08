@@ -187,6 +187,11 @@ pub fn loads(page: &str) -> Vec<(&'static str, &'static str, Value)> {
         "Git" => vec![
             ("host", "host_info", json!({})),
             ("github", "native_github_list", json!({})),
+            (
+                "forges",
+                "forge_action",
+                json!({"action": {"type": "status"}}),
+            ),
         ],
         "Worktrees" => vec![
             ("host", "host_info", json!({})),
@@ -2082,6 +2087,7 @@ fn git(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
             ],
         ),
         github_accounts(d),
+        other_forges(d),
         group(
             t("Comportamento"),
             vec![
@@ -2219,6 +2225,72 @@ fn github_accounts(d: &HashMap<&'static str, Value>) -> Group {
         }
     }
     group(t("Contas do GitHub"), rows)
+}
+
+/// Settings → Git → GitLab and Bitbucket: glab's sign-in as it stands, and the Bitbucket token
+/// (kept in the Keychain by the host's `forge_action`). The shell keeps the reply in `forges`.
+fn other_forges(d: &HashMap<&'static str, Value>) -> Group {
+    let forges = get_data(d, "forges");
+    let hosts = forges["gitlabHosts"]
+        .as_array()
+        .map(|hosts| {
+            hosts
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default();
+    let gitlab = match forges["gitlab"].as_str() {
+        Some("missing") => t(
+            "O GitLab CLI (glab) não está instalado. Instale com `brew install glab` e rode `glab auth login`.",
+        )
+        .to_string(),
+        Some("signedIn") if !hosts.is_empty() => tf("Conectado pelo glab em {}.", &[&hosts]),
+        Some("signedIn") => t("Conectado pelo glab.").to_string(),
+        Some(_) => t("O glab não está conectado. Rode `glab auth login` no terminal.").to_string(),
+        None => String::new(),
+    };
+    let bitbucket = if yes(&forges["bitbucketToken"]) {
+        row(
+            "Bitbucket",
+            t("Token guardado no Keychain."),
+            vec![confirm_button(
+                t("Remover"),
+                act_run(
+                    "forge_action",
+                    json!({"action": {"type": "clearBitbucketToken"}}),
+                ),
+            )],
+        )
+    } else {
+        row(
+            "Bitbucket",
+            t(
+                "Cole email:token (um API token da Atlassian) ou um access token do repositório. Sem token, o Sirus usa as credenciais do Git para bitbucket.org.",
+            ),
+            vec![Ctl::Field {
+                key: "bitbucketToken",
+                text: String::new(),
+                width: 240.,
+                button: Some(t("Adicionar token")),
+            }],
+        )
+    };
+    group(
+        t("GitLab e Bitbucket"),
+        vec![
+            row(
+                "",
+                t(
+                    "Merge requests do GitLab e pull requests do Bitbucket aparecem no painel de alterações, com os checks, e podem ser criados por lá.",
+                ),
+                Vec::new(),
+            ),
+            row("GitLab", gitlab, Vec::new()),
+            bitbucket,
+        ],
+    )
 }
 
 /// A button that asks in the confirmation popup before running `act`.
@@ -3507,6 +3579,10 @@ pub fn commit(settings: &Value, key: &str, text: &str) -> Option<Commit> {
         });
     }
     match key {
+        "bitbucketToken" => (!text.is_empty()).then(|| Commit::Run {
+            cmd: "forge_action",
+            args: json!({"action": {"type": "setBitbucketToken", "token": text}}),
+        }),
         "worktreeBasePath" => Some(Commit::Save {
             key: "worktreeBasePath",
             value: if text.is_empty() {

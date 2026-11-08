@@ -43,6 +43,7 @@ mod drafts;
 mod editor;
 mod error;
 mod execution;
+mod forge;
 mod fs_tree;
 mod gh_gate;
 mod git;

@@ -312,6 +312,19 @@ mod vault {
     }
 }
 
+/// A secret of another part of the host (a Bitbucket token) in the same Keychain service.
+pub(crate) fn secret_get(id: &str) -> Option<String> {
+    vault::get(id)
+}
+
+pub(crate) fn secret_put(id: &str, value: &str) -> bool {
+    vault::put(id, value)
+}
+
+pub(crate) fn secret_delete(id: &str) {
+    vault::delete(id)
+}
+
 fn load_tokens(id: &str) -> Option<Tokens> {
     let encoded = vault::get(id)?;
     serde_json::from_slice(&STANDARD.decode(encoded).ok()?).ok()

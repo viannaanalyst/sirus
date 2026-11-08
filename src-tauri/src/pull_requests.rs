@@ -23,6 +23,8 @@ pub enum LookupStatus {
 #[serde(rename_all = "camelCase")]
 pub struct PullRequestSnapshot {
     pub session_id: String,
+    /// `github`, `gitlab` or `bitbucket`: which service answered (the window says PR or MR).
+    pub forge: &'static str,
     pub repository: Option<String>,
     pub branch: Option<String>,
     pub local_head: Option<String>,
@@ -71,6 +73,9 @@ pub(crate) struct Context {
     pub branch: Option<String>,
     pub local_head: Option<String>,
     pub status: LookupStatus,
+    /// A GitLab or Bitbucket `origin` (the status stays `UnsupportedRemote` for the GitHub
+    /// paths); `crate::forge` answers for it.
+    pub forge: Option<crate::forge::Remote>,
 }
 
 pub(crate) fn repository(web_url: &str) -> Option<String> {
@@ -142,6 +147,7 @@ pub(crate) fn inspect(cwd: PathBuf) -> Result<Context> {
         branch: None,
         local_head: None,
         status: LookupStatus::NotGit,
+        forge: None,
     };
     let inside = crate::git::bounded_probe(&context.cwd, &["rev-parse", "--is-inside-work-tree"])?;
     if !inside.status.success() || inside.stdout != b"true\n" {
@@ -176,9 +182,12 @@ pub(crate) fn inspect(cwd: PathBuf) -> Result<Context> {
     }
     let remote = crate::git::bounded_probe(&context.cwd, &["remote", "get-url", "origin"])?;
     if remote.status.success() {
+        let raw = String::from_utf8_lossy(&remote.stdout);
         context.repository =
-            crate::git::normalize_github_web_url(String::from_utf8_lossy(&remote.stdout).trim())
-                .and_then(|url| repository(&url));
+            crate::git::normalize_github_web_url(raw.trim()).and_then(|url| repository(&url));
+        if context.repository.is_none() {
+            context.forge = crate::forge::remote_of(raw.trim());
+        }
     }
     context.status = if context.repository.is_some() {
         LookupStatus::Ready
@@ -460,6 +469,7 @@ async fn load_with_binary(
 ) -> PullRequestSnapshot {
     let mut snapshot = PullRequestSnapshot {
         session_id,
+        forge: "github",
         repository: context.repository.clone(),
         branch: context.branch.clone(),
         local_head: context.local_head.clone(),
@@ -527,6 +537,7 @@ mod tests {
             branch: Some("feature/topic".into()),
             local_head: Some("a".repeat(40)),
             status: LookupStatus::Ready,
+            forge: None,
         }
     }
     fn wire_pr() -> serde_json::Value {

@@ -646,6 +646,17 @@ pub async fn pull_request_action(
                 Ok((cwd, context))
             })
             .await?;
+            // GitLab and Bitbucket: the same push, then a merge request or pull request there.
+            if let Some(remote) = context.forge.clone() {
+                let head = context
+                    .branch
+                    .clone()
+                    .ok_or_else(|| Error::git("cannot open a pull request from a detached HEAD"))?;
+                let push_cwd = cwd.clone();
+                native_task(move || crate::git::push(&push_cwd).map(|_| ())).await?;
+                let url = crate::forge::create(&remote, &head, &title, &body, draft).await?;
+                return Ok(Response::Created { url });
+            }
             let repo = context
                 .repository
                 .clone()

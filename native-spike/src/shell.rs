@@ -1882,6 +1882,9 @@ impl Shell {
                     crate::settings_connectors::finish();
                     self.problem = Some(error_text(&value));
                 }
+                Some(Waiting::SettingsData("forges")) => {
+                    self.problem = Some(error_text(&value));
+                }
                 Some(Waiting::SettingsData("remote")) => {
                     // Shown under the Remote access group, where the change was made.
                     self.settings_data
@@ -2678,6 +2681,10 @@ impl Shell {
                     json!({ "action": { "type": "signOut", "id": args["id"] } }),
                 );
                 self.save_setting("connectors", args["list"].clone(), cx);
+            }
+            "forge_action" => {
+                let id = self.backend.invoke(command, args);
+                self.waiting.insert(id, Waiting::SettingsData("forges"));
             }
             "connector_action" => {
                 // The reply is the sign-in states; it lands in the page when a sign-in is over.

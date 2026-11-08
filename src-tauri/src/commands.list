@@ -38,6 +38,7 @@ commands::trash_workspace_entry
 skills::skill_action
 mcp_config::mcp_action
 connectors::connector_action
+forge::forge_action
 notifications::notification_action
 secrets::secret_action
 login_vault::login_vault_list

@@ -382,6 +382,7 @@ fn start(dir: &Path) -> crate::error::Result<AppHandle> {
         dir.to_path_buf(),
         data.settings.computer_use_enabled,
     );
+    crate::computer_mcp::set_self_allowed(data.settings.computer_use_control_sirus);
     app.manage(Arc::new(AppState::new(data_path, worktree_root, data)));
     crate::archive_removal::delete_archived(app.state::<Arc<AppState>>().inner());
     crate::notifications::install(&app);

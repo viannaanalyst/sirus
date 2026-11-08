@@ -1237,6 +1237,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "Deixa o fundo da janela aparecer através do app.",
         "Lets the window background show through the app.",
     ),
+    (
+        "Deixa os agentes clicarem nas janelas do próprio Sirus, inclusive em aprovações. Ligue só se confiar nos agentes que usa.",
+        "Lets agents click Sirus's own windows, including approvals. Turn it on only if you trust the agents you use.",
+    ),
     ("Deixe do seu jeito", "Make it yours"),
     (
         "Deixe o Codex, o Claude Code e o OpenCode verem e usarem apps do Mac que você aprovar, em segundo plano.",
@@ -3830,6 +3834,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Permitir", "Allow"),
     ("Permitir nesta sessão", "Allow for this session"),
     ("Permitir outros aparelhos", "Allow other devices"),
+    (
+        "Permitir que agentes controlem o Sirus",
+        "Let agents control Sirus",
+    ),
     (
         "Permitir que agentes usem o computador",
         "Allow agents to use the computer",

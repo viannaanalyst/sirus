@@ -317,6 +317,7 @@ fn save_settings_native(state: &AppState, mut settings: AppSettings) -> Result<A
         return Err(error);
     }
     crate::computer_mcp::set_enabled(settings.computer_use_enabled);
+    crate::computer_mcp::set_self_allowed(settings.computer_use_control_sirus);
     crate::agent_pool::set_limit(settings.keep_idle_agents as usize);
     crate::sirus_tools::set_enabled(settings.agents_manage_sessions);
     crate::browser_mcp::set_agent_access(settings.agent_browser_access);

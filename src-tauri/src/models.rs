@@ -843,6 +843,9 @@ pub struct AppSettings {
     pub developer_logs: bool,
     /// Offers the app-owned computer-use MCP server to Codex/Claude/OpenCode turns (ADR-038).
     pub computer_use_enabled: bool,
+    /// Lets computer use drive Sirus's own windows too. Off by default: an agent that can click
+    /// Sirus can approve its own requests (ADR-198).
+    pub computer_use_control_sirus: bool,
     /// Lists the `sirus_*` session tools on the per-session MCP bridge (ADR-076).
     pub agents_manage_sessions: bool,
     pub experimental: bool,
@@ -1046,6 +1049,7 @@ impl Default for AppSettings {
             terminal_scrollback: 2000,
             developer_logs: false,
             computer_use_enabled: false,
+            computer_use_control_sirus: false,
             agents_manage_sessions: false,
             experimental: false,
             disabled_models: Vec::new(),

@@ -3109,14 +3109,24 @@ fn computer(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
         group(t("Captura de janela"), window),
         group(
             t("Computador"),
-            vec![switch_row(
-                s,
-                t("Permitir que agentes usem o computador"),
-                t(
-                    "Adiciona as ferramentas de computador aos próximos turnos. Cada app ainda precisa da sua aprovação uma vez por sessão.",
+            vec![
+                switch_row(
+                    s,
+                    t("Permitir que agentes usem o computador"),
+                    t(
+                        "Adiciona as ferramentas de computador aos próximos turnos. Cada app ainda precisa da sua aprovação uma vez por sessão.",
+                    ),
+                    top("computerUseEnabled"),
                 ),
-                top("computerUseEnabled"),
-            )],
+                switch_row(
+                    s,
+                    t("Permitir que agentes controlem o Sirus"),
+                    t(
+                        "Deixa os agentes clicarem nas janelas do próprio Sirus, inclusive em aprovações. Ligue só se confiar nos agentes que usa.",
+                    ),
+                    top("computerUseControlSirus"),
+                ),
+            ],
         ),
         group(
             t("Permissões do macOS"),

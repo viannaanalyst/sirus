@@ -58,6 +58,9 @@ const BLOCKED: &[(&str, &str)] = &[
 
 pub fn is_blocked(bundle_id: &str) -> bool {
     let id = bundle_id.to_ascii_lowercase();
+    if SELF_ALLOWED.load(Ordering::SeqCst) && id.starts_with("com.siruscode.") {
+        return false;
+    }
     BLOCKED.iter().any(|(blocked, _)| *blocked == id)
 }
 
@@ -118,6 +121,12 @@ struct Bridge {
 }
 
 static ENABLED: AtomicBool = AtomicBool::new(false);
+/// The person chose to let agents drive Sirus itself (Settings → Computador).
+static SELF_ALLOWED: AtomicBool = AtomicBool::new(false);
+
+pub fn set_self_allowed(value: bool) {
+    SELF_ALLOWED.store(value, Ordering::SeqCst);
+}
 static OVERLAY_GENERATION: AtomicU64 = AtomicU64::new(0);
 static BRIDGE: Mutex<Option<Bridge>> = Mutex::new(None);
 static APP: OnceLock<(AppHandle, PathBuf)> = OnceLock::new();

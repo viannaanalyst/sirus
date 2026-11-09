@@ -484,6 +484,8 @@ const LISTEN: &[&str] = &[
     // Cards for other conversations, and the sound and banner the host asks the window for.
     "notification-activity",
     "notification-native",
+    // This Mac's provider CLI updates, as offers (toast.rs).
+    "provider-updates",
 ];
 
 pub fn start() -> (Backend, async_channel::Receiver<Incoming>) {

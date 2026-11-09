@@ -103,9 +103,6 @@ pub(crate) mod message_actions;
 /// A secret card's 1Password list (onepassword_pick.rs).
 #[path = "onepassword_pick.rs"]
 mod onepassword_pick;
-/// A failure as a toast that leaves by itself (problem_toast.rs).
-#[path = "problem_toast.rs"]
-mod problem_toast;
 /// The ⌥Tab switcher's cards (project_switch.rs).
 #[path = "project_switch.rs"]
 mod project_switch;
@@ -115,6 +112,9 @@ mod secret_card;
 /// Several conversations picked in the sidebar (sidebar_pick.rs).
 #[path = "sidebar_pick.rs"]
 mod sidebar_pick;
+/// The toasts: failures and provider updates as cards at the top centre (toast.rs).
+#[path = "toast.rs"]
+mod toast;
 /// ⌘F: the find bar over the open conversation (transcript_find.rs).
 #[path = "transcript_find.rs"]
 pub(crate) mod transcript_find;
@@ -990,6 +990,10 @@ enum Waiting {
     AccountMoved(String, String),
     /// `send_prompt` that carries on after a failure.
     FailureContinue,
+    /// `provider_updates` on connect: the offers it lists.
+    ProviderOffers,
+    /// `update_providers` from an offer's "Atualizar", for the provider it runs.
+    ProviderUpdate(String),
     /// `set_session_model` of a conversation that hit its usage limit: its session and
     /// approval, to carry on with the fallback provider after (ADR-198).
     LimitFallback(String, String),
@@ -1445,8 +1449,10 @@ pub struct Shell {
     current_project: Option<usize>,
     marked: Option<Range<usize>>,
     problem: Option<String>,
-    /// The problem whose toast is on screen, so its timer starts once (problem_toast.rs).
+    /// The problem whose toast is on screen, so its timer starts once (toast.rs).
     problem_shown: Option<String>,
+    /// The toasts' own state: the failure's clock and the provider updates on offer (toast.rs).
+    toasts: toast::Toasts,
     /// Set with the problem when the toast reports instead of warning.
     notice: Option<String>,
     /// Conversations picked with ⌘ or ⇧ in the sidebar (sidebar_pick.rs).
@@ -1859,6 +1865,7 @@ impl Shell {
             marked: None,
             problem: None,
             problem_shown: None,
+            toasts: Default::default(),
             notice: None,
             picked: Vec::new(),
             edit_menu: None,
@@ -1978,6 +1985,12 @@ impl Shell {
             Incoming::Reply { id, ok, value } => match self.waiting.remove(&id) {
                 Some(Waiting::CliAgents) if ok => self.cli_agents_arrived(value, cx),
                 Some(Waiting::CliAgents) => self.problem = Some(error_text(&value)),
+                // The connect-time check is quiet when it fails: the card is only a convenience.
+                Some(Waiting::ProviderOffers) if ok => self.offers_arrived(&value, cx),
+                Some(Waiting::ProviderOffers) => {}
+                Some(Waiting::ProviderUpdate(provider)) => {
+                    self.update_answered(&provider, ok, &value, cx)
+                }
                 Some(Waiting::CliProbe(id)) => {
                     let reply = if ok {
                         value
@@ -2395,6 +2408,7 @@ impl Shell {
                 "notification-activity" => self.activity_event(&payload, cx),
                 "agent-output" => self.agent_output(&payload),
                 "agent-exit" => self.refresh_diff(),
+                "provider-updates" => self.provider_event(&payload, cx),
                 // The chime for activity on something linked to a session.
                 "pr-watch-activity" => {
                     if self.settings["notifications"]["sounds"].as_bool() != Some(false) {
@@ -2421,6 +2435,11 @@ impl Shell {
         let now = Instant::now();
         self.connected = true;
         self.problem = None;
+        // Events are not replayed, so the provider updates on offer are asked for once connected.
+        let call = self
+            .backend
+            .invoke("provider_updates", json!({ "refresh": false }));
+        self.waiting.insert(call, Waiting::ProviderOffers);
         self.settings = state["settings"].clone();
         self.note_settings(cx);
         self.push_phone_look(true);
@@ -19132,7 +19151,7 @@ impl Render for Shell {
         let context_popup = self.context_popup_view(now, &mut moving, cx);
         let sidebar_card = self.sidebar_card_view(now, &mut moving, cx);
         let activity_cards = self.cards_view(cx);
-        let problem_toast = self.problem_toast(cx);
+        let toasts = self.toast_stack(cx);
         let edit_menu = self.edit_menu.map(|open| {
             let (pick, dismiss) = (cx.entity(), cx.entity());
             crate::edit_menu::view(
@@ -19432,7 +19451,7 @@ impl Render for Shell {
             // Over Settings and Usage too, whose pages would cover them.
             .children(confirm_dialog)
             .children(activity_cards)
-            .children(problem_toast)
+            .children(toasts)
             .children(edit_menu)
             .children(palette_view)
             .children(first_run)

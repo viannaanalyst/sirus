@@ -897,7 +897,7 @@ impl Shell {
                 .opacity(shown)
                 .rounded(px(crate::theme::RADIUS_LG))
                 .border_1()
-                .border_color(content(0.12))
+                .border_color(crate::theme::border())
                 .child(crate::theme::floating_surface(crate::theme::RADIUS_LG))
                 .shadow_lg()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())

@@ -339,11 +339,11 @@ impl Shell {
                 .pr(px(4.))
                 // A pill on an opaque fill: a frosted film let the text under it show through
                 // and its square blur edge peeked out past the corners.
-                .rounded(px(17.))
+                .rounded(px(crate::theme::RADIUS_LG))
                 .overflow_hidden()
                 .bg(crate::theme::opaque_floating())
                 .border_1()
-                .border_color(content(0.1))
+                .border_color(crate::theme::border())
                 .shadow_md()
                 .on_mouse_down(
                     MouseButton::Left,

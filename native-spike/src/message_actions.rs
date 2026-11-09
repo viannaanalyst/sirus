@@ -204,7 +204,7 @@ impl Render for NameTip {
             .py(px(4.))
             .rounded(px(crate::theme::RADIUS_MD))
             .border_1()
-            .border_color(content(0.12))
+            .border_color(crate::theme::border())
             .bg(floating_fill())
             .text_size(px(12.))
             .text_color(content(0.92))

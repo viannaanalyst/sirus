@@ -92,7 +92,7 @@ pub(crate) fn view(
                 .p(px(4.))
                 .rounded(px(crate::theme::RADIUS_LG))
                 .border_1()
-                .border_color(content(0.1))
+                .border_color(crate::theme::border())
                 .shadow_lg()
                 .child(crate::theme::floating_surface(crate::theme::RADIUS_LG))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())

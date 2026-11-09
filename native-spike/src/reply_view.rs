@@ -46,7 +46,7 @@ fn slot(size: (f32, f32)) -> gpui::Div {
         .rounded(px(crate::theme::RADIUS_MD))
         .overflow_hidden()
         .border_1()
-        .border_color(content(0.08))
+        .border_color(crate::theme::border())
         .bg(content(0.04))
 }
 
@@ -176,7 +176,7 @@ fn chip(
         .px(px(10.))
         .rounded(px(crate::theme::RADIUS_MD))
         .border_1()
-        .border_color(content(0.1))
+        .border_color(crate::theme::border())
         .bg(content(0.04))
         .hover(|s| s.bg(content(0.07)))
         .cursor_pointer()

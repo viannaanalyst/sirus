@@ -768,7 +768,7 @@ impl Render for SimulatorPanel {
                             gpui::img(image.clone())
                                 .w(px(fw))
                                 .h(px(fh))
-                                .rounded(px(crate::theme::RADIUS_XL))
+                                .rounded(px(crate::theme::RADIUS_LG))
                                 .object_fit(ObjectFit::Fill),
                         ),
                 );

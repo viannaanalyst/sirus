@@ -624,7 +624,7 @@ impl Shell {
                 ..rgb(AMBER).into()
             },
             Kind::Question => accent_wash(0.45),
-            _ => content(0.12),
+            _ => crate::theme::border(),
         };
         let card_el = div()
             .id(("activity-card", key))

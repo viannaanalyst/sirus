@@ -48,6 +48,10 @@ pub struct DelegatedBy {
     /// The parent read the result or was woken with it.
     #[serde(default)]
     pub delivered: bool,
+    /// The parent was already woken for the person's current wait on this task (a question or an
+    /// approval); cleared once the request is answered, so each waiting episode wakes it once.
+    #[serde(default)]
+    pub asked: bool,
 }
 
 pub fn tool_definitions() -> Vec<Value> {
@@ -375,6 +379,7 @@ fn delegate(
                 notify: true,
                 settled: false,
                 delivered: false,
+                asked: false,
             }),
             share_worktree: (!new_worktree).then(|| caller.worktree.clone()),
         },
@@ -488,46 +493,82 @@ pub fn settled(app: &AppHandle, state: &Arc<AppState>, session_id: &str) {
         let mut parents = vec![session_id];
         parents.extend(parent);
         for parent in parents {
-            let Some((prompt, ids)) = take_ready(&mut state.data.lock(), &parent) else {
-                continue;
-            };
-            let _ = state.persist();
-            let execution = state
-                .data
-                .lock()
-                .sessions
-                .iter()
-                .find(|session| session.id == parent)
-                .map(|session| session.execution.clone())
-                .unwrap_or_default();
-            let request = crate::models::SendPromptRequest {
-                queued_after: None,
-                debugging: false,
-                goal: None,
-                session_id: parent.clone(),
-                attachment_ids: vec![],
-                attachment_owner: String::new(),
-                prompt,
-                execution,
-                team: false,
-                client_request_id: None,
-            };
-            let sent =
-                crate::commands::send_prompt(app.clone(), app.state::<Arc<AppState>>(), request)
-                    .await;
-            if sent.is_err() {
-                // The next settling tries again.
-                let mut data = state.data.lock();
-                for session in data.sessions.iter_mut().filter(|s| ids.contains(&s.id)) {
-                    if let Some(by) = session.delegated_by.as_mut() {
-                        by.delivered = false;
-                    }
-                }
-                drop(data);
-                let _ = state.persist();
-            }
+            wake_parent(&app, &state, &parent).await;
         }
     });
+}
+
+/// A delegated child just started waiting on the person (a question or an approval): the parent
+/// is woken once for that wait, so it can answer an approval or tell the person.
+pub fn waiting(app: &AppHandle, state: &Arc<AppState>, session_id: &str) {
+    let (app, state, session_id) = (app.clone(), state.clone(), session_id.to_owned());
+    crate::runtime::async_runtime::spawn(async move {
+        let parent = state
+            .data
+            .lock()
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .and_then(|session| session.delegated_by.as_ref())
+            .filter(|by| by.notify)
+            .map(|by| by.session_id.clone());
+        if let Some(parent) = parent {
+            wake_parent(&app, &state, &parent).await;
+        }
+    });
+}
+
+/// The child's request was answered: its next wait wakes the parent again.
+pub fn answered(session: &mut Session) {
+    if session.pending_requests.is_empty() {
+        if let Some(by) = session.delegated_by.as_mut() {
+            by.asked = false;
+        }
+    }
+}
+
+/// Sends the parent what is due: finished tasks first, otherwise a wait for the person.
+async fn wake_parent(app: &AppHandle, state: &Arc<AppState>, parent: &str) {
+    let due = {
+        let mut data = state.data.lock();
+        take_ready(&mut data, parent).or_else(|| take_asking(&mut data, parent))
+    };
+    let Some((prompt, ids)) = due else { return };
+    let _ = state.persist();
+    let execution = state
+        .data
+        .lock()
+        .sessions
+        .iter()
+        .find(|session| session.id == parent)
+        .map(|session| session.execution.clone())
+        .unwrap_or_default();
+    let request = crate::models::SendPromptRequest {
+        queued_after: None,
+        debugging: false,
+        goal: None,
+        session_id: parent.to_owned(),
+        attachment_ids: vec![],
+        attachment_owner: String::new(),
+        prompt,
+        execution,
+        team: false,
+        client_request_id: None,
+    };
+    let sent =
+        crate::commands::send_prompt(app.clone(), app.state::<Arc<AppState>>(), request).await;
+    if sent.is_err() {
+        // The next settling or wait tries again.
+        let mut data = state.data.lock();
+        for session in data.sessions.iter_mut().filter(|s| ids.contains(&s.id)) {
+            if let Some(by) = session.delegated_by.as_mut() {
+                by.delivered = false;
+                by.asked = false;
+            }
+        }
+        drop(data);
+        let _ = state.persist();
+    }
 }
 
 /// Marks a finished delegated child; returns its parent.
@@ -544,6 +585,7 @@ fn mark_settled(data: &mut AppData, session_id: &str) -> Option<String> {
         return None;
     }
     by.settled = true;
+    by.asked = false;
     Some(by.session_id.clone())
 }
 
@@ -602,6 +644,74 @@ fn take_ready(data: &mut AppData, parent_id: &str) -> Option<(String, Vec<String
     Some((wake_prompt(&ready, portuguese), ids))
 }
 
+/// Children of a free parent that wait on the person and have not woken it for this wait, as one
+/// prompt; they are marked so the same wait never wakes it twice.
+fn take_asking(data: &mut AppData, parent_id: &str) -> Option<(String, Vec<String>)> {
+    let parent = data
+        .sessions
+        .iter()
+        .find(|session| session.id == parent_id)?;
+    if parent.status.is_active() || parent.stopped_by_user_at.is_some() {
+        return None;
+    }
+    let asking: Vec<(String, String, bool)> = data
+        .sessions
+        .iter()
+        .filter(|session| session.status == SessionStatus::Waiting)
+        .filter(|session| !session.pending_requests.is_empty())
+        .filter(|session| {
+            session.delegated_by.as_ref().is_some_and(|by| {
+                by.session_id == parent_id && by.notify && !by.settled && !by.asked
+            })
+        })
+        .map(|session| {
+            let question = session.pending_requests.iter().any(|request| {
+                matches!(
+                    request.kind,
+                    crate::models::PendingRequestKind::UserInput { .. }
+                )
+            });
+            (session.id.clone(), session.title.clone(), question)
+        })
+        .collect();
+    if asking.is_empty() {
+        return None;
+    }
+    let ids: Vec<String> = asking.iter().map(|(id, _, _)| id.clone()).collect();
+    for session in data.sessions.iter_mut().filter(|s| ids.contains(&s.id)) {
+        if let Some(by) = session.delegated_by.as_mut() {
+            by.asked = true;
+        }
+    }
+    let portuguese = data.settings.locale == "pt-BR";
+    Some((ask_prompt(&asking, portuguese), ids))
+}
+
+fn ask_prompt(asking: &[(String, String, bool)], portuguese: bool) -> String {
+    let list = asking
+        .iter()
+        .map(|(id, title, question)| {
+            let kind = match (portuguese, question) {
+                (true, true) => "uma pergunta",
+                (true, false) => "uma aprovação",
+                (false, true) => "a question",
+                (false, false) => "an approval",
+            };
+            format!("“{title}” ({kind}, taskId {id})")
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    if portuguese {
+        format!(
+            "🛰 Tarefa delegada esperando a pessoa: {list}. Veja o pedido em sirus_session_status (pendingApprovals). Aprovações você pode responder com sirus_answer_approval, nas regras dela (recusar sempre; aceitar só com acesso total); perguntas são da pessoa. Se não puder responder, avise a pessoa e termine o turno. Não refaça a tarefa."
+        )
+    } else {
+        format!(
+            "🛰 Delegated task waiting on the person: {list}. See the request in sirus_session_status (pendingApprovals). You may answer approvals with sirus_answer_approval under its rules (decline always; accept only with full access); questions are the person's. If you cannot answer, tell the person and end your turn. Do not redo the task."
+        )
+    }
+}
+
 fn wake_prompt(ready: &[(String, String, &'static str)], portuguese: bool) -> String {
     let list = ready
         .iter()
@@ -642,6 +752,7 @@ mod tests {
             notify: true,
             settled: false,
             delivered: false,
+            asked: false,
         });
         session
     }
@@ -708,6 +819,91 @@ mod tests {
         assert!(pending_parents(&data).is_empty());
         data.sessions[2].delegated_by.as_mut().unwrap().settled = true;
         assert_eq!(pending_parents(&data), vec!["parent".to_string()]);
+    }
+
+    fn ask(data: &mut AppData, child: usize, question: bool) {
+        data.sessions[child].status = SessionStatus::Waiting;
+        data.sessions[child]
+            .pending_requests
+            .push(crate::models::PendingRequest {
+                request_id: "r".into(),
+                generation: "g".into(),
+                turn_id: "t".into(),
+                item_id: "i".into(),
+                kind: if question {
+                    crate::models::PendingRequestKind::UserInput { questions: vec![] }
+                } else {
+                    crate::models::PendingRequestKind::Command {
+                        command: "ls".into(),
+                        cwd: None,
+                        reason: None,
+                    }
+                },
+            });
+    }
+
+    #[test]
+    fn a_waiting_child_wakes_a_free_parent_once_per_episode() {
+        let mut data = AppData {
+            sessions: vec![
+                session("parent", SessionStatus::Completed, None),
+                session("a", SessionStatus::Running, Some(("parent", "t1"))),
+            ],
+            ..AppData::default()
+        };
+        assert!(take_asking(&mut data, "parent").is_none(), "nothing waits");
+        ask(&mut data, 1, false);
+        let (prompt, ids) = take_asking(&mut data, "parent").expect("first wake");
+        assert_eq!(ids, ["a"]);
+        assert!(prompt.contains("sirus_answer_approval") && prompt.contains("taskId a"));
+        assert!(
+            take_asking(&mut data, "parent").is_none(),
+            "the same wait wakes once"
+        );
+        // Answered, then asking again: a new episode.
+        data.sessions[1].pending_requests.clear();
+        data.sessions[1].status = SessionStatus::Running;
+        answered(&mut data.sessions[1]);
+        ask(&mut data, 1, true);
+        let (prompt, _) = take_asking(&mut data, "parent").expect("second episode");
+        assert!(prompt.contains("pergunta") || prompt.contains("question"));
+    }
+
+    #[test]
+    fn a_busy_or_stopped_parent_is_not_woken_and_the_wait_stays_pending() {
+        let mut data = AppData {
+            sessions: vec![
+                session("parent", SessionStatus::Running, None),
+                session("a", SessionStatus::Running, Some(("parent", "t1"))),
+            ],
+            ..AppData::default()
+        };
+        ask(&mut data, 1, false);
+        assert!(take_asking(&mut data, "parent").is_none());
+        assert!(!data.sessions[1].delegated_by.as_ref().unwrap().asked);
+        data.sessions[0].status = SessionStatus::Completed;
+        data.sessions[0].stopped_by_user_at = Some("t".into());
+        assert!(
+            take_asking(&mut data, "parent").is_none(),
+            "person stopped it"
+        );
+        data.sessions[0].stopped_by_user_at = None;
+        assert!(take_asking(&mut data, "parent").is_some(), "free again");
+    }
+
+    #[test]
+    fn answering_only_clears_the_flag_when_no_request_is_left() {
+        let mut data = AppData {
+            sessions: vec![session("a", SessionStatus::Waiting, Some(("parent", "t1")))],
+            ..AppData::default()
+        };
+        ask(&mut data, 0, false);
+        data.sessions[0].delegated_by.as_mut().unwrap().asked = true;
+        answered(&mut data.sessions[0]);
+        assert!(data.sessions[0].delegated_by.as_ref().unwrap().asked);
+        data.sessions[0].pending_requests.clear();
+        answered(&mut data.sessions[0]);
+        assert!(!data.sessions[0].delegated_by.as_ref().unwrap().asked);
     }
 
     #[test]

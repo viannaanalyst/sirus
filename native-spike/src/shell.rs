@@ -1320,6 +1320,8 @@ const SELECTED_MIN: f32 = 112.;
 const SIDEBAR_MIN: f32 = 196.;
 const SIDEBAR_MAX: f32 = 420.;
 const CONV_ROW: f32 = 29.;
+/// The "N tarefas" row under a conversation that delegated (delegated_tasks.rs).
+const TASKS_ROW: f32 = 24.;
 const STEP_ROW: f32 = 28.;
 
 struct Tab {
@@ -1360,6 +1362,8 @@ enum Row {
     Conversation(usize),
     /// The docked "N conversas paradas" row under the list (ADR-198).
     Settled,
+    /// "N tarefas" under a conversation that delegated: opens the nested list of its tasks (ADR-111).
+    Tasks(usize),
 }
 
 struct RowMotion {
@@ -1417,6 +1421,10 @@ pub struct Shell {
     /// sessions settled at the last check, and those whose leftovers have stopped.
     settled_open: bool,
     settled_listed: usize,
+    /// Delegated tasks nested under a conversation in the sidebar: the parents whose list is open
+    /// (collapsed by default), and the replies whose task group the person folded (delegated_tasks.rs).
+    tasks_open: HashSet<usize>,
+    delegated_folded: HashSet<String>,
     settled_known: HashSet<String>,
     settled_stopped: HashSet<String>,
     settings_data: HashMap<&'static str, Value>,
@@ -1921,6 +1929,8 @@ impl Shell {
             pane_views: HashMap::new(),
             settled_open: false,
             settled_listed: 0,
+            tasks_open: HashSet::new(),
+            delegated_folded: HashSet::new(),
             settled_known: HashSet::new(),
             settled_stopped: HashSet::new(),
             settings_data: HashMap::new(),
@@ -2707,9 +2717,17 @@ impl Shell {
         self.project_order
             .sort_by(|a, b| latest(&projects[*b]).cmp(&latest(&projects[*a])));
         // Side chats have no place in a project's list, so they never open on launch.
+        // Nor do delegated tasks: they open when the person picks them, never by themselves.
         let mut recent: Vec<usize> = (0..self.conversations.len())
-            .filter(|ix| self.project_of(*ix).is_some())
+            .filter(|ix| {
+                self.project_of(*ix).is_some() && !self.conversations[*ix].delegated_notify
+            })
             .collect();
+        if recent.is_empty() {
+            recent = (0..self.conversations.len())
+                .filter(|ix| self.project_of(*ix).is_some())
+                .collect();
+        }
         recent.sort_by(|a, b| activity[*b].cmp(&activity[*a]));
         recent.truncate(4);
         self.parked.clear();
@@ -4943,6 +4961,114 @@ impl Shell {
         self.waiting.insert(id, Waiting::Created);
     }
 
+    /// A request the agent waits on: the approval or question card the conversation's own tab
+    /// shows above its composer, also used inside a delegated task's row (delegated_tasks.rs).
+    pub(super) fn pending_request_card(
+        &self,
+        ix: usize,
+        request: &Value,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let kind = &request["kind"];
+        let question = kind["type"] == "userInput";
+        let asked = &kind["questions"][0];
+        let question_id = asked["id"].as_str().unwrap_or("").to_owned();
+        let options: Vec<String> = asked["options"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|o| o["label"].as_str().map(str::to_owned))
+            .collect();
+        let what = match kind["type"].as_str() {
+            Some("command") => tf("Executar: {}", &[&kind["command"].as_str().unwrap_or("")]),
+            Some("fileChange") => t("Alterar arquivos").to_owned(),
+            Some("tool") => tf(
+                "Usar a ferramenta {}",
+                &[&kind["name"].as_str().unwrap_or("")],
+            ),
+            _ => asked["question"]
+                .as_str()
+                .unwrap_or(t("O agente fez uma pergunta."))
+                .to_owned(),
+        };
+        let (accept, decline, asked_request) = (request.clone(), request.clone(), request.clone());
+        let button = |id: &'static str, label: &'static str, main: bool| {
+            div()
+                .id((id, ix))
+                .h(px(26.))
+                .px(px(10.))
+                .rounded(px(crate::theme::RADIUS_MD))
+                .flex()
+                .items_center()
+                .text_size(px(12.5))
+                .cursor_pointer()
+                .text_color(if main { on_accent() } else { content(0.85) })
+                .bg(if main { accent() } else { content(0.08) })
+                .hover(|s| s.opacity(0.88))
+                .child(label)
+        };
+        div()
+            .child(
+                div()
+                    .p(px(10.))
+                    .rounded(px(crate::theme::RADIUS_LG))
+                    .border_1()
+                    .border_color(accent_wash(0.4))
+                    .bg(field_fill())
+                    .flex()
+                    .items_center()
+                    .gap(px(10.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_size(px(13.))
+                            .text_color(content(0.9))
+                            .child(what),
+                    )
+                    .when(question, |d| {
+                        d.children(options.into_iter().enumerate().map(|(i, label)| {
+                            let (request, question_id, answer) =
+                                (asked_request.clone(), question_id.clone(), label.clone());
+                            div()
+                                .id(("answer", ix * 64 + i))
+                                .h(px(26.))
+                                .px(px(10.))
+                                .rounded(px(crate::theme::RADIUS_MD))
+                                .flex()
+                                .items_center()
+                                .text_size(px(12.5))
+                                .cursor_pointer()
+                                .text_color(content(0.9))
+                                .bg(content(0.08))
+                                .hover(|s| s.bg(content(0.14)))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.answer(ix, &request, &question_id, &answer);
+                                    cx.notify();
+                                }))
+                                .child(label)
+                        }))
+                    })
+                    .when(!question, |d| {
+                        d.child(button("deny", t("Recusar"), false).on_click(cx.listener(
+                            move |this, _, _, cx| {
+                                this.respond(ix, &decline, "decline");
+                                cx.notify();
+                            },
+                        )))
+                        .child(
+                            button("allow", t("Aprovar"), true).on_click(cx.listener(
+                                move |this, _, _, cx| {
+                                    this.respond(ix, &accept, "accept");
+                                    cx.notify();
+                                },
+                            )),
+                        )
+                    }),
+            )
+            .into_any_element()
+    }
+
     fn respond(&mut self, ix: usize, request: &Value, decision: &str) {
         let args = json!({ "request": { "sessionId": self.conversations[ix].session_id, "generation": request["generation"], "requestId": request["requestId"], "turnId": request["turnId"], "response": { "type": "approval", "decision": decision } } });
         self.backend.invoke("respond_agent_request", args);
@@ -5447,9 +5573,8 @@ impl Shell {
         // A page on screen is the selected tab, wherever it sits; the session tabs give that up.
         let tasks_live = self.term.tasks_in_strip();
         let tasks_shown = tasks_live && self.term.tasks_active;
-        let page_on_screen = self.term.pulls_active
-            || self.term.tasks_active
-            || self.term.terminal_showing();
+        let page_on_screen =
+            self.term.pulls_active || self.term.tasks_active || self.term.terminal_showing();
         let page_in_strip = pulls_shown || tasks_shown || self.term.terminal_showing_in_strip();
         let free = (self.tabs.iter().filter(|t| !t.pinned && !t.closing).count()
             + usize::from(pulls_live)
@@ -6825,6 +6950,7 @@ impl Shell {
                 }
             };
             listed.sort_by_key(|(c, days)| group_rank(group_of(*c, *days)));
+            let (_, kids) = self.project_tree(project);
             let mut group = None;
             for (conversation, days) in listed {
                 let this_group = group_of(conversation, days);
@@ -6835,6 +6961,7 @@ impl Shell {
                 }
                 wanted.push((Row::Conversation(conversation), y, y));
                 y += CONV_ROW;
+                self.push_tasks(conversation, &kids, &mut wanted, &mut y);
             }
             if !settled.is_empty() {
                 wanted.push((Row::Settled, y, y));
@@ -6843,6 +6970,7 @@ impl Shell {
                     for conversation in settled {
                         wanted.push((Row::Conversation(conversation), y, y));
                         y += CONV_ROW;
+                        self.push_tasks(conversation, &kids, &mut wanted, &mut y);
                     }
                 }
             }
@@ -7999,6 +8127,7 @@ impl Shell {
                     self.conversation_row(index, y, alpha, index == active, now, cx)
                 }
                 Row::Settled => self.settled_row(y, alpha, cx),
+                Row::Tasks(parent) => self.tasks_row(parent, y, alpha, cx),
             });
         }
         let contents = |id: &'static str,
@@ -8116,6 +8245,10 @@ impl Shell {
 
     /// Whether the project's sidebar list shows this conversation (its checkout and filters pass).
     fn in_sidebar_list(&self, project: usize, conversation: usize) -> bool {
+        // A delegated task lives under its parent's row, not in the list (delegated_tasks.rs).
+        if self.nested_parent(project, conversation).is_some() {
+            return false;
+        }
         let conversation = &self.conversations[conversation];
         self.checkout_filter
             .get(&project)
@@ -11743,6 +11876,11 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let conversation = &self.conversations[index];
+        // A delegated task sits indented under the conversation that delegated it.
+        let nested = conversation.delegated_notify
+            && self
+                .project_of(index)
+                .is_some_and(|project| self.nested_parent(project, index).is_some());
         // Settling fades a row toward its limit and fills the bar under it (ADR-198).
         let shell_settle::Fade {
             opacity: fade,
@@ -11761,7 +11899,7 @@ impl Shell {
         let row = div()
             .id(("conversation", index))
             .absolute()
-            .left(px(6.))
+            .left(px(if nested { 22. } else { 6. }))
             .right(px(6.))
             .top(px(y))
             .h(px(CONV_ROW - 2.))
@@ -14306,105 +14444,10 @@ impl Shell {
                 |d, line| d.child(self.secret_done_view(&line)),
             )
             .when_some(pending, |d, request| {
-                let kind = &request["kind"];
-                let question = kind["type"] == "userInput";
-                let asked = &kind["questions"][0];
-                let question_id = asked["id"].as_str().unwrap_or("").to_owned();
-                let options: Vec<String> = asked["options"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|o| o["label"].as_str().map(str::to_owned))
-                    .collect();
-                let what = match kind["type"].as_str() {
-                    Some("command") => {
-                        tf("Executar: {}", &[&kind["command"].as_str().unwrap_or("")])
-                    }
-                    Some("fileChange") => t("Alterar arquivos").to_owned(),
-                    Some("tool") => tf(
-                        "Usar a ferramenta {}",
-                        &[&kind["name"].as_str().unwrap_or("")],
-                    ),
-                    _ => asked["question"]
-                        .as_str()
-                        .unwrap_or(t("O agente fez uma pergunta."))
-                        .to_owned(),
-                };
-                let (accept, decline, asked_request) =
-                    (request.clone(), request.clone(), request.clone());
-                let button = |id: &'static str, label: &'static str, main: bool| {
-                    div()
-                        .id(id)
-                        .h(px(26.))
-                        .px(px(10.))
-                        .rounded(px(crate::theme::RADIUS_MD))
-                        .flex()
-                        .items_center()
-                        .text_size(px(12.5))
-                        .cursor_pointer()
-                        .text_color(if main { on_accent() } else { content(0.85) })
-                        .bg(if main { accent() } else { content(0.08) })
-                        .hover(|s| s.opacity(0.88))
-                        .child(label)
-                };
                 d.child(
                     div()
                         .mb(px(8.))
-                        .p(px(10.))
-                        .rounded(px(crate::theme::RADIUS_LG))
-                        .border_1()
-                        .border_color(accent_wash(0.4))
-                        .bg(field_fill())
-                        .flex()
-                        .items_center()
-                        .gap(px(10.))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .text_size(px(13.))
-                                .text_color(content(0.9))
-                                .child(what),
-                        )
-                        .when(question, |d| {
-                            d.children(options.into_iter().enumerate().map(|(i, label)| {
-                                let (request, question_id, answer) =
-                                    (asked_request.clone(), question_id.clone(), label.clone());
-                                div()
-                                    .id(("answer", i))
-                                    .h(px(26.))
-                                    .px(px(10.))
-                                    .rounded(px(crate::theme::RADIUS_MD))
-                                    .flex()
-                                    .items_center()
-                                    .text_size(px(12.5))
-                                    .cursor_pointer()
-                                    .text_color(content(0.9))
-                                    .bg(content(0.08))
-                                    .hover(|s| s.bg(content(0.14)))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.answer(ix, &request, &question_id, &answer);
-                                        cx.notify();
-                                    }))
-                                    .child(label)
-                            }))
-                        })
-                        .when(!question, |d| {
-                            d.child(button("deny", t("Recusar"), false).on_click(cx.listener(
-                                move |this, _, _, cx| {
-                                    this.respond(ix, &decline, "decline");
-                                    cx.notify();
-                                },
-                            )))
-                            .child(
-                                button("allow", t("Aprovar"), true).on_click(cx.listener(
-                                    move |this, _, _, cx| {
-                                        this.respond(ix, &accept, "accept");
-                                        cx.notify();
-                                    },
-                                )),
-                            )
-                        }),
+                        .child(self.pending_request_card(ix, &request, cx)),
                 )
             })
             .when_some(self.account_card(ix, cx), |d, card| d.child(card))

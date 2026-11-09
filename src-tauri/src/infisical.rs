@@ -62,6 +62,9 @@ pub enum Action {
         key: String,
         value: String,
     },
+    /// The keys a new terminal of this conversation starts with: every secret of the project's
+    /// environment as `{name: value}`, empty when the project does not use them (ADR-198).
+    TerminalEnv { session_id: String },
     /// Reads a secret here and answers the waiting secret request with it.
     Answer {
         request_id: String,
@@ -328,6 +331,45 @@ pub(crate) fn keys_of(reply: &Value) -> Vec<String> {
     names.sort();
     names.dedup();
     names
+}
+
+/// Every secret of a listing as `(name, value)`, skipping names a shell cannot export. The values
+/// are only ever moved into the terminal's environment, never formatted into text.
+pub(crate) fn env_pairs_of(reply: &Value) -> Vec<(String, String)> {
+    reply["secrets"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|secret| {
+            let key = secret["secretKey"].as_str().filter(|key| valid_key(key))?;
+            let value = secret["secretValue"].as_str()?;
+            (!value.contains('\0')).then(|| (key.to_owned(), value.to_owned()))
+        })
+        .collect()
+}
+
+/// The project and environment a conversation's terminals use keys from, when it is linked and
+/// the switch is on.
+fn terminal_source(state: &AppState, session_id: &str) -> Result<Option<(String, String)>> {
+    let data = state.data.lock();
+    let session = data
+        .sessions
+        .iter()
+        .find(|session| session.id == session_id)
+        .ok_or_else(|| Error::not_found("This conversation no longer exists."))?;
+    let project = data
+        .projects
+        .iter()
+        .find(|project| project.id == session.project_id)
+        .ok_or_else(|| Error::not_found("That project is not in Sirus."))?;
+    let Some(environment) = project.scripts.infisical_run.as_deref() else {
+        return Ok(None);
+    };
+    if !valid_slug(environment) {
+        return Ok(None);
+    }
+    Ok(read_link(Path::new(&project.path))
+        .map(|(workspace, _)| (workspace, environment.to_owned())))
 }
 
 // ---- The link file ----
@@ -613,6 +655,20 @@ pub async fn infisical_action(state: State<'_, Arc<AppState>>, action: Action) -
             save_secret(&workspace, &environment, &key, &value).await?;
             Ok(json!({ "kind": "saved" }))
         }
+        Action::TerminalEnv { session_id } => {
+            let mut env = serde_json::Map::new();
+            if let Some((workspace, environment)) = terminal_source(state, &session_id)? {
+                let (status, reply) =
+                    api(Method::GET, secrets_url(&workspace, &environment)?, None).await?;
+                if !(200..300).contains(&status) {
+                    return Err(http_status_error(status));
+                }
+                for (key, value) in env_pairs_of(&reply) {
+                    env.insert(key, Value::String(value));
+                }
+            }
+            Ok(json!({ "kind": "terminalEnv", "env": env }))
+        }
         Action::Answer {
             request_id,
             project_path,
@@ -689,6 +745,20 @@ mod tests {
         assert_eq!(names, vec!["A_KEY", "STRIPE_KEY"]);
         let shown = serde_json::to_string(&names).unwrap();
         assert!(!shown.contains("hunter2") && !shown.contains("another-value"));
+    }
+
+    #[test]
+    fn terminal_keys_keep_values_and_skip_unusable_names() {
+        let reply = json!({"secrets": [
+            {"secretKey": "STRIPE_KEY", "secretValue": "sk_live_hunter2"},
+            {"secretKey": "bad-name", "secretValue": "x"},
+            {"secretKey": "NO_VALUE"},
+            {"secretKey": "NUL", "secretValue": "a\u{0}b"}
+        ]});
+        assert_eq!(
+            env_pairs_of(&reply),
+            vec![("STRIPE_KEY".to_owned(), "sk_live_hunter2".to_owned())]
+        );
     }
 
     #[test]

@@ -2738,6 +2738,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Não detectado", "Not detected"),
     (
+        "Não deu para carregar as chaves do Infisical",
+        "Could not load the Infisical keys",
+    ),
+    (
         "Não deu para escrever o título. Use /commit seguido da mensagem.",
         "Could not write the title. Use /commit followed by the message.",
     ),
@@ -4323,10 +4327,6 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Rodar de novo", "Run again"),
     ("Rodar preparação", "Run setup"),
     (
-        "Rodar scripts com as chaves do Infisical",
-        "Run scripts with the Infisical keys",
-    ),
-    (
         "Rode `glab auth login` no terminal para ver e criar merge requests.",
         "Run `glab auth login` in a terminal to see and open merge requests.",
     ),
@@ -4783,6 +4783,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Usar", "Use"),
     ("Usar Este Mac", "Use this Mac"),
     ("Usar a ferramenta {}", "Use the {} tool"),
+    (
+        "Usar as chaves do Infisical nos scripts e no terminal",
+        "Use the Infisical keys in scripts and the terminal",
+    ),
     ("Usar do Infisical…", "Use from Infisical…"),
     ("Usar esta conta", "Use this account"),
     ("Usar fonte do sistema na interface", "Use system UI font"),
@@ -4852,6 +4856,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Vale para código nas transcrições, diffs e no editor.",
         "Applies to code in transcripts, diffs and the editor.",
     ),
+    ("Vale para terminais novos.", "Applies to new terminals."),
     ("Vale por {} · uso único", "Valid for {} · single use"),
     (
         "Valores salvos das células. Fórmulas não são recalculadas; gráficos e formatação não são exibidos.",

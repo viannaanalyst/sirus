@@ -11,6 +11,10 @@ const AMBER: u32 = 0xf0a35e;
 /// How many characters of a long value fit the field; the window follows the caret.
 const VISIBLE: usize = 46;
 const MAX_UNDO: usize = 100;
+/// A press that closed a menu from outside must not be read as the click that reopens it.
+const REOPEN_GUARD: Duration = Duration::from_millis(250);
+/// The error color of the field's line, the same red the browser panel uses.
+const DANGER: u32 = 0xec8a85;
 
 fn amber(alpha: f32) -> Hsla {
     Hsla {
@@ -53,7 +57,13 @@ pub(crate) struct SecretCard {
     /// What the person picked; `None` follows the default.
     pub chosen: Option<Dest>,
     pub menu: Option<CardMenu>,
+    /// The menu a press outside just closed, and when; its button's click then stays closed.
+    menu_closed: Option<(CardMenu, Instant)>,
     pub keys: Keys,
+    /// The save is on its way to the host; the card stays until it answers.
+    pub saving: Option<String>,
+    /// Why the last save failed, shown under the field in the person's language.
+    pub error: Option<String>,
 }
 
 impl Drop for SecretCard {
@@ -80,7 +90,47 @@ impl SecretCard {
             focused: false,
             chosen: None,
             menu: None,
+            menu_closed: None,
             keys: Keys::Idle,
+            saving: None,
+            error: None,
+        }
+    }
+
+    /// A mouse press outside the open menu closes it.
+    pub fn close_menu_outside(&mut self, now: Instant) {
+        if let Some(kind) = self.menu.take() {
+            self.menu_closed = Some((kind, now));
+        }
+    }
+
+    /// The menu's button: opens it, or closes it when it is open. True when it opened. A click
+    /// that follows the press which just closed this menu from outside keeps it closed.
+    pub fn toggle_menu(&mut self, kind: CardMenu, now: Instant) -> bool {
+        if self.menu == Some(kind) {
+            self.menu = None;
+            return false;
+        }
+        let just_closed = self
+            .menu_closed
+            .is_some_and(|(was, at)| was == kind && now.duration_since(at) < REOPEN_GUARD);
+        if just_closed {
+            return false;
+        }
+        self.menu = Some(kind);
+        true
+    }
+
+    /// The host's answer to a save. A failure keeps the card and the typed value and shows the
+    /// message under the field; only a success returns the line the card collapses to.
+    pub fn saved(&mut self, outcome: Result<(), String>) -> Option<String> {
+        let line = self.saving.take();
+        match outcome {
+            Ok(()) => line,
+            Err(problem) => {
+                self.error = Some(problem);
+                None
+            }
         }
     }
 
@@ -411,6 +461,9 @@ impl Shell {
         let Some(value) = card.value() else {
             return;
         };
+        if card.saving.is_some() {
+            return;
+        }
         let id = card.request.clone();
         let dest = self.card_dest(request);
         let link = self.secret_link(request);
@@ -420,26 +473,62 @@ impl Shell {
             Dest::DotEnv => action["dotenv"] = json!(true),
             Dest::Conversation => {}
         }
+        let project = link.map(|(_, name, _)| name).unwrap_or_default();
+        let line = match &dest {
+            Dest::Conversation => {
+                t("Chave guardada só nesta conversa. O agente a recebeu sem ver o valor.")
+                    .to_owned()
+            }
+            other => tf(
+                "Salvo no {}. O agente recebeu a chave sem ver o valor.",
+                &[&destination_label(other, &project)],
+            ),
+        };
         let call = self
             .backend
             .invoke("secret_action", json!({ "action": action }));
-        // A failed save (a tracked file, Infisical unreachable) shows as the window's problem.
-        self.waiting.insert(call, Waiting::ScriptAction);
-        let project = link.map(|(_, name, _)| name).unwrap_or_default();
-        self.finish_secret(
-            &id,
-            match &dest {
-                Dest::Conversation => {
-                    t("Chave guardada só nesta conversa. O agente a recebeu sem ver o valor.")
-                        .to_owned()
-                }
-                other => tf(
-                    "Salvo no {}. O agente recebeu a chave sem ver o valor.",
-                    &[&destination_label(other, &project)],
-                ),
-            },
-            cx,
-        );
+        if dest == Dest::Conversation {
+            // Nothing is written anywhere, so the agent is answered and the card collapses.
+            self.waiting.insert(call, Waiting::ScriptAction);
+            self.finish_secret(&id, line, cx);
+            return;
+        }
+        // Infisical and .env.local: the host answers the agent only once the save worked, so
+        // the card waits for its reply and stays open, value and all, when it fails.
+        self.waiting.insert(call, Waiting::SecretSave(id));
+        if let Some(card) = self.secret_card.as_mut() {
+            card.saving = Some(line);
+            card.error = None;
+        }
+        cx.notify();
+    }
+
+    /// The host's reply to a save from the card.
+    pub(super) fn secret_save_reply(
+        &mut self,
+        id: &str,
+        ok: bool,
+        value: &Value,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(card) = self.secret_card.as_mut().filter(|c| c.request == id) else {
+            return;
+        };
+        let outcome = if ok {
+            Ok(())
+        } else {
+            Err(crate::i18n::from_host(
+                value["message"]
+                    .as_str()
+                    .or(value.as_str())
+                    .unwrap_or("Infisical refused the request."),
+            ))
+        };
+        if let Some(line) = card.saved(outcome) {
+            self.finish_secret(id, line, cx);
+        } else {
+            cx.notify();
+        }
     }
 
     /// Closes the card and shows `line` in its place for a few seconds.
@@ -468,11 +557,10 @@ impl Shell {
         let Some(card) = self.secret_card.as_mut() else {
             return;
         };
-        if card.menu == Some(CardMenu::From) {
-            card.menu = None;
+        if !card.toggle_menu(CardMenu::From, Instant::now()) {
+            cx.notify();
             return;
         }
-        card.menu = Some(CardMenu::From);
         card.keys = Keys::Loading;
         let call = self.backend.invoke(
             "infisical_action",
@@ -611,8 +699,10 @@ impl Shell {
             .child(icon(name, 16.).text_color(content(0.55)))
     }
 
-    fn card_menu_surface(&self) -> Div {
+    /// A menu's surface; a press anywhere outside it closes the menu.
+    fn card_menu_surface(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         div()
+            .id("secret-menu")
             .absolute()
             .w(px(250.))
             .p(px(5.))
@@ -622,6 +712,12 @@ impl Shell {
             .bg(crate::theme::opaque_floating())
             .shadow_lg()
             .occlude()
+            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                if let Some(card) = this.secret_card.as_mut() {
+                    card.close_menu_outside(Instant::now());
+                }
+                cx.notify();
+            }))
             .flex()
             .flex_col()
     }
@@ -813,7 +909,7 @@ impl Shell {
             .hover(|s| s.bg(content(0.06)))
             .on_click(cx.listener(|this, _, _, cx| {
                 if let Some(card) = this.secret_card.as_mut() {
-                    card.menu = (card.menu != Some(CardMenu::Where)).then_some(CardMenu::Where);
+                    card.toggle_menu(CardMenu::Where, Instant::now());
                 }
                 cx.notify();
             }))
@@ -848,7 +944,7 @@ impl Shell {
                 })
                 .collect();
             gpui::deferred(
-                self.card_menu_surface()
+                self.card_menu_surface(cx)
                     .top(px(24.))
                     .right(px(-6.))
                     .child(
@@ -914,7 +1010,7 @@ impl Shell {
                     .collect(),
             };
             gpui::deferred(
-                self.card_menu_surface()
+                self.card_menu_surface(cx)
                     .bottom(px(36.))
                     .left(px(0.))
                     .max_h(px(240.))
@@ -1066,19 +1162,34 @@ impl Shell {
                     ),
             )
             .child(
-                div().relative().px(px(16.)).pb(px(14.)).child(field).child(
-                    div()
-                        .relative()
-                        .flex()
-                        .justify_between()
-                        .items_center()
-                        .mt(px(7.))
-                        .mx(px(2.))
-                        .text_size(px(11.5))
-                        .text_color(content(0.42))
-                        .child(count_text(chars))
-                        .child(div().relative().child(where_button).children(where_menu)),
-                ),
+                div()
+                    .relative()
+                    .px(px(16.))
+                    .pb(px(14.))
+                    .child(field)
+                    .children(card.error.clone().map(|problem| {
+                        div()
+                            .id("secret-error")
+                            .mt(px(6.))
+                            .mx(px(2.))
+                            .text_size(px(12.))
+                            .line_height(px(17.))
+                            .text_color(Hsla::from(rgb(DANGER)))
+                            .child(problem)
+                    }))
+                    .child(
+                        div()
+                            .relative()
+                            .flex()
+                            .justify_between()
+                            .items_center()
+                            .mt(px(7.))
+                            .mx(px(2.))
+                            .text_size(px(11.5))
+                            .text_color(content(0.42))
+                            .child(count_text(chars))
+                            .child(div().relative().child(where_button).children(where_menu)),
+                    ),
             )
             .child(bar)
             .into_any_element()
@@ -1113,6 +1224,43 @@ mod tests {
         let mut card = SecretCard::new("r".into());
         card.insert(text);
         card
+    }
+
+    #[test]
+    fn a_failed_save_keeps_the_card_the_value_and_the_error() {
+        let mut card = typed("sk_live_1");
+        card.saving = Some("Salvo no Infisical.".into());
+        assert_eq!(
+            card.saved(Err("O Infisical recusou o pedido.".into())),
+            None
+        );
+        assert_eq!(card.draft.text, "sk_live_1");
+        assert_eq!(card.error.as_deref(), Some("O Infisical recusou o pedido."));
+        assert!(card.saving.is_none());
+        // Retrying clears the error, and only a success collapses the card.
+        card.error = None;
+        card.saving = Some("Salvo no Infisical.".into());
+        assert_eq!(card.saved(Ok(())).as_deref(), Some("Salvo no Infisical."));
+        assert!(card.error.is_none());
+    }
+
+    #[test]
+    fn a_press_outside_closes_the_menu_and_its_button_does_not_reopen_it() {
+        let mut card = typed("x");
+        let now = Instant::now();
+        assert!(card.toggle_menu(CardMenu::Where, now));
+        card.close_menu_outside(now);
+        assert!(card.menu.is_none());
+        // The click of the same press, on the same button: stays closed.
+        assert!(!card.toggle_menu(CardMenu::Where, now));
+        assert!(card.menu.is_none());
+        // Another menu's button still opens at once, and a later click opens this one again.
+        assert!(card.toggle_menu(CardMenu::From, now));
+        card.menu = None;
+        assert!(card.toggle_menu(CardMenu::Where, now + REOPEN_GUARD));
+        // The button closes its own open menu.
+        assert!(!card.toggle_menu(CardMenu::Where, now + REOPEN_GUARD));
+        assert!(card.menu.is_none());
     }
 
     #[test]

@@ -587,7 +587,8 @@ pub async fn secret_action(state: State<'_, Arc<AppState>>, action: Action) -> I
         dotenv,
     } = action
     {
-        // Saved first, from the value still in hand; the agent is answered either way.
+        // Saved first, from the value still in hand; the agent is answered only once the save
+        // worked, so a failed save leaves the request waiting for a retry.
         let mut saved = Ok(());
         if let (Some(environment), Some(typed)) = (infisical_env.as_deref(), value.as_deref()) {
             let asked = snapshot()
@@ -612,10 +613,18 @@ pub async fn secret_action(state: State<'_, Arc<AppState>>, action: Action) -> I
         if let (true, Some(typed)) = (dotenv, value.as_deref()) {
             saved = save_dotenv(state.inner(), &request_id, typed);
         }
-        respond(&request_id, value)?;
-        saved?;
+        respond_if_saved(saved, || respond(&request_id, value))?;
     }
     Ok(snapshot())
+}
+
+/// The agent hears back only after the save: a failed one is returned and nothing is answered.
+fn respond_if_saved(
+    saved: IpcResult<()>,
+    respond: impl FnOnce() -> IpcResult<()>,
+) -> IpcResult<()> {
+    saved?;
+    respond()
 }
 
 /// The card's ".env.local do projeto": the value is written to that untracked file in the
@@ -673,6 +682,22 @@ pub(crate) fn respond(request_id: &str, value: Option<String>) -> IpcResult<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_failed_save_does_not_answer_the_agent() {
+        let mut answered = false;
+        let failed = respond_if_saved(Err(Error::agent("Infisical could not be reached.")), || {
+            answered = true;
+            Ok(())
+        });
+        assert!(failed.is_err() && !answered);
+        respond_if_saved(Ok(()), || {
+            answered = true;
+            Ok(())
+        })
+        .unwrap();
+        assert!(answered);
+    }
 
     #[test]
     fn names_and_paths_are_strict() {

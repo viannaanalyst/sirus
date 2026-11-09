@@ -4,9 +4,9 @@
  */
 export const ICON = {
   /** Round buttons of the top bar and sheets. */
-  bar: 20,
+  bar: 22,
   /** The top bar's pill segments. */
-  segment: 18,
+  segment: 21,
   /** Leading icon of a list row (`ListRow`, `ToolRow`, `SheetRow`). */
   row: 24,
   sheetRow: 20,

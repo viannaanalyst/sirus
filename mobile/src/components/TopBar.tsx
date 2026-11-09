@@ -18,7 +18,7 @@ const tick = () => void Haptics.selectionAsync().catch(() => undefined);
 /** A round glass button of the top bar. */
 export function RoundButton(props: { readonly icon: string; readonly label: string; readonly onPress: () => void; readonly badge?: number }) {
   return <Pressable onPress={() => { tick(); props.onPress(); }} accessibilityRole="button" accessibilityLabel={props.label}
-    className="size-11 items-center justify-center rounded-full border border-border-subtle bg-glass-fallback active:opacity-60">
+    className="size-12 items-center justify-center rounded-full border border-border-subtle bg-glass-fallback active:opacity-60">
     <SymbolView name={props.icon as AppSymbolName} size={ICON.bar} weight="medium" tintColorClassName="accent-foreground" />
     {props.badge ? <View className="absolute -right-0.5 -top-0.5 min-w-[17px] items-center rounded-full bg-[#f0a35e] px-1">
       <AppText className="font-app-bold text-[11px] leading-[17px] text-[#1a1208]">{props.badge}</AppText>
@@ -38,9 +38,9 @@ export function TopBar(props: { readonly selected: MainTab; readonly onSelect: (
         const on = segment.tab === props.selected;
         return <Animated.View key={segment.tab} layout={LinearTransition.springify().damping(22).stiffness(260)}>
           <Pressable onPress={() => { if (!on) { tick(); props.onSelect(segment.tab); } }} accessibilityRole="tab" accessibilityState={{ selected: on }} accessibilityLabel={segment.label}
-            className={`h-9 flex-row items-center gap-1.5 rounded-[20px] ${on ? "bg-subtle-strong px-3.5" : "px-3"}`}>
+            className={`h-[42px] flex-row items-center gap-2 rounded-[21px] ${on ? "bg-subtle-strong px-4" : "px-3.5"}`}>
             <SymbolView name={segment.icon as AppSymbolName} size={ICON.segment} weight="medium" tintColorClassName={on ? "accent-foreground" : "accent-foreground-muted"} />
-            {on ? <Animated.View entering={FadeIn.duration(160)} exiting={FadeOut.duration(80)}><AppText className="font-app-medium text-sm">{segment.label}</AppText></Animated.View> : null}
+            {on ? <Animated.View entering={FadeIn.duration(160)} exiting={FadeOut.duration(80)}><AppText className="font-app-medium text-[16px]">{segment.label}</AppText></Animated.View> : null}
           </Pressable>
         </Animated.View>;
       })}

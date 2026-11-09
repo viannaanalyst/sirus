@@ -25,6 +25,9 @@ const COMPOSE: f32 = 38.;
 const FEED: f32 = 232.;
 const PAGE: usize = 60;
 const KEPT: usize = 300;
+/// The `turn` of a `transcript_select::Reply` that names an entry of the open feed (its `beat`),
+/// not a turn of the conversation.
+pub(super) const FEED_TURN: usize = usize::MAX;
 
 /// What a reply from the host is for.
 #[derive(Clone)]
@@ -116,10 +119,31 @@ struct Feed {
     scroll: ScrollHandle,
     shut: bool,
     open: Tween,
+    /// Where the feed was scrolled when it was left, put back once its entries arrive.
+    restore: Option<gpui::Point<Pixels>>,
+}
+
+/// What one subagent's feed keeps while another subagent's is open.
+struct Remembered {
+    shown: usize,
+    opened: HashSet<String>,
+    offset: gpui::Point<Pixels>,
+}
+
+impl Feed {
+    fn remember(&self) -> Remembered {
+        Remembered {
+            shown: self.shown,
+            opened: self.opened.clone(),
+            offset: self.scroll.offset(),
+        }
+    }
 }
 
 #[derive(Default)]
 pub(super) struct State {
+    /// Each subagent's feed view, by (session, key), for when it is opened again.
+    remembered: HashMap<(String, String), Remembered>,
     /// A card folded shut: (conversation, turn) to its openness; absent is open.
     folds: HashMap<(usize, usize), Tween>,
     compose: Option<Compose>,
@@ -166,9 +190,15 @@ impl Feed {
     fn take(&mut self, incoming: Vec<Entry>, host_dropped: usize) {
         let at_bottom = self.scroll.max_offset().y + self.scroll.offset().y < px(48.);
         let first = self.entries.is_empty();
+        let restore = self
+            .restore
+            .take()
+            .filter(|_| first && !incoming.is_empty());
         self.dropped = host_dropped.max(self.dropped) + merge(&mut self.entries, incoming, KEPT);
         self.loading = false;
-        if at_bottom || first {
+        if let Some(offset) = restore {
+            self.scroll.set_offset(offset);
+        } else if at_bottom || first {
             self.scroll.scroll_to_bottom();
         }
     }
@@ -711,7 +741,7 @@ impl Shell {
                     .into_any_element(),
             );
         }
-        for (at, entry) in feed.entries[start..].iter().enumerate() {
+        for (at, entry) in feed.entries.iter().enumerate().skip(start) {
             rows.push(self.feed_entry(feed, at, entry, (add, remove), cx));
         }
         if feed.loading {
@@ -763,6 +793,30 @@ impl Shell {
             .into_any_element()
     }
 
+    /// The selection address of the open feed's entry `at`.
+    fn feed_reply(&self, at: usize) -> transcript_select::Reply {
+        transcript_select::Reply {
+            conversation: self.active_conversation(),
+            turn: FEED_TURN,
+            user: false,
+            beat: at,
+        }
+    }
+
+    /// The selectable fragments of the open feed's entry `at`, as drawn.
+    pub(super) fn feed_texts(&self, at: usize) -> Vec<String> {
+        let Some(entry) = self.subagents.feed.as_ref().and_then(|f| f.entries.get(at)) else {
+            return Vec::new();
+        };
+        match entry.kind {
+            Kind::Prompt => vec![entry.text.clone()],
+            Kind::Text => transcript_select::record(|| {
+                crate::markdown::render(&entry.text);
+            }),
+            Kind::Thinking | Kind::Tool => Vec::new(),
+        }
+    }
+
     fn feed_entry(
         &self,
         feed: &Feed,
@@ -786,13 +840,26 @@ impl Shell {
                         .text_color(content(0.4))
                         .child(t("Tarefa")),
                 )
-                .child(div().line_clamp(4).child(entry.text.clone()))
+                .child(div().line_clamp(4).child(transcript_select::scoped(
+                    &self.select,
+                    self.feed_reply(at),
+                    || {
+                        transcript_select::wrap(
+                            gpui::StyledText::new(entry.text.clone()),
+                            entry.text.clone().into(),
+                        )
+                    },
+                )))
                 .into_any_element(),
             Kind::Text => div()
                 .px(px(6.))
                 .flex_shrink_0()
                 .text_color(content(0.75))
-                .child(crate::markdown::render(&entry.text))
+                .child(transcript_select::scoped(
+                    &self.select,
+                    self.feed_reply(at),
+                    || crate::markdown::render(&entry.text),
+                ))
                 .into_any_element(),
             Kind::Thinking => {
                 let first = entry
@@ -1044,14 +1111,28 @@ impl Shell {
             cx.notify();
             return;
         }
+        // The feed being left keeps its page, opened steps and scroll for its next opening.
+        if let Some(left) = self.subagents.feed.take() {
+            let kept = left.remember();
+            self.subagents
+                .remembered
+                .insert((left.session, left.key), kept);
+        }
+        let back = self
+            .subagents
+            .remembered
+            .remove(&(session.to_owned(), key.to_owned()));
         self.subagents.feed = Some(Feed {
             session: session.to_owned(),
             key: key.to_owned(),
             entries: Vec::new(),
             dropped: 0,
             loading: true,
-            shown: PAGE,
-            opened: HashSet::new(),
+            shown: back.as_ref().map_or(PAGE, |b| b.shown),
+            restore: back.as_ref().map(|b| b.offset),
+            opened: back
+                .as_ref()
+                .map_or_else(HashSet::new, |b| b.opened.clone()),
             scroll: ScrollHandle::new(),
             shut: false,
             open: Tween::from_to(0., 1., now, duration, Curve::Expo),

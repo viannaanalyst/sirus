@@ -581,6 +581,9 @@ pub(crate) fn finalize_session(
     for message in &mut session.messages {
         message.streaming = false;
     }
+    // Nothing answers an approval once the turn is over; one left listed would hold the next
+    // message back in the composer.
+    session.pending_requests.clear();
     session.last_error = if session.status == SessionStatus::Failed {
         session.last_error.clone().or_else(|| {
             Some(wait_error.map(str::to_owned).unwrap_or_else(|| {
@@ -934,6 +937,20 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(event.offset, expected + 1, "an outside append is recounted");
+    }
+    #[test]
+    fn a_failed_turn_leaves_no_pending_request_behind() {
+        let mut session: Session = serde_json::from_value(serde_json::json!({"id":"s","title":"Test","projectId":"p","agent":"claude","status":"waiting","createdAt":"time","lastActivityAt":"time","worktree":{"path":"/unused","branch":"main","isolated":false},"messages":[]})).unwrap();
+        session.pending_requests.push(crate::models::PendingRequest {
+            request_id: "r".into(),
+            generation: "g".into(),
+            turn_id: "t".into(),
+            item_id: "i".into(),
+            kind: crate::models::PendingRequestKind::UserInput { questions: vec![] },
+        });
+        finalize_session(&mut session, Some(1), false, false, false, None);
+        assert_eq!(session.status, SessionStatus::Failed);
+        assert!(session.pending_requests.is_empty());
     }
     #[test]
     fn a_late_process_exit_preserves_shutdown_interruption() {

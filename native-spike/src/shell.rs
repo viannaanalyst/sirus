@@ -13546,6 +13546,7 @@ impl Shell {
         let text = div()
             .relative()
             .w_full()
+            .cursor(gpui::CursorStyle::IBeam)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, _, cx| {
@@ -18399,32 +18400,66 @@ fn other_choice<'a>(options: &[&'a str], current: Option<&str>, seed: usize) -> 
 fn paint_selection(layout: &gpui::TextLayout, selection: Range<usize>, window: &mut Window) {
     let line = layout.line_height();
     let fill = crate::theme::text_selection();
+    let left = f32::from(layout.bounds().origin.x);
+    let runs = selection_runs(
+        |index| {
+            layout
+                .position_for_index(index)
+                .map(|p| (f32::from(p.x), f32::from(p.y)))
+        },
+        left,
+        selection,
+    );
+    for (x, y, width) in runs {
+        window.paint_quad(gpui::fill(
+            Bounds::new(gpui::point(px(x), px(y)), gpui::size(px(width), line)),
+            fill,
+        ));
+    }
+}
+
+/// The selection's runs as `(x, y, width)`, one per wrapped row. `pos` is the shaped layout's
+/// position of a byte index. At a wrap boundary it answers with the end of the row above, not the
+/// start of the next one, so a row that continues a wrap starts at `left` and covers its first
+/// glyph, which ends where the next index sits.
+fn selection_runs(
+    pos: impl Fn(usize) -> Option<(f32, f32)>,
+    left: f32,
+    selection: Range<usize>,
+) -> Vec<(f32, f32, f32)> {
+    let mut runs = Vec::new();
     let mut at = selection.start;
     while at < selection.end {
-        let Some(start) = layout.position_for_index(at) else {
+        let Some((mut x, mut y)) = pos(at) else {
             break;
         };
+        // The glyph at a wrap boundary begins the row below: its next index is down and right of
+        // the row's left edge (after a line break it is exactly at the left edge).
+        if let Some((nx, ny)) = pos(at + 1)
+            && ny > y
+            && nx > left + 0.01
+        {
+            (x, y) = (left, ny);
+        }
         let mut stop = at;
-        let mut end = start;
+        let mut end = x;
         for next in (at + 1)..=selection.end {
-            if let Some(p) = layout.position_for_index(next) {
-                if p.y != start.y {
+            if let Some((nx, ny)) = pos(next) {
+                if ny != y {
                     break;
                 }
                 stop = next;
-                end = p;
+                end = nx;
             }
         }
         if stop == at {
             at += 1;
             continue;
         }
-        window.paint_quad(gpui::fill(
-            Bounds::new(start, gpui::size(end.x - start.x, line)),
-            fill,
-        ));
+        runs.push((x, y, end - x));
         at = stop;
     }
+    runs
 }
 
 /// What a composer this wide leaves out: the effort, then the access level's name.
@@ -19408,6 +19443,45 @@ impl Render for Shell {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A layout of rows with these glyph counts, 10 px per glyph and 20 px per row, answering as
+    /// the shaped one does: a wrap boundary reports the end of the row above.
+    fn rows(counts: &[usize]) -> impl Fn(usize) -> Option<(f32, f32)> {
+        let counts = counts.to_vec();
+        move |index| {
+            let mut first = 0;
+            for (row, count) in counts.iter().enumerate() {
+                if index <= first + count {
+                    return Some(((index - first) as f32 * 10., row as f32 * 20.));
+                }
+                first += count;
+            }
+            None
+        }
+    }
+
+    #[test]
+    fn a_selection_covers_every_glyph_across_wrapped_rows() {
+        // Rows of 4, 3 and 2 glyphs, all selected.
+        let runs = selection_runs(rows(&[4, 3, 2]), 0., 0..9);
+        assert_eq!(
+            runs,
+            [(0., 0., 40.), (0., 20., 30.), (0., 40., 20.)],
+            "each row from its left edge to its end"
+        );
+        // A selection that starts and ends mid-row.
+        let runs = selection_runs(rows(&[4, 3, 2]), 0., 2..8);
+        assert_eq!(runs, [(20., 0., 20.), (0., 20., 30.), (0., 40., 10.)]);
+        // A row of one glyph between two others.
+        let runs = selection_runs(rows(&[2, 1, 2]), 0., 0..5);
+        assert_eq!(runs, [(0., 0., 20.), (0., 20., 10.), (0., 40., 20.)]);
+    }
+
+    #[test]
+    fn a_selection_starting_on_a_wrap_boundary_keeps_its_first_glyph() {
+        let runs = selection_runs(rows(&[4, 3]), 0., 4..7);
+        assert_eq!(runs, [(0., 20., 30.)]);
+    }
 
     #[test]
     fn at_mentions_find_models_by_name_id_or_provider() {

@@ -693,6 +693,15 @@ fn is_file_chip(code: &str) -> bool {
             .is_some_and(|name| name.contains('.'))
 }
 
+/// The address an inline code span opens when the whole span is one web address
+/// (`` `http://127.0.0.1:8771/` ``): the span's text must be that address and nothing else.
+fn code_url(code: &str) -> Option<String> {
+    if code != code.trim() {
+        return None;
+    }
+    web_url(code)
+}
+
 /// A paragraph with inline code: words flow and wrap one by one, and each piece of code is a pill
 ///, which a single run of text cannot draw. The pieces still read and
 /// select as one paragraph (`wrap_piece`).
@@ -763,6 +772,8 @@ fn flowing(inl: Inline) -> AnyElement {
                 let glue = at + 1 < count;
                 let shared = SharedString::from(text);
                 let len = shared.len();
+                let link = link.or_else(|| if code { code_url(&shared) } else { None });
+                let opens_link = code && link.is_some();
                 let links = link.map(|url| vec![(0..len, url)]).unwrap_or_default();
                 let highlight = if code {
                     HighlightStyle {
@@ -806,6 +817,10 @@ fn flowing(inl: Inline) -> AnyElement {
                     .px(px(6.))
                     .rounded(px(crate::theme::RADIUS_SM))
                     .bg(content(0.08))
+                    // A web address in code opens like a link: pointing hand and a tint.
+                    .when(opens_link, |d| {
+                        d.cursor_pointer().hover(|s| s.bg(content(0.14)))
+                    })
                     .font_family("Menlo")
                     .text_size(px(11.2))
                     .line_height(px(24.))
@@ -1191,6 +1206,23 @@ mod tests {
         let found: Vec<&str> = bare_urls(text).into_iter().map(|r| &text[r]).collect();
         assert_eq!(found, ["https://example.com/a?b=1", "http://x.org/a_(b)"]);
         assert!(bare_urls("sem link aqui, ftp://x.org").is_empty());
+    }
+
+    #[test]
+    fn a_code_span_links_only_when_it_is_one_web_address() {
+        assert_eq!(
+            code_url("http://127.0.0.1:8771/").as_deref(),
+            Some("http://127.0.0.1:8771/")
+        );
+        assert_eq!(
+            code_url("https://a.com/x?y=1").as_deref(),
+            Some("https://a.com/x?y=1")
+        );
+        assert_eq!(code_url("curl http://a.com"), None);
+        assert_eq!(code_url("http://a.com e http://b.com"), None);
+        assert_eq!(code_url(" http://a.com"), None);
+        assert_eq!(code_url("src/main.rs"), None);
+        assert_eq!(code_url("ftp://a.com"), None);
     }
 
     #[test]

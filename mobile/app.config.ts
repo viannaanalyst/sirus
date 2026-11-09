@@ -57,7 +57,7 @@ const config: ExpoConfig = {
       speechRecognitionPermission: "O Sirus transcreve o que você fala para escrever mensagens aos agentes.",
     }],
     ["expo-splash-screen", { image: "./assets/splash.png", imageWidth: 309, backgroundColor: "#0f0f12" }],
-    ["expo-build-properties", { ios: { deploymentTarget: "16.4" } }],
+    ["expo-build-properties", { ios: { deploymentTarget: "16.4", usePrecompiledModules: false } }],
   ],
 };
 

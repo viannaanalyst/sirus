@@ -957,8 +957,8 @@ fn snapshot_sessions(
 }
 
 /// A checkpoint's index: every session's entry with its counts and the small
-/// app-state fields, as [`encode_state`] has them. Settings, projects and review
-/// guides change only through commands that save, so a checkpoint leaves
+/// app-state fields, as [`encode_state`] has them. Settings, projects, review
+/// guides and scheduled prompts change only through commands that save, so a checkpoint leaves
 /// their rows alone instead of encoding them every second.
 fn encode_checkpoint_index(data: &AppData) -> Result<serde_json::Value> {
     let mut sessions = without_transcripts(|| serde_json::to_value(&data.sessions))?;
@@ -1747,6 +1747,32 @@ mod tests {
     }
 
     #[test]
+    fn scheduled_prompts_live_in_their_own_rows_and_stay_out_of_the_ui_index() {
+        let temp = crate::git::tests::Repo::new();
+        let path = temp.0.join("state.json");
+        let mut data = load_or_create(&path).unwrap();
+        let task: crate::scheduled_prompts::Task = serde_json::from_value(serde_json::json!({
+            "id": "t1", "title": "Morning", "prompt": "Summarise", "projectId": "p",
+            "provider": "claude", "nextRun": "2026-11-10T09:00:00",
+            "schedule": { "repeat": { "kind": "weekdays", "time": "09:00" } }
+        }))
+        .unwrap();
+        data.scheduled_prompts = vec![task.clone()];
+        save(&path, &data).unwrap();
+        restart(&path);
+        let loaded = load_or_create(&path).unwrap();
+        assert_eq!(loaded.scheduled_prompts, vec![task]);
+        let meta = crate::transcript_view::state_meta(&loaded).unwrap();
+        assert!(meta.get("scheduledPrompts").is_none());
+        // Deleting the task deletes its row.
+        let mut again = loaded;
+        again.scheduled_prompts.clear();
+        save(&path, &again).unwrap();
+        restart(&path);
+        assert!(load_or_create(&path).unwrap().scheduled_prompts.is_empty());
+    }
+
+    #[test]
     fn a_save_rewrites_only_messages_that_changed() {
         let temp = crate::git::tests::Repo::new();
         let path = temp.0.join("state.json");
@@ -2140,7 +2166,7 @@ mod tests {
             .insert("session:a".into(), "draft".into());
         let mut full = encode_state(&data).unwrap();
         let object = full.as_object_mut().unwrap();
-        for key in ["settings", "projects", "reviewGuides"] {
+        for key in ["settings", "projects", "reviewGuides", "scheduledPrompts"] {
             assert!(object.remove(key).is_some());
         }
         assert_eq!(full, encode_checkpoint_index(&data).unwrap());

@@ -1809,6 +1809,9 @@ pub struct AppData {
     /// Guided reviews of pull requests and session changes (ADR-125); one row each in `state.db`.
     #[serde(default)]
     pub review_guides: Vec<crate::review_guides::ReviewGuide>,
+    /// Scheduled prompts, "Tarefas" (ADR-200); one row each in `state.db`.
+    #[serde(default)]
+    pub scheduled_prompts: Vec<crate::scheduled_prompts::Task>,
     /// The provider CLI version each update notice was dismissed for (ADR-198).
     #[serde(default)]
     pub provider_update_dismissals: std::collections::HashMap<AgentProviderId, String>,

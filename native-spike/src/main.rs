@@ -135,6 +135,7 @@ impl AssetSource for Assets {
             "pencil-line" => include_bytes!("../assets/pencil-line.svg"),
             "bot" => include_bytes!("../assets/bot.svg"),
             "refresh" => include_bytes!("../assets/refresh.svg"),
+            "task-clock" => include_bytes!("../assets/task-clock.svg"),
             "cloud" => include_bytes!("../assets/cloud.svg"),
             "cloud-download" => include_bytes!("../assets/cloud-download.svg"),
             "cloud-upload" => include_bytes!("../assets/cloud-upload.svg"),

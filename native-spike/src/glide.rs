@@ -11,6 +11,11 @@ use std::time::Instant;
 const EASE: f32 = 8.;
 /// The fastest the list may travel, in px per second.
 const SPEED: f32 = 1600.;
+/// The jump button's rate: 1/e every 33 ms, so a view closes in about 250 ms.
+const FAST_EASE: f32 = 30.;
+/// The longest the jump button's glide takes, in seconds.
+#[cfg(test)]
+const FAST_MAX: f32 = 0.28;
 /// Within this many px of the end counts as at the end.
 const AT_END: f32 = 2.;
 /// A move up of more than this, that this did not make, is the person scrolling away.
@@ -22,6 +27,8 @@ pub(crate) struct Glide {
     /// The last turn is anchored to the top of the view when the person sent it from here, with
     /// room below it, so a sent message glides up and stays there.
     pub anchored: bool,
+    /// The jump button's glide: quick whatever the distance, until it arrives.
+    fast: bool,
     expected: Option<f32>,
     last: Option<Instant>,
 }
@@ -38,6 +45,7 @@ impl Default for Glide {
         Self {
             stick: true,
             anchored: false,
+            fast: false,
             expected: None,
             last: None,
         }
@@ -52,9 +60,17 @@ impl Glide {
         self.expected = None;
     }
 
+    /// The jump button: follow the end quickly. A long way back lands a view above it first,
+    /// then the last view glides in under `FAST_MAX`.
+    pub fn follow_fast(&mut self) {
+        self.follow(false);
+        self.fast = true;
+    }
+
     /// The person (or a search hit, or a trail tick) took the list somewhere else.
     pub fn leave(&mut self) {
         self.stick = false;
+        self.fast = false;
         self.expected = None;
     }
 
@@ -73,6 +89,7 @@ impl Glide {
             .is_some_and(|expected| current < expected - MOVED_UP)
         {
             self.stick = false;
+            self.fast = false;
         }
         if !self.stick {
             self.expected = None;
@@ -87,6 +104,7 @@ impl Glide {
         }
         let remaining = (max - current).max(0.);
         if remaining < 0.5 {
+            self.fast = false;
             self.expected = Some(current);
             return Plan {
                 scroll: 0.,
@@ -95,6 +113,11 @@ impl Glide {
         }
         let scroll = if reduce {
             remaining
+        } else if self.fast {
+            let eased = (remaining * (1. - (-FAST_EASE * dt).exp())).max(1.);
+            // Further than a view: land a view above the end, glide only that last view.
+            let jump = (remaining - view.max(1.)).max(0.);
+            (eased + jump).min(remaining)
         } else {
             let eased = (remaining * (1. - (-EASE * dt).exp()))
                 .min(SPEED * dt)
@@ -190,5 +213,28 @@ mod tests {
         let plan = glide.step(100., 900., 600., Instant::now(), true);
         assert_eq!(plan.scroll, 800.);
         assert!(!plan.moving);
+    }
+
+    #[test]
+    fn the_jump_button_arrives_within_the_cap_from_any_distance() {
+        for far in [800., 5_000., 200_000.] {
+            let mut glide = Glide::default();
+            glide.leave();
+            glide.follow_fast();
+            let start = Instant::now();
+            let mut current = 0.;
+            let mut frames = 0;
+            while frames < 200 {
+                let plan = glide.step(current, far, 600., Glide::frame(start, frames), false);
+                current += plan.scroll;
+                if !plan.moving {
+                    break;
+                }
+                frames += 1;
+            }
+            let took = frames as f32 * 0.016;
+            assert!(current > far - 1., "arrives: {current}");
+            assert!(took <= FAST_MAX, "{far}: {took}s");
+        }
     }
 }

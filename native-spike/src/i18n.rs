@@ -606,6 +606,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Aguarde todas as tarefas terminarem antes de resolver.",
         "Wait until every task finishes before resolving.",
     ),
+    ("Ainda não enviados para {}", "Not pushed to {} yet"),
     (
         "Ainda não há o que compactar: esta conversa não começou.",
         "There is nothing to compact yet: this conversation has not started.",
@@ -2523,6 +2524,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "Mostra um anel de consumo de até dois provedores no rodapé da barra lateral.",
         "Show a usage ring for up to two providers at the bottom of the sidebar.",
     ),
+    (
+        "Mostrando os 50 commits mais recentes.",
+        "Showing the 50 most recent commits.",
+    ),
     ("Mostrar / ocultar barra lateral", "Toggle Sidebar"),
     ("Mostrar a mesa", "Show desktop"),
     ("Mostrar arquivos ignorados", "Show ignored files"),
@@ -2639,6 +2644,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Nenhum arquivo alterado.", "No files changed."),
     ("Nenhum arquivo encontrado.", "No files found."),
     ("Nenhum commit ainda.", "No commits yet."),
+    (
+        "Nenhum commit local para enviar.",
+        "No local commits to push.",
+    ),
     ("Nenhum conector encontrado.", "No connector matches."),
     (
         "Nenhum dispositivo de entrada de microfone está disponível.",
@@ -4491,6 +4500,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Sem login", "Not signed in"),
     ("Sem resposta", "No reply"),
     ("Sem saída.", "No output."),
+    (
+        "Sem upstream nem branch base para comparar.",
+        "No upstream or base branch to compare with.",
+    ),
     ("Semanal · Opus", "Weekly · Opus"),
     ("Semanal · Sonnet", "Weekly · Sonnet"),
     ("Semanal · apps OAuth", "Weekly · OAuth apps"),
@@ -5495,12 +5508,14 @@ const ENTRIES: &[(&str, &str)] = &[
     ("{} · Encontrada em: {}", "{} · Found in: {}"),
     ("{}% restante", "{}% left"),
     ("{}% usado", "{}% used"),
+    ("{}+ arquivos", "{}+ files"),
     (
         "{}, de qualquer app, abre um campo para começar uma conversa sem abrir a janela. O atalho muda em Atalhos.",
         "{}, from any app, opens a field to start a conversation without opening the window. Change the shortcut in Shortcuts.",
     ),
     ("À direita", "On the right"),
     ("À esquerda", "On the left"),
+    ("À frente de {} (sem upstream)", "Ahead of {} (no upstream)"),
     ("Âmbar", "Amber"),
     (
         "É rascunho: marque como pronto antes de mesclar.",

@@ -791,6 +791,18 @@ pub async fn git_workspace_action(
                 let (entries, truncated) = workspace::history_from(&cwd, &from, skip)?;
                 Response::History { entries, truncated }
             }
+            Action::Outgoing { .. } => {
+                let (base, upstream, commits, truncated) = workspace::outgoing(&cwd)?;
+                Response::Outgoing {
+                    base,
+                    upstream,
+                    commits,
+                    truncated,
+                }
+            }
+            Action::CommitDiff { hash, path, .. } => Response::Diff {
+                diff: workspace::commit_diff(&cwd, &hash, &path)?,
+            },
             Action::Pull { confirm, .. } => {
                 if !confirm {
                     return Err(Error::new("invalid", "Pull requires confirmation."));

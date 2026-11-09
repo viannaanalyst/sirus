@@ -1,12 +1,16 @@
-import { useMemo } from "react";
+import * as Haptics from "expo-haptics";
+import { useCallback, useMemo, type ReactNode } from "react";
 import { Linking, Platform, StyleSheet, View } from "react-native";
-import { EnrichedMarkdownText, type MarkdownStyle } from "react-native-enriched-markdown";
+import { EnrichedMarkdownText, type MarkdownMediaAsset, type MarkdownStyle } from "react-native-enriched-markdown";
 
 import { fileReference } from "@sirus/lib/chat-markdown";
 
 import { useAppearancePreferences } from "../features/settings/appearance/AppearancePreferencesProvider";
 import { resolveNativeMarkdownTypography } from "../lib/appearancePreferences";
+import { mathMarkdown, splitReplyBlocks } from "../lib/reply-blocks";
 import { useUniwindTheme } from "../lib/useUniwindTheme";
+import { MermaidBlock } from "./MermaidBlock";
+import { isDirectImage, ReplyImage } from "./ReplyImage";
 
 const MONOSPACE = Platform.OS === "ios" ? "Menlo" : "monospace";
 const FILE_SCHEME = "sirus-file:";
@@ -25,14 +29,17 @@ export function linkFileReferences(markdown: string, cwd: string): string {
 
 /**
  * A reply's markdown drawn natively: selectable
- * text, GitHub flavor, code blocks with syntax colors, tables and task lists, in the theme's
- * markdown colors and the phone's own font.
+ * text, GitHub flavor, code blocks with syntax colors, a language label and a copy button (the
+ * renderer's own header), tables and task lists, in the theme's markdown colors and the phone's
+ * own font. Closed Mermaid fences become diagrams (`MermaidBlock`), ```math fences and `$$` blocks
+ * become formulas (the native LaTeX engine), and pictures on their own line become `ReplyImage`
+ * with "Salvar em Fotos" on a long press. `$` in running text stays text.
  */
 export function Markdown(props: {
   readonly markdown: string;
   readonly onLinkPress?: (url: string) => void;
   /** The conversation's folder and how to open one of its files, for file references. */
-  readonly files?: { readonly cwd: string; readonly open: (path: string) => void };
+  readonly files?: { readonly cwd: string; readonly open: (path: string) => void; /** Asks the computer for a picture in its folder as a data URI. */ readonly image?: (link: string) => Promise<string> };
 }) {
   const theme = useUniwindTheme();
   const { appearance, themeAppearance } = useAppearancePreferences();
@@ -61,6 +68,7 @@ export function Markdown(props: {
       },
       blockquote: { ...body, color: theme["--color-foreground-muted"], backgroundColor: "transparent", borderColor: theme["--color-md-blockquote-border"], borderWidth: 2, gapWidth: 12 },
       list: { ...body, bulletColor: theme["--color-foreground-muted"], markerColor: theme["--color-foreground-muted"], gapWidth: 6 },
+      math: { color: theme["--color-md-body"], fontSize: typography.fontSize + 3, backgroundColor: "transparent", padding: 6, marginTop: 4, marginBottom: 12, textAlign: "center" },
       thematicBreak: { color: theme["--color-md-hr"], height: 1, marginTop: 8, marginBottom: 8 },
       table: {
         ...body, ...block,
@@ -77,18 +85,29 @@ export function Markdown(props: {
     if (props.onLinkPress) props.onLinkPress(url);
     else void Linking.openURL(url).catch(() => undefined);
   };
+  const loadImage = files?.image;
+  const renderMedia = useCallback((asset: MarkdownMediaAsset): ReactNode | null => {
+    if (asset.kind !== "image" || !asset.eligible) return null;
+    if (!isDirectImage(asset.url) && !loadImage) return null;
+    return <ReplyImage url={asset.url} alt={asset.altText} load={loadImage} />;
+  }, [loadImage]);
+  const blocks = useMemo(() => splitReplyBlocks(markdown), [markdown]);
+  const text = (value: string, math: boolean) => <EnrichedMarkdownText
+    markdown={value}
+    markdownStyle={markdownStyle}
+    containerStyle={{ flexShrink: 1, minWidth: 0 }}
+    flavor="github"
+    selectable
+    md4cFlags={{ latexMath: math, hardSoftBreaks: false, admonitions: true }}
+    enableTaskListItemToggle={false}
+    // a code block's button switches between scrolling and wrapped lines.
+    enableCodeBlockWrapToggle
+    onCopyPress={() => void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined)}
+    renderMedia={math ? undefined : renderMedia}
+    onLinkPress={({ url }) => open(url)}
+  />;
   return <View style={{ flexShrink: 1, minWidth: 0 }}>
-    <EnrichedMarkdownText
-      markdown={markdown}
-      markdownStyle={markdownStyle}
-      containerStyle={{ flexShrink: 1, minWidth: 0 }}
-      flavor="github"
-      selectable
-      md4cFlags={{ latexMath: false, hardSoftBreaks: false, admonitions: true }}
-      enableTaskListItemToggle={false}
-      // a code block's button switches between scrolling and wrapped lines.
-      enableCodeBlockWrapToggle
-      onLinkPress={({ url }) => open(url)}
-    />
+    {blocks.map((block, index) => block.kind === "mermaid" ? <MermaidBlock key={`m${index}`} code={block.code} />
+      : <View key={`${block.kind[0]}${index}`} style={{ flexShrink: 1, minWidth: 0 }}>{text(block.kind === "math" ? mathMarkdown(block.code) : block.text, block.kind === "math")}</View>)}
   </View>;
 }

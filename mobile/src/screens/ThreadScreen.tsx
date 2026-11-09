@@ -31,7 +31,7 @@ import { SuggestionsPanel } from "../components/composer/SuggestionsPanel";
 import { useComposer } from "../components/composer/useComposer";
 import { SentAttachments } from "../components/SentAttachments";
 import { useConversationModel } from "../data/conversation-model";
-import { attachmentOwner, pickAttachments, releaseAttachments, uploadAttachments } from "../data/attachments";
+import { attachmentOwner, pasteClipboardImage, pickAttachments, releaseAttachments, uploadAttachments } from "../data/attachments";
 import { useMacAccent } from "../data/mac-accent";
 import { isScratch, projectLabel } from "../data/scratch";
 import { ACTIVE_STATUS, transcriptKey, useSirus, type QueuedPrompt, type RowAction } from "../data/store";
@@ -156,7 +156,9 @@ export function ThreadScreen() {
   const cwd = session?.worktree?.path ?? project?.path;
   // File references in replies open in the conversation's files.
   const openFile = useCallback((path: string) => navigation.navigate("File", { computerId, sessionId, path }), [navigation, computerId, sessionId]);
-  const files = useMemo<ReplyFiles | undefined>(() => cwd ? { cwd, open: openFile } : undefined, [cwd, openFile]);
+  // A picture named by path lives on the computer: its `reply_image` answers a data URI.
+  const loadImage = useCallback((path: string) => useSirus.getState().invoke<string>(computerId, "reply_image", { sessionId, path }), [computerId, sessionId]);
+  const files = useMemo<ReplyFiles | undefined>(() => cwd ? { cwd, open: openFile, image: loadImage } : undefined, [cwd, openFile, loadImage]);
   const requests = session?.pendingRequests ?? [];
   const computerName = useSirus((state) => state.computers.find((item) => item.id === computerId)?.hostName);
   // "project · computer" under the title, as the approved layout.
@@ -369,9 +371,9 @@ function Composer(props: {
       setBusy(null);
     }
   };
-  const attach = async (kind: "photos" | "files") => {
+  const attach = async (kind: "photos" | "files" | "paste") => {
     try {
-      const files = await pickAttachments(kind);
+      const files = kind === "paste" ? await pasteClipboardImage() : await pickAttachments(kind);
       if (!files.length) return;
       setBusy("attaching");
       const added = await uploadAttachments(props.computerId, owner, files.slice(0, Math.max(0, 8 - attachments.length)));
@@ -428,7 +430,7 @@ function Composer(props: {
         </View>
       </GlassSurface>
     </View>
-    <AddSheet composer={composer} provider={provider} model={model} busy={busy !== null} onPhotos={() => void attach("photos")} onFiles={() => void attach("files")} />
+    <AddSheet composer={composer} provider={provider} model={model} busy={busy !== null} onPhotos={() => void attach("photos")} onFiles={() => void attach("files")} onPaste={() => void attach("paste")} />
   </KeyboardStickyView>;
 }
 

@@ -2,12 +2,13 @@ import { useState } from "react";
 import { Image, Modal, Pressable, ScrollView, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { offerSaveImage } from "../data/save-image";
 import { SymbolView } from "./AppSymbol";
 import { AppText } from "./AppText";
 
 /**
  * A full-screen viewer for pictures: swipe between them, pinch to zoom, the close button or a
- * downward fling of the safe area to leave. `uris` are full-size addresses.
+ * downward fling of the safe area to leave; a long press offers to save the picture to Photos. `uris` are full-size addresses.
  */
 export function ImageViewer(props: { readonly uris: readonly string[]; readonly index: number | null; readonly onClose: () => void }) {
   const { width, height } = useWindowDimensions();
@@ -21,7 +22,9 @@ export function ImageViewer(props: { readonly uris: readonly string[]; readonly 
         onMomentumScrollEnd={(event) => setPage(Math.round(event.nativeEvent.contentOffset.x / width))}>
         {props.uris.map((uri) => <ScrollView key={uri} style={{ width, height }} contentContainerStyle={{ width, height, alignItems: "center", justifyContent: "center" }}
           maximumZoomScale={4} minimumZoomScale={1} centerContent showsHorizontalScrollIndicator={false} showsVerticalScrollIndicator={false} bouncesZoom>
-          <Image source={{ uri }} style={{ width, height }} resizeMode="contain" accessibilityLabel="Imagem enviada" />
+          <Pressable onLongPress={() => offerSaveImage(uri)} delayLongPress={350} accessibilityHint="Segure para salvar em Fotos">
+            <Image source={{ uri }} style={{ width, height }} resizeMode="contain" accessibilityLabel="Imagem enviada" />
+          </Pressable>
         </ScrollView>)}
       </ScrollView>
       <View pointerEvents="box-none" style={{ position: "absolute", top: insets.top + 8, left: 16, right: 16, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>

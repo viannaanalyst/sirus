@@ -28,7 +28,7 @@ import { GlassSurface } from "../components/GlassSurface";
 import { ListSection } from "../components/ListSection";
 import { ProjectRobot } from "../components/ProjectRobot";
 import { ProviderIcon } from "../components/ProviderIcon";
-import { isImageFile, pickAttachments, type PickedFile } from "../data/attachments";
+import { isImageFile, pasteClipboardImage, pickAttachments, type PickedFile } from "../data/attachments";
 import { isScratch, SCRATCH_FOLDER } from "../data/scratch";
 import { computerName, type Computer } from "../data/computers";
 import { useSirus } from "../data/store";
@@ -215,9 +215,9 @@ function MainPage(props: { readonly embedded?: boolean }) {
       Alert.alert("Não foi possível começar", reason instanceof Error ? reason.message : String(reason));
     }
   };
-  const attach = async (kind: "photos" | "files") => {
+  const attach = async (kind: "photos" | "files" | "paste") => {
     try {
-      const files = await pickAttachments(kind);
+      const files = kind === "paste" ? await pasteClipboardImage() : await pickAttachments(kind);
       if (files.length) setDraft((current) => ({ ...current, files: [...current.files, ...files].slice(0, 8) }));
     } catch (reason) {
       Alert.alert("Anexos", reason instanceof Error ? reason.message : String(reason));
@@ -321,7 +321,7 @@ function MainPage(props: { readonly embedded?: boolean }) {
           </View>
         </GlassSurface>
         </View>
-        <AddSheet composer={composer} provider={provider} model={model} onPhotos={() => void attach("photos")} onFiles={() => void attach("files")} />
+        <AddSheet composer={composer} provider={provider} model={model} onPhotos={() => void attach("photos")} onFiles={() => void attach("files")} onPaste={() => void attach("paste")} />
       </View>
       </KeyboardStickyView>
     </View>

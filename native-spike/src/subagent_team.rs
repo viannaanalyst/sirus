@@ -53,6 +53,8 @@ pub struct Member {
     pub workflow: bool,
     /// The phase it was launched in, from 1.
     pub phase: usize,
+    /// The model the subagent runs on, as the host reports it (empty when unknown).
+    pub model: Option<String>,
 }
 
 impl Member {
@@ -111,6 +113,11 @@ impl Member {
                 .map(str::to_owned),
             workflow: item.get("workflow").is_some_and(|w| !w.is_null()),
             phase,
+            model: item["model"]
+                .as_str()
+                .map(str::trim)
+                .filter(|m| !m.is_empty())
+                .map(str::to_owned),
         }
     }
 
@@ -229,6 +236,17 @@ mod tests {
 
     fn member(phase: usize, status: Status) -> Member {
         Member::from_item(&json!({ "id": "agent:a", "label": "x" }), phase).with(status)
+    }
+
+    #[test]
+    fn the_model_comes_from_the_host_item_when_it_reports_one() {
+        let known = Member::from_item(
+            &json!({ "id": "agent:a", "label": "x", "model": "claude-haiku-5-5" }),
+            1,
+        );
+        assert_eq!(known.model.as_deref(), Some("claude-haiku-5-5"));
+        let blank = Member::from_item(&json!({ "id": "agent:b", "model": "  " }), 1);
+        assert_eq!(blank.model, None);
     }
 
     impl Member {

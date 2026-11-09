@@ -17963,7 +17963,7 @@ pub(crate) fn nav_label(page: &'static str) -> &'static str {
     }
 }
 
-fn model_label(model: Option<&str>, provider: &str) -> String {
+pub(crate) fn model_label(model: Option<&str>, provider: &str) -> String {
     let Some(model) = model.filter(|m| !m.is_empty()) else {
         return model_name(provider).to_owned();
     };

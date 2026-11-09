@@ -545,15 +545,28 @@ impl Shell {
                     .flex_shrink_0()
                     .max_w(px(240.))
                     .truncate()
+                    .line_height(px(ROW))
                     .text_size(px(13.))
                     .text_color(content(0.9))
                     .child(name),
             )
+            // Which model runs it, next to its name, in the provider's own colour.
+            .children(member.model.as_deref().map(|model| {
+                div()
+                    .flex_shrink_0()
+                    .max_w(px(160.))
+                    .truncate()
+                    .line_height(px(ROW))
+                    .text_size(px(11.5))
+                    .text_color(content(0.4))
+                    .child(crate::shell::model_label(Some(model), provider))
+            }))
             .child(
                 div()
                     .flex_1()
                     .min_w_0()
                     .truncate()
+                    .line_height(px(ROW))
                     .text_size(px(12.))
                     .text_color(content(0.4))
                     .child(member.step.clone()),
@@ -571,6 +584,7 @@ impl Shell {
                     .when(member.tools > 0, |d| {
                         d.child(
                             div()
+                                .line_height(px(ROW))
                                 .text_size(px(12.))
                                 .text_color(content(0.4))
                                 .when(swaps, |d| d.group_hover(group_steps, |s| s.opacity(0.)))
@@ -585,6 +599,7 @@ impl Shell {
                     .w(px(52.))
                     .flex()
                     .justify_end()
+                    .line_height(px(ROW))
                     .text_size(px(12.))
                     .text_color(content(0.45))
                     .children(elapsed),

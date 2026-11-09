@@ -46,3 +46,4 @@ Use `CARGO_TARGET_DIR=../native-spike/target/host-check` for the `src-tauri` com
 - Documentation is in English; the product UI is localized (English and Portuguese).
 - Project skills live in `.sirus/skills/`.
 - Design previews (HTML mockups to choose a direction) are temporary: build them outside the repo (for example under `/tmp`), never commit them, and delete them once the owner has chosen. `previews/` is ignored.
+- Delegating to subagents: pick by difficulty with the agents in `.claude/agents/` — `simples` (Haiku, high effort) for mechanical tasks, `intermediario` (Sonnet, medium) for contained features and fixes, `complexo` (Opus, medium) for cross-cutting work and reviews. When unsure between two, take the cheaper one and escalate if it stalls.

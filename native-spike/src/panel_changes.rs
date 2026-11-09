@@ -1988,14 +1988,14 @@ impl ChangesPanel {
             .justify_center()
             .gap(px(6.))
             .text_size(px(13.))
-            .font_weight(gpui::FontWeight::BOLD)
-            .bg(accent())
-            .text_color(on_accent())
+            .font_weight(gpui::FontWeight::SEMIBOLD)
+            .rounded_l(px(crate::theme::RADIUS_MD))
+            .text_color(content(if ready { 0.92 } else { 0.4 }))
             .child(
                 svg()
                     .path("check")
                     .size(px(14.))
-                    .text_color(on_accent())
+                    .text_color(content(if ready { 0.92 } else { 0.4 }))
                     .flex_shrink_0(),
             )
             .child(if self.committing {
@@ -2007,10 +2007,10 @@ impl ChangesPanel {
             });
         let main = if ready {
             main.cursor_pointer()
-                .hover(|style| style.opacity(0.9))
+                .hover(|style| style.bg(content(0.06)))
                 .on_click(cx.listener(|this, _, _, cx| this.commit(cx)))
         } else {
-            main.opacity(0.45)
+            main
         };
         let dropdown = div()
             .id("commit-menu")
@@ -2019,11 +2019,11 @@ impl ChangesPanel {
             .flex()
             .items_center()
             .justify_center()
-            .bg(accent())
+            .rounded_r(px(crate::theme::RADIUS_MD))
             .border_l_1()
-            .border_color(gpui::hsla(0., 0., 0., 0.2))
+            .border_color(content(0.12))
             .cursor_pointer()
-            .hover(|style| style.opacity(0.9))
+            .hover(|style| style.bg(content(0.06)))
             .on_click(cx.listener(|this, _, _, cx| {
                 this.menu = if this.menu == Some(Menu::Commit) {
                     None
@@ -2036,7 +2036,7 @@ impl ChangesPanel {
                 svg()
                     .path("chevron-down")
                     .size(px(14.))
-                    .text_color(on_accent())
+                    .text_color(content(0.7))
                     .flex_shrink_0(),
             );
         let split = div()
@@ -2045,7 +2045,9 @@ impl ChangesPanel {
             .mb(px(8.))
             .h(px(32.))
             .rounded(px(crate::theme::RADIUS_MD))
-            .overflow_hidden()
+            .bg(content(0.05))
+            .border_1()
+            .border_color(content(0.12))
             .flex()
             .child(main)
             .child(dropdown);

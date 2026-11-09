@@ -11,6 +11,8 @@ pub struct PanelContext {
     pub provider: &'static str,
     pub model: String,
     pub version: String,
+    /// Where the changes panes report the working tree's line totals for the top bar.
+    pub stat_tx: async_channel::Sender<crate::shell::GitResult>,
 }
 
 pub fn open(kind: usize, context: PanelContext, cx: &mut App) -> Option<AnyView> {

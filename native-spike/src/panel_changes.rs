@@ -10,13 +10,14 @@
 use crate::backend::Backend;
 use crate::i18n::{t, tf};
 use crate::local_git::{self, CommitFiles};
+use crate::motion::{Curve, eased};
 use crate::panel_files::{TextField, TextFieldEvent};
 use crate::panels::PanelContext;
 use crate::project_files::run_blocking;
 use crate::theme::{accent, accent_wash, content, diff_colors, on_accent};
 use gpui::{
-    AnyElement, AnyView, App, Context, Div, Entity, Hsla, Render, SharedString, Stateful,
-    Subscription, Window, div, prelude::*, px, rgb, svg, uniform_list,
+    Animation, AnimationExt, AnyElement, AnyView, App, Context, Div, Entity, Hsla, Render,
+    SharedString, Stateful, Subscription, Window, div, prelude::*, px, rgb, svg, uniform_list,
 };
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -57,6 +58,8 @@ fn build(context: PanelContext, mode: Mode, cx: &mut App) -> AnyView {
         let mut panel = ChangesPanel {
             mode,
             menu: None,
+            fading: None,
+            stat_tx: context.stat_tx,
             discard: None,
             staged_open: true,
             changes_open: true,
@@ -174,7 +177,7 @@ enum Mode {
 }
 
 /// The menu open over the changes view.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Menu {
     /// The "⋯" of the branch row.
     Branch,
@@ -185,10 +188,15 @@ enum Menu {
 /// The header bar's height, and where the Commit button's menu starts under it.
 const TITLE: f32 = 34.;
 const COMMIT_BAR: f32 = 8. + 34. + 8. + 32. + 4.;
+/// The branch and Commit menus fade and slide for this many seconds.
+const MENU_TIME: f32 = 0.14;
 
 struct ChangesPanel {
     mode: Mode,
     menu: Option<Menu>,
+    /// The menu that just closed, still fading out.
+    fading: Option<Menu>,
+    stat_tx: async_channel::Sender<crate::shell::GitResult>,
     /// A discard waiting for the confirmation card.
     discard: Option<DiscardAsk>,
     staged_open: bool,
@@ -972,6 +980,8 @@ impl ChangesPanel {
         let counts = self
             .backend
             .request("git_status", json!({ "sessionId": self.session_id }));
+        let stat_tx = self.stat_tx.clone();
+        let root = self.root.clone();
         cx.spawn(async move |this, cx| {
             let snapshot = settle(status).await;
             let counts = settle(counts).await.ok();
@@ -987,6 +997,9 @@ impl ChangesPanel {
                 }
                 if let Some(counts) = counts {
                     this.counts = counts_of(&counts);
+                    // The top bar's pill follows every refresh of the list.
+                    let _ =
+                        stat_tx.try_send(crate::shell::GitResult::Diff(root, diff_totals(&counts)));
                 }
                 if this.snapshot.as_ref().is_some_and(|s| s.branch.is_some()) {
                     this.check_pull_request(false, cx);
@@ -1182,14 +1195,7 @@ impl ChangesPanel {
                     .text_color(content(0.38))
                     .child(dir),
             )
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .font_family("Menlo")
-                    .text_size(px(11.))
-                    .text_color(content(0.45))
-                    .child(counts_text(add, remove)),
-            )
+            .child(crate::theme::diff_counts(add, remove, true).flex_shrink_0())
             .child(
                 div()
                     .w(px(12.))
@@ -1744,10 +1750,43 @@ impl ChangesPanel {
         section.into_any_element()
     }
 
+    /// Closes the open menu; it fades out for a moment, unless motion is reduced.
+    fn close_menu(&mut self, cx: &mut Context<Self>) {
+        let Some(menu) = self.menu.take() else {
+            return;
+        };
+        if !crate::prefs::still() {
+            self.fading = Some(menu);
+            cx.spawn(async move |this, cx| {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs_f32(MENU_TIME))
+                    .await;
+                let _ = this.update(cx, |this, cx| {
+                    this.fading = None;
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
+        cx.notify();
+    }
+
     /// A row of a floating menu.
     fn menu_item(
         &self,
         id: &'static str,
+        label: &str,
+        checked: bool,
+        enabled: bool,
+    ) -> Stateful<Div> {
+        self.menu_item_with(id, None, label, checked, enabled)
+    }
+
+    /// A row of a floating menu, with a small icon before its label.
+    fn menu_item_with(
+        &self,
+        id: &'static str,
+        glyph: Option<&'static str>,
         label: &str,
         checked: bool,
         enabled: bool,
@@ -1762,6 +1801,15 @@ impl ChangesPanel {
             .gap(px(6.))
             .text_size(px(12.5))
             .text_color(content(0.85))
+            .when_some(glyph, |d, glyph| {
+                d.child(
+                    svg()
+                        .path(glyph)
+                        .size(px(13.))
+                        .text_color(content(0.6))
+                        .flex_shrink_0(),
+                )
+            })
             .child(div().flex_1().child(label.to_owned()))
             .when(checked, |d| {
                 d.child(
@@ -1782,7 +1830,8 @@ impl ChangesPanel {
     /// The branch's "⋯" menu or the Commit button's "▾" menu, floating over the view, with a
     /// backdrop that closes it.
     fn menu_overlay(&self, snapshot: &Snapshot, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let menu = self.menu?;
+        let menu = self.menu.or(self.fading)?;
+        let closing = self.menu.is_none();
         let typed = !self.commit.read(cx).text().trim().is_empty();
         let can_amend =
             snapshot.ahead.is_none_or(|ahead| ahead > 0) && !snapshot.history.is_empty();
@@ -1808,12 +1857,18 @@ impl ChangesPanel {
             Menu::Branch => {
                 top = TITLE + 4.;
                 items.push(
-                    self.menu_item("menu-refresh", t("Atualizar"), false, true)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.menu = None;
-                            this.refresh(cx);
-                        }))
-                        .into_any_element(),
+                    self.menu_item_with(
+                        "menu-refresh",
+                        Some("refresh"),
+                        t("Atualizar"),
+                        false,
+                        true,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.close_menu(cx);
+                        this.refresh(cx);
+                    }))
+                    .into_any_element(),
                 );
             }
             Menu::Commit => {
@@ -1823,7 +1878,7 @@ impl ChangesPanel {
                     self.menu_item("menu-commit-push", t("Commit e Push"), false, both_on)
                         .when(both_on, |d| {
                             d.on_click(cx.listener(|this, _, _, cx| {
-                                this.menu = None;
+                                this.close_menu(cx);
                                 this.commit_with(true, cx);
                             }))
                         })
@@ -1834,7 +1889,7 @@ impl ChangesPanel {
                     self.menu_item("menu-push", t("Push"), false, push_on)
                         .when(push_on, |d| {
                             d.on_click(cx.listener(|this, _, _, cx| {
-                                this.menu = None;
+                                this.close_menu(cx);
                                 this.push.confirm = true;
                                 this.push.result = None;
                                 cx.notify();
@@ -1856,7 +1911,7 @@ impl ChangesPanel {
                     )
                     .when(pr_on, |d| {
                         d.on_click(cx.listener(|this, _, _, cx| {
-                            this.menu = None;
+                            this.close_menu(cx);
                             this.pr.open = true;
                             this.pr.result = None;
                             this.pr.title.update(cx, |field, cx| field.focus(cx));
@@ -1872,7 +1927,7 @@ impl ChangesPanel {
                                 "O próximo commit substitui o último, que ainda não foi enviado. Sem título, mantém a mensagem dele.",
                             )))
                             .on_click(cx.listener(|this, _, _, cx| {
-                                this.menu = None;
+                                this.close_menu(cx);
                                 this.amending = !this.amending;
                                 cx.notify();
                             }))
@@ -1881,32 +1936,44 @@ impl ChangesPanel {
                 }
             }
         }
+        let panel = div()
+            .absolute()
+            .top(px(top))
+            .right(px(12.))
+            .w(px(200.))
+            .p(px(5.))
+            .rounded(px(crate::theme::RADIUS_MD))
+            .bg(crate::theme::opaque_floating())
+            .border_1()
+            .border_color(content(0.1))
+            .shadow_lg()
+            .flex()
+            .flex_col()
+            .children(items);
+        // A quick fade and a short slide, both ways; none with Reduzir movimento.
+        let panel = if crate::prefs::still() {
+            panel.into_any_element()
+        } else {
+            panel
+                .with_animation(
+                    SharedString::from(format!("changes-menu-{menu:?}-{closing}")),
+                    Animation::new(std::time::Duration::from_secs_f32(MENU_TIME))
+                        .with_easing(|t| eased(t, Curve::Expo)),
+                    move |el, t| {
+                        let p = if closing { 1. - t } else { t };
+                        el.opacity(p).top(px(top - (1. - p) * 6.))
+                    },
+                )
+                .into_any_element()
+        };
         Some(
             div()
                 .id("changes-menu-backdrop")
                 .absolute()
                 .inset_0()
                 .occlude()
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.menu = None;
-                    cx.notify();
-                }))
-                .child(
-                    div()
-                        .absolute()
-                        .top(px(top))
-                        .right(px(12.))
-                        .w(px(200.))
-                        .p(px(5.))
-                        .rounded(px(crate::theme::RADIUS_MD))
-                        .bg(crate::theme::opaque_floating())
-                        .border_1()
-                        .border_color(content(0.1))
-                        .shadow_lg()
-                        .flex()
-                        .flex_col()
-                        .children(items),
-                )
+                .on_click(cx.listener(|this, _, _, cx| this.close_menu(cx)))
+                .child(panel)
                 .into_any_element(),
         )
     }
@@ -2402,6 +2469,7 @@ impl Render for ChangesPanel {
                     .items_center()
                     .gap(px(6.))
                     .min_w_0()
+                    .w_full()
                     .child(
                         svg()
                             .path("branch")
@@ -2472,6 +2540,7 @@ impl Render for ChangesPanel {
                     .items_center()
                     .justify_between()
                     .min_w_0()
+                    .w_full()
                     .child(
                         div()
                             .min_w_0()
@@ -2502,7 +2571,7 @@ impl Render for ChangesPanel {
                 (header.into_any_element(), body.into_any_element())
             }
         };
-        let overlay = match (&self.snapshot, self.mode, self.menu) {
+        let overlay = match (&self.snapshot, self.mode, self.menu.or(self.fading)) {
             (Some(snapshot), Mode::Review, Some(_)) => self.menu_overlay(snapshot, cx),
             _ => None,
         };
@@ -2732,14 +2801,16 @@ fn split_path(path: &str) -> (String, String) {
     }
 }
 
-/// The small "+a −d" of a row: a side with nothing on it is left out.
-fn counts_text(added: u64, removed: u64) -> String {
-    match (added, removed) {
-        (0, 0) => String::new(),
-        (a, 0) => format!("+{a}"),
-        (0, d) => format!("−{d}"),
-        (a, d) => format!("+{a} −{d}"),
-    }
+/// The added and removed lines of the whole working tree, as a git_status reply's `changes`
+/// carry them: what the top bar's +N -N shows and the file rows add up to.
+pub(crate) fn diff_totals(status: &Value) -> (u32, u32) {
+    let (added, removed) = counts_of(status)
+        .values()
+        .fold((0u64, 0u64), |(a, r), (add, del)| (a + add, r + del));
+    (
+        u32::try_from(added).unwrap_or(u32::MAX),
+        u32::try_from(removed).unwrap_or(u32::MAX),
+    )
 }
 
 /// The paths Preparar tudo or Despreparar tudo moves: the ones the host lets be moved.
@@ -2812,11 +2883,7 @@ fn commit_file_row(
     };
     let (letter, letter_color) = kind_mark(kind, added, removed);
     let counts = match (file.added, file.removed) {
-        (Some(add), Some(remove)) => div()
-            .flex()
-            .gap(px(5.))
-            .child(div().text_color(added).child(format!("+{add}")))
-            .child(div().text_color(removed).child(format!("−{remove}"))),
+        (Some(add), Some(remove)) => crate::theme::diff_counts(add, remove, false),
         _ => div().text_color(content(0.4)).child(t("binário")),
     };
     let path = file.path.clone();
@@ -2860,13 +2927,7 @@ fn commit_file_row(
                         .child(dir),
                 ),
         )
-        .child(
-            div()
-                .flex_shrink_0()
-                .font_family("Menlo")
-                .text_size(px(11.))
-                .child(counts),
-        )
+        .child(div().flex_shrink_0().child(counts))
         .into_any_element()
 }
 
@@ -3298,10 +3359,17 @@ mod tests {
             split_path("README.md"),
             (String::new(), "README.md".to_owned())
         );
-        assert_eq!(counts_text(92, 11), "+92 \u{2212}11");
-        assert_eq!(counts_text(120, 0), "+120");
-        assert_eq!(counts_text(0, 3), "\u{2212}3");
-        assert_eq!(counts_text(0, 0), "");
+    }
+
+    #[test]
+    fn the_top_bar_total_sums_every_changed_file() {
+        let status = json!({ "changes": [
+            { "path": "a.rs", "additions": 13, "deletions": 11 },
+            { "path": "b.rs", "additions": 1200, "deletions": 0 },
+            { "path": "c.txt" },
+        ] });
+        assert_eq!(diff_totals(&status), (1213, 11));
+        assert_eq!(diff_totals(&json!({})), (0, 0));
     }
 
     #[test]

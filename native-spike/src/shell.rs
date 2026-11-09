@@ -996,7 +996,7 @@ enum Waiting {
 }
 
 /// A `git` result from a background thread.
-enum GitResult {
+pub(crate) enum GitResult {
     Files(String, Vec<(String, String)>),
     Diff(String, (u32, u32)),
 }
@@ -4514,25 +4514,24 @@ impl Shell {
         if self.on_remote() {
             return;
         }
-        let path = self.conversations[self.active_conversation()]
-            .worktree
-            .clone();
+        let conversation = &self.conversations[self.active_conversation()];
+        let path = conversation.worktree.clone();
         if path.is_empty() {
             return;
         }
+        // The same read the changes list sums: staged and unstaged, untracked files included.
+        let reply = self.backend.request(
+            "git_status",
+            json!({ "sessionId": conversation.session_id }),
+        );
         let tx = self.git_tx.clone();
         std::thread::spawn(move || {
-            let stat = backend::git(&path, &["diff", "--shortstat", "HEAD"]);
-            let number = |word: &str| {
-                stat.split(',')
-                    .find(|part| part.contains(word))
-                    .and_then(|part| part.trim().split(' ').next()?.parse().ok())
-                    .unwrap_or(0)
-            };
-            let _ = tx.send_blocking(GitResult::Diff(
-                path,
-                (number("insertion"), number("deletion")),
-            ));
+            if let Ok(Ok(status)) = reply.recv_blocking() {
+                let _ = tx.send_blocking(GitResult::Diff(
+                    path,
+                    crate::panel_changes::diff_totals(&status),
+                ));
+            }
         });
     }
 
@@ -7199,7 +7198,7 @@ impl Shell {
         let dock_edge = (width - 6. - 1. - dock_width - 1.).max(nav_end + 6.);
         let controls = (80. + 28. * open_dock + 72.).max(width - dock_edge - 16. + 6.);
         let (added, removed) = self.diff_stat();
-        let (add_color, remove_color) = diff_colors(self.look.diff);
+        let tint: gpui::Hsla = gpui::rgb(crate::theme::DIFF_ADD).into();
         let changes_open = self.dock_open && self.dock_active == Some(CHANGES_PANE);
         let strip = width - strip_left - 12. - PLATE - 6. - controls - 10.;
         *moving |= self.layout_tabs(strip, now, reduced);
@@ -7279,22 +7278,14 @@ impl Shell {
                                 .flex()
                                 .items_center()
                                 .gap(px(6.))
-                                .text_size(px(12.))
+                                .text_size(px(crate::theme::DIFF_COUNT_SIZE))
                                 .cursor_pointer()
                                 // Dimmed with nothing changed; green-tinted with a ring while
                                 // the changes view is open.
                                 .when(added == 0 && removed == 0, |d| d.opacity(0.5))
                                 .when(changes_open, |d| {
-                                    d.bg(gpui::Hsla {
-                                        a: 0.11,
-                                        ..add_color
-                                    })
-                                    .border_color(
-                                        gpui::Hsla {
-                                            a: 0.33,
-                                            ..add_color
-                                        },
-                                    )
+                                    d.bg(gpui::Hsla { a: 0.11, ..tint })
+                                        .border_color(gpui::Hsla { a: 0.33, ..tint })
                                 })
                                 .when(!changes_open, |d| d.hover(|s| s.bg(content(0.07))))
                                 .on_click(cx.listener(|this, _, _, cx| {
@@ -7306,12 +7297,11 @@ impl Shell {
                                         this.open_pane(CHANGES_PANE, cx);
                                     }
                                 }))
-                                .child(div().text_color(add_color).child(format!("+{added}")))
-                                .child(
-                                    div()
-                                        .text_color(remove_color)
-                                        .child(format!("\u{2212}{removed}")),
-                                ),
+                                .child(crate::theme::diff_counts(
+                                    added.into(),
+                                    removed.into(),
+                                    false,
+                                )),
                         )
                     })
                     .child(
@@ -14856,6 +14846,7 @@ impl Shell {
         let key = (kind, conversation.session_id.clone());
         if !self.pane_views.contains_key(&key) {
             let context = crate::panels::PanelContext {
+                stat_tx: self.git_tx.clone(),
                 backend: self.backend.clone(),
                 session_id: conversation.session_id.clone(),
                 worktree: conversation.worktree.clone(),

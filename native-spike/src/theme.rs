@@ -270,6 +270,58 @@ pub fn mix(from: Palette, to: Palette, t: f32) -> Palette {
     }
 }
 
+/// The added and removed line counts' colors and type, as Monocode draws them: soft mint and
+/// rose, 10 px medium, with tabular digits so the numbers do not shift as they change.
+pub const DIFF_ADD: u32 = 0x6ee7b7;
+pub const DIFF_DEL: u32 = 0xfda4af;
+pub const DIFF_COUNT_SIZE: f32 = 10.;
+
+pub fn tabular() -> gpui::FontFeatures {
+    gpui::FontFeatures(std::sync::Arc::new(vec![("tnum".to_owned(), 1)]))
+}
+
+/// A count with thousands separators: 1,234.
+pub fn format_count(value: u64) -> String {
+    let digits = value.to_string();
+    let mut out = String::new();
+    for (ix, digit) in digits.chars().enumerate() {
+        if ix > 0 && (digits.len() - ix) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(digit);
+    }
+    out
+}
+
+/// "+added -removed" as small tabular text in the diff colors; a side with nothing is dropped
+/// when `skip_zero`.
+pub fn diff_counts(added: u64, removed: u64, skip_zero: bool) -> gpui::Div {
+    use gpui::FontWeight;
+    let mut row = gpui::div()
+        .flex()
+        .items_center()
+        .gap(px(6.))
+        .whitespace_nowrap()
+        .text_size(px(DIFF_COUNT_SIZE))
+        .font_weight(FontWeight::MEDIUM)
+        .font_features(tabular());
+    if !(skip_zero && added == 0) {
+        row = row.child(
+            gpui::div()
+                .text_color(rgb(DIFF_ADD))
+                .child(format!("+{}", format_count(added))),
+        );
+    }
+    if !(skip_zero && removed == 0) {
+        row = row.child(
+            gpui::div()
+                .text_color(rgb(DIFF_DEL))
+                .child(format!("-{}", format_count(removed))),
+        );
+    }
+    row
+}
+
 /// The diff's added and removed colors: default, colorblind or high contrast.
 pub fn diff_colors(diff: usize) -> (Hsla, Hsla) {
     let (add, remove) = match diff {
@@ -604,5 +656,18 @@ impl Sinks for gpui::Stateful<gpui::Div> {
     fn sinks(self) -> Self {
         use gpui::StatefulInteractiveElement as _;
         self.active(|style| style.mt(px(1.)).mb(px(-1.)).opacity(0.78))
+    }
+}
+
+#[cfg(test)]
+mod count_tests {
+    use super::format_count;
+
+    #[test]
+    fn counts_get_thousands_separators() {
+        assert_eq!(format_count(0), "0");
+        assert_eq!(format_count(999), "999");
+        assert_eq!(format_count(1000), "1,000");
+        assert_eq!(format_count(1234567), "1,234,567");
     }
 }

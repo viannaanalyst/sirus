@@ -71,17 +71,19 @@ impl Files {
 
     /// Small tiles (34 by 26) for the images among a queued request's files, up to four.
     pub(super) fn queue_tiles(&self, files: &[(String, String)], row: usize) -> Vec<Stateful<Div>> {
-        files
+        let images: Vec<&Info> = files
             .iter()
             .filter_map(|(id, _)| self.drafts.get(id))
             .filter(|info| info.is_image())
-            .take(4)
-            .enumerate()
-            .map(|(n, info)| {
+            .collect();
+        let mut out: Vec<Stateful<Div>> = images
+            .iter()
+            .take(1)
+            .map(|info| {
                 div()
-                    .id(("queue-thumb", row * 64 + n))
-                    .w(px(34.))
-                    .h(px(26.))
+                    .id(("queue-thumb", row * 64))
+                    .w(px(30.))
+                    .h(px(22.))
                     .flex_shrink_0()
                     .rounded(px(crate::theme::RADIUS_SM))
                     .overflow_hidden()
@@ -97,7 +99,18 @@ impl Files {
                         )
                     })
             })
-            .collect()
+            .collect();
+        if images.len() > 1 {
+            out.push(
+                div()
+                    .id(("queue-thumb-more", row))
+                    .flex_shrink_0()
+                    .text_size(px(11.))
+                    .text_color(content(0.55))
+                    .child(format!("+{}", images.len() - 1)),
+            );
+        }
+        out
     }
 
     /// The small picture of an image attachment, when there is one yet.

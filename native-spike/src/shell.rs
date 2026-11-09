@@ -30,9 +30,7 @@ use gpui::{
     Window, WindowControlArea, div, linear_color_stop, linear_gradient, percentage, prelude::*, px,
     rgb, svg,
 };
-use gpui::{
-    Bounds, ElementInputHandler, EntityInputHandler, StyledText, TextLayout, UTF16Selection,
-};
+use gpui::{Bounds, ElementInputHandler, EntityInputHandler, TextLayout, UTF16Selection};
 use serde_json::{Value, json};
 use shell_terminal::{PULLS_CARD, TERM_CARD, pulls_tile, terminal_tile};
 use std::cell::Cell;
@@ -219,17 +217,21 @@ impl Draft {
         self.cursor = range.start + text.len();
         self.anchor = self.cursor;
     }
+    /// One character back, or a whole inline badge.
     fn previous(&self, at: usize) -> usize {
-        self.text[..at]
+        let plain = self.text[..at]
             .char_indices()
             .next_back()
-            .map_or(0, |(i, _)| i)
+            .map_or(0, |(i, _)| i);
+        crate::inline_badges::step_back(&self.text, at, plain)
     }
+    /// One character forward, or a whole inline badge.
     fn next(&self, at: usize) -> usize {
-        self.text[at..]
+        let plain = self.text[at..]
             .chars()
             .next()
-            .map_or(at, |c| at + c.len_utf8())
+            .map_or(at, |c| at + c.len_utf8());
+        crate::inline_badges::step_forward(&self.text, at, plain)
     }
     fn word_left(&self, at: usize) -> usize {
         let before = self.text[..at].trim_end();
@@ -888,42 +890,6 @@ fn access_look(mode: &str) -> (&'static str, &'static str, &'static str, gpui::H
     }
 }
 
-/// `text` with its `/` and `@` tokens in the accent color.
-fn styled_tokens(text: String) -> StyledText {
-    let tokens = data::token_ranges(&text);
-    let found = crate::markdown::search_ranges(&text);
-    let mut cuts = vec![0, text.len()];
-    for range in tokens.iter().chain(found.iter().map(|(range, _)| range)) {
-        cuts.push(range.start);
-        cuts.push(range.end);
-    }
-    cuts.sort_unstable();
-    cuts.dedup();
-    let highlights: Vec<_> = cuts
-        .windows(2)
-        .filter_map(|pair| {
-            let (a, b) = (pair[0], pair[1]);
-            let inside = |range: &std::ops::Range<usize>| range.start <= a && b <= range.end;
-            let token = tokens.iter().any(inside);
-            let fill = found
-                .iter()
-                .find(|(range, _)| inside(range))
-                .map(|(_, fill)| *fill);
-            (token || fill.is_some()).then(|| {
-                (
-                    a..b,
-                    gpui::HighlightStyle {
-                        color: token.then(accent),
-                        background_color: fill,
-                        ..Default::default()
-                    },
-                )
-            })
-        })
-        .collect();
-    StyledText::new(text).with_highlights(highlights)
-}
-
 /// What a reply from the back end is for.
 enum Waiting {
     ProjectRemoved(usize),
@@ -1255,6 +1221,8 @@ pub struct Shell {
     dock_drawn: f32,
     ignored_text: String,
     composer_layout: std::cell::RefCell<Option<TextLayout>>,
+    /// The composer's text as laid out, with a gap for each inline badge.
+    composer_shown: std::cell::RefCell<Option<std::rc::Rc<crate::inline_badges::Shown>>>,
     /// Groups of steps the person opened or closed: (conversation, turn, first step).
     phase_open: HashMap<(usize, usize, usize), bool>,
     /// The first project the sidebar's rail shows.
@@ -1687,6 +1655,7 @@ impl Shell {
             dock_drawn: 0.,
             ignored_text: String::new(),
             composer_layout: Default::default(),
+            composer_shown: Default::default(),
             phase_open: HashMap::new(),
             rail_pos: std::cell::Cell::new(Tween::still(0., Instant::now())),
             rail_seen: Default::default(),
@@ -12999,15 +12968,24 @@ impl Shell {
             && self.appearance.is_none()
             && !self.usage_page_open()
             && !self.grabs_typing();
-        let styled = styled_tokens(if draft.text.is_empty() {
-            " ".to_owned()
-        } else {
-            draft.text.clone()
-        });
+        crate::inline_badges::sync(&self.skills, &self.files);
+        let shown = crate::inline_badges::shown_for(
+            if draft.text.is_empty() {
+                " "
+            } else {
+                &draft.text
+            },
+            false,
+            14.,
+            cx,
+        );
+        let styled = crate::inline_badges::styled(&shown);
         let layout = styled.layout().clone();
         *self.composer_layout.borrow_mut() = Some(layout.clone());
-        let selection = draft.selection();
-        let caret_at = draft.cursor;
+        *self.composer_shown.borrow_mut() = Some(shown.clone());
+        let badges = crate::inline_badges::overlay(layout.clone(), shown.clone(), 0);
+        let selection = shown.range_to_shown(draft.selection());
+        let caret_at = shown.to_shown(draft.cursor);
         let caret_key = (draft.cursor, draft.text.len());
         let composer_scroll = self.composer_scroll.clone();
         let caret_seen = self.composer_caret_seen.clone();
@@ -13110,7 +13088,11 @@ impl Shell {
                         .composer_layout
                         .borrow()
                         .as_ref()
-                        .map(|l| l.index_for_position(event.position).unwrap_or_else(|i| i));
+                        .map(|l| l.index_for_position(event.position).unwrap_or_else(|i| i))
+                        .map(|i| match this.composer_shown.borrow().as_ref() {
+                            Some(shown) => shown.to_plain(i),
+                            None => i,
+                        });
                     if let Some(index) = index {
                         let draft = this.draft();
                         let index = index.min(draft.text.len());
@@ -13124,6 +13106,7 @@ impl Shell {
                 }),
             )
             .child(styled)
+            .child(badges)
             .child(overlay)
             .when(draft.text.is_empty(), |d| {
                 d.child(
@@ -14619,17 +14602,35 @@ impl Shell {
                                         prompt_motion,
                                         bubble_width,
                                         prompt_collapsed,
-                                        transcript_select::user_text(
-                                            &self.select,
-                                            transcript_select::Reply {
-                                                conversation,
-                                                turn: index,
-                                                user: true,
-                                                beat: 0,
-                                            },
-                                            turn.user.clone(),
-                                            styled_tokens(turn.user.clone()),
-                                        ),
+                                        {
+                                            crate::inline_badges::sync(&self.skills, &self.files);
+                                            let shown = crate::inline_badges::shown_for(
+                                                &turn.user, true, 14., cx,
+                                            );
+                                            crate::inline_badges::remember(&shown);
+                                            let styled = crate::inline_badges::styled(&shown);
+                                            let badges = crate::inline_badges::overlay(
+                                                styled.layout().clone(),
+                                                shown.clone(),
+                                                1 + prompt_key.1 as u64
+                                                    + ((prompt_key.0 as u64) << 24),
+                                            );
+                                            div()
+                                                .relative()
+                                                .child(transcript_select::user_text(
+                                                    &self.select,
+                                                    transcript_select::Reply {
+                                                        conversation,
+                                                        turn: index,
+                                                        user: true,
+                                                        beat: 0,
+                                                    },
+                                                    shown.text.clone(),
+                                                    styled,
+                                                ))
+                                                .child(badges)
+                                                .into_any_element()
+                                        },
                                     ))
                                     .when(prompt_overflows, |d| {
                                         d.child(
@@ -18866,6 +18867,12 @@ impl Render for Shell {
                                 if event.pressed_button == Some(MouseButton::Left) {
                                     let index = this.composer_layout.borrow().as_ref().map(|l| {
                                         l.index_for_position(event.position).unwrap_or_else(|i| i)
+                                    });
+                                    let index = index.map(|i| {
+                                        match this.composer_shown.borrow().as_ref() {
+                                            Some(shown) => shown.to_plain(i),
+                                            None => i,
+                                        }
                                     });
                                     if let Some(index) = index {
                                         let draft = this.draft();

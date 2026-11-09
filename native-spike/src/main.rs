@@ -40,6 +40,7 @@ mod hotkey_conflicts;
 mod hover_track;
 mod i18n;
 mod image_markup;
+mod inline_badges;
 mod local_git;
 mod markdown;
 mod marks;

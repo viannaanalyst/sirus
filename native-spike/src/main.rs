@@ -225,6 +225,7 @@ impl AssetSource for Assets {
             "eye-off" => include_bytes!("../assets/eye-off.svg"),
             "clipboard" => include_bytes!("../assets/clipboard.svg"),
             "lock" => include_bytes!("../assets/lock.svg"),
+            "shield" => include_bytes!("../assets/shield.svg"),
             "file-text" => include_bytes!("../assets/file-text.svg"),
             "wrench" => include_bytes!("../assets/wrench.svg"),
             "arrow-left" => include_bytes!("../assets/arrow-left.svg"),

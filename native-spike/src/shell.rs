@@ -912,6 +912,79 @@ struct MentionHit {
     label: String,
     about: String,
     provider: Option<&'static str>,
+    /// The skill's line icon; files and models keep the rows they had.
+    icon: Option<&'static str>,
+}
+
+/// The icon a skill gets in the composer's lists, from its name first and then its description;
+/// the first keyword rule that matches wins, and a skill with none gets the puzzle piece
+/// (ADR-198).
+fn skill_icon(name: &str, about: &str) -> &'static str {
+    const RULES: [(&str, &[&str]); 17] = [
+        ("file-text", &["pdf", "docx", "xlsx", "pptx", "doc"]),
+        ("test-tube", &["test", "tdd"]),
+        ("bug", &["debug", "bug"]),
+        (
+            "palette",
+            &["design", "ui", "frontend", "theme", "tailwind"],
+        ),
+        ("rocket", &["deploy", "release", "store", "publish"]),
+        ("sparkles", &["animation", "motion"]),
+        ("shield", &["security", "review-security"]),
+        ("chart-column", &["data", "chart", "dataviz", "xlsx"]),
+        ("list-ordered", &["plan", "writing-plans"]),
+        ("search", &["review", "code-review"]),
+        ("branch", &["git", "branch", "pr"]),
+        ("plug", &["api", "sdk", "claude-api"]),
+        ("image", &["image", "imagegen"]),
+        ("bulb", &["brainstorm", "idea"]),
+        ("git-compare", &["migration", "migrate"]),
+        (
+            "smartphone",
+            &["mobile", "ios", "expo", "capacitor", "react-native"],
+        ),
+        ("globe", &["browser", "chrome", "web"]),
+    ];
+    for text in [name, about] {
+        let text = skill_fold(text);
+        if let Some((glyph, _)) = RULES
+            .iter()
+            .find(|(_, keywords)| keywords.iter().any(|k| skill_word_starts(&text, k)))
+        {
+            return *glyph;
+        }
+    }
+    "puzzle"
+}
+
+/// Lowercases and strips the accents, so a description written in Portuguese folds to plain
+/// ASCII letters before the keywords are looked for.
+fn skill_fold(text: &str) -> String {
+    text.to_lowercase()
+        .chars()
+        .map(|c| match c {
+            'á' | 'à' | 'â' | 'ã' | 'ä' | 'å' => 'a',
+            'é' | 'è' | 'ê' | 'ë' => 'e',
+            'í' | 'ì' | 'î' | 'ï' => 'i',
+            'ó' | 'ò' | 'ô' | 'õ' | 'ö' => 'o',
+            'ú' | 'ù' | 'û' | 'ü' => 'u',
+            'ç' => 'c',
+            'ñ' => 'n',
+            other => other,
+        })
+        .collect()
+}
+
+/// Whether `keyword` starts a word in `text`, so "test" finds "testing" and "latest" stays out.
+/// Abbreviations of three letters or fewer must also end their word ("pr" is not "project"),
+/// save for a plural "s".
+fn skill_word_starts(text: &str, keyword: &str) -> bool {
+    text.match_indices(keyword).any(|(at, _)| {
+        let before = text[..at].chars().next_back();
+        let after = text[at + keyword.len()..].chars().next();
+        before.is_none_or(|c| !c.is_alphanumeric())
+            && (keyword.len() > 3 || after.is_none_or(|c| !c.is_alphanumeric() || c == 's'))
+    })
 }
 
 /// The row's index among the mention list's children, each provider's group header counted
@@ -3436,6 +3509,7 @@ impl Shell {
                     label: name.clone(),
                     about: about.clone(),
                     provider: None,
+                    icon: Some(skill_icon(name, about)),
                 })
                 .collect(),
             '@' => {
@@ -3457,6 +3531,7 @@ impl Shell {
                             label: path,
                             about: String::new(),
                             provider: None,
+                            icon: None,
                         }
                     })
                     .collect();
@@ -3473,6 +3548,7 @@ impl Shell {
                             label: row.name,
                             about: t("Delegar a este modelo").to_owned(),
                             provider: Some(row.provider),
+                            icon: None,
                         }),
                 );
                 hits
@@ -7095,6 +7171,7 @@ impl Shell {
                 .enumerate()
                 .map(|(at, (name, about))| {
                     let chosen = name.clone();
+                    let glyph = skill_icon(name, about);
                     skills
                         .row(
                             div()
@@ -7112,7 +7189,7 @@ impl Shell {
                                 .child(
                                     div()
                                         .mt(px(2.))
-                                        .child(icon("box", 13.).text_color(content(0.5))),
+                                        .child(icon(glyph, 14.).text_color(content(0.6))),
                                 )
                                 .child(
                                     div()
@@ -14115,6 +14192,7 @@ impl Shell {
                                                     label: name,
                                                     about,
                                                     provider,
+                                                    icon: glyph,
                                                 } = hit;
                                                 // A provider's first model row opens its group with its name.
                                                 let header = provider
@@ -14160,8 +14238,21 @@ impl Shell {
                                                             .when_some(provider, |d, p| {
                                                                 d.child(provider_mark(p, 15.))
                                                             })
-                                                            .when(about.is_empty(), |d| {
+                                                            .when_some(glyph, |d, glyph| {
                                                                 d.child(
+                                                                    icon(glyph, 14.).text_color(
+                                                                        if i == selected {
+                                                                            content(0.95)
+                                                                        } else {
+                                                                            content(0.6)
+                                                                        },
+                                                                    ),
+                                                                )
+                                                            })
+                                                            .when(
+                                                                glyph.is_none() && about.is_empty(),
+                                                                |d| {
+                                                                    d.child(
                                                                     crate::file_icons::file_icon(
                                                                         name.rsplit('/')
                                                                             .next()
@@ -14170,7 +14261,8 @@ impl Shell {
                                                                         15.,
                                                                     ),
                                                                 )
-                                                            })
+                                                                },
+                                                            )
                                                             .child(
                                                                 div().flex_shrink_0().child(name),
                                                             )
@@ -19935,6 +20027,39 @@ mod tests {
         assert!(!hit("s"));
         assert!(!hit("gpt"));
         assert_eq!(model_mention("codex", "gpt-5.5"), "model:codex/gpt-5.5");
+    }
+
+    #[test]
+    fn a_skill_icon_comes_from_its_name_and_then_its_description() {
+        assert_eq!(skill_icon("pdf", "Lê e extrai texto."), "file-text");
+        assert_eq!(skill_icon("systematic-debugging", ""), "bug");
+        assert_eq!(skill_icon("test-driven-development", ""), "test-tube");
+        assert_eq!(skill_icon("capacitor-testing", ""), "test-tube");
+        assert_eq!(skill_icon("frontend-design", ""), "palette");
+        assert_eq!(skill_icon("security-review", ""), "shield");
+        assert_eq!(skill_icon("code-review", ""), "search");
+        assert_eq!(skill_icon("expo-animation", ""), "sparkles");
+        assert_eq!(skill_icon("git-commit-helper", ""), "branch");
+        assert_eq!(skill_icon("create-design-md", ""), "palette");
+        // The name comes before the description.
+        assert_eq!(skill_icon("test", "Deploy it to the store"), "test-tube");
+        // The map's first rule wins: xlsx is a document before it is a chart.
+        assert_eq!(skill_icon("xlsx", "Charts and data"), "file-text");
+        // Migration is checked before the phone rule its name also carries.
+        assert_eq!(
+            skill_icon("capacitor-app-migrations:framework-to-capacitor", ""),
+            "git-compare"
+        );
+        assert_eq!(skill_icon("mobile-ui", ""), "palette");
+        assert_eq!(skill_icon("unknown", "Shipping a release"), "rocket");
+        assert_eq!(
+            skill_icon("unknown", "How to migrate an app"),
+            "git-compare"
+        );
+        assert_eq!(skill_icon("unknown", "Open the browser"), "globe");
+        assert_eq!(skill_icon("latest", ""), "puzzle");
+        assert_eq!(skill_icon("project-helper", ""), "puzzle");
+        assert_eq!(skill_icon("unknown", "A book about nothing"), "puzzle");
     }
 
     #[test]

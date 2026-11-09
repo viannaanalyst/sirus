@@ -118,6 +118,9 @@ pub(crate) mod handoff;
 pub(crate) mod computer_switch;
 #[path = "computer_ui.rs"]
 pub(crate) mod computer_ui;
+/// The floating conversation over a maximized panel (conversation_balloon.rs).
+#[path = "conversation_balloon.rs"]
+mod conversation_balloon;
 #[path = "prompt_link.rs"]
 pub(crate) mod prompt_link;
 /// The changed files under a finished reply, opened in place (turn_review.rs).
@@ -1200,6 +1203,7 @@ pub struct Shell {
     sidebar_card: sidebar_card::State,
     /// Cards for other conversations that finished, failed or wait for the person.
     cards: activity_cards::State,
+    balloon: conversation_balloon::State,
     /// The accent last sent to the host for the phone, `#rrggbb`.
     phone_accent: String,
     /// The ⌘F find bar and its hits (transcript_find.rs).
@@ -1640,6 +1644,7 @@ impl Shell {
             context: Default::default(),
             sidebar_card: Default::default(),
             cards: Default::default(),
+            balloon: Default::default(),
             phone_accent: String::new(),
             message_actions: Default::default(),
             turn_review: Default::default(),
@@ -6064,6 +6069,11 @@ impl Shell {
             cx.notify();
             return;
         }
+        if key == "escape" && self.balloon.open {
+            self.balloon_close(cx);
+            cx.stop_propagation();
+            return;
+        }
         // Escape and ⌘. stop the agent, ⌘Enter flips queue/steer, ↑ recalls the last message.
         if self.queue_keys(keys, window, cx) {
             return;
@@ -6111,6 +6121,10 @@ impl Shell {
             }
             (true, false, false, "s") => self.toggle_sidebar(cx),
             (true, false, false, ",") => self.toggle_appearance(cx),
+            (true, false, false, "l") if self.balloon_shows() => {
+                self.balloon_toggle(cx);
+                cx.stop_propagation();
+            }
             (true, false, false, "f") => self.open_find(window, cx),
             (true, false, false, "k") => self.toggle_palette(false, cx),
             (true, false, false, "p") => self.toggle_palette(true, cx),
@@ -17504,6 +17518,15 @@ impl Shell {
     }
 }
 
+/// The element for the main slot, and whether it is the conversation (the balloon floats only
+/// over a panel when the conversation, not a terminal page, holds the slot).
+fn title_tab_or(title_tab: Option<AnyElement>, transcript: AnyElement) -> (AnyElement, bool) {
+    match title_tab {
+        Some(page) => (page, false),
+        None => (transcript, true),
+    }
+}
+
 fn running(conversation: &Conversation, _now: Instant) -> bool {
     conversation.working()
 }
@@ -18700,7 +18723,8 @@ impl Render for Shell {
                 || self.actions.covers_pages()
                 || self.first_run.active()
                 || self.viewer.visible()
-                || self.cards_visible(),
+                || self.cards_visible()
+                || self.balloon_covers_page(),
         );
         if std::mem::take(&mut self.refocus) {
             window.focus(&self.focus, cx);
@@ -18744,6 +18768,13 @@ impl Render for Shell {
         let title_tab = self.title_tab_view(cx);
         let bottom_terminal = self.bottom_view(cx);
         let attachment_modal = self.attachment_view(now, &mut moving, cx);
+        let (chat_slot, balloon) = {
+            let chat = title_tab_or(title_tab, transcript);
+            match chat {
+                (chat, true) => self.balloon_view(chat, now, &mut moving, cx),
+                (chat, false) => (chat, None),
+            }
+        };
         let trail_card = self.trail_card();
         let project_switch = self.project_switch_view(cx);
         let quit_notice = self.press_notice(Press::Quit, cx).map(|notice| {
@@ -18947,7 +18978,7 @@ impl Render for Shell {
                                                     .bg(pane_fill())
                                                     .overflow_hidden()
                                                     .child(div().flex_1().min_h_0().w_full().flex()
-                                                    .child(div().flex_1().min_w_0().h_full().flex().overflow_hidden().child(title_tab.unwrap_or(transcript)))
+                                                    .child(div().flex_1().min_w_0().h_full().flex().overflow_hidden().child(chat_slot))
                                                     .when_some(dock, |d, dock| {
                                                         d.child(
                                                             div().id("dock-resize").relative().flex_shrink_0().h_full().w(px(1. - dock_filling)).bg(content(0.08)).opacity(dock_share)
@@ -18960,6 +18991,7 @@ impl Render for Shell {
                                                     }))
                                                     .children(bottom_terminal),
                                             )
+                                            .children(balloon)
                                             .child(card_corner_mask(false)),
                                     ),
                             ),

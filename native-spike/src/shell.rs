@@ -35,7 +35,7 @@ use gpui::{
 };
 use gpui::{Bounds, ElementInputHandler, EntityInputHandler, TextLayout, UTF16Selection};
 use serde_json::{Value, json};
-use shell_terminal::{PULLS_CARD, TERM_CARD, pulls_tile};
+use shell_terminal::{PULLS_CARD, TASKS_CARD, TERM_CARD, pulls_tile, tasks_tile};
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ops::Range;
@@ -1684,6 +1684,8 @@ pub struct Shell {
     history_at: usize,
     rolls: HashMap<(usize, usize), Tween>,
     drag: Option<TabDrag>,
+    /// Which title tab the pointer is over, eased into a glow (tab_hover.rs).
+    tab_glow: crate::tab_hover::TabGlow,
     /// The sidebar navigation row being dragged to a new place, each row's eased top, and whether
     /// the last press became a drag (so its click is ignored).
     nav_drag: Option<NavDrag>,
@@ -2102,6 +2104,7 @@ impl Shell {
             history_at: 0,
             rolls: HashMap::new(),
             drag: None,
+            tab_glow: Default::default(),
             nav_drag: None,
             nav_motion: HashMap::new(),
             nav_dragged: false,
@@ -2780,6 +2783,7 @@ impl Shell {
         self.save_drafts();
         self.active = self.tabs[0].id;
         self.history.push(self.active);
+        self.restore_page_tabs(cx);
         for provider in ["claude", "codex", "opencode"] {
             let id = self
                 .backend
@@ -5441,15 +5445,15 @@ impl Shell {
         };
         let pinned = self.tabs.iter().filter(|t| t.pinned && !t.closing).count()
             + self.term.pinned_ids().len()
-            + usize::from(self.term.pulls_in_deck());
+            + usize::from(self.term.pulls_in_deck())
+            + usize::from(self.term.tasks_in_deck());
         let pulls_live = self.term.pulls_in_strip();
         let pulls_shown = pulls_live && self.term.pulls_active;
         // A page on screen is the selected tab, wherever it sits; the session tabs give that up.
         let tasks_live = self.term.tasks_in_strip();
         let tasks_shown = tasks_live && self.term.tasks_active;
-        let page_on_screen = self.term.pulls_active
-            || self.term.tasks_active
-            || self.term.terminal_showing();
+        let page_on_screen =
+            self.term.pulls_active || self.term.tasks_active || self.term.terminal_showing();
         let page_in_strip = pulls_shown || tasks_shown || self.term.terminal_showing_in_strip();
         let free = (self.tabs.iter().filter(|t| !t.pinned && !t.closing).count()
             + usize::from(pulls_live)
@@ -5547,7 +5551,8 @@ impl Shell {
             }
         }
         // The Tarefas tab follows Pull requests.
-        if let Some(page) = self.term.tasks_tab.as_mut() {
+        let tasks_pinned = self.term.tasks_in_deck_now();
+        if let Some(page) = self.term.tasks_tab.as_mut().filter(|_| !tasks_pinned) {
             let width = match (page.closing, tasks_shown) {
                 (true, _) => 0.,
                 (false, true) => selected,
@@ -5593,6 +5598,7 @@ impl Shell {
             .filter(|t| t.pinned && !t.closing)
             .map(|t| (t.id, Some(t.conversation)))
             .chain(self.term.pulls_in_deck().then_some((PULLS_CARD, None)))
+            .chain(self.term.tasks_in_deck().then_some((TASKS_CARD, None)))
             .chain(
                 self.term
                     .pinned_ids()
@@ -5649,6 +5655,7 @@ impl Shell {
             let title = match pinned[ix].1 {
                 Some(conversation) => self.conversations[conversation].title.clone(),
                 None if pinned[ix].0 == PULLS_CARD => t("Pull requests").to_owned(),
+                None if pinned[ix].0 == TASKS_CARD => t("Tarefas").to_owned(),
                 None => self.term_title(pinned[ix].0 - TERM_CARD, cx),
             };
             Some((title, places[ix].x))
@@ -5662,10 +5669,13 @@ impl Shell {
             let selected = id == active_card;
             let hovered = hovered_card == Some(id);
             let is_pulls = id == PULLS_CARD;
-            let terminal = (conversation.is_none() && !is_pulls).then(|| id - TERM_CARD);
+            let is_tasks = id == TASKS_CARD;
+            let terminal =
+                (conversation.is_none() && !is_pulls && !is_tasks).then(|| id - TERM_CARD);
             let (face, mark) = match conversation {
                 Some(conversation) => self.tile_parts(&self.conversations[conversation], now),
                 None if is_pulls => pulls_tile(),
+                None if is_tasks => tasks_tile(),
                 None => terminal_tile(terminal.and_then(|id| self.term_agent(id, cx))),
             };
             cards.push(
@@ -5720,6 +5730,10 @@ impl Shell {
                                 this.ask_chip_menu(0, event.position, cx);
                                 return;
                             }
+                            if is_tasks {
+                                this.ask_chip_menu(shell_terminal::TASKS_TAB, event.position, cx);
+                                return;
+                            }
                             if let Some(terminal) = terminal {
                                 this.ask_chip_menu(terminal, event.position, cx);
                                 return;
@@ -5741,6 +5755,10 @@ impl Shell {
                     .on_click(cx.listener(move |this, _, window, cx| {
                         if is_pulls {
                             this.open_pull_requests(cx);
+                            return;
+                        }
+                        if is_tasks {
+                            this.open_tasks_page(cx);
                             return;
                         }
                         match terminal {
@@ -5855,6 +5873,17 @@ impl Shell {
         });
         self.menu = None;
         self.select(id, cx);
+    }
+
+    /// Esc during a tab drag drops nothing: the tab goes back to its slot and no half stays aimed.
+    fn cancel_tab_drag(&mut self, keys: &gpui::Keystroke, cx: &mut Context<Self>) -> bool {
+        if keys.key != "escape" || !self.drag.as_ref().is_some_and(|d| d.active) {
+            return false;
+        }
+        self.drag = None;
+        self.split_clear_aim();
+        cx.notify();
+        true
     }
 
     fn mouse_move(&mut self, event: &MouseMoveEvent, _window: &mut Window, cx: &mut Context<Self>) {
@@ -6060,6 +6089,10 @@ impl Shell {
             return;
         }
         if self.first_run_keys(&event.keystroke, cx) {
+            cx.stop_propagation();
+            return;
+        }
+        if self.cancel_tab_drag(&event.keystroke, cx) {
             cx.stop_propagation();
             return;
         }
@@ -7509,7 +7542,12 @@ impl Shell {
         let group: gpui::SharedString = format!("tab{id}").into();
         let width = tab.w.at(now);
         let dragged = self.drag.as_ref().is_some_and(|d| d.active && d.id == id);
-        let ink = if active { 1. } else { 0.5 };
+        let glow = self.tab_glow.level(id, now);
+        let ink = if active {
+            1.
+        } else {
+            crate::tab_hover::title_ink(glow)
+        };
         let (face, glyph) = self.tile_parts(conversation, now);
         let mark = mark_tile(&TAB_TILE, face, glyph);
         let closable = active || width >= 72.;
@@ -7536,8 +7574,16 @@ impl Shell {
             .items_center()
             .pl(px(tab_tile_inset()))
             .gap(px(8.))
-            .bg(content(if active { 0.1 } else { 0.04 }))
-            .when(!active, |d| d.hover(|s| s.bg(content(0.07))))
+            .cursor_pointer()
+            .bg(content(if active {
+                0.1
+            } else {
+                crate::tab_hover::plate_ink(glow)
+            }))
+            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                this.tab_glow.hover(id, *hovered);
+                cx.notify();
+            }))
             .when(dragged, |d| d.bg(content(0.14)).shadow_md())
             .when(tab.closing, |d| {
                 d.opacity((width / PIN_WIDTH).clamp(0., 1.))
@@ -7574,7 +7620,6 @@ impl Shell {
                         .opacity(title)
                         .text_size(px(13.))
                         .text_color(content(ink))
-                        .group_hover(group.clone(), |s| s.text_color(content(1.)))
                         .child(tab_label(conversation.title.clone())),
                 )
             })
@@ -7663,6 +7708,8 @@ impl Shell {
         let changes_open = self.dock_open && self.dock_active == Some(CHANGES_PANE);
         let strip = width - strip_left - 12. - PLATE - 6. - controls - 10.;
         *moving |= self.layout_tabs(strip, now, reduced);
+        *moving |= self.tab_glow.step(now);
+        self.save_page_tabs();
         let tabs: Vec<AnyElement> = {
             // Pinned tabs live in the dock, not the strip.
             let mut order: Vec<usize> = (0..self.tabs.len())

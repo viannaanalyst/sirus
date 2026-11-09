@@ -707,6 +707,21 @@ pub fn edge_at(nx: f32, ny: f32) -> Edge {
     .0
 }
 
+/// Which half of a pane a tab dropped on it opens beside: the left or the right, by the side
+/// of the middle the pointer is on (`nx` is its place across the pane, 0 to 1).
+pub fn drop_half(nx: f32) -> Edge {
+    if nx < 0.5 { Edge::Left } else { Edge::Right }
+}
+
+/// A tab pulled out of the strip splits only left or right, whatever part of a pane it is over;
+/// the area's own border (the whole area) keeps the edge it names.
+pub fn tab_drop_edge(target: Target, edge: Edge, pane_nx: f32) -> Edge {
+    match target {
+        Target::Pane(_) => drop_half(pane_nx),
+        Target::Root => edge,
+    }
+}
+
 /// What a point of the area (in fractions, with the area's size in pixels) would drop onto.
 pub fn target_at(
     panes: &[(u32, Rect)],
@@ -1224,6 +1239,7 @@ impl Shell {
         session: &str,
         position: Point<Pixels>,
         bounds: Bounds<Pixels>,
+        halves: bool,
     ) -> bool {
         let before = self.split.hover;
         self.split.hover = None;
@@ -1237,6 +1253,13 @@ impl Shell {
                     None => base.rects().0,
                 };
                 if let Some((target, edge)) = target_at(&panes, nx, ny, width, height) {
+                    // A tab pulled from the strip lands on the half under the pointer.
+                    let edge = match panes.iter().find(|(id, _)| Target::Pane(*id) == target) {
+                        Some((_, rect)) if halves => {
+                            tab_drop_edge(target, edge, (nx - rect.x) / rect.w)
+                        }
+                        _ => edge,
+                    };
                     // A terminal never takes a pane's place: its middle splits it too.
                     let edge = if edge == Edge::Center && term_id(session).is_some() {
                         Edge::Right
@@ -1297,7 +1320,7 @@ impl Shell {
                 .find(|t| t.id == tab)
                 .map(|t| self.conversations[t.conversation].session_id.clone());
             if let (Some(session), Some(area)) = (session, self.split.area.get()) {
-                if self.split_aim(&session, event.position, area) {
+                if self.split_aim(&session, event.position, area, true) {
                     cx.notify();
                 }
             }
@@ -1420,14 +1443,14 @@ impl Shell {
             .on_drag_move(
                 cx.listener(|this, event: &gpui::DragMoveEvent<ConvDrag>, _, cx| {
                     let session = event.drag(cx).session.clone();
-                    if this.split_aim(&session, event.event.position, event.bounds) {
+                    if this.split_aim(&session, event.event.position, event.bounds, false) {
                         cx.notify();
                     }
                 }),
             )
             .on_drag_move(cx.listener(
                 |this, event: &gpui::DragMoveEvent<crate::panel_terminal::TermTabDrag>, _, cx| {
-                    if this.split_aim(&term_session(0), event.event.position, event.bounds) {
+                    if this.split_aim(&term_session(0), event.event.position, event.bounds, false) {
                         cx.notify();
                     }
                 },
@@ -2022,6 +2045,22 @@ mod tests {
         assert_eq!(sessions(&pruned), ["a"]);
         let none = layout.pruned(&|_| false);
         assert_eq!(none.count(), 1);
+    }
+
+    #[test]
+    fn a_pulled_tab_opens_on_the_half_under_the_pointer() {
+        assert_eq!(drop_half(0.1), Edge::Left);
+        assert_eq!(drop_half(0.49), Edge::Left);
+        assert_eq!(drop_half(0.5), Edge::Right);
+        assert_eq!(drop_half(0.9), Edge::Right);
+        // Over a pane, even its middle or its top edge becomes a half.
+        assert_eq!(
+            tab_drop_edge(Target::Pane(1), Edge::Center, 0.3),
+            Edge::Left
+        );
+        assert_eq!(tab_drop_edge(Target::Pane(1), Edge::Top, 0.8), Edge::Right);
+        // The area's border keeps its edge.
+        assert_eq!(tab_drop_edge(Target::Root, Edge::Bottom, 0.1), Edge::Bottom);
     }
 
     #[test]

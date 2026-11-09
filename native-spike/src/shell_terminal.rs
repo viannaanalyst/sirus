@@ -12,10 +12,12 @@ pub(super) const BOTTOM_HEIGHT: f32 = 280.;
 pub(super) const TERM_CARD: u64 = 1 << 62;
 /// The Pull requests tab's key in the deck.
 pub(super) const PULLS_CARD: u64 = 1 << 61;
+/// The Tarefas tab's key in the deck.
+pub(super) const TASKS_CARD: u64 = 1 << 60;
 /// What the tab menu calls the Pull requests tab; terminal tabs count from 1.
 const PULLS_TAB: u64 = 0;
 /// The Tarefas tab's name in the same menus, clear of the terminals' counting.
-const TASKS_TAB: u64 = u64::MAX - 1;
+pub(super) const TASKS_TAB: u64 = u64::MAX - 1;
 
 struct TermTab {
     id: u64,
@@ -50,6 +52,11 @@ pub(super) struct TermState {
     /// The Tarefas page (tasks_page.rs): a title tab like Pull requests, after it in the strip.
     pub(super) tasks_active: bool,
     pub(super) tasks_tab: Option<PageTab>,
+    /// The Tarefas tab sits in the deck of pinned tabs.
+    tasks_pinned: bool,
+    /// The page tabs saved last, to write the file only when they change.
+    pages_saved: Option<crate::page_tabs::Snapshot>,
+    pages_restored: bool,
 }
 
 /// A page's tab among the session tabs: it is not a conversation, so it has no `Tab`.
@@ -77,10 +84,20 @@ impl TermState {
             _pulls_events: None,
             tasks_active: false,
             tasks_tab: None,
+            tasks_pinned: false,
+            pages_saved: None,
+            pages_restored: false,
         }
     }
     pub fn tasks_in_strip(&self) -> bool {
-        self.tasks_tab.as_ref().is_some_and(|tab| !tab.closing)
+        !self.tasks_pinned && self.tasks_tab.as_ref().is_some_and(|tab| !tab.closing)
+    }
+    pub fn tasks_in_deck(&self) -> bool {
+        self.tasks_pinned && self.tasks_tab.as_ref().is_some_and(|tab| !tab.closing)
+    }
+    /// Pinned, closing or not: its plate is not in the strip to lay out.
+    pub fn tasks_in_deck_now(&self) -> bool {
+        self.tasks_pinned
     }
     /// Terminal tabs in the strip: one pulled from the panel stays a tab, in any placement.
     pub fn strip_count(&self) -> usize {
@@ -121,6 +138,9 @@ impl TermState {
     pub fn active_card(&self) -> Option<u64> {
         if self.pulls_active {
             return Some(PULLS_CARD);
+        }
+        if self.tasks_active {
+            return Some(TASKS_CARD);
         }
         self.active.map(|id| TERM_CARD + id)
     }
@@ -538,6 +558,8 @@ impl Shell {
         let shown = open.at(now).clamp(0., 1.);
         let pinned = if id == PULLS_TAB {
             self.term.pulls_pinned
+        } else if id == TASKS_TAB {
+            self.term.tasks_pinned
         } else {
             self.term.tabs.iter().find(|tab| tab.id == id)?.pinned
         };
@@ -657,6 +679,8 @@ impl Shell {
     fn toggle_page_pin(&mut self, id: u64) {
         if id == PULLS_TAB {
             self.term.pulls_pinned = !self.term.pulls_pinned;
+        } else if id == TASKS_TAB {
+            self.term.tasks_pinned = !self.term.tasks_pinned;
         } else if let Some(tab) = self.term.tabs.iter_mut().find(|tab| tab.id == id) {
             tab.pinned = !tab.pinned;
         }
@@ -881,6 +905,69 @@ impl Shell {
         cx.notify();
     }
 
+    /// The page tabs as they stand: open ones, their pins, the one showing.
+    fn page_snapshot(&self) -> crate::page_tabs::Snapshot {
+        use crate::page_tabs::{Page, Snapshot};
+        let live = |tab: &Option<PageTab>| tab.as_ref().is_some_and(|tab| !tab.closing);
+        let mut pages = Vec::new();
+        if live(&self.term.pulls_tab) {
+            pages.push((Page::Pulls, self.term.pulls_pinned));
+        }
+        if live(&self.term.tasks_tab) {
+            pages.push((Page::Tasks, self.term.tasks_pinned));
+        }
+        let active = if self.term.pulls_active {
+            Some(Page::Pulls)
+        } else if self.term.tasks_active {
+            Some(Page::Tasks)
+        } else {
+            None
+        };
+        Snapshot { pages, active }
+    }
+
+    /// Writes the page tabs when they changed since the last frame. Until they are restored the
+    /// file is left alone, so a launch that has not reopened them yet does not wipe it.
+    pub(super) fn save_page_tabs(&mut self) {
+        if !self.term.pages_restored {
+            return;
+        }
+        let now = self.page_snapshot();
+        if self.term.pages_saved.as_ref() != Some(&now) {
+            crate::page_tabs::write(&crate::page_tabs::file(), &now);
+            self.term.pages_saved = Some(now);
+        }
+    }
+
+    /// Reopens the page tabs the last run left, in their order and pins, once the state is in.
+    pub(super) fn restore_page_tabs(&mut self, cx: &mut Context<Self>) {
+        use crate::page_tabs::Page;
+        if std::mem::replace(&mut self.term.pages_restored, true) {
+            return;
+        }
+        let Some(saved) = crate::page_tabs::read(&crate::page_tabs::file()) else {
+            return;
+        };
+        let saved = saved.restored();
+        for (page, pinned) in &saved.pages {
+            match page {
+                Page::Pulls => {
+                    self.open_pull_requests(cx);
+                    self.term.pulls_pinned = *pinned;
+                }
+                Page::Tasks => {
+                    self.open_tasks_page(cx);
+                    self.term.tasks_pinned = *pinned;
+                }
+            }
+        }
+        // Opening a page shows it; only the one that was showing stays on screen.
+        self.term.pulls_active = saved.active == Some(Page::Pulls);
+        self.term.tasks_active = saved.active == Some(Page::Tasks);
+        self.term.pages_saved = Some(self.page_snapshot());
+        cx.notify();
+    }
+
     /// Closes the Tarefas tab; if it was showing, its left neighbour takes over, as for Pull requests.
     pub(super) fn close_tasks_tab(&mut self, cx: &mut Context<Self>) {
         let was_active = self.term.tasks_active;
@@ -889,6 +976,7 @@ impl Shell {
             _ => return,
         }
         self.term.tasks_active = false;
+        self.term.tasks_pinned = false;
         self.tasks_page.sheet = None;
         self.tasks_page.popover = None;
         if was_active {
@@ -916,14 +1004,17 @@ impl Shell {
         active: bool,
         mark: AnyElement,
         title: SharedString,
+        key: u64,
         now: Instant,
+        cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
+        let glow = self.tab_glow.level(key, now);
         let width = place.w.at(now);
         let closable = active || width >= 72.;
         let shown = ((width - PIN_WIDTH) / 60.).clamp(0., 1.);
         div()
             .id(id)
-            .group(group.clone())
+            .group(group)
             .absolute()
             .left(px(place.x.at(now)))
             .top(px((TITLE_BAR - PLATE) / 2.))
@@ -935,8 +1026,16 @@ impl Shell {
             .items_center()
             .pl(px(tab_tile_inset()))
             .gap(px(8.))
-            .bg(content(if active { 0.1 } else { 0.04 }))
-            .when(!active, |d| d.hover(|s| s.bg(content(0.07))))
+            .cursor_pointer()
+            .bg(content(if active {
+                0.1
+            } else {
+                crate::tab_hover::plate_ink(glow)
+            }))
+            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                this.tab_glow.hover(key, *hovered);
+                cx.notify();
+            }))
             .when(place.closing, |d| {
                 d.opacity((width / PIN_WIDTH).clamp(0., 1.))
             })
@@ -951,8 +1050,11 @@ impl Shell {
                         .mr(px(if closable { 24. } else { 8. }))
                         .opacity(shown)
                         .text_size(px(13.))
-                        .text_color(content(if active { 1. } else { 0.5 }))
-                        .group_hover(group, |s| s.text_color(content(1.)))
+                        .text_color(content(if active {
+                            1.
+                        } else {
+                            crate::tab_hover::title_ink(glow)
+                        }))
                         .child(crate::tab_label::tab_label(title)),
                 )
             })
@@ -1017,7 +1119,9 @@ impl Shell {
                 active,
                 mark_tile(&TAB_TILE, face, glyph).into_any_element(),
                 t("Pull requests").into(),
+                PULLS_CARD,
                 now,
+                cx,
             )
             .on_mouse_down(
                 MouseButton::Right,
@@ -1038,7 +1142,11 @@ impl Shell {
         now: Instant,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let tab = self.term.tasks_tab.as_ref()?;
+        let tab = self
+            .term
+            .tasks_tab
+            .as_ref()
+            .filter(|_| !self.term.tasks_pinned)?;
         let active = self.term.tasks_active && !tab.closing;
         let group: SharedString = "tasks-tab".into();
         let (face, glyph) = tasks_tile();
@@ -1062,7 +1170,16 @@ impl Shell {
                 active,
                 mark_tile(&TAB_TILE, face, glyph).into_any_element(),
                 t("Tarefas").into(),
+                TASKS_CARD,
                 now,
+                cx,
+            )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    this.ask_chip_menu(TASKS_TAB, event.position, cx);
+                }),
             )
             .on_click(cx.listener(|this, _, _, cx| this.open_tasks_page(cx)))
             .children(close)
@@ -1101,7 +1218,9 @@ impl Shell {
                     active,
                     mark_tile(&TAB_TILE, face, glyph).into_any_element(),
                     tab.view.read(cx).title().into(),
+                    TERM_CARD + id,
                     now,
+                    cx,
                 )
                 .on_mouse_down(
                     MouseButton::Middle,

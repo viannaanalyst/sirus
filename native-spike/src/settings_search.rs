@@ -645,7 +645,7 @@ mod tests {
             if page == crate::shell::APPEARANCE {
                 collect(|| {
                     // The page's groups, as it draws them; the choices are filed under these.
-                    for group in ["Tema", "Cores", "Materiais", "Interface", "Ícone do app"] {
+                    for group in ["Tema e cores", "Materiais", "Interface", "Ícone do app"] {
                         note_group(t(group));
                     }
                     crate::shell::note_appearance_choices();
@@ -662,19 +662,19 @@ mod tests {
         let hits = search(&index, "escuro");
         let hit = hits
             .iter()
-            .find(|e| e.title.pt == "Escuro" && e.group.pt == "Tema")
+            .find(|e| e.title.pt == "Escuro" && e.group.pt == "Tema e cores")
             .expect("the theme option is indexed");
         assert_eq!(hit.page, crate::shell::APPEARANCE);
         assert_eq!(hit.target().as_deref(), Some("Tema"));
         assert!(
             search(&index, "dark")
                 .iter()
-                .any(|e| e.title.pt == "Escuro" && e.group.pt == "Tema")
+                .any(|e| e.title.pt == "Escuro" && e.group.pt == "Tema e cores")
         );
         // The group itself jumps to its picker too.
         let group = index
             .iter()
-            .find(|e| e.kind == Kind::Group && e.title.pt == "Tema")
+            .find(|e| e.kind == Kind::Group && e.title.pt == "Tema e cores")
             .unwrap();
         assert_eq!(group.target().as_deref(), Some("Tema"));
     }

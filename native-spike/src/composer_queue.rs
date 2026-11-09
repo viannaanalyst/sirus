@@ -797,8 +797,7 @@ impl Shell {
                 .iter()
                 .position(|conversation| conversation.session_id == wait.session_id)
             {
-                self.list_state(ix, cx).pause_following_tail();
-                self.glides.entry(ix).or_default().follow(true);
+                self.pin_to_top(ix, cx);
             }
             if let Some(item) = &wait.item {
                 let files = self.queues.cancel(&wait.session_id, item);
@@ -874,11 +873,17 @@ impl Shell {
         let attachment_ids: Vec<&String> = out.attachments.iter().map(|(id, _)| id).collect();
         // One id per send, so a repeated delivery can't start a second turn.
         let id = self.backend.invoke("send_prompt", json!({ "request": { "sessionId": out.session_id, "prompt": out.prompt, "clientRequestId": uuid(), "execution": out.execution, "attachmentIds": attachment_ids, "attachmentOwner": format!("session:{}", out.session_id), "goal": out.goal, "debugging": out.debugging, "team": out.team } }));
-        self.waiting.insert(id, Waiting::Session(ix));
+        self.waiting.insert(id, Waiting::Session);
         // The sent message glides up to the top of the view (glide.rs).
+        self.pin_to_top(ix, cx);
+        cx.notify();
+    }
+
+    /// Brings the conversation's newest turn to the top of the view, with its room below: what a
+    /// sent message, an instruction and a compaction divider all do (glide.rs).
+    pub(super) fn pin_to_top(&mut self, ix: usize, cx: &mut Context<Self>) {
         self.list_state(ix, cx).pause_following_tail();
         self.glides.entry(ix).or_default().follow(true);
-        cx.notify();
     }
 
     /// The composer after a message left it: empty, with a team request spent (it is one-shot).

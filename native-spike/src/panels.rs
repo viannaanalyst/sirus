@@ -8,9 +8,6 @@ pub struct PanelContext {
     pub backend: Backend,
     pub session_id: String,
     pub worktree: String,
-    pub provider: &'static str,
-    pub model: String,
-    pub version: String,
     /// Where the changes panes report the working tree's line totals for the top bar.
     pub stat_tx: async_channel::Sender<crate::shell::GitResult>,
 }

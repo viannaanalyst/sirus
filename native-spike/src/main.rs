@@ -46,7 +46,6 @@ mod inline_badges;
 mod local_git;
 mod markdown;
 mod marks;
-mod mascots;
 mod memory_trim;
 mod motion;
 mod native_actions;

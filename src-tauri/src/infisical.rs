@@ -351,7 +351,14 @@ pub(crate) fn env_pairs_of(reply: &Value) -> Vec<(String, String)> {
 /// The project and environment a conversation's terminals use keys from, when it is linked and
 /// the switch is on.
 fn terminal_source(state: &AppState, session_id: &str) -> Result<Option<(String, String)>> {
-    let data = state.data.lock();
+    terminal_source_in(&state.data.lock(), session_id)
+}
+
+/// `terminal_source` for a caller that already holds the data lock.
+pub(crate) fn terminal_source_in(
+    data: &crate::models::AppData,
+    session_id: &str,
+) -> Result<Option<(String, String)>> {
     let session = data
         .sessions
         .iter()
@@ -370,6 +377,22 @@ fn terminal_source(state: &AppState, session_id: &str) -> Result<Option<(String,
     }
     Ok(read_link(Path::new(&project.path))
         .map(|(workspace, _)| (workspace, environment.to_owned())))
+}
+
+/// The keys a terminal starts with, for the `(workspace, environment)` of `terminal_source`
+/// (nothing when there is no source). Shared by the `terminalEnv` action and the host's own
+/// terminals (the phone's).
+pub(crate) async fn terminal_env_pairs(
+    source: Option<(String, String)>,
+) -> Result<Vec<(String, String)>> {
+    let Some((workspace, environment)) = source else {
+        return Ok(Vec::new());
+    };
+    let (status, reply) = api(Method::GET, secrets_url(&workspace, &environment)?, None).await?;
+    if !(200..300).contains(&status) {
+        return Err(http_status_error(status));
+    }
+    Ok(env_pairs_of(&reply))
 }
 
 // ---- The link file ----
@@ -656,16 +679,10 @@ pub async fn infisical_action(state: State<'_, Arc<AppState>>, action: Action) -
             Ok(json!({ "kind": "saved" }))
         }
         Action::TerminalEnv { session_id } => {
+            let source = terminal_source(state, &session_id)?;
             let mut env = serde_json::Map::new();
-            if let Some((workspace, environment)) = terminal_source(state, &session_id)? {
-                let (status, reply) =
-                    api(Method::GET, secrets_url(&workspace, &environment)?, None).await?;
-                if !(200..300).contains(&status) {
-                    return Err(http_status_error(status));
-                }
-                for (key, value) in env_pairs_of(&reply) {
-                    env.insert(key, Value::String(value));
-                }
+            for (key, value) in terminal_env_pairs(source).await? {
+                env.insert(key, Value::String(value));
             }
             Ok(json!({ "kind": "terminalEnv", "env": env }))
         }

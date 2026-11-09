@@ -316,6 +316,25 @@ pub(crate) fn provider_mark(provider: &str, side: f32) -> Div {
     )
 }
 
+/// A terminal tab's face and mark: the mark of the agent CLI holding the terminal, or else the
+/// terminal icon on a dark tile.
+pub(crate) fn terminal_tile(agent: Option<&str>) -> (Face, AnyElement) {
+    match agent {
+        Some(provider) => (
+            Face::provider(provider),
+            crate::theme::provider_glyph(provider, 12.),
+        ),
+        None => (
+            Face::Fill(gpui::rgb(0x3A3A3C).into(), gpui::rgb(0x1C1C1E).into()),
+            gpui::svg()
+                .path("terminal-square")
+                .size(px(12.))
+                .text_color(gpui::white())
+                .into_any_element(),
+        ),
+    }
+}
+
 pub(crate) fn mark_tile(size: &TileSize, face: Face, mark: impl IntoElement) -> Div {
     tile(size, 0., face, mark.into_any_element()).flex_shrink_0()
 }

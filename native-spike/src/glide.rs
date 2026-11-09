@@ -167,6 +167,15 @@ mod tests {
     }
 
     #[test]
+    fn a_compaction_divider_pins_like_a_sent_message_even_after_scrolling_away() {
+        let mut glide = Glide::default();
+        glide.leave();
+        assert!(!glide.stick);
+        glide.follow(true);
+        assert!(glide.stick && glide.anchored);
+    }
+
+    #[test]
     fn a_growing_reply_closes_its_few_pixels_gently() {
         let mut glide = Glide::default();
         let first = glide.step(1000., 1020., 600., Instant::now(), false);

@@ -292,10 +292,13 @@ impl Shell {
         if self.this_mac_only(cx) {
             return;
         }
-        let cwd = self.conversations[self.active_conversation()]
-            .worktree
-            .clone();
-        let view = cx.new(|cx| TerminalGroup::new(cwd, cx));
+        let conversation = &self.conversations[self.active_conversation()];
+        let cwd = conversation.worktree.clone();
+        let keys = crate::panel_terminal::KeySource {
+            backend: self.backend.clone(),
+            session_id: conversation.session_id.clone(),
+        };
+        let view = cx.new(|cx| TerminalGroup::new(cwd, keys, cx));
         let id = self.term.next_id;
         self.term.next_id += 1;
         if let Some(window) = window {

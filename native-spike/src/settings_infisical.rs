@@ -650,9 +650,21 @@ pub fn view<V: 'static>(
                             div()
                                 .flex_1()
                                 .min_w_0()
-                                .text_size(px(12.5))
-                                .text_color(content(0.7))
-                                .child(t("Rodar scripts com as chaves do Infisical")),
+                                .flex()
+                                .flex_col()
+                                .gap(px(2.))
+                                .child(
+                                    div()
+                                        .text_size(px(12.5))
+                                        .text_color(content(0.7))
+                                        .child(t("Usar as chaves do Infisical nos scripts e no terminal")),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(11.5))
+                                        .text_color(content(0.45))
+                                        .child(t("Vale para terminais novos.")),
+                                ),
                         )
                         .child(switch_track(9000 + at, on, true)),
                 );

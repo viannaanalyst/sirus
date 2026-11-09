@@ -945,6 +945,8 @@ enum Waiting {
     Infisical,
     /// An `infisical_action` reply for the secret card's key list or hand-over.
     SecretCard,
+    /// A secret card's save to Infisical or `.env.local`, by request id: only success answers.
+    SecretSave(String),
     Usage,
     CliAgents,
     CliProbe(String),
@@ -1907,6 +1909,7 @@ impl Shell {
                     }
                 }
                 Some(Waiting::SecretCard) => self.secret_card_reply(ok, &value, cx),
+                Some(Waiting::SecretSave(id)) => self.secret_save_reply(&id, ok, &value, cx),
                 Some(Waiting::ScriptAction) if !ok => {
                     self.problem = Some(error_text(&value));
                 }

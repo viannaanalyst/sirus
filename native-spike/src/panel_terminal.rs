@@ -62,7 +62,11 @@ pub fn new(context: PanelContext, cx: &mut App) -> AnyView {
         &context.model,
         &folder,
     );
-    cx.new(|cx| TerminalPanel::new(context.worktree, banner, cx))
+    let keys = KeySource {
+        backend: context.backend,
+        session_id: context.session_id,
+    };
+    cx.new(|cx| TerminalPanel::new(context.worktree, banner, keys, cx))
         .into()
 }
 
@@ -77,6 +81,7 @@ pub struct TermTabDrag {
 
 pub struct TerminalPanel {
     cwd: String,
+    keys: KeySource,
     terminals: Vec<Entity<Terminal>>,
     active: usize,
     /// The terminal each project action last ran in, reused while it sits idle.
@@ -91,10 +96,11 @@ fn folder_name(cwd: &str) -> String {
 }
 
 impl TerminalPanel {
-    fn new(cwd: String, banner: String, cx: &mut Context<Self>) -> Self {
-        let first = cx.new(|cx| Terminal::new(cwd.clone(), banner, cx));
+    fn new(cwd: String, banner: String, keys: KeySource, cx: &mut Context<Self>) -> Self {
+        let first = cx.new(|cx| Terminal::new(cwd.clone(), banner, Some(keys.clone()), cx));
         Self {
             cwd,
+            keys,
             terminals: vec![first],
             active: 0,
             action_terminals: HashMap::new(),
@@ -105,7 +111,7 @@ impl TerminalPanel {
         &mut self,
         ix: usize,
         cx: &mut Context<Self>,
-    ) -> Option<(String, Entity<Terminal>)> {
+    ) -> Option<(String, KeySource, Entity<Terminal>)> {
         if ix >= self.terminals.len() {
             return None;
         }
@@ -116,12 +122,13 @@ impl TerminalPanel {
         }
         self.active = self.active.min(self.terminals.len() - 1);
         cx.notify();
-        Some((self.cwd.clone(), terminal))
+        Some((self.cwd.clone(), self.keys.clone(), terminal))
     }
     /// A shell in the panel's folder. Only the first terminal prints the banner.
     fn spawn(&self, cx: &mut Context<Self>) -> Entity<Terminal> {
         let cwd = self.cwd.clone();
-        cx.new(|cx| Terminal::new(cwd, String::new(), cx))
+        let keys = self.keys.clone();
+        cx.new(|cx| Terminal::new(cwd, String::new(), Some(keys), cx))
     }
     fn select(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         if ix < self.terminals.len() {
@@ -394,6 +401,12 @@ struct Terminal {
     shell_pid: u32,
     /// A duplicate of the PTY master, kept to ask which process group is in front.
     master_fd: i32,
+    listener: Listener,
+    program: String,
+    workdir: std::path::PathBuf,
+    /// The shell waits for the project's Infisical keys; what is typed meanwhile is held.
+    starting: bool,
+    held: Vec<u8>,
     exited: bool,
     selecting: bool,
     /// The pointer rests on a web address, which a click opens.
@@ -430,8 +443,51 @@ fn working_dir(cwd: &str) -> std::path::PathBuf {
     }
 }
 
+/// Where a terminal asks for its project's Infisical keys (ADR-198): the host fetches them for
+/// the conversation's project when "Usar as chaves do Infisical nos scripts e no terminal" is on.
+#[derive(Clone)]
+pub struct KeySource {
+    pub backend: crate::backend::Backend,
+    pub session_id: String,
+}
+
+/// Variables the terminal sets itself; a project's key never replaces them.
+const OWN_ENV: [&str; 4] = ["TERM", "COLORTERM", "TERM_PROGRAM", "PWD"];
+
+/// The shell's environment with the project's keys added. Values only move, they are never
+/// formatted into text.
+fn merged_env(
+    mut base: HashMap<String, String>,
+    secrets: Vec<(String, String)>,
+) -> HashMap<String, String> {
+    for (key, value) in secrets {
+        if !OWN_ENV.contains(&key.as_str()) {
+            base.insert(key, value);
+        }
+    }
+    base
+}
+
+/// The keys in the host's `terminalEnv` reply.
+fn keys_of_reply(reply: &serde_json::Value) -> Vec<(String, String)> {
+    reply["env"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter_map(|(key, value)| Some((key.clone(), value.as_str()?.to_owned())))
+        .collect()
+}
+
+/// The one line a terminal shows when the keys could not be loaded.
+fn keys_warning() -> String {
+    format!(
+        "\x1b[33m{}\x1b[0m\r\n",
+        t("Não deu para carregar as chaves do Infisical")
+    )
+}
+
 impl Terminal {
-    fn new(cwd: String, banner: String, cx: &mut Context<Self>) -> Self {
+    fn new(cwd: String, banner: String, keys: Option<KeySource>, cx: &mut Context<Self>) -> Self {
         let size = GridSize {
             columns: 80,
             lines: 24,
@@ -449,57 +505,7 @@ impl Terminal {
             .ok()
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "/bin/zsh".into());
-        let mut env = HashMap::new();
-        for (key, value) in [
-            ("TERM", "xterm-256color".to_owned()),
-            ("COLORTERM", "truecolor".to_owned()),
-            ("TERM_PROGRAM", "SirusNative".to_owned()),
-            ("PWD", workdir.to_string_lossy().into_owned()),
-        ] {
-            env.insert(key.to_owned(), value);
-        }
-        let options = tty::Options {
-            shell: Some(tty::Shell::new(program.clone(), vec!["-l".into()])),
-            working_directory: Some(workdir),
-            drain_on_exit: false,
-            env,
-        };
-        let window = WindowSize {
-            num_lines: size.lines as u16,
-            num_cols: size.columns as u16,
-            cell_width: 8,
-            cell_height: 16,
-        };
         write_note(&term, &banner);
-        let mut shell_pid = 0;
-        let mut master_fd = -1;
-        let sender = match tty::new(&options, window, cx.entity_id().as_u64()) {
-            Ok(pty) => {
-                shell_pid = pty.child().id();
-                {
-                    use std::os::fd::AsRawFd;
-                    master_fd = unsafe { libc::dup(pty.file().as_raw_fd()) };
-                }
-                match EventLoop::new(term.clone(), listener, pty, false, false) {
-                    Ok(event_loop) => {
-                        let sender = event_loop.channel();
-                        event_loop.spawn();
-                        Some(sender)
-                    }
-                    Err(error) => {
-                        write_note(&term, &format!("\x1b[31m{error}\x1b[0m"));
-                        None
-                    }
-                }
-            }
-            Err(error) => {
-                write_note(
-                    &term,
-                    &format!("\x1b[31mCould not start the shell ({program}): {error}\x1b[0m"),
-                );
-                None
-            }
-        };
         let events = cx.spawn(async move |this, cx| {
             while let Ok(event) = rx.recv().await {
                 let mut batch = vec![event];
@@ -518,22 +524,126 @@ impl Terminal {
                 }
             }
         });
-        Self {
-            exited: sender.is_none(),
+        let mut this = Self {
+            exited: false,
             term,
-            sender,
+            sender: None,
             focus: cx.focus_handle(),
             size,
             geometry: Rc::default(),
-            shell_pid,
-            master_fd,
+            shell_pid: 0,
+            master_fd: -1,
+            listener,
+            program,
+            workdir,
+            starting: keys.is_some(),
+            held: Vec::new(),
             selecting: false,
             over_link: false,
             edit_menu: None,
             scroll_remainder: 0.,
             marked: None,
             _events: events,
+        };
+        match keys {
+            None => this.launch(Vec::new(), cx),
+            Some(source) => {
+                // The host answers at once when the project does not use the keys; otherwise the
+                // shell starts when they arrive, or without them when they cannot be had.
+                let reply = source.backend.request(
+                    "infisical_action",
+                    serde_json::json!({"action": {"type": "terminalEnv", "sessionId": source.session_id}}),
+                );
+                let (done, answer) = async_channel::bounded(1);
+                let waiting = done.clone();
+                cx.background_executor()
+                    .spawn(async move {
+                        let _ = waiting.try_send(reply.recv().await.ok().and_then(Result::ok));
+                    })
+                    .detach();
+                let timer = cx
+                    .background_executor()
+                    .timer(std::time::Duration::from_secs(20));
+                cx.background_executor()
+                    .spawn(async move {
+                        timer.await;
+                        let _ = done.try_send(None);
+                    })
+                    .detach();
+                cx.spawn(async move |this, cx| {
+                    let reply = answer.recv().await.ok().flatten();
+                    let _ = this.update(cx, |this, cx| match reply {
+                        Some(reply) => this.launch(keys_of_reply(&reply), cx),
+                        None => {
+                            write_note(&this.term, &keys_warning());
+                            this.launch(Vec::new(), cx);
+                        }
+                    });
+                })
+                .detach();
+            }
         }
+        this
+    }
+
+    /// Starts the shell with `keys` added to its environment.
+    fn launch(&mut self, keys: Vec<(String, String)>, cx: &mut Context<Self>) {
+        self.starting = false;
+        let mut env = HashMap::new();
+        for (key, value) in [
+            ("TERM", "xterm-256color".to_owned()),
+            ("COLORTERM", "truecolor".to_owned()),
+            ("TERM_PROGRAM", "SirusNative".to_owned()),
+            ("PWD", self.workdir.to_string_lossy().into_owned()),
+        ] {
+            env.insert(key.to_owned(), value);
+        }
+        let options = tty::Options {
+            shell: Some(tty::Shell::new(self.program.clone(), vec!["-l".into()])),
+            working_directory: Some(self.workdir.clone()),
+            drain_on_exit: false,
+            env: merged_env(env, keys),
+        };
+        let window = WindowSize {
+            num_lines: self.size.lines as u16,
+            num_cols: self.size.columns as u16,
+            cell_width: 8,
+            cell_height: 16,
+        };
+        match tty::new(&options, window, cx.entity_id().as_u64()) {
+            Ok(pty) => {
+                self.shell_pid = pty.child().id();
+                {
+                    use std::os::fd::AsRawFd;
+                    self.master_fd = unsafe { libc::dup(pty.file().as_raw_fd()) };
+                }
+                match EventLoop::new(self.term.clone(), self.listener.clone(), pty, false, false) {
+                    Ok(event_loop) => {
+                        let sender = event_loop.channel();
+                        event_loop.spawn();
+                        self.sender = Some(sender);
+                    }
+                    Err(error) => {
+                        write_note(&self.term, &format!("\x1b[31m{error}\x1b[0m"));
+                    }
+                }
+            }
+            Err(error) => {
+                write_note(
+                    &self.term,
+                    &format!(
+                        "\x1b[31mCould not start the shell ({}): {error}\x1b[0m",
+                        self.program
+                    ),
+                );
+            }
+        }
+        self.exited = self.sender.is_none();
+        let held = std::mem::take(&mut self.held);
+        if !held.is_empty() {
+            self.write(held);
+        }
+        cx.notify();
     }
 
     fn on_event(&mut self, event: TermEvent, cx: &mut Context<Self>) {
@@ -583,9 +693,11 @@ impl Terminal {
         self.sender = None;
         cx.notify();
     }
-    fn write(&self, bytes: impl Into<Cow<'static, [u8]>>) {
+    fn write(&mut self, bytes: impl Into<Cow<'static, [u8]>>) {
         if let Some(sender) = &self.sender {
             let _ = sender.send(Msg::Input(bytes.into()));
+        } else if self.starting {
+            self.held.extend_from_slice(&bytes.into());
         }
     }
     /// Types a command at the prompt and presses return.
@@ -918,15 +1030,17 @@ pub fn run_in(
 /// A title-bar tab: one shell, or several side by side after Split Terminal Right.
 pub struct TerminalGroup {
     cwd: String,
+    keys: KeySource,
     panes: Vec<Entity<Terminal>>,
 }
 
 /// Takes the dragged terminal out of its panel, into a group of its own.
 pub fn group_from_drag(drag: &TermTabDrag, cx: &mut App) -> Option<Entity<TerminalGroup>> {
     let panel = drag.panel.upgrade()?;
-    let (cwd, terminal) = panel.update(cx, |panel, cx| panel.take_terminal(drag.ix, cx))?;
+    let (cwd, keys, terminal) = panel.update(cx, |panel, cx| panel.take_terminal(drag.ix, cx))?;
     Some(cx.new(|_| TerminalGroup {
         cwd,
+        keys,
         panes: vec![terminal],
     }))
 }
@@ -952,17 +1066,19 @@ pub fn adopt_group(
 }
 
 impl TerminalGroup {
-    pub fn new(cwd: String, cx: &mut Context<Self>) -> Self {
-        let first = cx.new(|cx| Terminal::new(cwd.clone(), String::new(), cx));
+    pub fn new(cwd: String, keys: KeySource, cx: &mut Context<Self>) -> Self {
+        let first = cx.new(|cx| Terminal::new(cwd.clone(), String::new(), Some(keys.clone()), cx));
         Self {
             cwd,
+            keys,
             panes: vec![first],
         }
     }
     /// A shell beside the last one, in the same folder, with the keyboard focus.
     pub fn split(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let cwd = self.cwd.clone();
-        let pane = cx.new(|cx| Terminal::new(cwd, String::new(), cx));
+        let keys = self.keys.clone();
+        let pane = cx.new(|cx| Terminal::new(cwd, String::new(), Some(keys), cx));
         self.panes.push(pane);
         self.focus(window, cx);
         cx.notify();
@@ -1900,7 +2016,7 @@ mod close_tests {
 
 #[cfg(test)]
 mod url_tests {
-    use super::url_at;
+    use super::{HashMap, keys_of_reply, keys_warning, merged_env, url_at};
 
     #[test]
     fn a_web_address_is_found_around_the_click() {
@@ -1914,5 +2030,30 @@ mod url_tests {
         assert_eq!(url_at(line, line.find("then").unwrap()), None);
         assert_eq!(url_at(line, line.find("Local").unwrap()), None);
         assert_eq!(url_at("https://", 2), None);
+    }
+
+    #[test]
+    fn project_keys_join_the_shell_environment_but_never_replace_its_own() {
+        let base = HashMap::from([
+            ("TERM".to_owned(), "xterm-256color".to_owned()),
+            ("PWD".to_owned(), "/work".to_owned()),
+        ]);
+        let reply = serde_json::json!({"kind": "terminalEnv", "env": {
+            "STRIPE_KEY": "sk_live_hunter2", "TERM": "dumb", "PWD": "/elsewhere", "N": 3
+        }});
+        let merged = merged_env(base, keys_of_reply(&reply));
+        assert_eq!(merged["STRIPE_KEY"], "sk_live_hunter2");
+        assert_eq!(merged["TERM"], "xterm-256color");
+        assert_eq!(merged["PWD"], "/work");
+        assert!(!merged.contains_key("N"));
+        assert!(keys_of_reply(&serde_json::json!({"kind": "terminalEnv", "env": {}})).is_empty());
+    }
+
+    #[test]
+    fn the_failure_line_names_no_key_and_no_value() {
+        let line = keys_warning();
+        assert!(line.contains("Infisical"));
+        assert!(!line.contains("hunter2") && !line.contains("STRIPE"));
+        assert_eq!(line.matches('\n').count(), 1);
     }
 }

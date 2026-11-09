@@ -223,14 +223,23 @@ fn update_argv(
     binary: &str,
 ) -> Option<Vec<String>> {
     let argv = match method {
-        InstallMethod::Npm { .. } => vec![
-            "npm".to_string(),
-            "install".into(),
-            "-g".into(),
-            "--no-fund".into(),
-            "--no-audit".into(),
-            format!("{}@latest", package?),
-        ],
+        InstallMethod::Npm { prefix } => {
+            let mut argv = vec![
+                "npm".to_string(),
+                "install".into(),
+                "-g".into(),
+                "--no-fund".into(),
+                "--no-audit".into(),
+            ];
+            // The tree the binary lives in, not the prefix of whichever npm runs (Homebrew's npm
+            // would otherwise update `/opt/homebrew` and leave a `~/.local` install as it was).
+            if let Some(prefix) = prefix {
+                argv.push("--prefix".into());
+                argv.push(prefix.to_string_lossy().into_owned());
+            }
+            argv.push(format!("{}@latest", package?));
+            argv
+        }
         InstallMethod::Bun => vec![
             "bun".to_string(),
             "add".into(),
@@ -642,7 +651,18 @@ pub async fn update_providers(
         };
         let (ok, message) = match run {
             Ok(output) if output.status.success() => (true, String::new()),
-            Ok(output) => (false, last_line(&output.stderr)),
+            Ok(output) => {
+                // Some CLIs report their failure on stdout.
+                let line = last_line(&output.stderr);
+                (
+                    false,
+                    if line.is_empty() {
+                        last_line(&output.stdout)
+                    } else {
+                        line
+                    },
+                )
+            }
             Err(error) => (false, error.to_string()),
         };
         let installed_version = detect::probe_version(&plan.binary).await;
@@ -868,6 +888,22 @@ mod tests {
             ]))
         );
         assert_eq!(update_argv(&npm, None, None, "/x/codex"), None);
+        let local = InstallMethod::Npm {
+            prefix: Some(PathBuf::from("/Users/me/.local")),
+        };
+        assert_eq!(
+            update_argv(&local, Some("pkg"), None, "/x/pi"),
+            Some(argv(&[
+                "npm",
+                "install",
+                "-g",
+                "--no-fund",
+                "--no-audit",
+                "--prefix",
+                "/Users/me/.local",
+                "pkg@latest"
+            ]))
+        );
         assert_eq!(
             update_argv(&InstallMethod::Bun, Some("@openai/codex"), None, "/x"),
             Some(argv(&["bun", "add", "-g", "@openai/codex@latest"]))
@@ -946,7 +982,9 @@ mod tests {
                 AgentProviderId::Claude,
                 Some("2.1.4"),
                 true,
-                Some("A versão 2.1.4 saiu. O Sirus roda /usr/local/bin/claude; atualize pela ferramenta que o instalou."),
+                Some(
+                    "A versão 2.1.4 saiu. O Sirus roda /usr/local/bin/claude; atualize pela ferramenta que o instalou.",
+                ),
             ),
             update(AgentProviderId::OpenCode, Some("1.0.0"), false, None),
         ];

@@ -861,8 +861,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "Automatically fetch when opening project",
     ),
     ("Atualizar skills", "Refresh skills"),
+    ("Atualizar tudo", "Update all"),
     ("Atualização pronta · Reiniciar", "Update ready · Restart"),
     ("Atualizações", "Updates"),
+    ("Atualizações disponíveis", "Updates available"),
     (
         "Atualizações do provedor exigem confirmação.",
         "Provider updates require confirmation.",

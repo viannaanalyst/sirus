@@ -1,6 +1,7 @@
-//! The window's toasts: rounded cards that slide down from the top centre and stack. A failure
-//! (the window's `problem`) and a provider CLI update (on offer, running, or just run) share one
-//! layout: a tinted icon square on the left, a bold title over a dim line, the actions on the right
+//! The window's toasts: rounded cards that slide down and stack. A failure (the window's
+//! `problem`) sits at the top centre; provider CLI updates (on offer, running, or just run) sit at
+//! the top right, one card each, or one card listing them all when several are on offer. They share
+//! one layout: a tinted icon square on the left, a bold title over a dim line, the actions on the right
 //! (the primary one last, at the edge) and a ✕. They leave by themselves after a while; hovering
 //! pauses that clock, and ✕ closes one at once. The rules are plain functions so they are tested
 //! without a window. This module is a child of `shell` (`#[path]`).
@@ -120,8 +121,20 @@ pub(crate) fn progress_of(
     }
 }
 
+/// One provider's `status`, installed version and message in `update_providers`' answer, an array
+/// of the host's per-provider results.
+fn answer_entry(value: &Value, provider: &str) -> Option<(String, String, String)> {
+    let entry = value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|entry| entry["provider"].as_str() == Some(provider))?;
+    let text = |key: &str| entry[key].as_str().unwrap_or("").to_owned();
+    Some((text("status"), text("installedVersion"), text("message")))
+}
+
 impl Shell {
-    /// The toasts on the top centre: the failure first, then the offers in the order they came.
+    /// The toasts: the failure on the top centre: the failure first, then the offers in the order they came.
     pub(super) fn toast_stack(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if self.problem != self.problem_shown {
             self.problem_shown = self.problem.clone();
@@ -147,24 +160,33 @@ impl Shell {
             return None;
         }
         let reduced = cx.reduce_motion();
-        let mut column = div().w(px(WIDTH)).flex().flex_col().gap(px(8.));
+        let top = px(crate::theme::TITLE_BAR + 6.);
+        let mut layer = div().absolute().top_0().left_0().size_full();
         if let Some(problem) = self.problem.clone() {
-            column = column.child(self.problem_card(&problem, reduced, cx));
+            layer = layer.child(
+                div()
+                    .absolute()
+                    .top(top)
+                    .left_0()
+                    .right_0()
+                    .flex()
+                    .justify_center()
+                    .child(self.problem_card(&problem, reduced, cx)),
+            );
         }
-        for offer in self.toasts.offers.clone() {
-            column = column.child(self.offer_card(&offer, reduced, cx));
+        if !self.toasts.offers.is_empty() {
+            let offers = self.toasts.offers.clone();
+            let mut column = div().w(px(WIDTH)).flex().flex_col().gap(px(8.));
+            if offers.len() > 1 {
+                column = column.child(self.group_card(&offers, reduced, cx));
+            } else {
+                for offer in &offers {
+                    column = column.child(self.offer_card(offer, reduced, cx));
+                }
+            }
+            layer = layer.child(div().absolute().top(top).right(px(12.)).child(column));
         }
-        Some(
-            div()
-                .absolute()
-                .top(px(crate::theme::TITLE_BAR + 6.))
-                .left_0()
-                .right_0()
-                .flex()
-                .justify_center()
-                .child(column)
-                .into_any_element(),
-        )
+        Some(layer.into_any_element())
     }
 
     /// One tick of the failure's clock; false once the failure is gone and the clock can stop.
@@ -274,6 +296,109 @@ impl Shell {
         slide_in(card, serial, reduced)
     }
 
+    /// One card for several offers: a header, a row per provider with its own "Atualizar" and
+    /// progress, then "Agora não" and "Atualizar tudo".
+    fn group_card(&self, offers: &[Offer], reduced: bool, cx: &mut Context<Self>) -> AnyElement {
+        let mut rows = div().flex().flex_col().gap(px(8.));
+        for offer in offers {
+            let name = crate::shell::provider_title(&offer.provider);
+            let serial = offer.serial;
+            let versions = format!("{} → {}", offer.installed, offer.latest);
+            let (mark, title, detail, detail_color) = match &offer.progress {
+                Progress::Offered | Progress::Running => {
+                    let detail = if offer.progress == Progress::Running {
+                        t("Atualizando…").to_owned()
+                    } else if offer.command || offer.notice.is_empty() {
+                        versions
+                    } else {
+                        crate::i18n::from_host(&offer.notice)
+                    };
+                    (
+                        provider_mark_badge(&offer.provider),
+                        name.to_owned(),
+                        Some(detail),
+                        content(0.55),
+                    )
+                }
+                Progress::Done(text) => (badge("✓", GOOD), text.clone(), None, content(0.55)),
+                Progress::Failed(message) => (
+                    badge("!", WARM),
+                    tf("Não foi possível atualizar {}", &[&name]),
+                    Some(message.clone()),
+                    rgb(WARM).into(),
+                ),
+            };
+            let mut row = div()
+                .flex()
+                .items_center()
+                .gap(px(12.))
+                .child(mark)
+                .child(words(title, detail, detail_color));
+            if offer.progress == Progress::Offered && offer.command {
+                row = row.child(
+                    action(format!("offer-update-{serial}"), t("Atualizar"), false).on_click(
+                        cx.listener(move |this, _, _, cx| {
+                            this.update_offer(serial, cx);
+                        }),
+                    ),
+                );
+            }
+            rows = rows.child(row);
+        }
+        let waiting = offers
+            .iter()
+            .any(|o| o.progress == Progress::Offered && o.command);
+        let header = div()
+            .flex()
+            .items_center()
+            .gap(px(12.))
+            .child(badge("↑", GOOD))
+            .child(words(
+                t("Atualizações disponíveis").to_owned(),
+                None,
+                content(0.55),
+            ))
+            .child(
+                close_button("offer-group-close").on_click(cx.listener(|this, _, _, cx| {
+                    this.drop_all_offers(false, cx);
+                })),
+            );
+        let mut card = frame("offer-group-toast".to_owned())
+            .flex_col()
+            .items_stretch()
+            .gap(px(10.))
+            .on_hover(cx.listener(|this, hovered: &bool, _, _| {
+                for offer in &mut this.toasts.offers {
+                    offer.hovered = *hovered;
+                }
+            }))
+            .child(header)
+            .child(rows);
+        if waiting {
+            card = card.child(
+                div()
+                    .flex()
+                    .justify_end()
+                    .gap(px(6.))
+                    .child(
+                        action("offer-group-later".to_owned(), t("Agora não"), false).on_click(
+                            cx.listener(|this, _, _, cx| {
+                                this.drop_all_offers(true, cx);
+                            }),
+                        ),
+                    )
+                    .child(
+                        action("offer-group-all".to_owned(), t("Atualizar tudo"), true).on_click(
+                            cx.listener(|this, _, _, cx| {
+                                this.update_all_offers(cx);
+                            }),
+                        ),
+                    ),
+            );
+        }
+        slide_in(card, 0, reduced)
+    }
+
     /// Starts an offer's clock: it ends when the offer is gone or has been up long enough.
     fn offer_clock(&self, serial: u64, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
@@ -362,7 +487,8 @@ impl Shell {
         }
     }
 
-    /// `update_providers`' answer: the fallback for when the `result` event does not come.
+    /// `update_providers`' answer: the fallback for when the `result` event does not come. A
+    /// card that already has its result keeps it.
     pub(super) fn update_answered(
         &mut self,
         provider: &str,
@@ -370,23 +496,21 @@ impl Shell {
         value: &Value,
         cx: &mut Context<Self>,
     ) {
+        let running = self
+            .toasts
+            .offers
+            .iter()
+            .find(|o| o.provider == provider)
+            .is_none_or(|o| o.progress == Progress::Running);
+        if !running {
+            return;
+        }
         if !ok {
             let message = error_text(value);
             return self.finish_update(provider, "failed", "", &message, cx);
         }
-        let entry = value
-            .as_array()
-            .into_iter()
-            .flatten()
-            .find(|entry| entry["provider"].as_str() == Some(provider));
-        let Some(entry) = entry else {
-            return;
-        };
-        if entry["ok"].as_bool() == Some(true) {
-            self.finish_update(provider, "updated", "", "", cx);
-        } else {
-            let message = entry["message"].as_str().unwrap_or("").to_owned();
-            self.finish_update(provider, "failed", "", &message, cx);
+        if let Some((status, installed, message)) = answer_entry(value, provider) {
+            self.finish_update(provider, &status, &installed, &message, cx);
         }
     }
 
@@ -442,6 +566,35 @@ impl Shell {
         );
         self.waiting.insert(call, Waiting::ProviderUpdate(provider));
         cx.notify();
+    }
+
+    /// "Atualizar tudo": every offer still waiting with a one-click update.
+    fn update_all_offers(&mut self, cx: &mut Context<Self>) {
+        let serials: Vec<u64> = self
+            .toasts
+            .offers
+            .iter()
+            .filter(|o| o.progress == Progress::Offered && o.command)
+            .map(|o| o.serial)
+            .collect();
+        for serial in serials {
+            self.update_offer(serial, cx);
+        }
+    }
+
+    /// "Agora não" lets go of the offers still waiting (and tells the host); ✕ on the list
+    /// closes every row.
+    fn drop_all_offers(&mut self, not_now: bool, cx: &mut Context<Self>) {
+        let serials: Vec<u64> = self
+            .toasts
+            .offers
+            .iter()
+            .filter(|o| !not_now || o.progress == Progress::Offered)
+            .map(|o| o.serial)
+            .collect();
+        for serial in serials {
+            self.drop_offer(serial, not_now, cx);
+        }
     }
 
     /// Takes an offer off the stack. "Agora não" also tells the host, and either way the offer is
@@ -644,6 +797,24 @@ mod tests {
         assert_eq!(offers[0].latest, "2.1.322");
         assert_eq!(offers[0].installed, "2.1.319");
         assert_eq!(offers[1].notice, "Update OpenCode by hand.");
+    }
+
+    #[test]
+    fn the_answer_is_read_by_status_not_by_ok() {
+        // The host's `update_providers` answer: one result per provider.
+        let answer = json!([
+            { "provider": "claude", "status": "updated", "message": "", "installedVersion": "2.1.322" },
+            { "provider": "pi", "status": "failed", "message": "EACCES", "installedVersion": null },
+        ]);
+        assert_eq!(
+            answer_entry(&answer, "claude"),
+            Some(("updated".into(), "2.1.322".into(), String::new()))
+        );
+        assert_eq!(
+            answer_entry(&answer, "pi"),
+            Some(("failed".into(), String::new(), "EACCES".into()))
+        );
+        assert_eq!(answer_entry(&answer, "codex"), None);
     }
 
     #[test]

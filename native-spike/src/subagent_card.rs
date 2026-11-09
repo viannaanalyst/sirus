@@ -650,12 +650,7 @@ impl Shell {
                     .child(typed_text(
                         &compose.text,
                         t("Mensagem para este subagente"),
-                        div()
-                            .flex_shrink_0()
-                            .w(px(1.5))
-                            .h(px(15.))
-                            .rounded_full()
-                            .bg(crate::theme::caret_color()),
+                        self.popup_caret(),
                     ))
                     .children(compose.error.clone().map(|error| {
                         div()

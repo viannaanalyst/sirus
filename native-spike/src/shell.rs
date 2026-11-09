@@ -403,8 +403,11 @@ struct ProjectMenu {
     /// The Checkouts or Projects search, or the project's name while editing it.
     query: String,
     selected: usize,
-    /// Which settings row has its list open beside it: "editor".
+    /// Which settings row has its list open beside it: "editor" or "mute".
     expanded: Option<&'static str>,
+    /// Whether the Settings name field takes the keys: only once it is clicked, so typing while
+    /// the panel is merely open renames nothing.
+    name_focused: bool,
     /// What the appearance's tabs are showing.
     look_tab: LookTab,
 }
@@ -544,6 +547,8 @@ struct ContextMenu {
     renaming: Option<String>,
     /// ⌘A in the name being typed: the next key replaces it.
     renaming_all: bool,
+    /// A project's "Silenciar avisos" has its choices open beside the menu.
+    mute_open: bool,
 }
 
 const EFFORT_ORDER: [&str; 8] = [
@@ -626,13 +631,7 @@ fn cursor_preset(id: &str) -> (String, Option<&'static str>, bool) {
 /// A sidebar title being renamed: the caret follows the text from the left, and a long text
 /// keeps its end (and the caret) in view, clipped at the start with no ellipsis. The empty space
 /// after the caret takes up what a short text leaves, so only an overflow pushes to the end.
-fn inline_name_field(text: &str, selected: bool) -> AnyElement {
-    let caret = div()
-        .flex_shrink_0()
-        .w(px(crate::theme::CARET_WIDTH))
-        .h(px(15.))
-        .rounded_full()
-        .bg(crate::theme::caret_color());
+fn inline_name_field(text: &str, selected: bool, caret: Div) -> AnyElement {
     div()
         .flex_1()
         .min_w_0()
@@ -656,10 +655,11 @@ fn inline_name_field(text: &str, selected: bool) -> AnyElement {
 
 /// A field's text with the caret after it, or the caret before a placeholder.
 fn typed_text(text: &str, placeholder: &str, caret: Div) -> Div {
-    let line = div().flex_1().min_w_0().flex().items_center().gap(px(1.));
+    let line = div().flex_1().min_w_0().flex().items_center();
     if text.is_empty() {
         line.child(caret).child(
             div()
+                .ml(px(1.))
                 .min_w_0()
                 .truncate()
                 .text_color(content(0.4))
@@ -1314,6 +1314,11 @@ pub struct Shell {
     caret_drawn: Rc<Cell<bool>>,
     /// The composer is taking the keys, so its caret blinks.
     caret_blinks: Cell<bool>,
+    /// The popup and inline fields' caret (`field_caret`): when a key last went in, whether a
+    /// field drew it this frame, and whether it was lit then, so the tick redraws each flip.
+    field_caret_moved: Cell<Instant>,
+    field_caret_shown: Cell<bool>,
+    field_caret_drawn: Cell<bool>,
     selecting: bool,
     tick: u32,
     window_active: bool,
@@ -1447,6 +1452,11 @@ pub struct Shell {
     refocus: bool,
     /// Where "Abrir no editor" was last drawn: its list opens beside it.
     project_editor_row: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Where "Silenciar avisos" was last drawn in the settings panel and in the right-click menu,
+    /// and where the menu's choices beside it were, so a click on them doesn't dismiss the menu.
+    project_mute_row: Rc<Cell<Option<Bounds<Pixels>>>>,
+    context_mute_row: Rc<Cell<Option<Bounds<Pixels>>>>,
+    context_mute_sub: Rc<Cell<Option<Bounds<Pixels>>>>,
     system_dark: bool,
     theme_menu: Option<PaletteState>,
     settings_page: &'static str,
@@ -1603,7 +1613,11 @@ impl Shell {
                         && this.caret_blinks.get()
                         && caret_lit(this.caret_moved.get().elapsed().as_secs_f32())
                             != this.caret_drawn.get();
-                    if pulse || flip {
+                    let field_flip = this.window_active
+                        && this.field_caret_shown.get()
+                        && caret_lit(this.field_caret_moved.get().elapsed().as_secs_f32())
+                            != this.field_caret_drawn.get();
+                    if pulse || flip || field_flip {
                         cx.notify();
                     }
                     // The footer's bolt shows under pressure, so it needs a reading to know.
@@ -1738,6 +1752,9 @@ impl Shell {
             caret_moved: Rc::new(Cell::new(Instant::now())),
             caret_drawn: Rc::new(Cell::new(true)),
             caret_blinks: Cell::new(false),
+            field_caret_moved: Cell::new(Instant::now()),
+            field_caret_shown: Cell::new(false),
+            field_caret_drawn: Cell::new(true),
             selecting: false,
             tick: 0,
             window_active: true,
@@ -1832,6 +1849,9 @@ impl Shell {
             actions: shell_actions::ActionsUi::new(),
             refocus: false,
             project_editor_row: Default::default(),
+            project_mute_row: Default::default(),
+            context_mute_row: Default::default(),
+            context_mute_sub: Default::default(),
             system_dark: true,
             theme_menu: None,
             settings_page: APPEARANCE,
@@ -3674,12 +3694,7 @@ impl Shell {
                     .child(typed_text(
                         &name,
                         t("Nome da conta, Enter para entrar"),
-                        div()
-                            .flex_shrink_0()
-                            .w(px(1.5))
-                            .h(px(15.))
-                            .rounded_full()
-                            .bg(crate::theme::caret_color()),
+                        self.popup_caret(),
                     ))
                     .into_any_element(),
                 None => div()
@@ -3865,6 +3880,7 @@ impl Shell {
         crate::segment_pill::forget("usage-tabs");
         self.usage_accounts = None;
         self.usage_tab = None;
+        self.context_menu = None;
         self.usage_popup = match self.usage_popup {
             Some(_) => None,
             None => {
@@ -4190,7 +4206,9 @@ impl Shell {
                 .left(px(left.min(self.viewport_width - 320.).max(8.)))
                 .w(px(310.))
                 .p(px(14.))
-                .when(self.usage_accounts.is_none(), |d| d.h(px(USAGE_POPUP_HEIGHT)))
+                .when(self.usage_accounts.is_none(), |d| {
+                    d.h(px(USAGE_POPUP_HEIGHT))
+                })
                 .flex()
                 .flex_col()
                 .opacity(t)
@@ -4755,7 +4773,13 @@ impl Shell {
         if let Some(name) = self.context_menu.as_mut().and_then(|m| m.renaming.as_mut()) {
             return Some(name);
         }
-        if self.project_menu.as_ref().is_some_and(|m| m.sub.is_some()) {
+        if let Some(menu) = self.project_menu.as_ref()
+            && menu.sub.is_some()
+        {
+            // The name field takes keys only once clicked; until then they go nowhere.
+            if menu.sub == Some(ProjectSub::Settings) && !menu.name_focused {
+                return Some(&mut self.ignored_text);
+            }
             return self.project_menu.as_mut().map(|m| &mut m.query);
         }
         if let Some(name) = self.usage_accounts.as_mut().and_then(|p| p.adding.as_mut()) {
@@ -5738,6 +5762,8 @@ impl Shell {
             }
         };
         let key = keys.key.as_str();
+        // Every key restarts a field's caret lit, as the composer's does.
+        self.field_caret_moved.set(Instant::now());
         if self.rename_keys(keys, cx) {
             cx.stop_propagation();
             cx.notify();
@@ -6670,14 +6696,7 @@ impl Shell {
         let planning_ok =
             provider != "grok" && (provider != "codex" || conversation.model.is_some());
         let team_ok = matches!(provider, "claude" | "codex" | "opencode");
-        let caret = move || {
-            div()
-                .flex_shrink_0()
-                .w(px(1.5))
-                .h(px(15.))
-                .rounded_full()
-                .bg(crate::theme::caret_color())
-        };
+        let caret = || self.popup_caret();
         let track = crate::hover_track::list("add-menu");
         let item = |id: &'static str,
                     glyph: &'static str,
@@ -8028,6 +8047,7 @@ impl Shell {
             ),
             renaming: None,
             renaming_all: false,
+            mute_open: false,
         });
         cx.notify();
     }
@@ -8422,18 +8442,13 @@ impl Shell {
                 .text_size(px(13.))
                 .map(|d| {
                     if name.is_empty() {
-                        d.child(typed_text(
-                            name,
-                            crate::i18n::t("Nome"),
-                            div()
-                                .flex_shrink_0()
-                                .w(px(1.5))
-                                .h(px(15.))
-                                .rounded_full()
-                                .bg(crate::theme::caret_color()),
-                        ))
+                        d.child(typed_text(name, crate::i18n::t("Nome"), self.popup_caret()))
                     } else {
-                        d.child(inline_name_field(name, menu.renaming_all))
+                        d.child(inline_name_field(
+                            name,
+                            menu.renaming_all,
+                            self.popup_caret(),
+                        ))
                     }
                 })
                 .into_any_element()
@@ -8610,59 +8625,62 @@ impl Shell {
                         .into_any_element()
                 }
                 MenuTarget::Project(index) => {
-                    let path = self.projects[index].path.clone();
-                    let (reveal, copied) = (path.clone(), path);
+                    let copied = self.projects[index].path.clone();
                     div()
                         .flex()
                         .flex_col()
                         .child(
-                            item("menu-new", "square-pen", "Nova conversa", None).on_click(
-                                cx.listener(move |this, _, _, cx| {
+                            item("menu-new", "square-pen", "Nova conversa", None)
+                                .on_hover(cx.listener(Self::leave_mute_row))
+                                .on_click(cx.listener(move |this, _, _, cx| {
                                     close(this);
                                     this.close_project_menu();
                                     this.enter_project(Some(index), cx);
                                     this.new_conversation(Some(index), cx);
                                     cx.notify();
-                                }),
-                            ),
+                                })),
                         )
-                        .children(if self.project_muted(index) {
-                            vec![
-                                item("menu-project-unmute", "bell", "Reativar avisos", None)
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        close(this);
-                                        this.mute_project(index, Some(0), cx);
-                                    }))
-                                    .into_any_element(),
-                            ]
+                        .child(if self.project_muted(index) {
+                            item("menu-project-unmute", "bell", "Reativar avisos", None)
+                                .on_hover(cx.listener(Self::leave_mute_row))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    close(this);
+                                    this.mute_project(index, Some(0), cx);
+                                }))
                         } else {
-                            [
-                                ("menu-project-mute-1", "Silenciar por 1 hora", Some(1)),
-                                ("menu-project-mute-4", "Silenciar por 4 horas", Some(4)),
-                                ("menu-project-mute-8", "Silenciar por 8 horas", Some(8)),
-                                ("menu-project-mute", "Silenciar até reativar", None),
-                            ]
-                            .into_iter()
-                            .map(|(id, label, hours)| {
-                                item(id, "bell", label, None)
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        close(this);
-                                        this.mute_project(index, hours, cx);
-                                    }))
-                                    .into_any_element()
-                            })
-                            .collect()
+                            // One row; its four choices open beside the menu.
+                            item("menu-project-mute", "bell", "Silenciar avisos", None)
+                                .relative()
+                                .when(menu.mute_open, |d| d.bg(content(0.07)))
+                                .child(icon("chevron-right", 12.).text_color(content(0.45)))
+                                .child({
+                                    let store = self.context_mute_row.clone();
+                                    gpui::canvas(
+                                        move |bounds, _, _| store.set(Some(bounds)),
+                                        |_, _, _, _| {},
+                                    )
+                                    .absolute()
+                                    .top_0()
+                                    .left_0()
+                                    .size_full()
+                                })
+                                .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                                    if *hovered {
+                                        this.open_mute_row(cx);
+                                    }
+                                }))
+                                .on_click(cx.listener(|this, _, _, cx| this.open_mute_row(cx)))
                         })
                         .child(
-                            item("menu-project-rename", "pencil", "Renomear", Some("F2")).on_click(
-                                cx.listener(move |this, _, _, cx| {
+                            item("menu-project-rename", "pencil", "Renomear", Some("F2"))
+                                .on_hover(cx.listener(Self::leave_mute_row))
+                                .on_click(cx.listener(move |this, _, _, cx| {
                                     let name = this.projects[index].name.clone();
                                     if let Some(menu) = this.context_menu.as_mut() {
                                         menu.renaming = Some(name);
                                     }
                                     cx.notify();
-                                }),
-                            ),
+                                })),
                         )
                         .child(
                             item(
@@ -8671,6 +8689,7 @@ impl Shell {
                                 "Configurações do projeto",
                                 None,
                             )
+                            .on_hover(cx.listener(Self::leave_mute_row))
                             .on_click(cx.listener(
                                 move |this, _, _, cx| {
                                     close(this);
@@ -8682,29 +8701,21 @@ impl Shell {
                         )
                         .child(divider())
                         .child(
-                            item("menu-reveal", "folder-open", "Mostrar no Finder", None).on_click(
-                                cx.listener(move |this, _, _, cx| {
-                                    let _ = crate::native_actions::open_path(&reveal);
-                                    close(this);
-                                    cx.notify();
-                                }),
-                            ),
-                        )
-                        .child(
-                            item("menu-copy-path", "copy", "Copiar caminho", None).on_click(
-                                cx.listener(move |this, _, _, cx| {
+                            item("menu-copy-path", "copy", "Copiar caminho", None)
+                                .on_hover(cx.listener(Self::leave_mute_row))
+                                .on_click(cx.listener(move |this, _, _, cx| {
                                     cx.write_to_clipboard(gpui::ClipboardItem::new_string(
                                         copied.clone(),
                                     ));
                                     close(this);
                                     cx.notify();
-                                }),
-                            ),
+                                })),
                         )
                         .child(divider())
                         .child(
                             div()
                                 .id("menu-project-remove")
+                                .on_hover(cx.listener(Self::leave_mute_row))
                                 .h(px(30.))
                                 .px(px(8.))
                                 .rounded(px(crate::theme::RADIUS_MD))
@@ -8727,29 +8738,90 @@ impl Shell {
             }
         };
         const WIDTH: f32 = 230.;
+        let menu_left = menu.x.min(self.viewport_width - WIDTH - 8.).max(8.);
+        // A project's mute choices, beside the menu on its right (or its left when the window
+        // ends first), level with their row.
+        let mute_sub = match menu.target {
+            MenuTarget::Project(index)
+                if menu.mute_open && menu.renaming.is_none() && !self.project_muted(index) =>
+            {
+                self.context_mute_row.get().map(|row| {
+                    let wide = 190.;
+                    let right = menu_left + WIDTH + 6.;
+                    let beside = if right + wide + 8. <= self.viewport_width {
+                        right
+                    } else {
+                        (menu_left - wide - 6.).max(8.)
+                    };
+                    let tall = MUTE_CHOICES.len() as f32 * 30. + 10.;
+                    let top = (f32::from(row.top()) - 5.)
+                        .min(self.viewport_height - tall - 8.)
+                        .max(8.);
+                    let rows = self.mute_choice_rows("context-mute", index, true, cx);
+                    let store = self.context_mute_sub.clone();
+                    side_list("context-mute", beside, top, wide, shown, rows)
+                        .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
+                        .child(
+                            gpui::canvas(
+                                move |bounds, _, _| store.set(Some(bounds)),
+                                |_, _, _, _| {},
+                            )
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .size_full(),
+                        )
+                        .into_any_element()
+                })
+            }
+            _ => None,
+        };
+        if mute_sub.is_none() {
+            self.context_mute_sub.set(None);
+        }
+        let mute_bounds = self.context_mute_sub.clone();
+        let card = div()
+            .id("context-menu")
+            .occlude()
+            .absolute()
+            .left(px(menu_left))
+            .top(px(
+                menu.y.min(self.viewport_height - 300.).max(8.) + (1. - shown) * -4.
+            ))
+            .w(px(WIDTH))
+            .p(px(4.))
+            .flex()
+            .flex_col()
+            .opacity(shown)
+            .rounded(px(crate::theme::RADIUS_LG))
+            .border_1()
+            .border_color(crate::theme::border())
+            .child(crate::theme::floating_surface(crate::theme::RADIUS_LG))
+            .shadow_lg()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
+            // Any press outside dismisses it, in the capture phase, so a button that stops
+            // the press on its way up (the project switcher, the sidebar's three dots, the
+            // composer's pills) can't leave it open beside the popup it opens.
+            .on_mouse_down_out(cx.listener(move |this, _, window, cx| {
+                let at = window.mouse_position();
+                if mute_bounds.get().is_some_and(|b| b.contains(&at)) {
+                    return;
+                }
+                if this.context_menu.take().is_some() {
+                    cx.notify();
+                }
+            }))
+            .child(crate::hover_track::list("context-menu").pill())
+            .child(body);
         Some(
             div()
-                .id("context-menu")
-                .occlude()
                 .absolute()
-                .left(px(menu.x.min(self.viewport_width - WIDTH - 8.).max(8.)))
-                .top(px(
-                    menu.y.min(self.viewport_height - 300.).max(8.) + (1. - shown) * -4.
-                ))
-                .w(px(WIDTH))
-                .p(px(4.))
-                .flex()
-                .flex_col()
-                .opacity(shown)
-                .rounded(px(crate::theme::RADIUS_LG))
-                .border_1()
-                .border_color(crate::theme::border())
-                .child(crate::theme::floating_surface(crate::theme::RADIUS_LG))
-                .shadow_lg()
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
-                .child(crate::hover_track::list("context-menu").pill())
-                .child(body)
+                .top_0()
+                .left_0()
+                .size_full()
+                .child(card)
+                .children(mute_sub)
                 .into_any_element(),
         )
     }
@@ -9057,6 +9129,7 @@ impl Shell {
             self.composer_menu = None;
             self.usage_popup = None;
             self.sidebar_options = None;
+            self.context_menu = None;
             self.project_menu = Some(ProjectMenu {
                 open: Tween::from_to(
                     0.,
@@ -9070,6 +9143,7 @@ impl Shell {
                 query: String::new(),
                 selected: 0,
                 expanded: None,
+                name_focused: false,
                 look_tab: LookTab::default(),
             });
         }
@@ -9081,7 +9155,7 @@ impl Shell {
         let Some(menu) = self.project_menu.take() else {
             return false;
         };
-        if menu.sub == Some(ProjectSub::Settings) {
+        if menu.sub == Some(ProjectSub::Settings) && menu.name_focused {
             self.commit_project_name(&menu.query);
         }
         true
@@ -9113,11 +9187,13 @@ impl Shell {
         if menu.sub == Some(sub) {
             return;
         }
-        let edited = (menu.sub == Some(ProjectSub::Settings)).then(|| menu.query.clone());
+        let edited = (menu.sub == Some(ProjectSub::Settings) && menu.name_focused)
+            .then(|| menu.query.clone());
         menu.sub = Some(sub);
         menu.sub_at = Instant::now();
         menu.selected = 0;
         menu.expanded = None;
+        menu.name_focused = false;
         menu.query = if sub == ProjectSub::Settings {
             name
         } else {
@@ -9528,11 +9604,94 @@ impl Shell {
         cx.notify();
     }
 
-    fn open_editor_row(&mut self, cx: &mut Context<Self>) {
+    /// The four mute choices of a project, for the list beside "Silenciar avisos" (`track` names
+    /// it). A pick closes the right-click menu or the project popover the list belongs to.
+    fn mute_choice_rows(
+        &self,
+        track: &'static str,
+        index: usize,
+        from_context_menu: bool,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        let list = crate::hover_track::list(track);
+        MUTE_CHOICES
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(at, (label, hours))| {
+                list.row(
+                    div()
+                        .id((track, at))
+                        .relative()
+                        .h(px(30.))
+                        .px(px(8.))
+                        .rounded(px(crate::theme::RADIUS_MD))
+                        .flex()
+                        .items_center()
+                        .text_size(px(13.))
+                        .text_color(content(0.92))
+                        .cursor_pointer()
+                        .child(div().min_w_0().truncate().child(crate::i18n::t(label)))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if from_context_menu {
+                                this.context_menu = None;
+                            } else {
+                                this.close_project_menu();
+                            }
+                            this.mute_project(index, hours, cx);
+                            cx.notify();
+                        })),
+                    at,
+                    false,
+                )
+                .into_any_element()
+            })
+            .collect()
+    }
+
+    /// Whether a popup or inline field's caret is lit this frame; the tick redraws at each flip
+    /// while one shows.
+    fn field_caret_lit(&self) -> bool {
+        let since = self.field_caret_moved.get().elapsed().as_secs_f32();
+        self.field_caret_shown.set(true);
+        self.field_caret_drawn.set(caret_lit(since));
+        !self.window_active || caret_lit(since)
+    }
+
+    /// The caret of a popup or inline text field (`field_caret`), kept blinking.
+    fn popup_caret(&self) -> Div {
+        self.field_caret_lit();
+        field_caret(
+            self.field_caret_moved.get().elapsed().as_secs_f32(),
+            self.window_active,
+        )
+    }
+
+    /// Opens the list beside a settings row: "editor" or "mute".
+    fn open_editor_row(&mut self, row: &'static str, cx: &mut Context<Self>) {
         if let Some(menu) = self.project_menu.as_mut()
-            && menu.expanded != Some("editor")
+            && menu.expanded != Some(row)
         {
-            menu.expanded = Some("editor");
+            menu.expanded = Some(row);
+            cx.notify();
+        }
+    }
+
+    /// Hovering another row of the right-click menu closes the mute choices beside it.
+    fn leave_mute_row(&mut self, hovered: &bool, _: &mut Window, cx: &mut Context<Self>) {
+        if *hovered
+            && let Some(menu) = self.context_menu.as_mut()
+            && std::mem::take(&mut menu.mute_open)
+        {
+            cx.notify();
+        }
+    }
+
+    fn open_mute_row(&mut self, cx: &mut Context<Self>) {
+        if let Some(menu) = self.context_menu.as_mut()
+            && !menu.mute_open
+        {
+            menu.mute_open = true;
             cx.notify();
         }
     }
@@ -9637,10 +9796,22 @@ impl Shell {
             return false;
         };
         let (sub, query, selected) = (menu.sub, menu.query.clone(), menu.selected);
+        let name_focused = menu.name_focused;
         let Some(project) = self.current_project else {
             return false;
         };
+        let settings = sub == Some(ProjectSub::Settings);
         match key {
+            // Esc in the name field puts the saved name back and lets go of the keys.
+            "escape" if settings && name_focused => {
+                let saved = self.projects[project].name.clone();
+                let menu = self.project_menu.as_mut().unwrap();
+                menu.query = saved;
+                menu.name_focused = false;
+                true
+            }
+            // Until the name field is clicked, Backspace and Enter leave the name alone.
+            "backspace" | "enter" if settings && !name_focused => true,
             "tab" => {
                 let next = match sub {
                     None | Some(ProjectSub::Settings) => ProjectSub::Checkouts,
@@ -9652,9 +9823,6 @@ impl Shell {
             }
             "escape" => {
                 if sub.is_some() {
-                    if sub == Some(ProjectSub::Settings) {
-                        self.commit_project_name(&query);
-                    }
                     let menu = self.project_menu.as_mut().unwrap();
                     menu.sub = None;
                     menu.query.clear();
@@ -9703,6 +9871,10 @@ impl Shell {
                     }
                     Some(ProjectSub::Settings) => {
                         self.commit_project_name(&query);
+                        let saved = self.projects[project].name.clone();
+                        let menu = self.project_menu.as_mut().unwrap();
+                        menu.query = saved;
+                        menu.name_focused = false;
                     }
                     None => {}
                 }
@@ -9866,14 +10038,7 @@ impl Shell {
         if since < 0.14 {
             *moving = true;
         }
-        let caret = move || {
-            div()
-                .flex_shrink_0()
-                .w(px(1.5))
-                .h(px(16.))
-                .rounded_full()
-                .bg(crate::theme::caret_color())
-        };
+        let caret = || self.popup_caret();
         let query = menu.query.clone();
         let selected = menu.selected;
         let search = |placeholder: &'static str| {
@@ -10369,6 +10534,24 @@ impl Shell {
                             .into_any_element(),
                     );
                 }
+                // The mute choices open beside their row the same way.
+                let muted = self.project_muted(index);
+                if expanded == Some("mute")
+                    && !muted
+                    && let Some(row) = self.project_mute_row.get()
+                {
+                    let wide = 190.;
+                    let beside = (left + 260. + 6.).min(self.viewport_width - wide - 8.);
+                    let tall = MUTE_CHOICES.len() as f32 * 30. + 10.;
+                    let flyout_top = (f32::from(row.top()) - 5.)
+                        .min(self.viewport_height - tall - 8.)
+                        .max(8.);
+                    let rows = self.mute_choice_rows("project-mute", index, false, cx);
+                    flyout = Some(
+                        side_list("project-mute", beside, flyout_top, wide, t, rows)
+                            .into_any_element(),
+                    );
+                }
                 let reveal_path = project_path.clone();
                 let divider = || div().mx(px(4.)).my(px(5.)).h(px(1.)).bg(content(0.08));
                 let body = div()
@@ -10376,20 +10559,34 @@ impl Shell {
                     .flex()
                     .flex_col()
                     .child(
+                        // The name takes keys only once clicked: Enter saves, Esc puts it back.
                         div()
+                            .id("project-name")
                             .h(px(32.))
                             .px(px(10.))
                             .rounded(px(crate::theme::RADIUS_MD))
                             .border_1()
-                            .border_color(crate::theme::border())
+                            .border_color(if menu.name_focused {
+                                content(0.3)
+                            } else {
+                                crate::theme::border()
+                            })
                             .bg(field_fill())
                             .flex()
                             .items_center()
-                            .gap(px(2.))
                             .text_size(px(13.))
                             .text_color(content(0.95))
+                            .cursor(gpui::CursorStyle::IBeam)
+                            .on_hover(cx.listener(Self::leave_editor_row))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if let Some(menu) = this.project_menu.as_mut() {
+                                    menu.name_focused = true;
+                                }
+                                this.field_caret_moved.set(Instant::now());
+                                cx.notify();
+                            }))
                             .child(div().min_w_0().truncate().child(query.clone()))
-                            .child(caret()),
+                            .when(menu.name_focused, |d| d.child(caret())),
                     )
                     .child(
                         // The robot on its colour: a click draws another look.
@@ -10544,11 +10741,51 @@ impl Shell {
                         })
                         .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
                             if *hovered {
-                                this.open_editor_row(cx);
+                                this.open_editor_row("editor", cx);
                             }
                         }))
-                        .on_click(cx.listener(|this, _, _, cx| this.open_editor_row(cx))),
+                        .on_click(cx.listener(|this, _, _, cx| this.open_editor_row("editor", cx))),
                     )
+                    .child(if muted {
+                        item(
+                            "project-unmute",
+                            "bell",
+                            crate::i18n::t("Reativar avisos"),
+                            false,
+                        )
+                        .on_hover(cx.listener(Self::leave_editor_row))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.close_project_menu();
+                            this.mute_project(index, Some(0), cx);
+                            cx.notify();
+                        }))
+                    } else {
+                        item(
+                            "project-mute-open",
+                            "bell",
+                            crate::i18n::t("Silenciar avisos"),
+                            true,
+                        )
+                        .relative()
+                        .when(expanded == Some("mute"), |d| d.bg(content(0.07)))
+                        .child({
+                            let store = self.project_mute_row.clone();
+                            gpui::canvas(
+                                move |bounds, _, _| store.set(Some(bounds)),
+                                |_, _, _, _| {},
+                            )
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .size_full()
+                        })
+                        .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                            if *hovered {
+                                this.open_editor_row("mute", cx);
+                            }
+                        }))
+                        .on_click(cx.listener(|this, _, _, cx| this.open_editor_row("mute", cx)))
+                    })
                     .child(divider())
                     .child(
                         div()
@@ -10576,7 +10813,7 @@ impl Shell {
                             .child(icon("trash", 15.).text_color(rgb(0xe08a8a)))
                             .child(crate::i18n::t("Remover da lista")),
                     );
-                (260., 72., 436., body.into_any_element())
+                (260., 72., 468., body.into_any_element())
             }
         };
         let top = (menu_top + top_offset)
@@ -10723,6 +10960,7 @@ impl Shell {
             return;
         }
         self.close_project_menu();
+        self.context_menu = None;
         self.sidebar_options = Some(Tween::from_to(
             0.,
             1.,
@@ -11039,6 +11277,7 @@ impl Shell {
                 Some(text) => inline_name_field(
                     text,
                     self.context_menu.as_ref().is_some_and(|m| m.renaming_all),
+                    self.popup_caret(),
                 ),
                 None => div()
                     .flex_1()
@@ -11814,6 +12053,7 @@ impl Shell {
             .as_ref()
             .is_some_and(|(m, _)| *m == which || (model_menu(*m) && model_menu(which)));
         self.workspace_sub = false;
+        self.context_menu = None;
         self.composer_menu = if same {
             None
         } else {
@@ -12353,12 +12593,7 @@ impl Shell {
                             .child(typed_text(
                                 &self.model_query,
                                 t("Buscar modelos..."),
-                                div()
-                                    .flex_shrink_0()
-                                    .w(px(1.5))
-                                    .h(px(15.))
-                                    .rounded_full()
-                                    .bg(crate::theme::caret_color()),
+                                self.popup_caret(),
                             ))
                             .when(!self.model_query.is_empty(), |d| {
                                 d.child(
@@ -15616,7 +15851,7 @@ impl Shell {
                                     } else {
                                         t("Buscar conversas, arquivos e projetos")
                                     },
-                                    div().flex_shrink_0().w(px(1.5)).h(px(18.)).bg(accent()),
+                                    self.popup_caret(),
                                 ))
                                 .child(palette_key("esc")),
                         )
@@ -16894,7 +17129,7 @@ impl Shell {
                             .child(typed_text(
                                 &menu.query,
                                 crate::i18n::t("Buscar"),
-                                div().flex_shrink_0().w(px(1.5)).h(px(15.)).bg(accent()),
+                                self.popup_caret(),
                             )),
                     )
                     .child(crate::hover_track::list("theme-menu").pill())
@@ -17843,8 +18078,60 @@ fn prompt_frame(
 }
 
 /// Whether the caret shows, `since` seconds after it last moved: the Mac's blink, starting lit.
-fn caret_lit(since: f32) -> bool {
+pub(crate) fn caret_lit(since: f32) -> bool {
     since % 1.06 < 0.58
+}
+
+/// A project's mute choices: the label and the hours, `None` until turned back on.
+const MUTE_CHOICES: [(&str, Option<i64>); 4] = [
+    ("Silenciar por 1 hora", Some(1)),
+    ("Silenciar por 4 horas", Some(4)),
+    ("Silenciar por 8 horas", Some(8)),
+    ("Silenciar até reativar", None),
+];
+
+/// A list that opens beside a menu row, as the project popover's do: the same surface, border,
+/// radius, shadow and hover track.
+fn side_list(
+    id: &'static str,
+    left: f32,
+    top: f32,
+    width: f32,
+    shown: f32,
+    rows: Vec<AnyElement>,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .occlude()
+        .absolute()
+        .left(px(left))
+        .top(px(top))
+        .w(px(width))
+        .p(px(4.))
+        .opacity(shown)
+        .rounded(px(crate::theme::RADIUS_LG))
+        .border_1()
+        .border_color(crate::theme::border())
+        .child(crate::theme::floating_surface(crate::theme::RADIUS_LG))
+        .shadow_lg()
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .child(crate::hover_track::list(id).pill())
+        .children(rows)
+}
+
+/// How tall a field's caret stands beside its 13px text: the composer's line, scaled from 14px.
+const FIELD_CARET_HEIGHT: f32 = COMPOSER_LINE * 13. / 14.;
+
+/// A text field's caret, the composer's own: as wide, a line tall, in its colour, blinking from
+/// `since_moved` seconds after the last key and resting lit while the window is inactive.
+fn field_caret(since_moved: f32, window_active: bool) -> Div {
+    let lit = !window_active || caret_lit(since_moved);
+    div()
+        .flex_shrink_0()
+        .w(px(crate::theme::CARET_WIDTH))
+        .h(px(FIELD_CARET_HEIGHT))
+        .rounded(px(1.))
+        .when(lit, |d| d.bg(crate::theme::caret_color()))
 }
 
 /// The ⌥Tab switcher: the projects as they stood when it opened, and the one picked.
@@ -18458,6 +18745,7 @@ impl EntityInputHandler for Shell {
             return;
         }
         self.replace_selected_name();
+        self.field_caret_moved.set(Instant::now());
         let marked = self.marked.take();
         self.mention_selected = 0;
         self.mention_dismissed = None;
@@ -18493,6 +18781,7 @@ impl EntityInputHandler for Shell {
             return;
         }
         self.replace_selected_name();
+        self.field_caret_moved.set(Instant::now());
         let marked = self.marked.take();
         let start_utf16;
         if let Some(query) = self.query_target() {
@@ -18542,6 +18831,7 @@ impl Render for Shell {
         let reduced = cx.reduce_motion();
         let size = window.viewport_size();
         self.window_active = window.is_window_active();
+        self.field_caret_shown.set(false);
         self.cards_seen();
         // The header's incoming check follows the selected conversation, its folder and its turns.
         if !self.conversations.is_empty() {

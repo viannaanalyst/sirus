@@ -35,17 +35,23 @@ pub fn new(context: PanelContext, cx: &mut App) -> AnyView {
             scroll: ScrollHandle::new(),
             epoch: Instant::now(),
             layout: Rc::new(RefCell::new(None)),
+            caret_moved: Instant::now(),
+            caret_drawn: true,
         };
         panel.open(cx);
         panel.listen(cx);
-        // Os laços (shimmer, texto chegando) andam a 30 Hz; o caret é fixo.
+        // Os laços (shimmer, texto chegando) andam a 30 Hz; o caret pisca como o do composer,
+        // redesenhado só a cada virada.
         cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor()
                     .timer(Duration::from_millis(33))
                     .await;
                 let alive = this.update(cx, |this, cx| {
-                    if this.side.working() {
+                    let flip = this.focused
+                        && crate::shell::caret_lit(this.caret_moved.elapsed().as_secs_f32())
+                            != this.caret_drawn;
+                    if this.side.working() || flip {
                         cx.notify();
                     }
                 });
@@ -76,6 +82,9 @@ struct SideChat {
     scroll: ScrollHandle,
     epoch: Instant,
     layout: Rc<RefCell<Option<TextLayout>>>,
+    /// Quando o caret andou por último (ele pisca a partir daí) e se o último quadro o mostrou.
+    caret_moved: Instant,
+    caret_drawn: bool,
 }
 
 async fn settle(rx: async_channel::Receiver<Result<Value, Value>>) -> Result<Value, String> {
@@ -338,6 +347,7 @@ impl SideChat {
     }
 
     fn key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+        self.caret_moved = Instant::now();
         let keys = &event.keystroke;
         let (cmd, shift) = (keys.modifiers.platform, keys.modifiers.shift);
         match (cmd, shift, keys.key.as_str()) {
@@ -482,6 +492,7 @@ impl EntityInputHandler for SideChat {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.caret_moved = Instant::now();
         let marked = self.marked.take();
         if let Some(range) = range.or(marked) {
             self.anchor = byte_at(&self.text, range.start);
@@ -498,6 +509,7 @@ impl EntityInputHandler for SideChat {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.caret_moved = Instant::now();
         let marked = self.marked.take();
         if let Some(range) = range.or(marked) {
             self.anchor = byte_at(&self.text, range.start);
@@ -543,6 +555,11 @@ impl Render for SideChat {
         let layout = styled.layout().clone();
         *self.layout.borrow_mut() = Some(layout.clone());
         let (selection, caret_at, focused) = (self.selection(), self.cursor, self.focused);
+        // O caret do composer: a mesma largura, a altura da linha, piscando; parado aceso com a
+        // janela fora de foco.
+        let lit = crate::shell::caret_lit(self.caret_moved.elapsed().as_secs_f32());
+        self.caret_drawn = lit;
+        let lit = lit || !window.is_window_active();
         let (input_focus, input_view) = (self.focus.clone(), cx.entity());
         let overlay = gpui::canvas(
             |_, _, _| {},
@@ -567,11 +584,11 @@ impl Render for SideChat {
                             }
                         }
                     }
-                } else if focused {
+                } else if focused && lit {
                     let origin = layout.position_for_index(caret_at).unwrap_or(bounds.origin);
                     window.paint_quad(
                         gpui::fill(
-                            Bounds::new(origin, gpui::size(px(2.), line)),
+                            Bounds::new(origin, gpui::size(px(crate::theme::CARET_WIDTH), line)),
                             crate::theme::caret_color(),
                         )
                         .corner_radii(px(1.)),

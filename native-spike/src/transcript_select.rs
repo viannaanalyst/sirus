@@ -734,6 +734,9 @@ const MENU_WIDTH: f32 = 200.;
 impl Shell {
     /// The fragments of a reply in render order, from its current source.
     fn reply_texts(&self, reply: Reply) -> Vec<String> {
+        if reply.turn == subagent_card::FEED_TURN {
+            return self.feed_texts(reply.beat);
+        }
         let Some(turn) = self
             .conversations
             .get(reply.conversation)

@@ -194,6 +194,19 @@ fn takes_instruction(provider: &str, status: &str, messages: &[Value]) -> bool {
     can_steer(provider, status) && !compacting(messages)
 }
 
+/// The approvals a message sent now declines first. Once the turn has ended, a request still
+/// listed is stale: nothing answers it, so declining would only fail and hold the message back.
+fn approvals_to_decline(status: &str, pending: &[Value]) -> Vec<Value> {
+    if !matches!(status, "starting" | "running" | "waiting") {
+        return Vec::new();
+    }
+    pending
+        .iter()
+        .filter(|r| r["kind"]["type"] != "userInput")
+        .cloned()
+        .collect()
+}
+
 /// A sent prompt as the person wrote it, without the reference block the agent received.
 fn request_of(content: &str) -> &str {
     let marker = format!("\n\n{REFERENCE_HEADER}\n");
@@ -659,12 +672,7 @@ impl Shell {
         };
         // A message sent while an approval waits redirects the agent: the approvals are declined
         // first, since a reply still waiting on one would never read the message.
-        let approvals: Vec<Value> = conversation
-            .pending
-            .iter()
-            .filter(|r| r["kind"]["type"] != "userInput")
-            .cloned()
-            .collect();
+        let approvals = approvals_to_decline(&conversation.status, &conversation.pending);
         if approvals.is_empty() || out.text.is_empty() {
             self.dispatch(out, false, invert, cx);
             return;
@@ -709,9 +717,10 @@ impl Shell {
         }
         let redirect = self.queues.redirects.remove(&key).unwrap();
         self.queues.busy = false;
-        if !redirect.failed {
-            self.dispatch(redirect.out, true, redirect.invert, cx);
-        }
+        // A decline that failed (the request was already settled, or the link dropped) still
+        // sends the message: it steers when the turn takes it and waits in the queue otherwise,
+        // so the composer is never left holding a message that cannot leave.
+        self.dispatch(redirect.out, !redirect.failed, redirect.invert, cx);
         cx.notify();
     }
 
@@ -1630,6 +1639,19 @@ impl Queues {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stale_approval_after_a_failed_turn_does_not_hold_the_message() {
+        let pending = vec![
+            json!({ "requestId": "a", "kind": { "type": "command" } }),
+            json!({ "requestId": "b", "kind": { "type": "userInput" } }),
+        ];
+        assert_eq!(approvals_to_decline("running", &pending).len(), 1);
+        assert_eq!(approvals_to_decline("waiting", &pending).len(), 1);
+        for ended in ["failed", "stopped", "completed", "idle"] {
+            assert!(approvals_to_decline(ended, &pending).is_empty());
+        }
+    }
 
     #[test]
     fn one_line_collapses_whitespace_and_truncates() {

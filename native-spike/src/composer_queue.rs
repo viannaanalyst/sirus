@@ -14,6 +14,17 @@ use super::*;
 
 /// A press in the text being edited: places the caret, extends with Shift, and a double or triple
 /// click takes the word or the whole text.
+/// The text of a queued message on one line: whitespace runs (newlines too) become one
+/// space, the ends are trimmed, and a long text is cut with an ellipsis.
+fn one_line(text: &str, max: usize) -> String {
+    let joined = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if joined.chars().count() <= max {
+        return joined;
+    }
+    let cut: String = joined.chars().take(max).collect();
+    format!("{}…", cut.trim_end())
+}
+
 fn press_in_draft(draft: &mut super::Draft, at: usize, clicks: usize, shift: bool) {
     let at = at.min(draft.text.len());
     match clicks {
@@ -1356,15 +1367,23 @@ impl Shell {
                     )
                     .into_any_element()
             } else {
-                div()
+                let full = item.text.clone();
+                let shown = if full.trim().is_empty() {
+                    t(ATTACHMENTS_ONLY).to_owned()
+                } else {
+                    one_line(&full, 200)
+                };
+                let mut line = div()
+                    .id(("queue-text", i))
                     .truncate()
+                    .whitespace_nowrap()
                     .text_color(content(0.75))
-                    .child(if item.text.is_empty() {
-                        t(ATTACHMENTS_ONLY).to_owned()
-                    } else {
-                        item.text.clone()
-                    })
-                    .into_any_element()
+                    .child(shown);
+                if !full.trim().is_empty() {
+                    let tip: String = full.trim().chars().take(600).collect();
+                    line = line.tooltip(message_actions::text_tip(tip));
+                }
+                line.into_any_element()
             };
 
             let actions = (!is_editing).then(|| {
@@ -1499,7 +1518,8 @@ impl Shell {
 
             div()
                 .id(("queue-item", i))
-                .min_h(px(32.))
+                .when(is_editing, |d| d.min_h(px(32.)))
+                .when(!is_editing, |d| d.h(px(42.)).overflow_hidden())
                 .when(i > 0, |d| d.border_t_1().border_color(content(0.05)))
                 .flex()
                 .items_center()
@@ -1512,7 +1532,7 @@ impl Shell {
                     div()
                         .flex_1()
                         .min_w_0()
-                        .py(px(4.))
+                        .when(is_editing, |d| d.py(px(4.)))
                         .flex()
                         .flex_col()
                         .child(body)
@@ -1601,6 +1621,16 @@ impl Queues {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn one_line_collapses_whitespace_and_truncates() {
+        assert_eq!(one_line("a = b\n2 ok\r\n3 = c", 100), "a = b 2 ok 3 = c");
+        assert_eq!(one_line("a\n\n\n\nb", 100), "a b");
+        assert_eq!(one_line("  \n  oi  \t mundo \n ", 100), "oi mundo");
+        assert_eq!(one_line("   \n ", 100), "");
+        assert_eq!(one_line("abcdefghij", 5), "abcde…");
+        assert_eq!(one_line("abcd efgh", 5), "abcd…");
+    }
 
     #[test]
     fn a_press_places_the_caret_and_clicks_take_more() {

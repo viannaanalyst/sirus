@@ -69,6 +69,19 @@ impl State {
         self.open || self.progress(now) > 0.001
     }
 
+    /// Runs the balloon to the drawer (`open`) or back to the pill, with the open's length and
+    /// spring both ways. It starts from the progress on screen, so a reopen mid-collapse turns
+    /// back without a jump.
+    fn run(&mut self, open: bool, now: Instant, reduce_motion: bool) {
+        self.open = open;
+        self.t.set(
+            if open { 1. } else { 0. },
+            now,
+            if reduce_motion { 0. } else { GROW },
+            Curve::Spring,
+        );
+    }
+
     fn reset(&mut self, now: Instant) {
         self.open = false;
         self.t.snap(0., now);
@@ -161,9 +174,10 @@ fn lerp(a: f32, b: f32, t: f32) -> f32 {
 }
 
 impl Shell {
-    /// The drawer is up over a panel that fills the card: its web view has to step aside.
-    pub(super) fn balloon_covers_page(&self) -> bool {
-        self.balloon.open && self.dock_open && self.dock_max.to > 0.5
+    /// The drawer is up, or still shrinking, over a panel that fills the card: its web view has
+    /// to step aside until the collapse ends.
+    pub(super) fn balloon_covers_page(&self, now: Instant) -> bool {
+        self.balloon.drawer_visible(now) && self.dock_open && self.dock_max.to > 0.5
     }
 
     pub(super) fn balloon_shows(&self) -> bool {
@@ -179,14 +193,8 @@ impl Shell {
             return;
         }
         let now = Instant::now();
-        self.balloon.open = true;
         self.balloon.auto_at = None;
-        self.balloon.t.set(
-            1.,
-            now,
-            if cx.reduce_motion() { 0. } else { GROW },
-            Curve::Spring,
-        );
+        self.balloon.run(true, now, cx.reduce_motion());
         let ix = self.active_conversation();
         self.glides.entry(ix).or_default().follow_fast();
         self.refocus = true;
@@ -197,13 +205,7 @@ impl Shell {
         if !self.balloon.open {
             return;
         }
-        self.balloon.open = false;
-        self.balloon.t.set(
-            0.,
-            Instant::now(),
-            if cx.reduce_motion() { 0. } else { GROW },
-            Curve::Expo,
-        );
+        self.balloon.run(false, Instant::now(), cx.reduce_motion());
         self.refocus = true;
         cx.notify();
     }
@@ -646,6 +648,68 @@ mod tests {
         assert!(!auto_open_due(true, true, 1, 0));
         assert!(!auto_open_due(false, false, 1, 0));
         assert!(!auto_open_due(true, false, 0, 0));
+    }
+
+    #[test]
+    fn collapsing_runs_the_open_length_and_easing_back_into_the_pill() {
+        let base = Instant::now();
+        let mut state = State::default();
+        state.run(true, base, false);
+        let opened = state.progress(base + Duration::from_secs_f32(GROW));
+        assert!((opened - 1.).abs() < 1e-3);
+
+        // Closing from the middle of the open starts at the progress on screen, not at 1.
+        let at = base + Duration::from_millis(120);
+        let before = state.progress(at);
+        state.run(false, at, false);
+        assert!(!state.open);
+        assert!(
+            (state.progress(at) - before).abs() < 1e-4,
+            "no jump on close"
+        );
+        let mut last = before;
+        for ms in (0..=(GROW * 1000.) as u64).step_by(20) {
+            let p = state.progress(at + Duration::from_millis(ms));
+            assert!(p <= last + 1e-4, "the collapse only goes down");
+            last = p;
+        }
+        // The drawer stays on screen while it shrinks, and the pill is back when it ends.
+        assert!(state.drawer_visible(at + Duration::from_millis(200)));
+        let end = at + Duration::from_secs_f32(GROW);
+        assert!(state.progress(end) < 1e-3);
+        assert!(!state.drawer_visible(end));
+    }
+
+    #[test]
+    fn reopening_mid_collapse_turns_back_from_the_current_progress() {
+        let base = Instant::now();
+        let mut state = State::default();
+        state.run(true, base, false);
+        state.run(false, base + Duration::from_secs_f32(GROW), false);
+        let at = base + Duration::from_secs_f32(GROW) + Duration::from_millis(150);
+        let shrinking = state.progress(at);
+        assert!(shrinking > 0.05 && shrinking < 0.95);
+
+        state.run(true, at, false);
+        assert!(state.open);
+        assert!(
+            (state.progress(at) - shrinking).abs() < 1e-4,
+            "no jump on reopen"
+        );
+        assert!(state.progress(at + Duration::from_millis(60)) > shrinking);
+        let end = at + Duration::from_secs_f32(GROW);
+        assert!((state.progress(end) - 1.).abs() < 1e-3);
+    }
+
+    #[test]
+    fn with_reduced_motion_the_balloon_changes_at_once() {
+        let base = Instant::now();
+        let mut state = State::default();
+        state.run(true, base, true);
+        assert!((state.progress(base) - 1.).abs() < 1e-6);
+        state.run(false, base, true);
+        assert!(state.progress(base) < 1e-6);
+        assert!(!state.drawer_visible(base));
     }
 
     #[test]

@@ -18778,7 +18778,7 @@ impl Render for Shell {
                 || self.first_run.active()
                 || self.viewer.visible()
                 || self.cards_visible()
-                || self.balloon_covers_page(),
+                || self.balloon_covers_page(now),
         );
         if std::mem::take(&mut self.refocus) {
             window.focus(&self.focus, cx);

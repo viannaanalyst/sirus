@@ -2511,6 +2511,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Mostrar arquivos não rastreados", "Show untracked files"),
     ("Mostrar cliques", "Show clicks"),
     ("Mostrar em", "Show on"),
+    ("Mostrar mais", "Show more"),
     ("Mostrar mais {} arquivos", "Show {} more files"),
     ("Mostrar menos", "Show less"),
     ("Mostrar no Finder", "Show in Finder"),

@@ -34,6 +34,8 @@ mod file_icons;
 mod folder_icon_data;
 mod fonts;
 mod freeze_watch;
+#[cfg(feature = "ghostty")]
+mod ghostty_vt;
 mod git_graph;
 mod git_split;
 mod git_sync;
@@ -86,6 +88,7 @@ mod subagent_team;
 mod syntax;
 mod tab_label;
 mod tab_tile;
+mod terminal_engine;
 mod terminal_place;
 mod theme;
 mod tool_images;

@@ -27,6 +27,7 @@ Quitting with `pkill` leaves the host running. Kill it too after rebuilding it, 
 - `src/data.rs`: sessions and messages as conversations and turns.
 - `src/settings_pages.rs`: the Settings pages. `src/settings_pair.rs`: the pairing popup (QR code) of Settings → Conexões.
 - `src/panel_*.rs`: the side panel: Terminal, Files, Changes, Browser and side chat.
+- `src/terminal_engine.rs`: the terminal engines behind the Terminal panel (alacritty by default, Ghostty's `libghostty-vt` in `src/ghostty_vt.rs` with the `ghostty` feature; `scripts/build-libghostty-vt.sh` builds the library, ADR-199).
 - `src/browser_bridge.rs`, `browser_tab.rs`, `browser_js/`: agent control of the browser pane and the sign-in and computer-use approval cards (see ADR-189).
 - `src/attachment_view.rs`, `attachment_doc.rs`, `attachment_pdf.rs`: the composer's attachment chips and the viewer (image gallery, PDF, Word, slides, sheets, web pages, text). `attachment_ooxml.rs` (zip and XML of Office files) and `attachment_html.rs` (DOCX, PPTX and web pages as safe HTML) are pure and tested; `attachment_web.rs` lays a WKWebView or a PDFKit `PDFView` over the viewer's body. `image_markup.rs` keeps the strokes drawn on a draft picture and burns them into a PNG. `disclosure.rs` is the reveal behind folds; `sound.rs` the notification sounds. The sidebar's project rail and the ⌥Tab switcher live in `shell.rs`.
 - `src/theme.rs`: the look (Ink, accent, glass) and its file. `src/send_morph.rs`: the composer's send button.

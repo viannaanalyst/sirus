@@ -6,6 +6,11 @@ version = "0.1.1"
 edition = "2024"
 publish = false
 
+[features]
+# Ghostty's libghostty-vt as a second terminal engine (ADR-199). Off by default: it needs the
+# static library `scripts/build-libghostty-vt.sh` writes to vendor/libghostty-vt/lib.
+ghostty = []
+
 [dependencies]
 gpui = { package = "gpui-pre", version = "=0.3.9", default-features = false }
 gpui_platform = { package = "gpui-pre-platform", version = "=0.3.9", default-features = false, features = ["font-kit", "runtime_shaders"] }

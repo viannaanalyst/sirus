@@ -1820,6 +1820,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "This transcript exceeds the 32 KiB fork context limit. Use a shorter session or write a handoff summary.",
     ),
     (
+        "Esta versão do Sirus só traz o Alacritty.",
+        "This build of Sirus only includes Alacritty.",
+    ),
+    (
         "Esta é a própria janela do Sirus Native, não um dispositivo.",
         "This is the Sirus Native window itself, not a device.",
     ),
@@ -2515,6 +2519,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Mostre um aviso para sessões que você não está visualizando.",
         "Show an in-app alert for sessions you are not currently viewing.",
     ),
+    ("Motor do terminal", "Terminal engine"),
     ("Movendo a conversa…", "Moving the conversation…"),
     ("Mover", "Move"),
     ("Mover \"{}\" para {}?", "Move \"{}\" to {}?"),

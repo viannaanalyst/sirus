@@ -4957,7 +4957,7 @@ impl Shell {
         if self.usage_page.open.is_some() {
             return Some(&mut self.ignored_text);
         }
-        if self.tasks_page.open.is_some() {
+        if self.term.tasks_active {
             return Some(self.tasks_page.text_target(&mut self.ignored_text));
         }
         if self.appearance.is_some() {
@@ -5286,9 +5286,10 @@ impl Shell {
             let next = neighbour_on_close(live.len(), at).and_then(|ix| live.get(ix).copied());
             if let Some(next) = next {
                 // A page tab being shown stays shown; only the conversation underneath moves on.
-                let page = self.term.pulls_active;
+                let (pulls, tasks) = (self.term.pulls_active, self.term.tasks_active);
                 self.select(next, cx);
-                self.term.pulls_active = page;
+                self.term.pulls_active = pulls;
+                self.term.tasks_active = tasks;
             }
         }
         if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == id) {
@@ -5367,10 +5368,15 @@ impl Shell {
         let pulls_live = self.term.pulls_in_strip();
         let pulls_shown = pulls_live && self.term.pulls_active;
         // A page on screen is the selected tab, wherever it sits; the session tabs give that up.
-        let page_on_screen = self.term.pulls_active || self.term.terminal_showing();
-        let page_in_strip = pulls_shown || self.term.terminal_showing_in_strip();
+        let tasks_live = self.term.tasks_in_strip();
+        let tasks_shown = tasks_live && self.term.tasks_active;
+        let page_on_screen = self.term.pulls_active
+            || self.term.tasks_active
+            || self.term.terminal_showing();
+        let page_in_strip = pulls_shown || tasks_shown || self.term.terminal_showing_in_strip();
         let free = (self.tabs.iter().filter(|t| !t.pinned && !t.closing).count()
             + usize::from(pulls_live)
+            + usize::from(tasks_live)
             + self.term.strip_count()) as f32;
         let menu_on_pin = self
             .menu
@@ -5461,6 +5467,27 @@ impl Shell {
             }
             if page.closing && page.w.done(now) {
                 self.term.pulls_tab = None;
+            }
+        }
+        // The Tarefas tab follows Pull requests.
+        if let Some(page) = self.term.tasks_tab.as_mut() {
+            let width = match (page.closing, tasks_shown) {
+                (true, _) => 0.,
+                (false, true) => selected,
+                (false, false) => others,
+            };
+            if page.x.to < 0. {
+                page.x.snap(x, now);
+                page.w.snap(width, now);
+            }
+            page.w.set(width, now, open, Curve::Quad);
+            page.x.set(x, now, reorder, Curve::Expo);
+            moving |= !page.x.done(now) || !page.w.done(now);
+            if !page.closing {
+                x += width + GAP;
+            }
+            if page.closing && page.w.done(now) {
+                self.term.tasks_tab = None;
             }
         }
         moving |= self
@@ -5988,8 +6015,8 @@ impl Shell {
         if self.find_keys(keys, window, cx) {
             return;
         }
-        // The Tarefas page and its sheet take Esc, Enter, Tab and Backspace.
-        if self.tasks_keys(key, cx) {
+        // The Tarefas tab takes its shortcuts, and its modal Esc, Enter, Tab and Backspace.
+        if self.tasks_keys(keys, cx) {
             cx.stop_propagation();
             cx.notify();
             return;
@@ -6471,6 +6498,7 @@ impl Shell {
                 self.new_conversation(None, cx)
             }
             (true, false, false, "w") if self.term.pulls_active => self.close_pull_requests(cx),
+            (true, false, false, "w") if self.term.tasks_active => self.close_tasks_tab(cx),
             (true, false, false, "w") => self.close(self.active, cx),
             (true, true, false, "p") => self.toggle_pin(self.active, cx),
             // With text in the composer these keys still select to the line's ends.
@@ -7398,6 +7426,7 @@ impl Shell {
         let active = id == self.active
             && !tab.closing
             && !self.term.pulls_active
+            && !self.term.tasks_active
             && !self.term.terminal_showing();
         let group: gpui::SharedString = format!("tab{id}").into();
         let width = tab.w.at(now);
@@ -7570,6 +7599,7 @@ impl Shell {
                 out.push(self.tab(tab, now, cx));
             }
             out.extend(self.pulls_tab_view(now, cx));
+            out.extend(self.tasks_tab_view(now, cx));
             out.extend(self.term_tabs_view(now, cx));
             out
         };
@@ -11365,7 +11395,7 @@ impl Shell {
             )
             .on_click(cx.listener(|this, _, _, cx| {
                 if !this.nav_dragged {
-                    this.toggle_tasks_page(cx)
+                    this.open_tasks_page(cx)
                 }
             }))
             .child(icon("task-clock", 16.).text_color(content(if active { 0.7 } else { 0.35 })))
@@ -11560,7 +11590,7 @@ impl Shell {
             return;
         }
         // The settings have their own column: nothing peeks over it.
-        if open && (self.appearance.is_some() || self.usage_page_open() || self.tasks_page_open()) {
+        if open && (self.appearance.is_some() || self.usage_page_open()) {
             return;
         }
         let now = Instant::now();
@@ -19507,8 +19537,7 @@ impl Render for Shell {
         let panel = self.appearance_view(now, &mut moving, cx);
         self.usage_settle(now);
         let usage_page = self.usage_page_view(now, &mut moving, window, cx);
-        self.tasks_settle(now);
-        let tasks_page = self.tasks_page_view(now, &mut moving, window, cx);
+        let tasks_overlays = self.tasks_overlays(window, cx);
         let settings_cover = self
             .appearance
             .as_ref()
@@ -19519,7 +19548,8 @@ impl Render for Shell {
         crate::panel_browser::set_covered(
             self.appearance.is_some()
                 || self.usage_page_open()
-                || self.tasks_page_open()
+                || self.tasks_page.sheet.is_some()
+                || self.tasks_page.popover.is_some()
                 || self.palette_ui.is_some()
                 || self.environment.is_some()
                 || self.menu.is_some()
@@ -19840,7 +19870,7 @@ impl Render for Shell {
             .children(git_menu)
             .children(panel)
             .children(usage_page)
-            .children(tasks_page)
+            .children(tasks_overlays)
             // Over Settings and Usage too, whose pages would cover them.
             .children(confirm_dialog)
             .children(activity_cards)

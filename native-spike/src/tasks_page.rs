@@ -1,6 +1,7 @@
 //! Tarefas (ADR-200): prompts that start a conversation by themselves, once or on a repeat rule.
-//! A page over the window, opened from the sidebar's "Tarefas" row: a calendar (Dia, Semana, Mês)
-//! of the runs the host lists, a popover per run, and the "Nova tarefa" sheet. The host
+//! A page in its own tab, like Pull requests (shell_terminal.rs), opened from the sidebar's "Tarefas"
+//! row: a calendar (Mês by default, Semana, Dia) of the runs the host lists, a popover per run, and
+//! the "Nova tarefa" modal. The host
 //! (`scheduled_prompts.rs`) owns the tasks and the schedule maths; this module only draws what
 //! `list_tasks` answers and sends `save_task`, `delete_task`, `set_task_enabled` and
 //! `run_task_now`. Times are the host's local wall-clock time, so the "now" line is the host's.
@@ -8,10 +9,10 @@
 //! This module is a child of `shell` (`#[path]`), so it reaches the window's private state.
 
 use super::*;
+use crate::motion::eased;
 use chrono::{Datelike, Duration as Span, Local, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
+use gpui::{Animation, AnimationExt};
 
-const OPEN: f32 = 0.22;
-const CLOSE: f32 = 0.16;
 const HOUR_H: f32 = 48.;
 const GUTTER: f32 = 56.;
 /// A run is drawn as half an hour tall.
@@ -19,6 +20,8 @@ const BLOCK_MIN: i64 = 30;
 const SWITCH_ID: usize = 910_000;
 const NOW_LINE: u32 = 0xff4f8b;
 const VIEWS: [View; 3] = [View::Day, View::Week, View::Month];
+/// Runs a month's day lists before it says "+N".
+const DAY_CHIPS: usize = 3;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum View {
@@ -46,6 +49,8 @@ pub(crate) enum Rule {
     Weekdays(NaiveTime),
     /// 0 is Monday.
     Weekly(NaiveTime, Vec<u8>),
+    /// The day of the month, 1 to 31; a shorter month uses its last day.
+    Monthly(NaiveTime, u8),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -56,6 +61,8 @@ pub(crate) struct Task {
     pub project_id: String,
     pub provider: String,
     pub model: Option<String>,
+    pub effort: Option<String>,
+    pub approval: Option<String>,
     pub rule: Rule,
     pub enabled: bool,
     pub last_session: Option<String>,
@@ -105,6 +112,12 @@ fn parse_rule(value: &Value) -> Option<Rule> {
             days.dedup();
             Some(Rule::Weekly(time, days))
         }
+        "monthly" => {
+            let day = repeat["day"]
+                .as_u64()
+                .filter(|day| (1..=31).contains(day))?;
+            Some(Rule::Monthly(time, day as u8))
+        }
         _ => None,
     }
 }
@@ -118,6 +131,9 @@ pub(crate) fn rule_json(rule: &Rule) -> Value {
         Rule::Weekdays(time) => json!({ "repeat": { "kind": "weekdays", "time": clock(time) } }),
         Rule::Weekly(time, days) => {
             json!({ "repeat": { "kind": "weekly", "time": clock(time), "weekdays": days } })
+        }
+        Rule::Monthly(time, day) => {
+            json!({ "repeat": { "kind": "monthly", "time": clock(time), "day": day } })
         }
     }
 }
@@ -136,6 +152,8 @@ pub(crate) fn parse_list(value: &Value) -> (Vec<Task>, Vec<Occ>, Option<NaiveDat
                 project_id: task["projectId"].as_str().unwrap_or("").to_owned(),
                 provider: task["provider"].as_str().unwrap_or("claude").to_owned(),
                 model: task["model"].as_str().map(str::to_owned),
+                effort: task["effort"].as_str().map(str::to_owned),
+                approval: task["approval"].as_str().map(str::to_owned),
                 rule: parse_rule(&task["schedule"])?,
                 enabled: task["enabled"].as_bool().unwrap_or(true),
                 last_session: task["lastRun"]["sessionId"].as_str().map(str::to_owned),
@@ -200,6 +218,16 @@ const MONTH_NAMES: [&str; 12] = [
     "Dezembro",
 ];
 
+/// "Novembro de 2026", or "November 2026" in English.
+pub(crate) fn month_title(date: NaiveDate) -> String {
+    let name = MONTH_NAMES[date.month0() as usize];
+    if crate::i18n::is_en() {
+        format!("{} {}", t(name), date.year())
+    } else {
+        format!("{name} de {}", date.year())
+    }
+}
+
 /// `9:00`: the hour has no leading zero.
 fn clock(time: NaiveTime) -> String {
     format!("{}:{:02}", time.hour(), time.minute())
@@ -218,6 +246,7 @@ pub(crate) fn rule_words(rule: &Rule) -> String {
         ),
         Rule::Daily(time) => tf("Todo dia às {}", &[&clock(*time)]),
         Rule::Weekdays(time) => tf("Dias úteis às {}", &[&clock(*time)]),
+        Rule::Monthly(time, day) => tf("Todo mês, dia {} às {}", &[day, &clock(*time)]),
         Rule::Weekly(time, days) => {
             let names: Vec<&str> = days
                 .iter()
@@ -250,18 +279,51 @@ fn lowered(text: &str) -> String {
 
 // ---------------------------------------------------------------- dates and layout
 
-fn week_start(date: NaiveDate) -> NaiveDate {
-    date - Span::days(i64::from(date.weekday().num_days_from_monday()))
+/// Weeks start on Monday in English and on Sunday ("Dom" to "Sáb") in Portuguese.
+fn monday_first() -> bool {
+    crate::i18n::is_en()
 }
 
-/// The days a view shows: one, seven, or the six weeks of a month's grid.
-pub(crate) fn view_days(view: View, anchor: NaiveDate) -> Vec<NaiveDate> {
-    let (first, count) = match view {
-        View::Day => (anchor, 1),
-        View::Week => (week_start(anchor), 7),
-        View::Month => (week_start(anchor.with_day(1).unwrap_or(anchor)), 42),
+/// The first day of `date`'s week.
+pub(crate) fn week_start(date: NaiveDate, monday_first: bool) -> NaiveDate {
+    let back = if monday_first {
+        date.weekday().num_days_from_monday()
+    } else {
+        date.weekday().num_days_from_sunday()
     };
-    (0..count).map(|day| first + Span::days(day)).collect()
+    date - Span::days(i64::from(back))
+}
+
+/// The column headings of a week as indexes into `WEEKDAYS` (0 is Monday), in the order shown.
+pub(crate) fn weekday_order(monday_first: bool) -> [usize; 7] {
+    if monday_first {
+        [0, 1, 2, 3, 4, 5, 6]
+    } else {
+        [6, 0, 1, 2, 3, 4, 5]
+    }
+}
+
+/// A month's grid: whole weeks from the one holding the 1st to the one holding the last day
+/// (four to six of them).
+pub(crate) fn month_grid(anchor: NaiveDate, monday_first: bool) -> Vec<NaiveDate> {
+    let first = anchor.with_day(1).unwrap_or(anchor);
+    let start = week_start(first, monday_first);
+    let last = step_end(first);
+    let end = week_start(last, monday_first) + Span::days(6);
+    let count = (end - start).num_days() + 1;
+    (0..count).map(|day| start + Span::days(day)).collect()
+}
+
+/// The days a view shows: one, seven, or a month's weeks.
+pub(crate) fn view_days(view: View, anchor: NaiveDate, monday_first: bool) -> Vec<NaiveDate> {
+    match view {
+        View::Day => vec![anchor],
+        View::Week => {
+            let first = week_start(anchor, monday_first);
+            (0..7).map(|day| first + Span::days(day)).collect()
+        }
+        View::Month => month_grid(anchor, monday_first),
+    }
 }
 
 /// The anchor one step away: a day, a week, or a month.
@@ -353,18 +415,16 @@ pub(crate) enum Preset {
     TodayEvening,
     TomorrowMorning,
     MondayMorning,
-    Custom,
 }
 
-const PRESETS: [(Preset, &str); 5] = [
+const PRESETS: [(Preset, &str); 4] = [
     (Preset::InHour, "Daqui a 1 hora"),
     (Preset::TodayEvening, "Hoje às 18:00"),
     (Preset::TomorrowMorning, "Amanhã às 9:00"),
     (Preset::MondayMorning, "Segunda às 9:00"),
-    (Preset::Custom, "Personalizada"),
 ];
 
-/// A preset's moment; `None` for a custom one and for "today at 18:00" once that has passed.
+/// A preset's moment; `None` for "today at 18:00" once that has passed.
 pub(crate) fn preset_time(preset: Preset, now: NaiveDateTime) -> Option<NaiveDateTime> {
     let at = |date: NaiveDate, hour: u32| date.and_hms_opt(hour, 0, 0);
     match preset {
@@ -375,8 +435,26 @@ pub(crate) fn preset_time(preset: Preset, now: NaiveDateTime) -> Option<NaiveDat
             let ahead = 7 - i64::from(now.date().weekday().num_days_from_monday());
             at(now.date() + Span::days(ahead), 9)
         }
-        Preset::Custom => None,
     }
+}
+
+/// The time a new task gets when a day (or an hour of it) is clicked: that hour when one was
+/// clicked, else 9:00, or the next hour when today's 9:00 has passed.
+pub(crate) fn slot_default(
+    date: NaiveDate,
+    hour: Option<u32>,
+    now: NaiveDateTime,
+) -> NaiveDateTime {
+    let at = |hour: u32| date.and_hms_opt(hour.min(23), 0, 0).unwrap_or(now);
+    if let Some(hour) = hour {
+        return at(hour);
+    }
+    let morning = at(9);
+    if date == now.date() && morning <= now {
+        let next = now.hour() + 1;
+        return if next < 24 { at(next) } else { morning };
+    }
+    morning
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -385,14 +463,39 @@ pub(crate) enum Repeat {
     Daily,
     Weekdays,
     Weekly,
+    Monthly,
 }
 
-const REPEATS: [(Repeat, &str); 4] = [
+const REPEATS: [(Repeat, &str); 5] = [
     (Repeat::No, "Não"),
     (Repeat::Daily, "Todo dia"),
     (Repeat::Weekdays, "Dias úteis"),
     (Repeat::Weekly, "Semanal"),
+    (Repeat::Monthly, "Mensal"),
 ];
+
+/// What the form shows for a task's rule: date, time, repeat and weekday chips. A repeating rule's
+/// date is its next run's (or tomorrow).
+pub(crate) fn form_parts(
+    rule: &Rule,
+    next: Option<NaiveDateTime>,
+    now: NaiveDateTime,
+) -> (NaiveDate, NaiveTime, Repeat, [bool; 7]) {
+    let mut weekdays = [false; 7];
+    let near = next.map_or(now.date() + Span::days(1), |at| at.date());
+    match rule {
+        Rule::Once(at) => (at.date(), at.time(), Repeat::No, weekdays),
+        Rule::Daily(time) => (near, *time, Repeat::Daily, weekdays),
+        Rule::Weekdays(time) => (near, *time, Repeat::Weekdays, weekdays),
+        Rule::Weekly(time, days) => {
+            for day in days.iter().filter(|day| **day < 7) {
+                weekdays[*day as usize] = true;
+            }
+            (near, *time, Repeat::Weekly, weekdays)
+        }
+        Rule::Monthly(time, _) => (near, *time, Repeat::Monthly, weekdays),
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Field {
@@ -408,11 +511,16 @@ pub(crate) enum Pick {
 }
 
 pub(super) struct Sheet {
+    /// The task being edited; `None` for a new one.
+    editing: Option<String>,
+    enabled: bool,
     prompt: String,
     project: String,
     provider: &'static str,
     model: Option<String>,
-    preset: Preset,
+    effort: Option<String>,
+    /// "ask", "auto" or "full".
+    approval: &'static str,
     date: String,
     time: String,
     repeat: Repeat,
@@ -424,17 +532,14 @@ pub(super) struct Sheet {
 }
 
 impl Sheet {
-    /// The moment the "when" part names: a preset's, or the typed date and time.
-    pub(crate) fn when(&self, now: NaiveDateTime) -> Option<NaiveDateTime> {
-        match self.preset {
-            Preset::Custom => Some(parse_date(&self.date)?.and_time(parse_hour(&self.time)?)),
-            preset => preset_time(preset, now),
-        }
+    /// The moment the date and time fields name.
+    pub(crate) fn when(&self) -> Option<NaiveDateTime> {
+        Some(parse_date(&self.date)?.and_time(parse_hour(&self.time)?))
     }
 
     /// The rule the form makes, once its date and weekdays are right.
-    pub(crate) fn rule(&self, now: NaiveDateTime) -> Option<Rule> {
-        let when = self.when(now)?;
+    pub(crate) fn rule(&self) -> Option<Rule> {
+        let when = self.when()?;
         let time = when.time().with_second(0)?;
         match self.repeat {
             Repeat::No => Some(Rule::Once(when.with_second(0)?)),
@@ -446,12 +551,37 @@ impl Sheet {
                     .collect();
                 (!days.is_empty()).then_some(Rule::Weekly(time, days))
             }
+            Repeat::Monthly => Some(Rule::Monthly(time, when.day() as u8)),
         }
     }
 
+    /// Sets the date and time fields to a moment (what a preset or a clicked slot names).
+    fn set_when(&mut self, at: NaiveDateTime) {
+        self.date = at.format("%d/%m/%Y").to_string();
+        self.time = clock(at.time());
+    }
+
+    /// Moves the date by days, or the time by minutes, within the day.
+    fn nudge(&mut self, field: Field, by: i64) {
+        let Some(at) = self.when() else {
+            return;
+        };
+        let moved = match field {
+            Field::Date => at + Span::days(by),
+            _ => {
+                let minutes =
+                    (i64::from(at.hour()) * 60 + i64::from(at.minute()) + by).clamp(0, 24 * 60 - 1);
+                at.date()
+                    .and_hms_opt((minutes / 60) as u32, (minutes % 60) as u32, 0)
+                    .unwrap_or(at)
+            }
+        };
+        self.set_when(moved);
+    }
+
     /// "Roda dias úteis às 9:00, em Sirus, com Claude Code."
-    pub(crate) fn summary(&self, now: NaiveDateTime, project: &str, model: &str) -> String {
-        match self.rule(now) {
+    pub(crate) fn summary(&self, project: &str, model: &str) -> String {
+        match self.rule() {
             Some(rule) => tf(
                 "Roda {}, em {}, com {}.",
                 &[&lowered(&rule_words(&rule)), &project, &model],
@@ -471,14 +601,12 @@ impl Sheet {
 
 // ---------------------------------------------------------------- state
 
-struct Popover {
+pub(super) struct Popover {
     task: String,
     at: gpui::Point<gpui::Pixels>,
 }
 
 pub(super) struct State {
-    pub open: Option<Tween>,
-    closing: bool,
     view: View,
     anchor: Option<NaiveDate>,
     pub tasks: Vec<Task>,
@@ -486,22 +614,22 @@ pub(super) struct State {
     now: Option<NaiveDateTime>,
     loaded: bool,
     error: Option<String>,
-    popover: Option<Popover>,
-    sheet: Option<Sheet>,
+    pub(super) popover: Option<Popover>,
+    pub(super) sheet: Option<Sheet>,
     scroll: gpui::ScrollHandle,
     sheet_scroll: gpui::ScrollHandle,
     /// Bumped by each request so a late answer to an older range is dropped.
     generation: u64,
     /// The grid scrolls to the morning (or to now) once after it opens or changes view.
-    scrolled: bool,
+    scrolled: Cell<bool>,
+    /// Bumped when the view or the range changes, so the body fades in again.
+    shown: u64,
 }
 
 impl Default for State {
     fn default() -> Self {
         Self {
-            open: None,
-            closing: false,
-            view: View::Week,
+            view: View::Month,
             anchor: None,
             tasks: Vec::new(),
             occurrences: Vec::new(),
@@ -513,7 +641,8 @@ impl Default for State {
             scroll: gpui::ScrollHandle::new(),
             sheet_scroll: gpui::ScrollHandle::new(),
             generation: 0,
-            scrolled: false,
+            scrolled: Cell::new(false),
+            shown: 0,
         }
     }
 }
@@ -532,7 +661,7 @@ impl State {
         self.tasks.iter().find(|task| task.id == id)
     }
 
-    /// The text the sheet's focused field edits; keys go to `fallback` when none has focus.
+    /// The text the modal's focused field edits; keys go to `fallback` when none has focus.
     pub(super) fn text_target<'a>(&'a mut self, fallback: &'a mut String) -> &'a mut String {
         match self
             .sheet
@@ -545,17 +674,14 @@ impl State {
     }
 }
 
-fn secs(cx: &Context<Shell>, seconds: f32) -> f32 {
-    if cx.reduce_motion() { 0. } else { seconds }
-}
-
 fn stamp(at: NaiveDateTime) -> String {
     at.format("%Y-%m-%dT%H:%M:%S").to_string()
 }
 
 impl Shell {
+    /// The Tarefas tab is the page on screen.
     pub(super) fn tasks_page_open(&self) -> bool {
-        self.tasks_page.open.is_some()
+        self.term.tasks_active
     }
 
     /// How many tasks will still run, for the sidebar's badge.
@@ -563,65 +689,27 @@ impl Shell {
         active_count(&self.tasks_page.tasks)
     }
 
-    /// Esc and clicks outside take the layers apart one at a time: the sheet, the popover, the page.
-    pub(super) fn close_tasks_page(&mut self, cx: &mut Context<Self>) -> bool {
+    /// Esc takes the layers apart one at a time: the open list, the modal, the popover.
+    fn tasks_close_layer(&mut self, cx: &mut Context<Self>) -> bool {
         let page = &mut self.tasks_page;
-        if page.sheet.take().is_some() || page.popover.take().is_some() {
+        if let Some(sheet) = page.sheet.as_mut() {
+            if sheet.pick.take().is_none() {
+                page.sheet = None;
+            }
             cx.notify();
             return true;
         }
-        let length = secs(cx, CLOSE);
-        let page = &mut self.tasks_page;
-        let Some(open) = page.open.as_mut() else {
-            return false;
-        };
-        if page.closing {
-            return false;
-        }
-        page.closing = true;
-        open.set(0., Instant::now(), length, Curve::Expo);
-        cx.notify();
-        true
-    }
-
-    pub(super) fn tasks_settle(&mut self, now: Instant) {
-        let page = &mut self.tasks_page;
-        if page.closing && page.open.as_ref().is_none_or(|open| open.done(now)) {
-            page.open = None;
-            page.closing = false;
-            page.sheet = None;
-            page.popover = None;
-        }
-    }
-
-    pub(super) fn toggle_tasks_page(&mut self, cx: &mut Context<Self>) {
-        if self.tasks_page.open.is_some() && !self.tasks_page.closing {
-            self.close_tasks_page(cx);
-            return;
-        }
-        let (now, length) = (Instant::now(), secs(cx, OPEN));
-        if let Some(open) = self.tasks_page.open.as_mut() {
-            self.tasks_page.closing = false;
-            open.set(1., now, length, Curve::Expo);
+        if page.popover.take().is_some() {
             cx.notify();
-            return;
+            return true;
         }
-        let page = &mut self.tasks_page;
-        page.open = Some(Tween::from_to(0., 1., now, length, Curve::Expo));
-        page.closing = false;
-        page.anchor = None;
-        page.popover = None;
-        page.sheet = None;
-        page.scrolled = false;
-        crate::segment_pill::forget("tasks-view");
-        self.tasks_load(cx);
-        cx.notify();
+        false
     }
 
     /// Asks the host for the tasks and the runs of what the page shows.
     pub(super) fn tasks_load(&mut self, cx: &mut Context<Self>) {
         let page = &mut self.tasks_page;
-        let days = view_days(page.view, page.anchor());
+        let days = view_days(page.view, page.anchor(), monday_first());
         let (Some(first), Some(last)) = (days.first().copied(), days.last().copied()) else {
             return;
         };
@@ -674,7 +762,8 @@ impl Shell {
         }
         self.tasks_page.view = view;
         self.tasks_page.popover = None;
-        self.tasks_page.scrolled = false;
+        self.tasks_page.scrolled.set(false);
+        self.tasks_page.shown += 1;
         self.tasks_load(cx);
         cx.notify();
     }
@@ -683,6 +772,7 @@ impl Shell {
         let page = &mut self.tasks_page;
         page.anchor = Some(step_anchor(page.view, page.anchor(), forward));
         page.popover = None;
+        page.shown += 1;
         self.tasks_load(cx);
         cx.notify();
     }
@@ -691,7 +781,8 @@ impl Shell {
         let page = &mut self.tasks_page;
         page.anchor = None;
         page.popover = None;
-        page.scrolled = false;
+        page.scrolled.set(false);
+        page.shown += 1;
         self.tasks_load(cx);
         cx.notify();
     }
@@ -757,51 +848,98 @@ impl Shell {
             return;
         };
         self.tasks_page.popover = None;
-        self.close_tasks_page(cx);
         self.open(ix, cx);
     }
 
-    // ------------------------------------------------------------ the sheet
+    // ------------------------------------------------------------ the modal
 
-    fn tasks_new(&mut self, cx: &mut Context<Self>) {
-        let now = self
-            .tasks_page
+    fn tasks_now(&self) -> NaiveDateTime {
+        self.tasks_page
             .now
-            .unwrap_or_else(|| Local::now().naive_local());
+            .unwrap_or_else(|| Local::now().naive_local())
+    }
+
+    /// Opens the modal for a new task at `at` (tomorrow at 9:00 when none).
+    fn tasks_new(&mut self, at: Option<NaiveDateTime>, cx: &mut Context<Self>) {
+        let now = self.tasks_now();
+        let at = at.unwrap_or_else(|| {
+            preset_time(Preset::TomorrowMorning, now).unwrap_or(now + Span::days(1))
+        });
         let provider = self
             .enabled_providers()
             .first()
             .copied()
             .unwrap_or("claude");
         let project = self.sidebar_project_id().unwrap_or_default();
-        let tomorrow = now.date() + Span::days(1);
         let mut weekdays = [false; 7];
-        weekdays[tomorrow.weekday().num_days_from_monday() as usize] = true;
-        self.tasks_page.popover = None;
-        self.tasks_page.sheet = Some(Sheet {
+        weekdays[at.date().weekday().num_days_from_monday() as usize] = true;
+        let mut sheet = Sheet {
+            editing: None,
+            enabled: true,
             prompt: String::new(),
             project,
             provider,
             model: None,
-            preset: Preset::TomorrowMorning,
-            date: tomorrow.format("%d/%m/%Y").to_string(),
-            time: "9:00".into(),
+            effort: None,
+            approval: "ask",
+            date: String::new(),
+            time: String::new(),
             repeat: Repeat::No,
             weekdays,
             field: Some(Field::Prompt),
             pick: None,
             error: None,
             saving: false,
-        });
+        };
+        sheet.set_when(at);
+        self.tasks_page.popover = None;
+        self.tasks_page.sheet = Some(sheet);
         self.field_caret_moved.set(Instant::now());
         cx.notify();
     }
 
+    /// Opens the modal on a task, to edit it: saving sends the same `save_task`, with its id.
+    fn tasks_edit(&mut self, id: &str, cx: &mut Context<Self>) {
+        let now = self.tasks_now();
+        let Some(task) = self.tasks_page.task(id).cloned() else {
+            return;
+        };
+        let (date, time, repeat, weekdays) = form_parts(&task.rule, task.next, now);
+        let provider = PROVIDER_ORDER
+            .iter()
+            .copied()
+            .find(|provider| *provider == task.provider)
+            .unwrap_or("claude");
+        let approval = ["ask", "auto", "full"]
+            .into_iter()
+            .find(|mode| Some(*mode) == task.approval.as_deref())
+            .unwrap_or("ask");
+        let mut sheet = Sheet {
+            editing: Some(task.id.clone()),
+            enabled: task.enabled,
+            prompt: task.prompt.clone(),
+            project: task.project_id.clone(),
+            provider,
+            model: task.model.clone(),
+            effort: task.effort.clone(),
+            approval,
+            date: String::new(),
+            time: String::new(),
+            repeat,
+            weekdays,
+            field: None,
+            pick: None,
+            error: None,
+            saving: false,
+        };
+        sheet.set_when(date.and_time(time));
+        self.tasks_page.popover = None;
+        self.tasks_page.sheet = Some(sheet);
+        cx.notify();
+    }
+
     fn tasks_save(&mut self, cx: &mut Context<Self>) {
-        let now = self
-            .tasks_page
-            .now
-            .unwrap_or_else(|| Local::now().naive_local());
+        let now = self.tasks_now();
         let Some(sheet) = self.tasks_page.sheet.as_mut() else {
             return;
         };
@@ -813,9 +951,9 @@ impl Shell {
             cx.notify();
             return;
         }
-        let Some(rule) = sheet.rule(now) else {
+        let Some(rule) = sheet.rule() else {
             sheet.error = Some(
-                if sheet.repeat == Repeat::Weekly {
+                if sheet.repeat == Repeat::Weekly && sheet.when().is_some() {
                     t("Escolha ao menos um dia da semana.")
                 } else {
                     t("Escolha uma data e hora válidas.")
@@ -839,14 +977,19 @@ impl Shell {
         }
         sheet.error = None;
         sheet.saving = true;
-        let task = json!({
+        let mut task = json!({
             "prompt": sheet.prompt.trim(),
             "projectId": sheet.project,
             "provider": sheet.provider,
             "model": sheet.model,
+            "effort": sheet.effort,
+            "approval": sheet.approval,
             "schedule": rule_json(&rule),
-            "enabled": true,
+            "enabled": sheet.enabled,
         });
+        if let Some(id) = &sheet.editing {
+            task["id"] = json!(id);
+        }
         let rx = self.backend.request("save_task", json!({ "task": task }));
         cx.spawn(async move |this, cx| {
             let answer = message_actions::settle(rx).await;
@@ -870,49 +1013,57 @@ impl Shell {
         cx.notify();
     }
 
-    /// Enter, Tab, Backspace and Esc while the page is up. Returns whether the key was taken.
-    pub(super) fn tasks_keys(&mut self, key: &str, cx: &mut Context<Self>) -> bool {
-        if self.tasks_page.open.is_none() {
+    /// The page's keys while its tab shows. Without the modal: ← and → step, T is today, D, S and
+    /// M pick the view. With it: Enter, Tab, Backspace and Esc edit the focused field. Returns
+    /// whether the key was taken.
+    pub(super) fn tasks_keys(&mut self, keys: &gpui::Keystroke, cx: &mut Context<Self>) -> bool {
+        if !self.tasks_page_open() {
             return false;
         }
-        let sheet = self.tasks_page.sheet.as_mut();
-        match key {
-            "escape" => {
-                if let Some(sheet) = sheet
-                    && sheet.pick.take().is_some()
-                {
-                    cx.notify();
-                    return true;
+        let key = keys.key.as_str();
+        let held = keys.modifiers.platform || keys.modifiers.control || keys.modifiers.alt;
+        if key == "escape" {
+            return self.tasks_close_layer(cx);
+        }
+        if self.tasks_page.sheet.is_none() {
+            if !held {
+                match key {
+                    "left" | "right" => self.tasks_step(key == "right", cx),
+                    "t" => self.tasks_today(cx),
+                    "d" => self.tasks_set_view(View::Day, cx),
+                    "s" => self.tasks_set_view(View::Week, cx),
+                    "m" => self.tasks_set_view(View::Month, cx),
+                    "enter" | "tab" | "backspace" => {}
+                    _ => return false,
                 }
-                self.close_tasks_page(cx);
-                true
+                return true;
             }
+            return false;
+        }
+        let Some(sheet) = self.tasks_page.sheet.as_mut() else {
+            return false;
+        };
+        match key {
             "enter" => {
-                if let Some(sheet) = sheet {
-                    match sheet.field {
-                        Some(Field::Prompt) => sheet.prompt.push('\n'),
-                        Some(_) => sheet.field = None,
-                        None => {}
-                    }
+                match sheet.field {
+                    Some(Field::Prompt) => sheet.prompt.push('\n'),
+                    Some(_) => sheet.field = None,
+                    None => {}
                 }
                 true
             }
             "tab" => {
-                if let Some(sheet) = sheet {
-                    sheet.field = match (sheet.field, sheet.preset == Preset::Custom) {
-                        (Some(Field::Prompt), true) => Some(Field::Date),
-                        (Some(Field::Date), _) => Some(Field::Time),
-                        (None, _) => Some(Field::Prompt),
-                        _ => None,
-                    };
-                    self.field_caret_moved.set(Instant::now());
-                }
+                sheet.field = match sheet.field {
+                    Some(Field::Prompt) => Some(Field::Date),
+                    Some(Field::Date) => Some(Field::Time),
+                    Some(Field::Time) => None,
+                    None => Some(Field::Prompt),
+                };
+                self.field_caret_moved.set(Instant::now());
                 true
             }
             "backspace" => {
-                if let Some(sheet) = sheet
-                    && let Some(field) = sheet.field
-                {
+                if let Some(field) = sheet.field {
                     sheet.text(field).pop();
                 }
                 true
@@ -949,58 +1100,48 @@ impl Shell {
         }
     }
 
-    pub(super) fn tasks_page_view(
-        &mut self,
-        now: Instant,
-        moving: &mut bool,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        let open = self.tasks_page.open.as_ref()?;
-        if !open.done(now) {
-            *moving = true;
-        }
-        let p = open.at(now).clamp(0., 1.);
-        let size = window.viewport_size();
-        let (vw, vh) = (f32::from(size.width), f32::from(size.height));
-        let width = (vw - 48.).min(1240.).max(360.);
-        let height = (vh - 72.).min(860.).max(260.);
-        let scale = 0.97 + 0.03 * p;
-        let body: AnyElement = if self.tasks_page.loaded && self.tasks_page.tasks.is_empty() {
+    /// The page in the Tarefas tab: header, the calendar and a message when the host refused
+    /// something. A change of view or range fades the calendar in again.
+    pub(super) fn tasks_page_body(&self, cx: &mut Context<Self>) -> AnyElement {
+        let page = &self.tasks_page;
+        let calendar: AnyElement = if page.loaded && page.tasks.is_empty() {
             self.tasks_empty(cx)
         } else {
-            match self.tasks_page.view {
+            match page.view {
                 View::Month => self.tasks_month(cx),
-                View::Week => self.tasks_grid(view_days(View::Week, self.tasks_page.anchor()), cx),
-                View::Day => self.tasks_grid(vec![self.tasks_page.anchor()], cx),
+                View::Week => {
+                    self.tasks_grid(view_days(View::Week, page.anchor(), monday_first()), cx)
+                }
+                View::Day => self.tasks_grid(vec![page.anchor()], cx),
             }
         };
-        let dialog = div()
-            .id("tasks-dialog")
-            .relative()
-            .top(px((1. - p) * 6.))
-            .w(px(width * scale))
-            .h(px(height * scale))
+        let calendar = div()
+            .id("tasks-calendar")
+            .flex_1()
+            .min_h_0()
             .flex()
             .flex_col()
-            .opacity(p)
-            .rounded(px(crate::theme::RADIUS_LG))
-            .border_1()
-            .border_color(crate::theme::border())
-            .overflow_hidden()
-            .child(crate::theme::floating_surface(crate::theme::RADIUS_LG))
-            .shadow_lg()
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _, _, cx| {
-                    if this.tasks_page.popover.take().is_some() {
-                        cx.notify();
-                    }
-                    cx.stop_propagation();
-                }),
-            )
+            .child(calendar);
+        let calendar = if crate::prefs::still() {
+            calendar.into_any_element()
+        } else {
+            calendar
+                .with_animation(
+                    SharedString::from(format!("tasks-calendar-{}", page.shown)),
+                    Animation::new(std::time::Duration::from_millis(180))
+                        .with_easing(|t| eased(t, Curve::Expo)),
+                    |el, t| el.opacity(t),
+                )
+                .into_any_element()
+        };
+        div()
+            .id("tasks-page")
+            .size_full()
+            .min_w_0()
+            .flex()
+            .flex_col()
             .child(self.tasks_header(cx))
-            .when_some(self.tasks_page.error.clone(), |d, error| {
+            .when_some(page.error.clone(), |d, error| {
                 d.child(
                     div()
                         .px(px(24.))
@@ -1010,30 +1151,25 @@ impl Shell {
                         .child(error),
                 )
             })
-            .child(body);
-        let popover = self.tasks_popover(vw, vh, cx);
-        let sheet = self.tasks_sheet_view(vh, cx);
-        Some(
-            div()
-                .id("tasks-page")
-                .occlude()
-                .absolute()
-                .inset_0()
-                .flex()
-                .items_center()
-                .justify_center()
-                .bg(gpui::black().opacity(0.32 * p))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _, _, cx| {
-                        this.close_tasks_page(cx);
-                    }),
-                )
-                .child(dialog)
-                .children(popover)
-                .children(sheet)
-                .into_any_element(),
-        )
+            .child(calendar)
+            .into_any_element()
+    }
+
+    /// What floats over the window while the tab shows: the run's popover and the modal.
+    pub(super) fn tasks_overlays(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        if !self.tasks_page_open() {
+            return Vec::new();
+        }
+        let size = window.viewport_size();
+        let (vw, vh) = (f32::from(size.width), f32::from(size.height));
+        self.tasks_popover(vw, vh, cx)
+            .into_iter()
+            .chain(self.tasks_sheet_view(vh, cx))
+            .collect()
     }
 
     fn tasks_header(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -1047,7 +1183,7 @@ impl Shell {
                 anchor.year()
             ),
             View::Week => {
-                let first = week_start(anchor);
+                let first = week_start(anchor, monday_first());
                 let last = first + Span::days(6);
                 format!(
                     "{} {} – {} {} {}",
@@ -1058,39 +1194,39 @@ impl Shell {
                     last.year()
                 )
             }
-            View::Month => format!(
-                "{} {}",
-                t(MONTH_NAMES[anchor.month0() as usize]),
-                anchor.year()
-            ),
+            View::Month => month_title(anchor),
         };
-        let chosen = VIEWS.iter().position(|v| *v == page.view).unwrap_or(1);
-        let segments = VIEWS.iter().enumerate().map(|(ix, view)| {
-            let view = *view;
-            div()
-                .id(("tasks-view", ix))
-                .relative()
-                .w(px(62.))
-                .h(px(26.))
-                .rounded(px(crate::theme::RADIUS_SM))
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_size(px(12.))
-                .font_weight(FontWeight::MEDIUM)
-                .cursor_pointer()
-                .text_color(if view == page.view {
-                    crate::theme::on_accent()
-                } else {
-                    content(0.6)
-                })
-                .when(view != page.view, |d| {
-                    d.hover(|s| s.text_color(content(0.9)))
-                })
-                .child(crate::segment_pill::probe("tasks-view", ix))
-                .on_click(cx.listener(move |this, _, _, cx| this.tasks_set_view(view, cx)))
-                .child(view.label())
-        });
+        let chosen = VIEWS.iter().position(|v| *v == page.view).unwrap_or(2);
+        let segments = VIEWS
+            .iter()
+            .enumerate()
+            .map(|(ix, view)| {
+                let view = *view;
+                div()
+                    .id(("tasks-view", ix))
+                    .relative()
+                    .w(px(62.))
+                    .h(px(26.))
+                    .rounded(px(crate::theme::RADIUS_SM))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_size(px(12.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .cursor_pointer()
+                    .text_color(if view == page.view {
+                        crate::theme::on_accent()
+                    } else {
+                        content(0.6)
+                    })
+                    .when(view != page.view, |d| {
+                        d.hover(|s| s.text_color(content(0.9)))
+                    })
+                    .child(crate::segment_pill::probe("tasks-view", ix))
+                    .on_click(cx.listener(move |this, _, _, cx| this.tasks_set_view(view, cx)))
+                    .child(view.label())
+            })
+            .collect::<Vec<_>>();
         let step = |id: &'static str, name: &'static str, forward: bool, cx: &mut Context<Self>| {
             div()
                 .id(id)
@@ -1108,53 +1244,27 @@ impl Shell {
             .flex_shrink_0()
             .flex()
             .items_center()
-            .gap(px(10.))
+            .gap(px(8.))
             .px(px(24.))
             .h(px(64.))
             .border_b_1()
             .border_color(content(0.08))
             .child(
                 div()
+                    .min_w(px(190.))
                     .text_size(px(18.))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(content(0.95))
-                    .child(t("Tarefas")),
-            )
-            .child(
-                div()
-                    .relative()
-                    .ml(px(14.))
-                    .flex()
-                    .flex_shrink_0()
-                    .p(px(2.))
-                    .rounded(px(crate::theme::RADIUS_LG))
-                    .bg(content(0.06))
-                    .child(crate::segment_pill::pill(
-                        "tasks-view",
-                        chosen,
-                        crate::theme::accent(),
-                        crate::theme::RADIUS_SM,
-                    ))
-                    .children(segments),
-            )
-            .child(div().flex_1())
-            .child(step("tasks-prev", "chevron-left", false, cx))
-            .child(
-                div()
-                    .min_w(px(150.))
-                    .flex()
-                    .justify_center()
-                    .text_size(px(13.))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(content(0.85))
                     .child(range),
             )
+            .child(step("tasks-prev", "chevron-left", false, cx))
             .child(step("tasks-next", "chevron-right", true, cx))
             .child(
                 div()
                     .id("tasks-today")
                     .h(px(28.))
                     .px(px(10.))
+                    .ml(px(4.))
                     .rounded(px(crate::theme::RADIUS_MD))
                     .border_1()
                     .border_color(crate::theme::border())
@@ -1167,24 +1277,25 @@ impl Shell {
                     .on_click(cx.listener(|this, _, _, cx| this.tasks_today(cx)))
                     .child(t("Hoje")),
             )
-            .child(self.tasks_new_button(cx))
+            .child(div().flex_1())
             .child(
                 div()
-                    .id("tasks-close")
-                    .size(px(28.))
-                    .rounded(px(crate::theme::RADIUS_MD))
+                    .relative()
                     .flex()
-                    .items_center()
-                    .justify_center()
-                    .cursor_pointer()
-                    .hover(|s| s.bg(content(0.07)))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.tasks_page.sheet = None;
-                        this.tasks_page.popover = None;
-                        this.close_tasks_page(cx);
-                    }))
-                    .child(icon("close", 14.).text_color(content(0.6))),
+                    .flex_shrink_0()
+                    .p(px(2.))
+                    .mr(px(8.))
+                    .rounded(px(crate::theme::RADIUS_LG))
+                    .bg(content(0.06))
+                    .child(crate::segment_pill::pill(
+                        "tasks-view",
+                        chosen,
+                        crate::theme::accent(),
+                        crate::theme::RADIUS_SM,
+                    ))
+                    .children(segments),
             )
+            .child(self.tasks_new_button(cx))
             .into_any_element()
     }
 
@@ -1204,7 +1315,7 @@ impl Shell {
             .cursor_pointer()
             .hover(|s| s.opacity(0.9))
             .active(|s| s.opacity(0.75))
-            .on_click(cx.listener(|this, _, _, cx| this.tasks_new(cx)))
+            .on_click(cx.listener(|this, _, _, cx| this.tasks_new(None, cx)))
             .child(icon("plus", 13.).text_color(crate::theme::on_accent()))
             .child(t("Nova tarefa"))
     }
@@ -1301,13 +1412,13 @@ impl Shell {
     }
 
     /// Week and day: hour rows, one column per day, runs placed by their time.
-    fn tasks_grid(&mut self, days: Vec<NaiveDate>, cx: &mut Context<Self>) -> AnyElement {
+    fn tasks_grid(&self, days: Vec<NaiveDate>, cx: &mut Context<Self>) -> AnyElement {
         let page = &self.tasks_page;
         let today = page.today();
         let now = page.now;
         let hairline = content(0.07);
         // Opened on the morning, or around now when today is showing.
-        if !page.scrolled {
+        if !page.scrolled.get() {
             let hour = match now {
                 Some(now) if days.contains(&now.date()) => f32::from(now.hour() as u8) - 2.,
                 _ => 7.,
@@ -1315,8 +1426,7 @@ impl Shell {
             page.scroll
                 .set_offset(gpui::point(px(0.), px(-(hour.max(0.) * HOUR_H))));
         }
-        self.tasks_page.scrolled = true;
-        let page = &self.tasks_page;
+        page.scrolled.set(true);
         let heads = days.iter().map(|day| {
             let is_today = *day == today;
             div()
@@ -1385,6 +1495,25 @@ impl Shell {
                 .border_l_1()
                 .border_color(hairline)
                 .when(is_today, |d| d.bg(crate::theme::accent_wash(0.045)));
+            // An empty slot starts a task at its hour.
+            for hour in 0..24u32 {
+                let day = *day;
+                column = column.child(
+                    div()
+                        .id(SharedString::from(format!("tasks-slot-{day}-{hour}")))
+                        .absolute()
+                        .top(px(hour as f32 * HOUR_H))
+                        .left_0()
+                        .right_0()
+                        .h(px(HOUR_H))
+                        .cursor_pointer()
+                        .hover(|s| s.bg(content(0.035)))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            let now = this.tasks_now();
+                            this.tasks_new(Some(slot_default(day, Some(hour), now)), cx);
+                        })),
+                );
+            }
             for hour in 1..24 {
                 column = column.child(
                     div()
@@ -1483,8 +1612,8 @@ impl Shell {
         let anchor = page.anchor();
         let today = page.today();
         let hairline = content(0.07);
-        let days = view_days(View::Month, anchor);
-        let heads = (0..7).map(|ix| {
+        let days = month_grid(anchor, monday_first());
+        let heads = weekday_order(monday_first()).into_iter().map(|ix| {
             div()
                 .flex_1()
                 .flex()
@@ -1511,10 +1640,10 @@ impl Shell {
                         .filter(|occ| occ.at.date() == day)
                         .collect();
                     occs.sort_by_key(|occ| occ.at);
-                    let more = occs.len().saturating_sub(3);
+                    let more = occs.len().saturating_sub(DAY_CHIPS);
                     let chips: Vec<AnyElement> = occs
                         .iter()
-                        .take(3)
+                        .take(DAY_CHIPS)
                         .filter_map(|occ| self.tasks_chip(occ, true, cx))
                         .map(|chip| div().h(px(18.)).child(chip).into_any_element())
                         .collect();
@@ -1533,8 +1662,8 @@ impl Shell {
                         .when(is_today, |d| d.bg(crate::theme::accent_wash(0.05)))
                         .hover(|s| s.bg(content(0.03)))
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            this.tasks_page.anchor = Some(day);
-                            this.tasks_set_view(View::Day, cx);
+                            let now = this.tasks_now();
+                            this.tasks_new(Some(slot_default(day, None, now)), cx);
                         }))
                         .child(
                             div()
@@ -1557,9 +1686,20 @@ impl Shell {
                         .when(more > 0, |d| {
                             d.child(
                                 div()
+                                    .id(SharedString::from(format!("tasks-more-{day}")))
                                     .px(px(6.))
+                                    .rounded(px(4.))
                                     .text_size(px(10.5))
                                     .text_color(content(0.5))
+                                    .hover(|s| s.bg(content(0.06)).text_color(content(0.8)))
+                                    .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                        cx.stop_propagation()
+                                    })
+                                    // The rest of the day's runs are in its own view.
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.tasks_page.anchor = Some(day);
+                                        this.tasks_set_view(View::Day, cx);
+                                    }))
                                     .child(format!("+{more}")),
                             )
                         })
@@ -1582,7 +1722,7 @@ impl Shell {
         let id = task.id.clone();
         const WIDTH: f32 = 300.;
         let left = f32::from(pop.at.x).min(vw - WIDTH - 12.).max(12.);
-        let top = (f32::from(pop.at.y) + 8.).min(vh - 290.).max(12.);
+        let top = (f32::from(pop.at.y) + 8.).min(vh - 330.).max(12.);
         let color = Self::tasks_color(&task.provider);
         let line = |label: String, value: String| {
             div()
@@ -1621,7 +1761,8 @@ impl Shell {
                 .child(t(label))
         };
         let toggle_id = id.clone();
-        let (run_id, last_id, delete_id) = (id.clone(), id.clone(), id.clone());
+        let (edit_id, run_id, last_id, delete_id) =
+            (id.clone(), id.clone(), id.clone(), id.clone());
         let has_last = task.last_session.is_some();
         Some(
             div()
@@ -1682,6 +1823,10 @@ impl Shell {
                     self.tasks_model_label(&task.provider, task.model.as_deref()),
                 ))
                 .child(div().h(px(1.)).bg(content(0.07)))
+                .child(
+                    action("tasks-edit", "Editar", true)
+                        .on_click(cx.listener(move |this, _, _, cx| this.tasks_edit(&edit_id, cx))),
+                )
                 .child(
                     action("tasks-run-now", "Executar agora", true).on_click(
                         cx.listener(move |this, _, _, cx| this.tasks_run_now(&run_id, cx)),
@@ -1777,6 +1922,34 @@ impl Shell {
                 cx.notify();
             }))
             .child(content_el)
+    }
+
+    /// A small arrow beside a date or time field: a day, or half an hour, back or forward.
+    fn tasks_nudge(
+        &self,
+        id: SharedString,
+        name: &'static str,
+        field: Field,
+        by: i64,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        div()
+            .id(id)
+            .size(px(24.))
+            .rounded(px(crate::theme::RADIUS_SM))
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_pointer()
+            .hover(|s| s.bg(content(0.07)))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if let Some(sheet) = this.tasks_page.sheet.as_mut() {
+                    sheet.nudge(field, by);
+                    sheet.field = None;
+                }
+                cx.notify();
+            }))
+            .child(icon(name, 12.).text_color(content(0.55)))
     }
 
     fn tasks_chip_button(id: SharedString, label: &str, on: bool, enabled: bool) -> Stateful<Div> {
@@ -1892,6 +2065,7 @@ impl Shell {
                     {
                         sheet.provider = provider;
                         sheet.model = None;
+                        sheet.effort = None;
                         sheet.pick = None;
                     }
                     cx.notify();
@@ -1945,6 +2119,7 @@ impl Shell {
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if let Some(sheet) = this.tasks_page.sheet.as_mut() {
                                     sheet.model = id.clone();
+                                    sheet.effort = None;
                                     sheet.pick = None;
                                 }
                                 cx.notify();
@@ -1959,66 +2134,87 @@ impl Shell {
                 .child(button)
                 .children(list)
         };
-        // When.
+        // When: presets fill the date and time, which stay editable.
+        let at_now = sheet.when().map(|at| at.with_second(0).unwrap_or(at));
         let preset_chips = PRESETS
             .iter()
             .enumerate()
             .map(|(ix, (preset, label))| {
                 let preset = *preset;
-                let usable = preset == Preset::Custom || preset_time(preset, now).is_some();
+                let moment = preset_time(preset, now);
+                let usable = moment.is_some();
                 let chip = Self::tasks_chip_button(
                     SharedString::from(format!("tasks-preset-{ix}")),
                     t(label),
-                    sheet.preset == preset,
+                    usable && moment == at_now,
                     usable,
                 );
-                if !usable {
+                let Some(moment) = moment else {
                     return chip;
-                }
+                };
                 chip.on_click(cx.listener(move |this, _, _, cx| {
                     if let Some(sheet) = this.tasks_page.sheet.as_mut() {
-                        // The custom fields start from what the preset named.
-                        if preset == Preset::Custom
-                            && let Some(at) = sheet.when(now)
-                        {
-                            sheet.date = at.format("%d/%m/%Y").to_string();
-                            sheet.time = clock(at.time());
-                        }
-                        sheet.preset = preset;
-                        sheet.field = (preset == Preset::Custom).then_some(Field::Date);
+                        sheet.set_when(moment);
+                        sheet.field = None;
                         sheet.pick = None;
-                        if sheet.repeat == Repeat::Weekly
-                            && let Some(at) = sheet.when(now)
-                        {
+                        if sheet.repeat == Repeat::Weekly {
                             sheet.weekdays = [false; 7];
-                            sheet.weekdays[at.weekday().num_days_from_monday() as usize] = true;
+                            sheet.weekdays[moment.weekday().num_days_from_monday() as usize] = true;
                         }
                     }
-                    this.field_caret_moved.set(Instant::now());
                     cx.notify();
                 }))
             })
             .collect::<Vec<_>>();
-        let custom = (sheet.preset == Preset::Custom).then(|| {
+        let mut picker = |id: &'static str,
+                          field: Field,
+                          text: &str,
+                          hint: &'static str,
+                          wide: f32,
+                          (back, forward): (i64, i64)| {
             div()
                 .flex()
-                .gap(px(8.))
+                .items_center()
+                .gap(px(4.))
+                .child(self.tasks_nudge(
+                    SharedString::from(format!("{id}-back")),
+                    "chevron-left",
+                    field,
+                    back,
+                    cx,
+                ))
                 .child(
-                    self.tasks_field(
-                        "tasks-date",
-                        Field::Date,
-                        &sheet.date,
-                        "dd/mm/aaaa",
-                        false,
-                        cx,
-                    )
-                    .w(px(140.)),
+                    self.tasks_field(id, field, text, hint, false, cx)
+                        .w(px(wide)),
                 )
-                .child(
-                    self.tasks_field("tasks-time", Field::Time, &sheet.time, "hh:mm", false, cx)
-                        .w(px(90.)),
-                )
-        });
+                .child(self.tasks_nudge(
+                    SharedString::from(format!("{id}-forward")),
+                    "chevron-right",
+                    field,
+                    forward,
+                    cx,
+                ))
+        };
+        let custom = div()
+            .flex()
+            .items_center()
+            .gap(px(14.))
+            .child(picker(
+                "tasks-date",
+                Field::Date,
+                &sheet.date,
+                "dd/mm/aaaa",
+                112.,
+                (-1, 1),
+            ))
+            .child(picker(
+                "tasks-time",
+                Field::Time,
+                &sheet.time,
+                "hh:mm",
+                70.,
+                (-30, 30),
+            ));
         // Repeat.
         let repeat_chips = REPEATS
             .iter()
@@ -2036,7 +2232,7 @@ impl Shell {
                         sheet.repeat = repeat;
                         if repeat == Repeat::Weekly
                             && sheet.weekdays.iter().all(|on| !on)
-                            && let Some(at) = sheet.when(now)
+                            && let Some(at) = sheet.when()
                         {
                             sheet.weekdays[at.weekday().num_days_from_monday() as usize] = true;
                         }
@@ -2047,7 +2243,8 @@ impl Shell {
             .collect::<Vec<_>>();
         let weekday_chips = (sheet.repeat == Repeat::Weekly).then(|| {
             div().flex().gap(px(6.)).children(
-                (0..7usize)
+                weekday_order(monday_first())
+                    .into_iter()
                     .map(|day| {
                         Self::tasks_chip_button(
                             SharedString::from(format!("tasks-weekday-{day}")),
@@ -2065,7 +2262,54 @@ impl Shell {
                     .collect::<Vec<_>>(),
             )
         });
-        let summary = sheet.summary(now, &project_name, &model_label);
+        let summary = sheet.summary(&project_name, &model_label);
+        // Effort: the composer's levels for the chosen model; a model has to be chosen first.
+        let levels = self
+            .execution(sheet.provider, sheet.model.as_deref())
+            .levels;
+        let effort_chips = std::iter::once((None, t("Automático").to_owned()))
+            .chain(
+                levels
+                    .iter()
+                    .map(|level| (Some(level.clone()), effort_label(level))),
+            )
+            .enumerate()
+            .map(|(ix, (level, label))| {
+                let on = sheet.effort == level;
+                Self::tasks_chip_button(
+                    SharedString::from(format!("tasks-effort-{ix}")),
+                    &label,
+                    on,
+                    true,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(sheet) = this.tasks_page.sheet.as_mut() {
+                        sheet.effort = level.clone();
+                    }
+                    cx.notify();
+                }))
+            })
+            .collect::<Vec<_>>();
+        // Access: how the run's actions are approved, as the composer's menu names them.
+        let access_chips = ["ask", "auto", "full"]
+            .into_iter()
+            .map(|mode| {
+                let (_, label, _, _) = access_look(mode);
+                Self::tasks_chip_button(
+                    SharedString::from(format!("tasks-access-{mode}")),
+                    label,
+                    sheet.approval == mode,
+                    true,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(sheet) = this.tasks_page.sheet.as_mut() {
+                        sheet.approval = mode;
+                    }
+                    cx.notify();
+                }))
+            })
+            .collect::<Vec<_>>();
+        let access_note = access_look(sheet.approval).2;
         let prompt = self.tasks_field(
             "tasks-prompt",
             Field::Prompt,
@@ -2121,9 +2365,39 @@ impl Shell {
                     .flex()
                     .flex_col()
                     .gap(px(6.))
+                    .child(Self::tasks_label("Esforço"))
+                    .child(div().flex().flex_wrap().gap(px(6.)).children(effort_chips))
+                    .when(levels.is_empty(), |d| {
+                        d.child(
+                            div()
+                                .text_size(px(11.5))
+                                .text_color(content(0.4))
+                                .child(t("Escolha um modelo para ajustar o esforço.")),
+                        )
+                    }),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.))
+                    .child(Self::tasks_label("Acesso"))
+                    .child(div().flex().flex_wrap().gap(px(6.)).children(access_chips))
+                    .child(
+                        div()
+                            .text_size(px(11.5))
+                            .text_color(content(0.4))
+                            .child(access_note),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.))
                     .child(Self::tasks_label("Quando"))
                     .child(div().flex().flex_wrap().gap(px(6.)).children(preset_chips))
-                    .children(custom),
+                    .child(custom),
             )
             .child(
                 div()
@@ -2221,7 +2495,7 @@ impl Shell {
                 .child(
                     div()
                         .id("tasks-sheet")
-                        .w(px(540.))
+                        .w(px(560.))
                         .max_h(px(vh - 72.))
                         .flex()
                         .flex_col()
@@ -2245,13 +2519,39 @@ impl Shell {
                         .child(
                             div()
                                 .flex_shrink_0()
+                                .flex()
+                                .items_center()
                                 .px(px(20.))
                                 .pt(px(16.))
                                 .pb(px(12.))
-                                .text_size(px(16.))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(content(0.95))
-                                .child(t("Nova tarefa")),
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .text_size(px(16.))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(content(0.95))
+                                        .child(if sheet.editing.is_some() {
+                                            t("Editar tarefa")
+                                        } else {
+                                            t("Nova tarefa")
+                                        }),
+                                )
+                                .child(
+                                    div()
+                                        .id("tasks-sheet-close")
+                                        .size(px(26.))
+                                        .rounded(px(crate::theme::RADIUS_MD))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .cursor_pointer()
+                                        .hover(|s| s.bg(content(0.07)))
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.tasks_page.sheet = None;
+                                            cx.notify();
+                                        }))
+                                        .child(icon("close", 14.).text_color(content(0.6))),
+                                ),
                         )
                         .child(form)
                         .child(footer),
@@ -2411,19 +2711,123 @@ mod tests {
     }
 
     #[test]
-    fn views_show_one_day_a_week_or_six_weeks() {
+    fn views_show_one_day_a_week_or_a_months_weeks() {
         // 2026-11-11 is a Wednesday.
         let wed = day("2026-11-11");
-        assert_eq!(view_days(View::Day, wed), vec![wed]);
-        let week = view_days(View::Week, wed);
+        assert_eq!(view_days(View::Day, wed, true), vec![wed]);
+        let week = view_days(View::Week, wed, true);
         assert_eq!(week.len(), 7);
         assert_eq!(week[0], day("2026-11-09"));
         assert_eq!(week[6], day("2026-11-15"));
-        let month = view_days(View::Month, wed);
+        // Sunday first: the week of the 11th starts on the 8th.
+        let sunday_week = view_days(View::Week, wed, false);
+        assert_eq!(sunday_week[0], day("2026-11-08"));
+        assert_eq!(sunday_week[6], day("2026-11-14"));
+        // November 2026 starts on a Sunday: Monday first needs the 26th of October, six weeks.
+        let month = view_days(View::Month, wed, true);
         assert_eq!(month.len(), 42);
-        // November 2026 starts on a Sunday, so the grid starts on Monday, October 26.
         assert_eq!(month[0], day("2026-10-26"));
         assert_eq!(month[41], day("2026-12-06"));
+        // Sunday first: the 1st opens the grid and five weeks reach December 5.
+        let month = view_days(View::Month, wed, false);
+        assert_eq!(month.len(), 35);
+        assert_eq!(month[0], day("2026-11-01"));
+        assert_eq!(month[34], day("2026-12-05"));
+    }
+
+    #[test]
+    fn a_month_grid_is_whole_weeks_holding_every_day() {
+        // February 2027 starts on a Monday and has 28 days: four Monday-first weeks.
+        let grid = month_grid(day("2027-02-14"), true);
+        assert_eq!(grid.len(), 28);
+        assert_eq!(grid[0], day("2027-02-01"));
+        assert_eq!(grid[27], day("2027-02-28"));
+        // Sunday first it needs a fifth week on each side of the month.
+        let grid = month_grid(day("2027-02-14"), false);
+        assert_eq!(grid.len(), 35);
+        assert_eq!(grid[0], day("2027-01-31"));
+        for month in 1..=12 {
+            for monday in [true, false] {
+                let grid = month_grid(NaiveDate::from_ymd_opt(2026, month, 5).unwrap(), monday);
+                assert!(matches!(grid.len(), 28 | 35 | 42));
+                assert_eq!(
+                    grid[0].weekday().num_days_from_monday(),
+                    if monday { 0 } else { 6 }
+                );
+                assert!(
+                    grid.windows(2)
+                        .all(|pair| pair[1] - pair[0] == Span::days(1))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_weekday_headings_follow_the_first_day() {
+        assert_eq!(weekday_order(true), [0, 1, 2, 3, 4, 5, 6]);
+        // Dom, Seg, ..., Sáb.
+        assert_eq!(weekday_order(false), [6, 0, 1, 2, 3, 4, 5]);
+        assert_eq!(WEEKDAYS[weekday_order(false)[0]], "Dom");
+        assert_eq!(WEEKDAYS[weekday_order(false)[6]], "Sáb");
+    }
+
+    #[test]
+    fn the_month_title_names_month_and_year() {
+        crate::i18n::with_locale(false, || {
+            assert_eq!(month_title(day("2026-11-09")), "Novembro de 2026");
+        });
+        crate::i18n::with_locale(true, || {
+            assert_eq!(month_title(day("2026-11-09")), "November 2026");
+        });
+    }
+
+    #[test]
+    fn a_clicked_day_or_hour_makes_the_new_tasks_time() {
+        let now = at("2026-11-09T12:34:00");
+        // A day ahead: 9:00. An hour of it: that hour.
+        assert_eq!(
+            slot_default(day("2026-11-20"), None, now),
+            at("2026-11-20T09:00:00")
+        );
+        assert_eq!(
+            slot_default(day("2026-11-20"), Some(15), now),
+            at("2026-11-20T15:00:00")
+        );
+        // Today after 9:00: the next hour. Late at night: not past midnight.
+        assert_eq!(
+            slot_default(day("2026-11-09"), None, now),
+            at("2026-11-09T13:00:00")
+        );
+        let night = at("2026-11-09T23:40:00");
+        assert_eq!(
+            slot_default(day("2026-11-09"), None, night),
+            at("2026-11-09T09:00:00")
+        );
+        // Today before 9:00 keeps 9:00.
+        let early = at("2026-11-09T07:00:00");
+        assert_eq!(
+            slot_default(day("2026-11-09"), None, early),
+            at("2026-11-09T09:00:00")
+        );
+    }
+
+    #[test]
+    fn editing_fills_the_form_from_the_rule() {
+        let now = at("2026-11-09T12:00:00");
+        let (date, clock_time, repeat, weekdays) =
+            form_parts(&Rule::Once(at("2026-11-12T07:45:00")), None, now);
+        assert_eq!(
+            (date, clock_time, repeat),
+            (day("2026-11-12"), time(7, 45), Repeat::No)
+        );
+        assert_eq!(weekdays, [false; 7]);
+        let next = Some(at("2026-11-10T09:00:00"));
+        let (date, _, repeat, weekdays) =
+            form_parts(&Rule::Weekly(time(9, 0), vec![1, 3]), next, now);
+        assert_eq!((date, repeat), (day("2026-11-10"), Repeat::Weekly));
+        assert_eq!(weekdays, [false, true, false, true, false, false, false]);
+        let (date, _, repeat, _) = form_parts(&Rule::Monthly(time(9, 0), 15), None, now);
+        assert_eq!((date, repeat), (day("2026-11-10"), Repeat::Monthly));
     }
 
     #[test]
@@ -2488,7 +2892,6 @@ mod tests {
             preset_time(Preset::MondayMorning, now),
             Some(at("2026-11-16T09:00:00"))
         );
-        assert_eq!(preset_time(Preset::Custom, now), None);
         // Past 18:00 the evening preset is gone.
         let late = at("2026-11-09T19:00:00");
         assert_eq!(preset_time(Preset::TodayEvening, late), None);
@@ -2512,13 +2915,16 @@ mod tests {
 
     fn sheet() -> Sheet {
         Sheet {
+            editing: None,
+            enabled: true,
             prompt: "Summarise".into(),
             project: "p".into(),
             provider: "claude",
             model: None,
-            preset: Preset::TomorrowMorning,
-            date: String::new(),
-            time: String::new(),
+            effort: None,
+            approval: "ask",
+            date: "10/11/2026".into(),
+            time: "9:00".into(),
             repeat: Repeat::No,
             weekdays: [false; 7],
             field: None,
@@ -2530,57 +2936,91 @@ mod tests {
 
     #[test]
     fn the_form_makes_a_rule_from_when_and_repeat() {
-        let now = at("2026-11-09T12:00:00");
         let mut form = sheet();
-        assert_eq!(form.rule(now), Some(Rule::Once(at("2026-11-10T09:00:00"))));
+        assert_eq!(form.rule(), Some(Rule::Once(at("2026-11-10T09:00:00"))));
         form.repeat = Repeat::Weekdays;
-        assert_eq!(form.rule(now), Some(Rule::Weekdays(time(9, 0))));
+        assert_eq!(form.rule(), Some(Rule::Weekdays(time(9, 0))));
         form.repeat = Repeat::Weekly;
-        assert_eq!(form.rule(now), None, "weekly needs a day");
+        assert_eq!(form.rule(), None, "weekly needs a day");
         form.weekdays[2] = true;
-        assert_eq!(form.rule(now), Some(Rule::Weekly(time(9, 0), vec![2])));
+        assert_eq!(form.rule(), Some(Rule::Weekly(time(9, 0), vec![2])));
+        // Monthly takes the date's day of the month.
+        form.repeat = Repeat::Monthly;
+        assert_eq!(form.rule(), Some(Rule::Monthly(time(9, 0), 10)));
     }
 
     #[test]
     fn a_custom_date_and_time_are_read_as_typed() {
-        let now = at("2026-11-09T12:00:00");
         let mut form = sheet();
-        form.preset = Preset::Custom;
         form.date = "12/11/2026".into();
         form.time = "7:45".into();
-        assert_eq!(form.when(now), Some(at("2026-11-12T07:45:00")));
+        assert_eq!(form.when(), Some(at("2026-11-12T07:45:00")));
         form.time = "18".into();
-        assert_eq!(form.when(now), Some(at("2026-11-12T18:00:00")));
+        assert_eq!(form.when(), Some(at("2026-11-12T18:00:00")));
         form.date = "2026-12-01".into();
-        assert_eq!(form.when(now), Some(at("2026-12-01T18:00:00")));
+        assert_eq!(form.when(), Some(at("2026-12-01T18:00:00")));
         form.date = "31/02/2026".into();
-        assert_eq!(form.when(now), None);
+        assert_eq!(form.when(), None);
         form.date = "12/11/2026".into();
         form.time = "25:00".into();
-        assert_eq!(form.when(now), None);
+        assert_eq!(form.when(), None);
+    }
+
+    #[test]
+    fn the_arrows_move_the_date_by_days_and_the_time_within_the_day() {
+        let mut form = sheet();
+        form.nudge(Field::Date, 1);
+        assert_eq!(form.date, "11/11/2026");
+        form.nudge(Field::Date, -30);
+        assert_eq!(form.date, "12/10/2026");
+        form.nudge(Field::Time, 30);
+        assert_eq!(form.time, "9:30");
+        form.time = "23:45".into();
+        form.nudge(Field::Time, 30);
+        assert_eq!(form.time, "23:59", "the time stays inside its day");
+        form.time = "0:10".into();
+        form.nudge(Field::Time, -30);
+        assert_eq!(form.time, "0:00");
+        form.date = "nope".into();
+        form.nudge(Field::Date, 1);
+        assert_eq!(form.date, "nope");
+    }
+
+    #[test]
+    fn a_monthly_rule_reads_and_goes_back_to_the_host() {
+        let host = json!({ "repeat": { "kind": "monthly", "time": "09:00", "day": 31 } });
+        let rule = parse_rule(&host).unwrap();
+        assert_eq!(rule, Rule::Monthly(time(9, 0), 31));
+        assert_eq!(rule_json(&rule), host);
+        assert_eq!(
+            parse_rule(&json!({ "repeat": { "kind": "monthly", "time": "09:00" } })),
+            None
+        );
+        crate::i18n::with_locale(false, || {
+            assert_eq!(rule_words(&rule), "Todo mês, dia 31 às 9:00");
+        });
     }
 
     #[test]
     fn the_summary_is_a_sentence_in_the_current_language() {
-        let now = at("2026-11-09T12:00:00");
         let mut form = sheet();
         form.repeat = Repeat::Weekdays;
         crate::i18n::with_locale(false, || {
             assert_eq!(
-                form.summary(now, "Sirus", "Claude Code"),
+                form.summary("Sirus", "Claude Code"),
                 "Roda dias úteis às 9:00, em Sirus, com Claude Code."
             );
         });
         crate::i18n::with_locale(true, || {
             assert_eq!(
-                form.summary(now, "Sirus", "Claude Code"),
+                form.summary("Sirus", "Claude Code"),
                 "Runs weekdays at 9:00, in Sirus, with Claude Code."
             );
         });
-        form.preset = Preset::Custom;
+        form.date = String::new();
         crate::i18n::with_locale(false, || {
             assert_eq!(
-                form.summary(now, "Sirus", "Claude"),
+                form.summary("Sirus", "Claude"),
                 "Escolha uma data e hora válidas."
             );
         });

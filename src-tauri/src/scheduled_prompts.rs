@@ -43,6 +43,8 @@ pub enum RepeatKind {
     Daily,
     Weekdays,
     Weekly,
+    /// On one day of the month; a shorter month uses its last day.
+    Monthly,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -54,6 +56,9 @@ pub struct Repeat {
     /// For `weekly`: 0 is Monday … 6 is Sunday.
     #[serde(default)]
     pub weekdays: Vec<u8>,
+    /// For `monthly`: the day of the month, 1 to 31.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub day: Option<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -88,6 +93,9 @@ pub struct Task {
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
+    /// How the run's actions are approved; a missing value is `ask`, since nobody is there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval: Option<ApprovalMode>,
     pub schedule: Schedule,
     #[serde(default = "yes")]
     pub enabled: bool,
@@ -146,7 +154,45 @@ fn matches_day(repeat: &Repeat, date: NaiveDate) -> bool {
         RepeatKind::Daily => true,
         RepeatKind::Weekdays => day < 5,
         RepeatKind::Weekly => repeat.weekdays.contains(&day),
+        // Handled by `monthly_next`: a month's day is not a weekday pattern.
+        RepeatKind::Monthly => false,
     }
+}
+
+fn last_day_of_month(year: i32, month: u32) -> u32 {
+    let (next_year, next_month) = if month == 12 {
+        (year + 1, 1)
+    } else {
+        (year, month + 1)
+    };
+    NaiveDate::from_ymd_opt(next_year, next_month, 1)
+        .and_then(|first| first.pred_opt())
+        .map_or(28, |last| last.day())
+}
+
+/// The first `day` of a month at `time` strictly after `after`; a short month uses its last day.
+fn monthly_next(day: u8, time: NaiveTime, after: NaiveDateTime) -> Option<NaiveDateTime> {
+    if !(1..=31).contains(&day) {
+        return None;
+    }
+    let (mut year, mut month) = (after.year(), after.month());
+    for _ in 0..14 {
+        let date = NaiveDate::from_ymd_opt(
+            year,
+            month,
+            u32::from(day).min(last_day_of_month(year, month)),
+        )?;
+        let at = date.and_time(time);
+        if at > after {
+            return Some(at);
+        }
+        if month == 12 {
+            (year, month) = (year + 1, 1);
+        } else {
+            month += 1;
+        }
+    }
+    None
 }
 
 /// The first run strictly after `after`; `None` when a one-time task is past or a rule is broken.
@@ -155,6 +201,9 @@ pub fn next_run(schedule: &Schedule, after: NaiveDateTime) -> Option<NaiveDateTi
         Schedule::Once(at) => parse_stamp(at).filter(|at| *at > after),
         Schedule::Repeat(repeat) => {
             let time = parse_time(&repeat.time)?;
+            if repeat.kind == RepeatKind::Monthly {
+                return monthly_next(repeat.day?, time, after);
+            }
             // A week and a day cover every weekday pattern, month ends included.
             (0..=7).find_map(|offset| {
                 let date = after.date().checked_add_signed(Span::days(offset))?;
@@ -241,6 +290,11 @@ fn check(task: &Task, now: NaiveDateTime) -> Result<()> {
                 && (repeat.weekdays.is_empty() || repeat.weekdays.iter().any(|day| *day > 6))
             {
                 return Err(invalid("pick at least one weekday"));
+            }
+            if repeat.kind == RepeatKind::Monthly
+                && !repeat.day.is_some_and(|d| (1..=31).contains(&d))
+            {
+                return Err(invalid("pick a day of the month"));
             }
         }
     }
@@ -453,8 +507,9 @@ async fn run(
             effort: task.effort.clone(),
             isolated_worktree: false,
             prompt: task.prompt.clone(),
-            // Nobody is there to answer: anything that needs approval waits in the conversation.
-            approval: ApprovalMode::Ask,
+            // Nobody is there to answer: unless the owner chose otherwise, anything that needs
+            // approval waits in the conversation.
+            approval: task.approval.unwrap_or(ApprovalMode::Ask),
             planning: false,
             delegated_by: None,
             share_worktree: None,
@@ -541,6 +596,7 @@ mod tests {
             kind,
             time: time.into(),
             weekdays: weekdays.to_vec(),
+            day: None,
         })
     }
 
@@ -570,6 +626,42 @@ mod tests {
             next(&daily, "2026-11-09T09:00:00").unwrap(),
             "2026-11-10T09:00:00"
         );
+    }
+
+    #[test]
+    fn monthly_runs_on_its_day_and_a_short_month_uses_its_last() {
+        let monthly = |day: u8| {
+            Schedule::Repeat(Repeat {
+                kind: RepeatKind::Monthly,
+                time: "09:00".into(),
+                weekdays: vec![],
+                day: Some(day),
+            })
+        };
+        assert_eq!(
+            next(&monthly(15), "2026-11-09T10:00:00").unwrap(),
+            "2026-11-15T09:00:00"
+        );
+        assert_eq!(
+            next(&monthly(15), "2026-11-15T09:00:00").unwrap(),
+            "2026-12-15T09:00:00"
+        );
+        assert_eq!(
+            next(&monthly(31), "2026-01-31T10:00:00").unwrap(),
+            "2026-02-28T09:00:00"
+        );
+        assert_eq!(
+            next(&monthly(31), "2026-12-31T10:00:00").unwrap(),
+            "2027-01-31T09:00:00"
+        );
+        assert_eq!(next(&monthly(0), "2026-11-09T10:00:00"), None);
+        let broken = Schedule::Repeat(Repeat {
+            kind: RepeatKind::Monthly,
+            time: "09:00".into(),
+            weekdays: vec![],
+            day: None,
+        });
+        assert_eq!(next(&broken, "2026-11-09T10:00:00"), None);
     }
 
     #[test]
@@ -704,6 +796,7 @@ mod tests {
             provider: AgentProviderId::Claude,
             model: None,
             effort: None,
+            approval: None,
             schedule,
             enabled,
             last_run: None,

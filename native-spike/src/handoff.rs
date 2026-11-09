@@ -75,6 +75,18 @@ pub(crate) fn switched(
     }
 }
 
+/// What changed between two sent turns of one provider: the model, the effort or Fast mode.
+/// Both turns must have recorded them (`fast` is set), so older turns show nothing; a
+/// provider switch has its own divider (`switched`). Compaction turns are not sends.
+pub(crate) fn model_changed(previous: &Turn, turn: &Turn) -> bool {
+    previous.fast.is_some()
+        && turn.fast.is_some()
+        && previous.provider == turn.provider
+        && (previous.model != turn.model
+            || previous.effort != turn.effort
+            || previous.fast != turn.fast)
+}
+
 /// The name of a provider as the menus show it.
 fn name_of(provider: &str) -> &'static str {
     provider_title(provider)
@@ -553,6 +565,15 @@ impl Shell {
             0 => conv.handoff.as_ref().map(|handoff| handoff.from),
             _ => conv.turns.get(index - 1).and_then(|before| before.provider),
         };
+        let changed = (index > 0 && !crate::shell::context_meter::is_compact_command(&turn.user))
+            .then(|| {
+                conv.turns[..index]
+                    .iter()
+                    .rev()
+                    .find(|before| !crate::shell::context_meter::is_compact_command(&before.user))
+            })
+            .flatten()
+            .filter(|before| model_changed(before, turn));
         match switched(previous, turn.provider) {
             Some((from, to)) => div()
                 .flex()
@@ -560,9 +581,52 @@ impl Shell {
                 .child(handoff_divider(from, to))
                 .child(body)
                 .into_any_element(),
-            None => body,
+            None => match (changed, turn.provider) {
+                (Some(_), Some(provider)) => {
+                    let name = self.model_display(provider, turn.model.as_deref());
+                    div()
+                        .flex()
+                        .flex_col()
+                        .child(model_divider(provider, &name, turn))
+                        .child(body)
+                        .into_any_element()
+                }
+                _ => body,
+            },
         }
     }
+}
+
+/// The thin divider where the model, effort or Fast mode changed, like the compaction row's:
+/// "Mudou para Sonnet 5.5 · Alto · ⚡ Rápido".
+fn model_divider(provider: &'static str, name: &str, turn: &Turn) -> AnyElement {
+    let mut label = name.to_owned();
+    if let Some(effort) = &turn.effort {
+        label = format!("{label} · {}", crate::shell::effort_label(effort));
+    }
+    if turn.fast == Some(true) {
+        label = format!("{label} · ⚡ {}", t("Rápido"));
+    }
+    let rule = || div().h(px(1.)).flex_1().bg(content(0.08));
+    div()
+        .flex()
+        .items_center()
+        .gap(px(12.))
+        .py(px(4.))
+        .text_size(px(12.))
+        .text_color(content(0.5))
+        .child(rule())
+        .child(
+            div()
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .child(crate::tab_tile::provider_mark(provider, 13.))
+                .child(tf("Mudou para {}", &[&label])),
+        )
+        .child(rule())
+        .into_any_element()
 }
 
 /// The thin divider where another provider answered (HandoffMarker.tsx).
@@ -602,6 +666,46 @@ mod tests {
     use super::*;
 
     const ENABLED: [&str; 3] = ["claude", "codex", "cursor"];
+
+    fn sent(model: &str, effort: Option<&str>, fast: Option<bool>) -> Turn {
+        let mut turn = crate::data::blank("oi");
+        turn.provider = Some("claude");
+        turn.model = Some(model.into());
+        turn.effort = effort.map(str::to_owned);
+        turn.fast = fast;
+        turn
+    }
+
+    #[test]
+    fn a_changed_model_effort_or_fast_gets_a_divider() {
+        let before = sent("opus", Some("high"), Some(false));
+        assert!(!model_changed(
+            &before,
+            &sent("opus", Some("high"), Some(false))
+        ));
+        assert!(model_changed(
+            &before,
+            &sent("sonnet", Some("high"), Some(false))
+        ));
+        assert!(model_changed(
+            &before,
+            &sent("opus", Some("low"), Some(false))
+        ));
+        assert!(model_changed(
+            &before,
+            &sent("opus", Some("high"), Some(true))
+        ));
+    }
+
+    #[test]
+    fn older_turns_show_no_divider() {
+        let old = sent("opus", None, None);
+        assert!(!model_changed(
+            &old,
+            &sent("sonnet", Some("low"), Some(true))
+        ));
+        assert!(!model_changed(&sent("sonnet", None, Some(false)), &old));
+    }
 
     #[test]
     fn a_live_turn_shows_no_action() {

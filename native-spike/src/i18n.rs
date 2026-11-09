@@ -2581,6 +2581,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Moving a conversation pushes a branch to GitHub and needs confirmation.",
     ),
     ("Mover “{}” para a Lixeira?", "Move “{}” to the Trash?"),
+    ("Mudou para {}", "Switched to {}"),
     ("Mármore", "Marble"),
     ("Máximo", "Maximum"),
     ("Médio", "Medium"),
@@ -4396,6 +4397,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Rosa", "Pink"),
     ("Rosto", "Face"),
     ("Rápida", "Fast"),
+    ("Rápido", "Fast"),
     ("Rótulo da conta", "Account label"),
     ("Sair", "Sign out"),
     (

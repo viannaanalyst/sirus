@@ -9,6 +9,7 @@ import { foldBoundary, markerSentence, timelineParts, type TimelinePart } from "
 
 import { AppText } from "./AppText";
 import { Markdown } from "./Markdown";
+import { UserBubble } from "./UserBubble";
 import { StepTree, ThinkingRow, type StepSource } from "./thread/StepTree";
 import { SubagentTeam } from "./thread/SubagentTeam";
 import { Tree } from "./thread/TreeRow";
@@ -105,7 +106,7 @@ const Part = memo(function Part(props: {
 }) {
   const { part } = props;
   if (part.kind === "text") return <Markdown markdown={props.content.slice(part.start, part.end).trim()} files={props.files} />;
-  if (part.kind === "steer") return <AppText className="self-end rounded-2xl bg-card px-3 py-1.5 text-sm text-foreground-muted">{part.text}</AppText>;
+  if (part.kind === "steer") return <UserBubble text={part.text} computerId={props.source.computerId} />;
   if (part.kind === "marker") return <AppText className="py-1 text-sm text-foreground-muted">{markerSentence(part.item, t)}</AppText>;
   // With a team, the subagents leave the tree: the card stands where the first one began.
   const segments: ReactNode[] = [];

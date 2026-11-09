@@ -10,6 +10,7 @@ import { maskInput, maskSecrets } from "@sirus/lib/redact";
 import { useSirus, type QueuedPrompt } from "../data/store";
 import { SymbolView, type AppSymbolName } from "./AppSymbol";
 import { AppText, AppTextInput } from "./AppText";
+import { UserBubble } from "./UserBubble";
 
 const t = (key: string) => translate("pt-BR", key);
 const errorText = (reason: unknown) => reason instanceof Error ? reason.message : String(reason);
@@ -119,18 +120,22 @@ export function PromptQueue(props: { readonly computerId: string; readonly sessi
       <SymbolView name={"list.number" as AppSymbolName} size={12} tintColorClassName="accent-foreground-muted" />
       <AppText className="text-[13px] text-foreground-muted">{props.items.length === 1 ? "1 pedido na fila" : `${props.items.length} pedidos na fila`} · {t("queue.waiting")}</AppText>
     </View>
-    {props.items.map((item, index) => <View key={item.id} className="flex-row items-center gap-2 px-3.5 py-2">
-      <AppText className="text-[13px] text-foreground-muted">{index + 1}</AppText>
-      <View className="flex-1">
-        <AppText numberOfLines={2} className="text-[15px]">{item.prompt || "Anexos"}</AppText>
-        {item.failed ? <AppText numberOfLines={2} className="text-[12px] text-danger-foreground">{item.failed}</AppText> : null}
+    {props.items.map((item, index) => <View key={item.id} className="gap-1 px-3.5 py-2">
+      <View className="flex-row items-start gap-2">
+        <AppText className="mt-2 text-[13px] text-foreground-muted">{index + 1}</AppText>
+        <View className="min-w-0 flex-1 items-end">
+          <UserBubble text={item.prompt.trim() ? item.prompt : "Anexos"} computerId={props.computerId} />
+        </View>
       </View>
-      {steerable && item.prompt && !item.attachmentIds.length ? <Pressable onPress={() => act(item, true)} hitSlop={6} className="px-1.5 py-1 active:opacity-60">
-        <AppText className="text-[13px] font-app-medium">Instruir agora</AppText>
-      </Pressable> : null}
-      <Pressable onPress={() => act(item, false)} hitSlop={6} accessibilityLabel="Cancelar" className="size-7 items-center justify-center rounded-full active:bg-row-hover">
-        <SymbolView name="xmark" size={10} weight="semibold" tintColorClassName="accent-foreground-muted" />
-      </Pressable>
+      <View className="flex-row items-center justify-end gap-1">
+        {item.failed ? <AppText numberOfLines={2} className="flex-1 text-[12px] text-danger-foreground">{item.failed}</AppText> : null}
+        {steerable && item.prompt && !item.attachmentIds.length ? <Pressable onPress={() => act(item, true)} hitSlop={6} className="px-1.5 py-1 active:opacity-60">
+          <AppText className="text-[13px] font-app-medium">Instruir agora</AppText>
+        </Pressable> : null}
+        <Pressable onPress={() => act(item, false)} hitSlop={6} accessibilityLabel="Cancelar" className="size-7 items-center justify-center rounded-full active:bg-row-hover">
+          <SymbolView name="xmark" size={10} weight="semibold" tintColorClassName="accent-foreground-muted" />
+        </Pressable>
+      </View>
     </View>)}
   </View>;
 }

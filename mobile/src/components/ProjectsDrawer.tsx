@@ -146,10 +146,6 @@ function DrawerBody(props: { readonly onClose: () => void; readonly selected: st
     </View>
     <AppText className="mb-1.5 ml-0.5 mt-[18px] text-[13px] text-foreground-muted">Projetos</AppText>
     <ScrollView className="flex-1" showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerClassName="gap-0.5 pb-4">
-      <Pressable onPress={() => pick(null)} accessibilityRole="button" className={`flex-row items-center gap-3 rounded-[14px] px-2.5 py-[9px] active:opacity-70 ${props.selected === null ? "bg-subtle-strong" : ""}`}>
-        <View className="size-[30px] items-center justify-center"><SymbolView name="square.grid.2x2" size={21} tintColorClassName="accent-foreground-muted" /></View>
-        <AppText className="font-app-medium text-[15.5px]">Todos os projetos</AppText>
-      </Pressable>
       {shown.map((item) => {
         const key = `${item.computerId}:${item.project.id}`;
         return <ProjectRow key={key} item={item} selected={props.selected === key} several={several} onPress={() => pick(key)}

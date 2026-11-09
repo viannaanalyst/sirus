@@ -9,7 +9,7 @@ import Animated, { FadeIn, FadeOut, useAnimatedStyle, useSharedValue, withTiming
 import { KeyboardStickyView, useKeyboardState } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import type { Message, MessageAttachment, PromptAttachment, TurnActivity } from "@sirus/client/types";
+import type { Message, PromptAttachment, TurnActivity } from "@sirus/client/types";
 import { afterSend, executionWithModes, promptExtras, setDebugging, setGoal, setPlanning, setTeam } from "@sirus/lib/composer-modes";
 
 import { ListeningRobot } from "../components/ListeningRobot";
@@ -19,7 +19,7 @@ import { ControlPillMenu } from "../components/ControlPillMenu";
 import { GlassSurface } from "../components/GlassSurface";
 import { AgentReply, type ReplyFiles } from "../components/AgentReply";
 import { AgentRequest, PromptQueue } from "../components/AgentRequest";
-import { UserText } from "../components/UserText";
+import { UserBubble } from "../components/UserBubble";
 import { OpenSubagent } from "../components/thread/subagent-context";
 import { SubagentSheet, type SubagentTarget } from "../components/thread/SubagentSheet";
 import { WORKING_PILL_HEIGHT, WorkingPill } from "../components/thread/WorkingPill";
@@ -29,7 +29,6 @@ import { ComposerField } from "../components/composer/ComposerField";
 import { ComposerStrip, type StripAttachment } from "../components/composer/ComposerStrip";
 import { SuggestionsPanel } from "../components/composer/SuggestionsPanel";
 import { useComposer } from "../components/composer/useComposer";
-import { SentAttachments } from "../components/SentAttachments";
 import { useConversationModel } from "../data/conversation-model";
 import { attachmentOwner, pasteClipboardImage, pickAttachments, releaseAttachments, uploadAttachments } from "../data/attachments";
 import { useMacAccent } from "../data/mac-accent";
@@ -298,21 +297,6 @@ const MessageRow = memo(function MessageRow(props: { readonly message: Message; 
   if (props.message.role === "user") return <UserBubble text={props.message.content} attachments={props.message.attachments} computerId={props.computerId} />;
   return <AgentReply message={props.message} computerId={props.computerId} agent={props.agent} model={props.model} cwd={props.cwd} files={props.files} prompt={props.prompt} />;
 });
-
-/** A sent message in the Mac's accent at 24%: a pill on one line, a card past it. */
-function UserBubble(props: { readonly text: string; readonly attachments?: readonly MessageAttachment[]; readonly computerId: string }) {
-  const accent = useMacAccent(props.computerId);
-  const [lines, setLines] = useState(1);
-  const bubble = props.text.trim() ? <View style={{ alignSelf: "flex-end", maxWidth: "88%", paddingHorizontal: 14, paddingVertical: 9, borderRadius: lines > 1 ? 14 : 21, borderCurve: "continuous", backgroundColor: `${accent}3d` }}>
-    <UserText text={props.text} onLines={setLines} />
-  </View> : null;
-  if (!props.attachments?.length) return bubble;
-  // The files go over the bubble, as on the Mac (`sent_chips`).
-  return <View className="items-end gap-1.5">
-    <SentAttachments attachments={props.attachments} computerId={props.computerId} />
-    {bubble}
-  </View>;
-}
 
 /** The glass composer: attachments, the field, dictation, and send or stop. */
 function Composer(props: {

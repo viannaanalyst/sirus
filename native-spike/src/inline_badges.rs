@@ -155,7 +155,7 @@ pub fn scan_with(text: &str, known: &Known, sent: bool) -> Vec<Badge> {
     }
     for word in words {
         let body = &text[word.clone()];
-        if let Some(url) = url_in(body) {
+        if let Some(url) = link_in_word(body) {
             let full = &body[url.clone()];
             if let Some(domain) = domain_of(full) {
                 badges.push(Badge {
@@ -200,13 +200,16 @@ pub fn scan_with(text: &str, known: &Known, sent: bool) -> Vec<Badge> {
     badges
 }
 
-/// Where a link sits in a word: after any opening bracket or quote, without the punctuation that
-/// ends a sentence. A `)` stays when the link opened its own `(`.
-fn url_in(word: &str) -> Option<Range<usize>> {
-    let lead = word.len()
-        - word
-            .trim_start_matches(['(', '[', '<', '"', '\'', '*'])
-            .len();
+/// Where a link sits in a word: after any opening bracket, quote or letter typed just before it,
+/// without the punctuation that ends a sentence. A `)` stays when the link opened its own `(`.
+/// A word is a run of non-whitespace, so a link is only ever a finished token: typed by hand it
+/// becomes a badge when a space or a newline ends it, as a pasted one already did.
+fn link_in_word(word: &str) -> Option<Range<usize>> {
+    let lower = word.to_ascii_lowercase();
+    let lead = ["https://", "http://"]
+        .into_iter()
+        .filter_map(|scheme| lower.find(scheme))
+        .min()?;
     let rest = &word[lead..];
     let scheme = ["https://", "http://"].into_iter().find(|s| {
         rest.get(..s.len())
@@ -821,6 +824,20 @@ mod tests {
         assert_eq!(urls("ok https://a.com!?"), ["https://a.com"]);
         assert_eq!(urls("(https://a.com/x)"), ["https://a.com/x"]);
         assert_eq!(urls("<https://a.com/x>"), ["https://a.com/x"]);
+    }
+
+    #[test]
+    fn a_typed_link_ended_by_a_space_or_a_newline_is_a_badge() {
+        assert_eq!(urls("veja https://a.com/x "), ["https://a.com/x"]);
+        assert_eq!(
+            urls("veja https://a.com/x\noutra linha"),
+            ["https://a.com/x"]
+        );
+        assert_eq!(urls("https://a.com/x "), ["https://a.com/x"]);
+        // Hand typed glued to the word before it, with no space, is still finished by the space.
+        assert_eq!(urls("veja:https://a.com/x "), ["https://a.com/x"]);
+        // Still being typed, with no space yet, it is also drawn as a badge.
+        assert_eq!(urls("https://a.com/x"), ["https://a.com/x"]);
     }
 
     #[test]

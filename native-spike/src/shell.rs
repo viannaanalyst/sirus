@@ -908,6 +908,61 @@ struct MentionHit {
     provider: Option<&'static str>,
 }
 
+/// The row's index among the mention list's children, each provider's group header counted
+/// first, so the keyboard can scroll the chosen row into view.
+fn mention_row_index(hits: &[MentionHit], selected: usize) -> usize {
+    let mut child = 0;
+    let mut group: Option<&'static str> = None;
+    for (ix, hit) in hits.iter().enumerate() {
+        if let Some(provider) = hit.provider
+            && group != Some(provider)
+        {
+            group = Some(provider);
+            child += 1;
+        }
+        if ix == selected {
+            return child;
+        }
+        child += 1;
+    }
+    child
+}
+
+/// A list's scrollbar, painted at its right edge whenever its content is taller than the list.
+fn scrollbar_for(handle: gpui::ScrollHandle) -> AnyElement {
+    gpui::canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            let most = f32::from(handle.max_offset().y);
+            let view = f32::from(handle.bounds().size.height);
+            if most <= 0. || view <= 0. {
+                return;
+            }
+            let track = f32::from(bounds.size.height);
+            let thumb = (view / (view + most) * track).clamp(24., track);
+            let scrolled = (-f32::from(handle.offset().y)).clamp(0., most);
+            let top = f32::from(bounds.origin.y) + (track - thumb) * (scrolled / most);
+            let right = f32::from(bounds.origin.x) + f32::from(bounds.size.width) - 3.;
+            window.paint_quad(
+                gpui::fill(
+                    Bounds::new(
+                        gpui::point(px(right), px(top)),
+                        gpui::size(px(3.), px(thumb)),
+                    ),
+                    content(0.24),
+                )
+                .corner_radii(px(1.5)),
+            );
+        },
+    )
+    .absolute()
+    .top_0()
+    .right_0()
+    .h_full()
+    .w(px(6.))
+    .into_any_element()
+}
+
 /// An `@` model mention's text after the sigil.
 fn model_mention(provider: &str, id: &str) -> String {
     format!("model:{provider}/{id}")
@@ -1346,6 +1401,8 @@ pub struct Shell {
     trail_x: f32,
     /// The composer's text scrolls under this, following the caret as it moves.
     composer_scroll: gpui::ScrollHandle,
+    /// The `@` and `/` list scrolls under this, following the chosen row.
+    mention_scroll: gpui::ScrollHandle,
     composer_caret_seen: Rc<Cell<(usize, usize)>>,
     /// When the caret last moved (it blinks from there), and whether the last frame drew it.
     caret_moved: Rc<Cell<Instant>>,
@@ -1791,6 +1848,7 @@ impl Shell {
             turn_width: Rc::new(Cell::new(px(0.))),
             trail_x: 0.,
             composer_scroll: gpui::ScrollHandle::new(),
+            mention_scroll: gpui::ScrollHandle::new(),
             composer_caret_seen: Default::default(),
             caret_moved: Rc::new(Cell::new(Instant::now())),
             caret_drawn: Rc::new(Cell::new(true)),
@@ -3319,7 +3377,6 @@ impl Shell {
                 .skills
                 .iter()
                 .filter(|(name, _)| name.to_lowercase().contains(&needle))
-                .take(8)
                 .map(|(name, about)| MentionHit {
                     insert: name.clone(),
                     label: name.clone(),
@@ -3335,7 +3392,6 @@ impl Shell {
                     .filter(|(name, folder)| {
                         format!("{folder}/{name}").to_lowercase().contains(&needle)
                     })
-                    .take(8)
                     .map(|(name, folder)| {
                         let path = if folder.is_empty() {
                             name.clone()
@@ -3358,7 +3414,6 @@ impl Shell {
                             self.provider_model_rows(provider, ("", None), "", &[])
                         })
                         .filter(|row| model_matches(&needle, row.provider, &row.id, &row.name))
-                        .take(8)
                         .map(|row| MentionHit {
                             insert: model_mention(row.provider, &row.id),
                             label: row.name,
@@ -5981,10 +6036,14 @@ impl Shell {
             let handled = match key {
                 "down" => {
                     self.mention_selected = (self.mention_selected + 1).min(mention.hits.len() - 1);
+                    self.mention_scroll
+                        .scroll_to_item(mention_row_index(&mention.hits, self.mention_selected));
                     true
                 }
                 "up" => {
                     self.mention_selected = self.mention_selected.saturating_sub(1);
+                    self.mention_scroll
+                        .scroll_to_item(mention_row_index(&mention.hits, self.mention_selected));
                     true
                 }
                 "enter" | "tab" if !keys.modifiers.shift => {
@@ -13714,66 +13773,102 @@ impl Shell {
                         .shadow_lg()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(crate::hover_track::list("mention-menu").pill())
-                        .children(mention.hits.into_iter().enumerate().flat_map(|(i, hit)| {
-                            let MentionHit {
-                                insert: chosen,
-                                label: name,
-                                about,
-                                provider,
-                            } = hit;
-                            // A provider's first model row opens its group with its name.
-                            let header = provider
-                                .filter(|p| Some(*p) != std::mem::replace(&mut group, Some(*p)))
-                                .map(|p| {
+                        .child(
+                            div()
+                                .relative()
+                                .w_full()
+                                .child(
                                     div()
-                                        .h(px(24.))
-                                        .px(px(8.))
-                                        .flex()
-                                        .items_center()
-                                        .text_size(px(11.5))
-                                        .text_color(content(0.45))
-                                        .child(provider_title(p))
-                                        .into_any_element()
-                                });
-                            let row = crate::hover_track::list("mention-menu").row(
-                                div()
-                                    .id(("mention", i))
-                                    .h(px(30.))
-                                    .px(px(8.))
-                                    .rounded(px(crate::theme::RADIUS_MD))
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(10.))
-                                    .text_size(px(13.))
-                                    .text_color(content(0.92))
-                                    .cursor_pointer()
-                                    .when(i == selected, |d| d.bg(content(0.1)))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.accept_mention(&chosen, cx)
-                                    }))
-                                    .when_some(provider, |d, p| d.child(provider_mark(p, 15.)))
-                                    .when(about.is_empty(), |d| {
-                                        d.child(crate::file_icons::file_icon(
-                                            name.rsplit('/').next().unwrap_or(&name),
-                                            false,
-                                            15.,
-                                        ))
-                                    })
-                                    .child(div().flex_shrink_0().child(name))
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .truncate()
-                                            .text_size(px(11.5))
-                                            .text_color(content(0.45))
-                                            .child(about),
-                                    ),
-                                i,
-                                i == selected,
-                            );
-                            header.into_iter().chain([row.into_any_element()])
-                        })),
+                                        .id("mention-list")
+                                        .max_h(px(320.))
+                                        // Every hit is listed; the list scrolls instead of stopping
+                                        // at a handful, as the reference apps do.
+                                        .overflow_y_scroll()
+                                        .track_scroll(&self.mention_scroll)
+                                        .children(mention.hits.into_iter().enumerate().flat_map(
+                                            |(i, hit)| {
+                                                let MentionHit {
+                                                    insert: chosen,
+                                                    label: name,
+                                                    about,
+                                                    provider,
+                                                } = hit;
+                                                // A provider's first model row opens its group with its name.
+                                                let header = provider
+                                                    .filter(|p| {
+                                                        Some(*p)
+                                                            != std::mem::replace(
+                                                                &mut group,
+                                                                Some(*p),
+                                                            )
+                                                    })
+                                                    .map(|p| {
+                                                        div()
+                                                            .h(px(24.))
+                                                            .px(px(8.))
+                                                            .flex()
+                                                            .items_center()
+                                                            .text_size(px(11.5))
+                                                            .text_color(content(0.45))
+                                                            .child(provider_title(p))
+                                                            .into_any_element()
+                                                    });
+                                                let row = crate::hover_track::list("mention-menu")
+                                                    .row(
+                                                        div()
+                                                            .id(("mention", i))
+                                                            .h(px(30.))
+                                                            .px(px(8.))
+                                                            .rounded(px(crate::theme::RADIUS_MD))
+                                                            .flex()
+                                                            .items_center()
+                                                            .gap(px(10.))
+                                                            .text_size(px(13.))
+                                                            .text_color(content(0.92))
+                                                            .cursor_pointer()
+                                                            .when(i == selected, |d| {
+                                                                d.bg(content(0.1))
+                                                            })
+                                                            .on_click(cx.listener(
+                                                                move |this, _, _, cx| {
+                                                                    this.accept_mention(&chosen, cx)
+                                                                },
+                                                            ))
+                                                            .when_some(provider, |d, p| {
+                                                                d.child(provider_mark(p, 15.))
+                                                            })
+                                                            .when(about.is_empty(), |d| {
+                                                                d.child(
+                                                                    crate::file_icons::file_icon(
+                                                                        name.rsplit('/')
+                                                                            .next()
+                                                                            .unwrap_or(&name),
+                                                                        false,
+                                                                        15.,
+                                                                    ),
+                                                                )
+                                                            })
+                                                            .child(
+                                                                div().flex_shrink_0().child(name),
+                                                            )
+                                                            .child(
+                                                                div()
+                                                                    .flex_1()
+                                                                    .min_w_0()
+                                                                    .truncate()
+                                                                    .text_size(px(11.5))
+                                                                    .text_color(content(0.45))
+                                                                    .child(about),
+                                                            ),
+                                                        i,
+                                                        i == selected,
+                                                    );
+                                                header.into_iter().chain([row.into_any_element()])
+                                            },
+                                        )),
+                                )
+                                .child(scrollbar_for(self.mention_scroll.clone())),
+                        ),
                 )
             })
             // Sign-in approvals and computer-use requests (browser_bridge.rs).
@@ -18943,6 +19038,7 @@ impl EntityInputHandler for Shell {
         let marked = self.marked.take();
         self.mention_selected = 0;
         self.mention_dismissed = None;
+        self.mention_scroll.set_offset(gpui::point(px(0.), px(0.)));
         if let Some(query) = self.query_target() {
             let end = data::utf16_len(query);
             let range = range.or(marked).unwrap_or(end..end);

@@ -147,9 +147,11 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("%d/%m/%Y", "%m/%d/%Y"),
     ("%d/%m/%Y %H:%M", "%m/%d/%Y %H:%M"),
+    ("(nova worktree)", "(new worktree)"),
     ("(vazio)", "(empty)"),
     ("+{} aviso", "+{} notice"),
     ("+{} avisos", "+{} notices"),
+    ("+{} mais", "+{} more"),
     (".env.local do projeto", ".env.local in the project"),
     ("1 agente", "1 agent"),
     ("1 anexo", "1 attachment"),
@@ -158,6 +160,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("1 caractere", "1 character"),
     ("1 conversa parada", "1 settled conversation"),
     ("1 falhou", "1 failed"),
+    ("1 nível de esforço", "1 effort level"),
     ("1 passo", "1 step"),
     ("1 pasta sem projeto", "1 folder without a project"),
     ("1 pedido na fila", "1 queued request"),
@@ -202,10 +205,15 @@ const ENTRIES: &[(&str, &str)] = &[
         "A busca atingiu seu limite. Algumas skills podem não aparecer.",
         "The search reached its limit. Some skills may not appear.",
     ),
+    ("A cada", "Every"),
     (
         "A cada 5 minutos, avança o checkout do projeto quando ele está no branch padrão do origin, sem mudanças locais e sem conversa rodando nele. Nunca faz merge, rebase nem mexe numa árvore com mudanças.",
         "Every 5 minutes, fast-forwards the project checkout when it is on origin's default branch with no local changes and no conversation running in it. It never merges, rebases or touches a tree with changes.",
     ),
+    ("A cada dia", "Every day"),
+    ("A cada semana", "Every week"),
+    ("A cada {} dias", "Every {} days"),
+    ("A cada {} semanas", "Every {} weeks"),
     (
         "A captura do anexo foi substituída.",
         "Attachment snapshot was replaced.",
@@ -378,6 +386,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "A preparação do Git mudou. Atualize antes de continuar.",
         "Git preparation changed. Refresh before continuing.",
     ),
+    ("A primeira execução será {}.", "The first run will be {}."),
     (
         "A página de login do serviço não é segura.",
         "The service's sign-in page is not secure.",
@@ -512,6 +521,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Abrir ao lado", "Open to the side"),
     ("Abrir arquivo", "Open file"),
     ("Abrir como rascunho", "Open as draft"),
+    ("Abrir conversa", "Open conversation"),
     (
         "Abrir diretório de dados do Sirus",
         "Open Sirus data directory",
@@ -618,6 +628,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Wait until every task finishes before resolving.",
     ),
     ("Ainda não enviados para {}", "Not pushed to {} yet"),
+    ("Ainda não executada", "Not run yet"),
     (
         "Ainda não há o que compactar: esta conversa não começou.",
         "There is nothing to compact yet: this conversation has not started.",
@@ -854,6 +865,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Atualizar a senha salva de {}?",
         "Update the saved password for {}?",
     ),
+    ("Atualizar dependências", "Update dependencies"),
     (
         "Atualizar o branch padrão automaticamente",
         "Automatically pull the default branch",
@@ -977,6 +989,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "Each conversation stays on the account that started it.",
     ),
     (
+        "Cada execução cria a própria worktree e branch, sem mexer no que está aberto.",
+        "Each run creates its own worktree and branch, without touching what is open.",
+    ),
+    (
         "Cada pergunta leva o que a sessão principal está fazendo agora. Começa em só leitura e usa o mesmo workspace.",
         "Each question carries what the main session is doing right now. It starts read-only and uses the same workspace.",
     ),
@@ -1036,6 +1052,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Carregar mensagens anteriores", "Load earlier messages"),
     ("Carregou ferramentas", "Loaded tools"),
     ("Carvão", "Charcoal"),
+    ("Caçar código morto", "Hunt dead code"),
     ("Chamada de ferramenta", "Tool call"),
     ("Chat lateral", "Side chat"),
     ("Chave conectada · {}", "Key connected · {}"),
@@ -1200,6 +1217,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Confirmar ações destrutivas do Git",
         "Confirm destructive Git actions",
     ),
+    ("Confirmar exclusão", "Confirm delete"),
     (
         "Confirmar fechamento de sessões em execução",
         "Show confirmation before closing running sessions",
@@ -1292,6 +1310,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Criar PR", "Create PR"),
     ("Criar branch…", "Create branch…"),
     ("Criar merge commit", "Create a merge commit"),
+    ("Criar tarefa", "Create task"),
     (
         "Criar um branch exige confirmação.",
         "Creating a branch requires confirmation.",
@@ -1313,6 +1332,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Color-blind and high contrast use blue and orange.",
     ),
     ("Daqui a 1 hora", "In 1 hour"),
+    ("Data e hora", "Date and time"),
     ("De 10 a 22 px.", "From 10 to 22 px."),
     ("De 11 a 18 px.", "From 11 to 18 px."),
     ("Defina uma meta a perseguir", "Define a goal to pursue"),
@@ -1362,6 +1382,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Descartar tudo", "Discard all"),
     ("Desconectar", "Disconnect"),
     ("Desconhecido", "Unknown"),
+    (
+        "Descreva o que o agente deve fazer, com o resultado que você espera…",
+        "Describe what the agent should do, with the result you expect…",
+    ),
     ("Descrição (opcional)", "Description (optional)"),
     (
         "Desenhe sobre a imagem para destacar uma área.",
@@ -1487,6 +1511,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Em breve", "Coming soon"),
     ("Em espera", "Waiting"),
     (
+        "Em meses curtos roda no último dia.",
+        "In short months it runs on the last day.",
+    ),
+    (
         "Em qualquer app, o atalho captura a janela da frente e anexa à conversa aberta no Sirus. Nada é enviado.",
         "From any app, the shortcut captures the window in front and attaches it to the conversation open in Sirus. Nothing is sent.",
     ),
@@ -1607,6 +1635,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "Choose the user or project scope.",
     ),
     (
+        "Escolha o esforço para criar a tarefa.",
+        "Choose the effort to create the task.",
+    ),
+    (
         "Escolha o provedor das novas sessões. As sessões atuais mantêm seu provedor.",
         "Choose the provider for new sessions. Current sessions keep their provider.",
     ),
@@ -1622,6 +1654,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Escolha o ícone exibido no Dock.",
         "Choose the icon shown in the Dock.",
     ),
+    ("Escolha os dias", "Choose the days"),
     (
         "Escolha os padrões para novas sessões, navegação e o painel Ambiente.",
         "Choose defaults for new sessions, navigation and the Environment panel.",
@@ -1644,10 +1677,17 @@ const ENTRIES: &[(&str, &str)] = &[
         "Choose a time in the future, within a year.",
     ),
     ("Escolha um item", "Pick an item"),
-    ("Escolha um modelo para ajustar o esforço.", "Choose a model to adjust the effort."),
+    (
+        "Escolha um modelo para ajustar o esforço.",
+        "Choose a model to adjust the effort.",
+    ),
     (
         "Escolha um modelo para esta conversa: o Ask executa o Codex no modo de planejamento.",
         "Pick a model for this conversation: Ask runs Codex in planning mode.",
+    ),
+    (
+        "Escolha um nível. O Sirus nunca decide o esforço por você.",
+        "Choose a level. Sirus never decides the effort for you.",
     ),
     (
         "Escolha um projeto para o escopo do projeto.",
@@ -1682,6 +1722,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "Write the goal and press Enter",
     ),
     ("Escreva o prompt da tarefa.", "Write the task's prompt."),
+    (
+        "Escreva o que o agente deve fazer. Sem prompt não há tarefa.",
+        "Write what the agent should do. No prompt, no task.",
+    ),
     (
         "Escreva outra coisa, fora da citação…",
         "Write something else, outside the quote…",
@@ -1760,6 +1804,10 @@ const ENTRIES: &[(&str, &str)] = &[
     (
         "Esse dispositivo não está mais pareado.",
         "That device is no longer paired.",
+    ),
+    (
+        "Esse horário já passou. Escolha um horário futuro ou repita a tarefa.",
+        "That time has passed. Pick a future time or repeat the task.",
     ),
     (
         "Esse item do 1Password não é válido.",
@@ -1853,6 +1901,8 @@ const ENTRIES: &[(&str, &str)] = &[
         "Esta equipe não está em execução.",
         "This team is not running.",
     ),
+    ("Esta execução: concluída", "This run: done"),
+    ("Esta execução: falhou", "This run: failed"),
     (
         "Esta imagem é grande demais para mostrar aqui.",
         "This image is too large to show here.",
@@ -2060,10 +2110,13 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Excluir perfil", "Delete profile"),
     ("Excluir todas", "Delete all"),
     ("Excluir {}?", "Delete {}?"),
+    ("Executando…", "Running…"),
     ("Executar agora", "Run now"),
     ("Executar: {}", "Run: {}"),
     ("Executou", "Ran"),
+    ("Executou {} às {}", "Ran {} at {}"),
     ("Executável", "Executable"),
+    ("Execução", "Run"),
     (
         "Exiba as ações do editor no painel Ambiente.",
         "Show the editor actions in the Environment panel.",
@@ -2148,6 +2201,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Fundo do chat", "Chat background"),
     ("Geral", "General"),
     ("Gerando um código…", "Making a code…"),
+    ("Gerar changelog", "Generate changelog"),
     ("Gerar código", "Generate code"),
     ("Gerar título do commit", "Generate commit title"),
     (
@@ -2157,6 +2211,10 @@ const ENTRIES: &[(&str, &str)] = &[
     (
         "Geração do título cancelada.",
         "Title generation cancelled.",
+    ),
+    (
+        "Gere o changelog desde a última tag a partir dos commits, agrupando por tipo de mudança.",
+        "Generate the changelog since the last tag from the commits, grouped by type of change.",
     ),
     (
         "Gerenciadores de senha, segurança do sistema, terminais e ferramentas de automação nunca podem ser controlados.",
@@ -2471,6 +2529,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "Lists the sessions an agent is working on beside the composer, once two or more run at the same time.",
     ),
     ("Lista de conversas", "Conversation list"),
+    (
+        "Liste os pull requests abertos, revise cada diff e deixe um resumo com riscos e sugestões.",
+        "List the open pull requests, review each diff and leave a summary with risks and suggestions.",
+    ),
     ("Listou os apps", "Listed apps"),
     ("Local dos worktrees", "Worktree location"),
     ("Login", "Sign-in"),
@@ -2551,6 +2613,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Mexa o mouse e clique no fundo",
         "Move the mouse and click the background",
     ),
+    ("Minhas tarefas", "My tasks"),
     ("Mission Control", "Mission Control (macOS)"),
     ("Modelo", "Model"),
     ("Modelos do Cursor", "Cursor models"),
@@ -2765,6 +2828,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "No GitHub account signed in.",
     ),
     ("Nenhuma conta encontrada", "No accounts found"),
+    (
+        "Nenhuma execução futura nesse horário.",
+        "No future runs at that time.",
+    ),
     ("Nenhuma issue aberta.", "No open issues."),
     ("Nenhuma pasta criada", "No folders created"),
     ("Nenhuma skill encontrada", "No skills found"),
@@ -2823,6 +2890,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Nova pasta", "New folder"),
     ("Nova sessão", "New Session"),
     ("Nova tarefa", "New task"),
+    ("Nova worktree", "New worktree"),
     ("Novas abas abrem em", "New tabs open in"),
     ("Novas sessões", "New threads"),
     ("Novembro", "November"),
@@ -3351,6 +3419,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "Sirus removed {} invisible character(s), which can hide instructions for the agent. The link may be malicious: read the prompt before you send it.",
     ),
     (
+        "O Sirus roda o prompt sozinho, no horário escolhido, e guarda a conversa de cada execução.",
+        "Sirus runs the prompt by itself, at the chosen time, and keeps the conversation of each run.",
+    ),
+    (
         "O acesso remoto ainda não está pronto.",
         "Remote access is not ready yet.",
     ),
@@ -3753,6 +3825,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "O pull request mudou no GitHub. Atualize e revise-o novamente.",
         "The pull request changed on GitHub. Refresh and review it again.",
     ),
+    ("O que fazer", "What to do"),
     ("O que o agente deve fazer?", "What should the agent do?"),
     ("O que um aparelho pode fazer", "What a device can do"),
     ("O que vamos fazer em {}?", "What shall we do in {}?"),
@@ -4068,6 +4141,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "Pastas no local dos worktrees que nenhuma sessão usa. Pastas com alterações não commitadas ficam; branches nunca são apagadas.{}",
         "Folders in the worktree location that no session uses. Folders with uncommitted changes stay; branches are never deleted.{}",
     ),
+    (
+        "Pausa e pergunta antes de editar arquivos ou rodar comandos.",
+        "Pauses and asks before editing files or running commands.",
+    ),
     ("Pausada", "Paused"),
     ("Pausar fila", "Pause queue"),
     (
@@ -4197,6 +4274,11 @@ const ENTRIES: &[(&str, &str)] = &[
         "Procurar atualizações automaticamente",
         "Check for updates automatically",
     ),
+    ("Procurar código morto", "Look for dead code"),
+    (
+        "Procure exports, arquivos e dependências sem uso e proponha a remoção em um PR.",
+        "Look for unused exports, files and dependencies and propose removing them in a PR.",
+    ),
     ("Produtividade", "Productivity"),
     ("Programação", "Coding"),
     ("Projeto", "Project"),
@@ -4240,7 +4322,9 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Provedor padrão", "Default provider"),
     ("Provedores", "Providers"),
     ("Prévia em HTML", "HTML preview"),
+    ("Próxima execução {} às {}", "Next run {} at {}"),
     ("Próxima fonte de entrada", "Next input source"),
+    ("Próximas", "Upcoming"),
     ("Próximo projeto", "Next project"),
     ("Pular", "Skip"),
     ("Pull exige confirmação.", "Pull requires confirmation."),
@@ -4325,6 +4409,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Quebrar linhas", "Wrap lines"),
     ("Quebrar linhas nos diffs", "Wrap lines in diffs"),
+    ("Quem e onde", "Who and where"),
     ("Qui", "Thu"),
     ("Raciocínio", "Thinking"),
     ("Rascunho", "Draft"),
@@ -4426,6 +4511,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Resume by itself when a usage limit resets",
     ),
     ("Revisar", "Review"),
+    ("Revisar PRs abertos", "Review open PRs"),
     (
         "Revise o diff e faça commit.",
         "Review the diff and commit.",
@@ -4441,6 +4527,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Revisão solicitada", "Review requested"),
     ("Revogar", "Revoke"),
     (
+        "Roda direto na pasta do projeto, com o que estiver aberto agora.",
+        "Runs directly in the project folder, with whatever is open now.",
+    ),
+    (
         "Roda em um worktree novo antes do primeiro turno (até 10 minutos).",
         "Runs in a new worktree before its first turn (up to 10 minutes).",
     ),
@@ -4451,6 +4541,10 @@ const ENTRIES: &[(&str, &str)] = &[
     (
         "Roda só em um worktree isolado",
         "Runs only in an isolated worktree",
+    ),
+    (
+        "Roda tudo sem perguntar. Use só em projetos de confiança.",
+        "Runs everything without asking. Use only in projects you trust.",
     ),
     ("Roda {}, em {}, com {}.", "Runs {}, in {}, with {}."),
     (
@@ -4470,9 +4564,18 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Rodar ao terminar", "Run on finish"),
     ("Rodar de novo", "Run again"),
     ("Rodar preparação", "Run setup"),
+    ("Rodar testes", "Run tests"),
+    (
+        "Rodar testes e resumir falhas",
+        "Run tests and summarise failures",
+    ),
     (
         "Rode `glab auth login` no terminal para ver e criar merge requests.",
         "Run `glab auth login` in a terminal to see and open merge requests.",
+    ),
+    (
+        "Rode a suíte de testes do projeto. Se algo falhar, explique a causa provável de cada falha e resuma tudo em uma lista curta, sem alterar código.",
+        "Run the project's test suite. If something fails, explain the likely cause of each failure and sum everything up in a short list, without changing code.",
     ),
     ("Rode comandos no projeto.", "Run commands in the project."),
     ("Rode o app num aparelho.", "Run the app on a device."),
@@ -4489,6 +4592,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Salvando…", "Saving…"),
     ("Salvar", "Save"),
+    ("Salvar alterações", "Save changes"),
     ("Salvar automaticamente", "Save automatically"),
     ("Salvar em", "Save to"),
     ("Salvar login", "Save login"),
@@ -4574,6 +4678,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Sem esforço", "None"),
     ("Sem limites informados.", "No limits reported."),
     ("Sem login", "Not signed in"),
+    ("Sem próxima execução", "No next run"),
     ("Sem resposta", "No reply"),
     ("Sem saída.", "No output."),
     ("Sem título", "Untitled"),
@@ -4701,6 +4806,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Substituindo imagem…", "Replacing image…"),
     ("Substituir", "Replace"),
     ("Substituir original", "Replace original"),
+    ("Sugestões", "Suggestions"),
     ("Sáb", "Sat"),
     ("Sírius", "Sirius"),
     (
@@ -4793,6 +4899,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Todo dia", "Every day"),
     ("Todo dia às {}", "Every day at {}"),
     ("Todo domingo", "Every Sunday"),
+    ("Todo mês, dia {}", "Every month, day {}"),
     ("Todo mês, dia {} às {}", "Monthly, day {} at {}"),
     ("Todo o período", "All time"),
     ("Todo sábado", "Every Saturday"),
@@ -4839,6 +4946,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Trouxe para a frente", "Brought to front"),
     ("Tudo", "All"),
     ("Tudo pronto", "All set"),
+    (
+        "Título (ex.: Rodar testes e resumir falhas)",
+        "Title (e.g. Run tests and summarise failures)",
+    ),
     ("Título do commit", "Commit title"),
     ("Título do pull request", "Pull request title"),
     ("Título escrito por {}", "Title written by {}"),
@@ -4881,6 +4992,10 @@ const ENTRIES: &[(&str, &str)] = &[
     (
         "Um plano de equipe precisa de 1 a 3 tarefas.",
         "A team plan needs 1 to 3 tasks.",
+    ),
+    (
+        "Um revisor aprova o que é seguro e só pergunta nas ações arriscadas.",
+        "A reviewer approves what is safe and only asks on risky actions.",
     ),
     (
         "Um script do projeto deve ser um texto de no máximo 8 KiB.",
@@ -4965,7 +5080,9 @@ const ENTRIES: &[(&str, &str)] = &[
         "Uma vez, na primeira abertura de cada versão.",
         "Once, on the first launch of each version.",
     ),
+    ("Uma vez, {} {}", "Once, {} {}"),
     ("Uma vez, {} {} às {}", "Once, {} {} at {}"),
+    ("Uma vez, {}, {} às {}", "Once, {}, {} at {}"),
     (
         "Usada a chave {} do Infisical. O agente a recebeu sem ver o valor.",
         "Used the key {} from Infisical. The agent received it without seeing the value.",
@@ -5084,6 +5201,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Verificar CLIs", "Check CLIs"),
     ("Verificar atualizações das CLIs", "Check for CLI updates"),
     ("Verificar de novo", "Check again"),
+    (
+        "Verifique dependências desatualizadas, atualize as seguras (patch e minor), rode os testes e abra um PR com o resultado.",
+        "Check for outdated dependencies, update the safe ones (patch and minor), run the tests and open a PR with the result.",
+    ),
     ("Versão", "Version"),
     ("Versão {}", "Version {}"),
     ("Versão {}.", "Version {}."),
@@ -5262,6 +5383,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("editor desconhecido", "unknown editor"),
     ("enviar", "send"),
     ("enviar e abrir", "send and open"),
+    ("escolha o esforço", "choose the effort"),
     ("escolha uma pasta pai", "choose a parent folder"),
     ("escopo MCP desconhecido", "unknown MCP scope"),
     ("esta conversa não tem equipe", "this session has no team"),
@@ -5287,12 +5409,14 @@ const ENTRIES: &[(&str, &str)] = &[
     ("ferramentas", "tools"),
     ("fev", "Feb"),
     ("guia não encontrado", "guide not found"),
+    ("hoje", "today"),
     ("https://exemplo.com", "https://example.com"),
     ("há {} dias", "{} days ago"),
     ("há {} h", "{} h ago"),
     ("há {} min", "{} min ago"),
     ("iPhone conectado", "iPhone connected"),
     ("id de terminal inválido", "invalid terminal id"),
+    ("indisponível neste modelo", "unavailable on this model"),
     (
         "interrompa as conversas em execução antes de remover este projeto",
         "stop running sessions before removing this project",
@@ -5310,15 +5434,18 @@ const ENTRIES: &[(&str, &str)] = &[
     ("mai", "May"),
     ("mar", "Mar"),
     ("mcp_servers não é uma tabela", "mcp_servers is not a table"),
+    ("modo rápido", "fast mode"),
     ("nenhum projeto", "no project"),
     (
         "nenhum remoto origin está configurado",
         "no origin remote is configured",
     ),
     ("nenhum servidor com esse nome", "no server with that name"),
+    ("no projeto", "in project"),
     ("nome de servidor inválido", "invalid server name"),
     ("nome do branch inválido", "invalid branch name"),
     ("nov", "Nov"),
+    ("nova worktree", "new worktree"),
     (
         "não foi possível alocar um caminho de worktree único",
         "could not allocate a unique worktree path",
@@ -5490,6 +5617,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("pastas de projeto demais", "too many project folders"),
     ("por {}", "by {}"),
+    ("primeira", "first"),
     ("projeto não encontrado", "project not found"),
     ("recusado", "declined"),
     (
@@ -5525,6 +5653,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("ritmo uniforme em {}%", "even pace at {}%"),
     ("saída {}", "exit {}"),
     ("sem preço", "no price"),
+    ("semanas", "weeks"),
     ("set", "Sep"),
     ("tarefa da equipe não encontrada", "team task not found"),
     ("texto-colado.txt", "pasted-text.txt"),
@@ -5557,6 +5686,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "{} files can be undone.",
     ),
     ("{} assumiu", "{} took over"),
+    ("{} ativas", "{} active"),
     ("{} atualizada a partir de {}", "{} updated from {}"),
     ("{} atualizado para {}", "{} updated to {}"),
     ("{} caracteres", "{} characters"),
@@ -5611,6 +5741,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "{} não reconhece mais este Mac. Pareie de novo em Configurações → Conexões.",
         "{} no longer recognises this Mac. Pair it again in Settings → Connections.",
     ),
+    ("{} níveis de esforço", "{} effort levels"),
     ("{} passos", "{} steps"),
     ("{} pastas sem projeto", "{} folders without a project"),
     ("{} pedidos na fila", "{} queued requests"),
@@ -5633,6 +5764,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("{} usado", "{} used"),
     ("{} {} disponível", "{} {} available"),
     ("{} · Encontrada em: {}", "{} · Found in: {}"),
+    (
+        "{} · este modelo tem {} níveis.",
+        "{} · this model has {} levels.",
+    ),
     ("{} às {}", "{} at {}"),
     ("{}% restante", "{}% left"),
     ("{}% usado", "{}% used"),
@@ -5657,6 +5792,8 @@ const ENTRIES: &[(&str, &str)] = &[
         "Ícone ou estilo do Astro desconhecido.",
         "Unknown Astro icon or style.",
     ),
+    ("Última execução: concluída", "Last run: done"),
+    ("Última execução: falhou", "Last run: failed"),
     ("Últimos 30 dias", "Last 30 days"),
     ("Últimos 7 dias", "Last 7 days"),
     ("últimas 24 horas", "last 24 hours"),

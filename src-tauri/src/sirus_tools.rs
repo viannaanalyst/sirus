@@ -23,6 +23,8 @@ const LIST_LIMIT: usize = 40;
 const READ_DEFAULT: usize = 6;
 const READ_LIMIT: usize = 20;
 const MESSAGE_CHARS: usize = 2000;
+const MIN_MESSAGE_CHARS: usize = 200;
+const MAX_MESSAGE_CHARS: usize = 6000;
 const PROMPT_CHARS: usize = 32 * 1024;
 /// Sessions one caller turn may start, and messages it may send.
 const STARTS_PER_TURN: u8 = 4;
@@ -73,7 +75,7 @@ fn definitions(enabled: bool) -> Vec<Value> {
     let id = || json!({ "type": "object", "properties": { "sessionId": { "type": "string" } }, "required": ["sessionId"] });
     tools.extend([
         json!({ "name": "sirus_list_sessions", "description": "Sirus: the projects and recent sessions in the app (id, title, project, provider, model, status, branch), newest first. Your own session is marked self.", "inputSchema": { "type": "object", "properties": { "project": { "type": "string", "description": "Optional project name or id." } } } }),
-        json!({ "name": "sirus_read_session", "description": "Sirus: a session's status and its last messages (user and assistant text only, each shortened to 2,000 characters).", "inputSchema": { "type": "object", "properties": { "sessionId": { "type": "string" }, "limit": { "type": "integer", "description": "Messages to return, 1–20 (default 6)." } }, "required": ["sessionId"] } }),
+        json!({ "name": "sirus_read_session", "description": "Sirus: a session's status and a page of its messages (user and assistant text only), oldest first within the page. With no paging parameters you get the newest 6, each cut at 2,000 characters. To read further back, pass the previous response's nextCursor as cursor (it is null once you reach the start). A message cut at maxChars carries a marker, truncated, nextCharOffset and totalChars: read the rest by calling again with cursor set to its index + 1, limit 1 and charOffset set to nextCharOffset. earlierMessages counts the messages before the page.", "inputSchema": { "type": "object", "properties": { "sessionId": { "type": "string" }, "limit": { "type": "integer", "description": "Messages per page, 1–20 (default 6)." }, "cursor": { "type": "integer", "description": "Page ending just before this message index; use the nextCursor of the previous page. Default: the end of the transcript (newest messages)." }, "maxChars": { "type": "integer", "description": "Characters kept per message, 200–6,000 (default 2,000)." }, "charOffset": { "type": "integer", "description": "Character to start each message from, to read the rest of a message cut at maxChars (use with limit 1)." } }, "required": ["sessionId"] } }),
         json!({ "name": "sirus_session_status", "description": "Sirus: a session's status (idle, running, waiting for the person, completed, failed, stopped), title and last error.", "inputSchema": id() }),
         json!({ "name": "sirus_create_session", "description": "Sirus: start a new visible session in a project with a first prompt. It runs on its own with your approval mode (so it may wait for the person's approval in its own tab) and returns at once; check it later with sirus_session_status. At most 4 per turn.", "inputSchema": { "type": "object", "properties": { "project": { "type": "string", "description": "Project name or id." }, "prompt": { "type": "string", "description": "The task: objective, context, constraints, what it may change and the result you expect." }, "title": { "type": "string" }, "provider": { "type": "string", "description": "Optional provider id (claude, codex, opencode, …); defaults to yours." }, "model": { "type": "string" }, "newWorktree": { "type": "boolean", "description": "Default true: an isolated worktree, so parallel sessions never mix files." } }, "required": ["project", "prompt"] } }),
         json!({ "name": "sirus_session_diff", "description": "Sirus: the uncommitted changes in a session's workspace: a per-file summary and the unified diff against HEAD (new files listed by name), cut to 60,000 characters. Optional path: one file, relative to the workspace.", "inputSchema": { "type": "object", "properties": { "sessionId": { "type": "string" }, "path": { "type": "string" } }, "required": ["sessionId"] } }),
@@ -255,8 +257,60 @@ fn session_diff(cwd: &std::path::Path, path: &str) -> Result<Value, String> {
     }))
 }
 
-fn read(data: &AppData, session: &Session, limit: usize) -> Value {
-    let limit = limit.clamp(1, READ_LIMIT);
+/// What `sirus_read_session` was asked for; `None` fields take their defaults.
+#[derive(Default, Clone, Copy)]
+struct ReadPage {
+    limit: Option<usize>,
+    /// Index just past the page's newest message; `None` is the end of the transcript.
+    cursor: Option<usize>,
+    max_chars: Option<usize>,
+    char_offset: usize,
+}
+
+impl ReadPage {
+    fn from_args(args: &Value) -> Self {
+        let number = |key: &str| {
+            args.get(key)
+                .and_then(Value::as_u64)
+                .map(|value| value as usize)
+        };
+        Self {
+            limit: number("limit"),
+            cursor: number("cursor"),
+            max_chars: number("maxChars"),
+            char_offset: number("charOffset").unwrap_or(0),
+        }
+    }
+}
+
+/// One message's slice of `max` characters from `offset`, with a marker when more remains.
+/// Returns the text and, while more remains, the next offset and the message's length.
+fn message_slice(
+    text: &str,
+    index: usize,
+    max: usize,
+    offset: usize,
+) -> (String, Option<(usize, usize)>) {
+    let total = text.chars().count();
+    let slice: String = text.chars().skip(offset).take(max).collect();
+    let next = offset.saturating_add(max);
+    if total <= next {
+        return (slice, None);
+    }
+    let marker = format!(
+        "[{} more characters; read on with sirus_read_session cursor {} and limit 1, charOffset {next}]",
+        total - next,
+        index + 1
+    );
+    (format!("{slice}\n\n{marker}"), Some((next, total)))
+}
+
+fn read(data: &AppData, session: &Session, page: ReadPage) -> Value {
+    let limit = page.limit.unwrap_or(READ_DEFAULT).clamp(1, READ_LIMIT);
+    let max_chars = page
+        .max_chars
+        .unwrap_or(MESSAGE_CHARS)
+        .clamp(MIN_MESSAGE_CHARS, MAX_MESSAGE_CHARS);
     let messages: Vec<&crate::models::Message> = session
         .messages
         .iter()
@@ -265,18 +319,33 @@ fn read(data: &AppData, session: &Session, limit: usize) -> Value {
                 && !message.content.trim().is_empty()
         })
         .collect();
-    let start = messages.len().saturating_sub(limit);
+    let end = page.cursor.unwrap_or(messages.len()).min(messages.len());
+    let start = end.saturating_sub(limit);
     let mut row = status(data, session);
-    row["messages"] = json!(messages[start..]
+    row["messages"] = json!(messages[start..end]
         .iter()
-        .map(|message| json!({
-            "role": if message.role == MessageRole::User { "user" } else { "assistant" },
-            "text": crate::launch::bounded(&message.content, MESSAGE_CHARS),
-            "streaming": message.streaming,
-            "at": message.created_at,
-        }))
+        .enumerate()
+        .map(|(offset, message)| {
+            let index = start + offset;
+            let (text, more) =
+                message_slice(message.content.trim(), index, max_chars, page.char_offset);
+            let mut item = json!({
+                "index": index,
+                "role": if message.role == MessageRole::User { "user" } else { "assistant" },
+                "text": text,
+                "truncated": more.is_some(),
+                "streaming": message.streaming,
+                "at": message.created_at,
+            });
+            if let Some((next, total)) = more {
+                item["nextCharOffset"] = json!(next);
+                item["totalChars"] = json!(total);
+            }
+            item
+        })
         .collect::<Vec<_>>());
     row["earlierMessages"] = json!(start);
+    row["nextCursor"] = if start > 0 { json!(start) } else { Value::Null };
     row
 }
 
@@ -401,14 +470,10 @@ pub fn execute(
             Ok(status(&data, find(&data, &arg("sessionId"))?))
         }
         "sirus_read_session" => {
-            let limit = args
-                .get("limit")
-                .and_then(Value::as_u64)
-                .map(|limit| limit as usize)
-                .unwrap_or(READ_DEFAULT);
+            let page = ReadPage::from_args(args);
             let target = arg("sessionId");
             let data = state.data_with_messages(&[&target]);
-            Ok(read(&data, find(&data, &target)?, limit))
+            Ok(read(&data, find(&data, &target)?, page))
         }
         "sirus_create_session" => {
             let prompt = arg("prompt");
@@ -666,18 +731,131 @@ mod tests {
             })).unwrap());
         }
         let session = data.sessions[0].clone();
-        let row = read(&data, &session, 100);
+        let page = |limit| ReadPage {
+            limit: Some(limit),
+            ..ReadPage::default()
+        };
+        let row = read(&data, &session, page(100));
         let messages = row["messages"].as_array().unwrap();
         assert_eq!(messages.len(), READ_LIMIT);
         assert_eq!(row["earlierMessages"], 10);
-        assert!(messages[0]["text"].as_str().unwrap().chars().count() <= MESSAGE_CHARS + 1);
+        assert_eq!(row["nextCursor"], 10);
+        assert!(messages[0]["text"].as_str().unwrap().chars().count() < MESSAGE_CHARS + 200);
         assert_eq!(
-            read(&data, &session, 0)["messages"]
+            read(&data, &session, page(0))["messages"]
                 .as_array()
                 .unwrap()
                 .len(),
             1
         );
+        // No paging parameters: the newest READ_DEFAULT messages, as before.
+        let row = read(&data, &session, ReadPage::default());
+        let messages = row["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), READ_DEFAULT);
+        assert_eq!(messages[READ_DEFAULT - 1]["index"], 29);
+    }
+
+    #[test]
+    fn reading_pages_back_to_the_start_with_cursors() {
+        let mut data = data();
+        for index in 0..7 {
+            data.sessions[0].messages.push(serde_json::from_value(json!({
+                "id": format!("m{index}"), "sessionId": "a", "role": if index % 2 == 0 { "user" } else { "agent" },
+                "content": format!("message {index}"), "createdAt": "t", "streaming": false
+            })).unwrap());
+        }
+        let session = data.sessions[0].clone();
+        let mut seen = Vec::new();
+        let mut cursor = None;
+        loop {
+            let row = read(
+                &data,
+                &session,
+                ReadPage {
+                    limit: Some(3),
+                    cursor,
+                    ..ReadPage::default()
+                },
+            );
+            let mut page: Vec<u64> = row["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|message| message["index"].as_u64().unwrap())
+                .collect();
+            assert!(page.windows(2).all(|pair| pair[0] + 1 == pair[1]));
+            page.extend(seen);
+            seen = page;
+            match row["nextCursor"].as_u64() {
+                Some(next) => cursor = Some(next as usize),
+                None => break,
+            }
+        }
+        assert_eq!(seen, (0..7).collect::<Vec<u64>>());
+        // A cursor past the end is the end.
+        let row = read(
+            &data,
+            &session,
+            ReadPage {
+                cursor: Some(500),
+                limit: Some(1),
+                ..ReadPage::default()
+            },
+        );
+        assert_eq!(row["messages"][0]["index"], 6);
+    }
+
+    #[test]
+    fn a_huge_message_is_cut_with_a_marker_and_read_on_by_offset() {
+        let mut data = data();
+        let long = format!("{}{}", "a".repeat(6000), "🙂".repeat(500));
+        data.sessions[0].messages.push(
+            serde_json::from_value(json!({
+                "id": "m0", "sessionId": "a", "role": "agent",
+                "content": long, "createdAt": "t", "streaming": false
+            }))
+            .unwrap(),
+        );
+        let session = data.sessions[0].clone();
+        let first = read(
+            &data,
+            &session,
+            ReadPage {
+                max_chars: Some(6000),
+                ..ReadPage::default()
+            },
+        );
+        let first = &first["messages"][0];
+        assert_eq!(first["truncated"], true);
+        assert_eq!(first["nextCharOffset"], 6000);
+        assert_eq!(first["totalChars"], 6500);
+        let text = first["text"].as_str().unwrap();
+        assert!(text.starts_with(&"a".repeat(6000)));
+        assert!(text.contains("500 more characters") && text.contains("charOffset 6000"));
+        let rest = read(
+            &data,
+            &session,
+            ReadPage {
+                limit: Some(1),
+                cursor: Some(1),
+                max_chars: Some(6000),
+                char_offset: 6000,
+            },
+        );
+        let rest = &rest["messages"][0];
+        assert_eq!(rest["text"], "🙂".repeat(500));
+        assert_eq!(rest["truncated"], false);
+        assert!(rest.get("nextCharOffset").is_none());
+        // Out-of-range maxChars is clamped.
+        let tiny = read(
+            &data,
+            &session,
+            ReadPage {
+                max_chars: Some(1),
+                ..ReadPage::default()
+            },
+        );
+        assert_eq!(tiny["messages"][0]["nextCharOffset"], MIN_MESSAGE_CHARS);
     }
 
     #[test]

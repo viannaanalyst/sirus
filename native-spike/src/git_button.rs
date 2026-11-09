@@ -358,10 +358,10 @@ impl Shell {
             }
             Synced::Conflict(files) => {
                 self.incoming.finish(generation, None);
-                self.git_toast(
+                self.git_conflict_toast(
                     t("Não deu para puxar"),
                     git_split::conflict_line(&files),
-                    false,
+                    files,
                 );
             }
             Synced::Failed(message) => {
@@ -517,6 +517,119 @@ impl Shell {
         };
         self.notice = ok.then(|| text.clone());
         self.problem = Some(text);
+        self.toasts.conflict = None;
+    }
+
+    /// A conflict toast: a warning that keeps its card and offers the ways out.
+    fn git_conflict_toast(&mut self, title: &str, detail: String, files: Vec<String>) {
+        let text = if detail.is_empty() {
+            title.to_owned()
+        } else {
+            format!("{title}\n{detail}")
+        };
+        self.notice = None;
+        self.problem = Some(text.clone());
+        self.toasts.conflict = Some(crate::shell::toast::Conflict {
+            problem: text,
+            files,
+        });
+    }
+
+    /// "Resolver com o agente": asks the conversation's agent to settle the conflict and finish
+    /// the merge or rebase.
+    pub(super) fn resolve_conflict_with_agent(&mut self, cx: &mut Context<Self>) {
+        let Some(conflict) = self.toasts.conflict.take() else {
+            return;
+        };
+        self.problem = None;
+        let list = conflict
+            .files
+            .iter()
+            .map(|file| format!("- {file}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let prompt = tf(
+            "Resolva o conflito de merge ou rebase nos arquivos abaixo, mantendo a intenção dos dois lados, e conclua o merge ou rebase:\n\n{}",
+            &[&list],
+        );
+        let conversation = &self.conversations[self.active_conversation()];
+        let session = conversation.session_id.clone();
+        if session.is_empty() {
+            cx.notify();
+            return;
+        }
+        let execution = json!({
+            "approval": conversation.approval,
+            "effort": conversation.effort,
+            "fast": conversation.fast,
+            "planning": conversation.planning,
+        });
+        self.backend.invoke(
+            "send_prompt",
+            json!({ "request": {
+                "sessionId": session.clone(),
+                "prompt": prompt,
+                "clientRequestId": crate::panel_sidechat::uuid(),
+                "execution": execution,
+                "attachmentIds": [],
+                "attachmentOwner": format!("session:{session}"),
+            } }),
+        );
+        cx.notify();
+    }
+
+    /// "Abrir arquivo": shows the first conflicted file in the Files pane.
+    pub(super) fn open_conflict_file(&mut self, cx: &mut Context<Self>) {
+        let Some(conflict) = self.toasts.conflict.take() else {
+            return;
+        };
+        self.problem = None;
+        let Some(first) = conflict.files.first().cloned() else {
+            cx.notify();
+            return;
+        };
+        let session = self.incoming.session().to_owned();
+        let root = self
+            .conversations
+            .iter()
+            .find(|conversation| conversation.session_id == session)
+            .or_else(|| self.conversations.get(self.active_conversation()))
+            .map(|conversation| conversation.worktree.clone())
+            .unwrap_or_default();
+        let path = if first.starts_with('/') || root.is_empty() {
+            first
+        } else {
+            format!("{}/{}", root.trim_end_matches('/'), first)
+        };
+        self.open_chip(
+            crate::file_chips::Target {
+                path,
+                folder: false,
+                outside: false,
+            },
+            cx,
+        );
+        cx.notify();
+    }
+
+    /// "Desfazer": ends the merge or rebase left in progress in the workspace.
+    pub(super) fn abort_conflict(&mut self, cx: &mut Context<Self>) {
+        if self.toasts.conflict.take().is_none() {
+            return;
+        }
+        self.problem = None;
+        let session = self.incoming.session().to_owned();
+        let session = if session.is_empty() {
+            self.active_session_id()
+        } else {
+            session
+        };
+        if !session.is_empty() {
+            self.backend
+                .invoke("git_abort_conflict", json!({ "sessionId": session }));
+        }
+        self.git_after(cx);
+        cx.notify();
     }
 }
 

@@ -49,6 +49,14 @@ pub(crate) struct Offer {
     hovered: bool,
 }
 
+/// A Git conflict the failure card offers to resolve: the files, and the exact problem text it
+/// was raised with, so a later problem does not inherit its actions.
+#[derive(Clone, Debug)]
+pub(crate) struct Conflict {
+    pub problem: String,
+    pub files: Vec<String>,
+}
+
 /// The toasts' own state, kept apart from the window's other fields.
 #[derive(Default)]
 pub(crate) struct Toasts {
@@ -57,6 +65,8 @@ pub(crate) struct Toasts {
     problem_up: Duration,
     /// Gives each failure's card its own slide-in.
     problem_serial: u64,
+    /// The conflict a failure card is offering to resolve, if any.
+    pub conflict: Option<Conflict>,
     pub offers: Vec<Offer>,
     /// Offers let go this session (with "Agora não" or ✕), so a later event does not bring them back.
     dismissed: Vec<(String, String)>,
@@ -172,6 +182,15 @@ impl Shell {
         if self.problem.as_deref() != Some(shown) {
             return false;
         }
+        // A conflict waits for the person: it leaves by its ✕ or by one of its actions.
+        if self
+            .toasts
+            .conflict
+            .as_ref()
+            .is_some_and(|conflict| conflict.problem == shown)
+        {
+            return true;
+        }
         if self.toasts.problem_hovered {
             return true;
         }
@@ -192,19 +211,47 @@ impl Shell {
             Some((title, detail)) => (title.to_owned(), Some(detail.to_owned())),
             None => (problem.to_owned(), None),
         };
-        let card = frame(format!("problem-toast-{}", self.toasts.problem_serial))
+        let serial = self.toasts.problem_serial;
+        let conflict = self
+            .toasts
+            .conflict
+            .as_ref()
+            .is_some_and(|conflict| conflict.problem == problem);
+        let mut actions = div().flex_shrink_0().flex().items_center().gap(px(6.));
+        if conflict {
+            actions = actions
+                .child(
+                    action(format!("problem-undo-{serial}"), t("Desfazer"), false)
+                        .on_click(cx.listener(|this, _, _, cx| this.abort_conflict(cx))),
+                )
+                .child(
+                    action(format!("problem-open-{serial}"), t("Abrir arquivo"), false)
+                        .on_click(cx.listener(|this, _, _, cx| this.open_conflict_file(cx))),
+                )
+                .child(
+                    action(
+                        format!("problem-resolve-{serial}"),
+                        t("Resolver com o agente"),
+                        true,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.resolve_conflict_with_agent(cx))),
+                );
+        }
+        let card = frame(format!("problem-toast-{serial}"))
             .on_hover(cx.listener(|this, hovered: &bool, _, _| {
                 this.toasts.problem_hovered = *hovered;
             }))
             .child(badge(mark, color))
             .child(words(title, detail, content(0.55)))
+            .child(actions)
             .child(
                 close_button("problem-toast-close").on_click(cx.listener(|this, _, _, cx| {
                     this.problem = None;
+                    this.toasts.conflict = None;
                     cx.notify();
                 })),
             );
-        slide_in(card, self.toasts.problem_serial, reduced)
+        slide_in(card, serial, reduced)
     }
 
     fn offer_card(&self, offer: &Offer, reduced: bool, cx: &mut Context<Self>) -> AnyElement {

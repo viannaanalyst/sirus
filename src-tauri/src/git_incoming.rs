@@ -606,6 +606,18 @@ pub async fn git_pull_ff(
     .await
 }
 
+/// Ends a merge or rebase left half-done in the session's workspace ("Desfazer" on a conflict).
+pub async fn git_abort_conflict(state: State<'_, Arc<AppState>>, session_id: String) -> Result<()> {
+    let state = state.inner().clone();
+    native_task(move || {
+        state.ensure_running()?;
+        let cwd = session_path(&state, &session_id)?;
+        abort_in_progress(&cwd);
+        Ok(())
+    })
+    .await
+}
+
 /// The top bar's Pull (`rebase` false: fast-forward) and Sync (`rebase` true), with the local
 /// changes kept and a conflict undone. Refused while a conversation works in that workspace.
 pub async fn git_sync_pull(

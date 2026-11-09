@@ -1326,6 +1326,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Leave empty to keep the saved token.",
     ),
     ("Delegada para {}", "Delegated to {}"),
+    ("Delegar a este modelo", "Delegate to this model"),
     ("Delegar tarefa", "Delegate task"),
     ("Delegou", "Delegated"),
     ("Densidade da interface", "UI density"),

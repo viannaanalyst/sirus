@@ -69,6 +69,53 @@ pub fn already_sent(session: &crate::models::Session, client_request_id: &str) -
         .any(|message| message.client_request_id.as_deref() == Some(client_request_id))
 }
 
+/// The `@model:<provider>/<id>` mentions the composer's `@` menu writes, in order and once
+/// each. Sentence punctuation after a mention is not part of it; unknown providers are prose.
+pub fn model_mentions(text: &str) -> Vec<(AgentProviderId, String)> {
+    let mut found: Vec<(AgentProviderId, String)> = Vec::new();
+    for word in text.split_whitespace() {
+        let Some(rest) = word
+            .trim_start_matches(['(', '[', '"', '\''])
+            .strip_prefix("@model:")
+        else {
+            continue;
+        };
+        let Some((provider, model)) = rest.split_once('/') else {
+            continue;
+        };
+        let model = model.trim_end_matches(['.', ',', ';', ':', '!', '?', ')', ']', '"', '\'']);
+        let Ok(provider) = serde_json::from_value::<AgentProviderId>(json!(provider)) else {
+            continue;
+        };
+        if model.is_empty() || found.iter().any(|(p, m)| *p == provider && m == model) {
+            continue;
+        }
+        found.push((provider, model.to_owned()));
+    }
+    found
+}
+
+/// A request that @-mentions a model asks for that model to do the work: the agent is told to
+/// hand it over with `sirus_delegate` (ADR-111), so it runs as a linked subagent (ADR-198).
+pub fn model_mention_prompt(request: String) -> String {
+    let mentions = model_mentions(&request);
+    if mentions.is_empty() {
+        return request;
+    }
+    let targets = mentions
+        .iter()
+        .map(|(provider, model)| {
+            format!(
+                "- @model:{key}/{model} → sirus_delegate with provider \"{key}\" and model \"{model}\" ({title})",
+                key = provider.key(),
+                title = provider.title()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("{request}\n\nSirus model mention: the person named the agent that should do this work. Delegate the request to it with sirus_delegate instead of doing it yourself, writing a self-contained task (objective, context, constraints, expected result) without the mention token; with several mentions, split the work between them as the request says.\n{targets}\nIf delegation fails, say why and ask before doing the work yourself.")
+}
+
 pub fn debug_prompt(debugging: bool, request: String) -> String {
     if !debugging {
         return request;
@@ -314,6 +361,25 @@ pub fn codex_turn(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn model_mentions_become_a_delegation_instruction() {
+        assert_eq!(
+            model_mentions(
+                "@model:claude/sonnet revise (@model:codex/gpt-5.5). @model:claude/sonnet again \
+                 @model:nobody/x @model:codex/ email@model:codex/y"
+            ),
+            vec![
+                (AgentProviderId::Claude, "sonnet".to_owned()),
+                (AgentProviderId::Codex, "gpt-5.5".to_owned()),
+            ]
+        );
+        assert_eq!(model_mention_prompt("plain".into()), "plain");
+        let prompt = model_mention_prompt("@model:opencode/anthropic/opus fix it".into());
+        assert!(prompt.starts_with("@model:opencode/anthropic/opus fix it\n\n"));
+        assert!(prompt.contains("provider \"opencode\" and model \"anthropic/opus\""));
+    }
+
     #[test]
     fn queued_context_rejects_changed_identity_history_and_active_turns() {
         let session: crate::models::Session = serde_json::from_value(json!({

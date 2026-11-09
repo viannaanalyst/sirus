@@ -895,7 +895,38 @@ fn model_brand(model: &str, provider: &str) -> u32 {
 /// What `/` or `@` is completing at the caret.
 struct Mention {
     start: usize,
-    hits: Vec<(String, String)>,
+    hits: Vec<MentionHit>,
+}
+
+/// One row of the `/` or `@` menu. `insert` follows the sigil in the draft; a model row
+/// (`provider` set) inserts `model:<provider>/<id>`, which the host turns into an instruction
+/// to delegate the request to that model (ADR-198).
+struct MentionHit {
+    insert: String,
+    label: String,
+    about: String,
+    provider: Option<&'static str>,
+}
+
+/// An `@` model mention's text after the sigil.
+fn model_mention(provider: &str, id: &str) -> String {
+    format!("model:{provider}/{id}")
+}
+
+/// Whether a model matches what follows `@`: two characters at least, so one letter keeps the
+/// menu for files, and spaces, dashes and colons are ignored ("sonnet5.5" finds "Sonnet 5.5").
+fn model_matches(needle: &str, provider: &str, id: &str, name: &str) -> bool {
+    let fold = |text: &str| -> String {
+        text.chars()
+            .filter(|c| !c.is_whitespace() && !matches!(c, '-' | ':' | '_' | '/'))
+            .flat_map(char::to_lowercase)
+            .collect()
+    };
+    let needle = fold(needle);
+    needle.chars().count() >= 2
+        && [id, name, provider, provider_title(provider)]
+            .iter()
+            .any(|text| fold(text).contains(&needle))
 }
 
 pub(crate) fn effort_label(effort: &str) -> String {
@@ -3264,33 +3295,60 @@ impl Shell {
         }
         let token = &before[start..];
         let needle = token.get(1..)?.to_lowercase();
-        let hits: Vec<(String, String)> = match token.chars().next()? {
+        let hits: Vec<MentionHit> = match token.chars().next()? {
             '/' => self
                 .skills
                 .iter()
                 .filter(|(name, _)| name.to_lowercase().contains(&needle))
                 .take(8)
-                .cloned()
-                .collect(),
-            '@' => self
-                .files
-                .1
-                .iter()
-                .filter(|(name, folder)| {
-                    format!("{folder}/{name}").to_lowercase().contains(&needle)
+                .map(|(name, about)| MentionHit {
+                    insert: name.clone(),
+                    label: name.clone(),
+                    about: about.clone(),
+                    provider: None,
                 })
-                .take(8)
-                .map(|(name, folder)| {
-                    (
-                        if folder.is_empty() {
+                .collect(),
+            '@' => {
+                let mut hits: Vec<MentionHit> = self
+                    .files
+                    .1
+                    .iter()
+                    .filter(|(name, folder)| {
+                        format!("{folder}/{name}").to_lowercase().contains(&needle)
+                    })
+                    .take(8)
+                    .map(|(name, folder)| {
+                        let path = if folder.is_empty() {
                             name.clone()
                         } else {
                             format!("{folder}/{name}")
-                        },
-                        String::new(),
-                    )
-                })
-                .collect(),
+                        };
+                        MentionHit {
+                            insert: path.clone(),
+                            label: path,
+                            about: String::new(),
+                            provider: None,
+                        }
+                    })
+                    .collect();
+                // The composer's models, grouped by provider in the picker's order (ADR-198).
+                hits.extend(
+                    self.enabled_providers()
+                        .into_iter()
+                        .flat_map(|provider| {
+                            self.provider_model_rows(provider, ("", None), "", &[])
+                        })
+                        .filter(|row| model_matches(&needle, row.provider, &row.id, &row.name))
+                        .take(8)
+                        .map(|row| MentionHit {
+                            insert: model_mention(row.provider, &row.id),
+                            label: row.name,
+                            about: t("Delegar a este modelo").to_owned(),
+                            provider: Some(row.provider),
+                        }),
+                );
+                hits
+            }
             _ => return None,
         };
         (!hits.is_empty()).then_some(Mention { start, hits })
@@ -5912,7 +5970,7 @@ impl Shell {
                 }
                 "enter" | "tab" if !keys.modifiers.shift => {
                     let name = mention.hits[self.mention_selected.min(mention.hits.len() - 1)]
-                        .0
+                        .insert
                         .clone();
                     self.accept_mention(&name, cx);
                     true
@@ -13618,6 +13676,7 @@ impl Shell {
             }))
             .when_some(mention, |d, mention| {
                 let selected = mention_selected.min(mention.hits.len() - 1);
+                let mut group: Option<&'static str> = None;
                 d.child(
                     div()
                         .id("mention-menu")
@@ -13635,47 +13694,66 @@ impl Shell {
                         .shadow_lg()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(crate::hover_track::list("mention-menu").pill())
-                        .children(mention.hits.into_iter().enumerate().map(
-                            |(i, (name, about))| {
-                                let chosen = name.clone();
-                                crate::hover_track::list("mention-menu").row(
+                        .children(mention.hits.into_iter().enumerate().flat_map(|(i, hit)| {
+                            let MentionHit {
+                                insert: chosen,
+                                label: name,
+                                about,
+                                provider,
+                            } = hit;
+                            // A provider's first model row opens its group with its name.
+                            let header = provider
+                                .filter(|p| Some(*p) != std::mem::replace(&mut group, Some(*p)))
+                                .map(|p| {
                                     div()
-                                        .id(("mention", i))
-                                        .h(px(30.))
+                                        .h(px(24.))
                                         .px(px(8.))
-                                        .rounded(px(crate::theme::RADIUS_MD))
                                         .flex()
                                         .items_center()
-                                        .gap(px(10.))
-                                        .text_size(px(13.))
-                                        .text_color(content(0.92))
-                                        .cursor_pointer()
-                                        .when(i == selected, |d| d.bg(content(0.1)))
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.accept_mention(&chosen, cx)
-                                        }))
-                                        .when(about.is_empty(), |d| {
-                                            d.child(crate::file_icons::file_icon(
-                                                name.rsplit('/').next().unwrap_or(&name),
-                                                false,
-                                                15.,
-                                            ))
-                                        })
-                                        .child(div().flex_shrink_0().child(name))
-                                        .child(
-                                            div()
-                                                .flex_1()
-                                                .min_w_0()
-                                                .truncate()
-                                                .text_size(px(11.5))
-                                                .text_color(content(0.45))
-                                                .child(about),
-                                        ),
-                                    i,
-                                    i == selected,
-                                )
-                            },
-                        )),
+                                        .text_size(px(11.5))
+                                        .text_color(content(0.45))
+                                        .child(provider_title(p))
+                                        .into_any_element()
+                                });
+                            let row = crate::hover_track::list("mention-menu").row(
+                                div()
+                                    .id(("mention", i))
+                                    .h(px(30.))
+                                    .px(px(8.))
+                                    .rounded(px(crate::theme::RADIUS_MD))
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(10.))
+                                    .text_size(px(13.))
+                                    .text_color(content(0.92))
+                                    .cursor_pointer()
+                                    .when(i == selected, |d| d.bg(content(0.1)))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.accept_mention(&chosen, cx)
+                                    }))
+                                    .when_some(provider, |d, p| d.child(provider_mark(p, 15.)))
+                                    .when(about.is_empty(), |d| {
+                                        d.child(crate::file_icons::file_icon(
+                                            name.rsplit('/').next().unwrap_or(&name),
+                                            false,
+                                            15.,
+                                        ))
+                                    })
+                                    .child(div().flex_shrink_0().child(name))
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .truncate()
+                                            .text_size(px(11.5))
+                                            .text_color(content(0.45))
+                                            .child(about),
+                                    ),
+                                i,
+                                i == selected,
+                            );
+                            header.into_iter().chain([row.into_any_element()])
+                        })),
                 )
             })
             // Sign-in approvals and computer-use requests (browser_bridge.rs).
@@ -19330,6 +19408,18 @@ impl Render for Shell {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn at_mentions_find_models_by_name_id_or_provider() {
+        let sonnet = ("claude", "claude-sonnet-5-5", "Sonnet 5.5");
+        let hit = |needle: &str| model_matches(needle, sonnet.0, sonnet.1, sonnet.2);
+        assert!(hit("sonnet5.5"));
+        assert!(hit("Sonnet-5"));
+        assert!(hit("claudecode"));
+        assert!(!hit("s"));
+        assert!(!hit("gpt"));
+        assert_eq!(model_mention("codex", "gpt-5.5"), "model:codex/gpt-5.5");
+    }
 
     #[test]
     fn usage_rows_follow_the_limits_the_provider_has() {

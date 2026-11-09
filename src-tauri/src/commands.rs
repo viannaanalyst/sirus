@@ -2118,6 +2118,7 @@ pub async fn send_prompt(
                 _ => process_prompt,
             };
             let process_prompt = crate::skills::with_agent_hint(session, process_prompt);
+            let process_prompt = crate::execution::model_mention_prompt(process_prompt);
             let process_prompt = crate::execution::debug_prompt(request.debugging, process_prompt);
             let process_prompt = crate::goals::prompt(
                 admitted_goal
@@ -2537,6 +2538,8 @@ pub async fn steer_turn(
             .iter()
             .map(|file| file.summary(&state.data_path))
             .collect();
+        // The saved instruction keeps the person's text; the delegation note goes to the agent.
+        let text = crate::execution::model_mention_prompt(text.clone());
         let text = crate::attachments::file_prompt(&text, &attachments);
         if text.len() > STEER_LIMIT + 16 * 1024 {
             return Err(Error::new(

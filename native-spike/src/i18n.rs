@@ -703,6 +703,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Arquivo grande demais para editar: somente leitura.",
         "File too large to edit: read-only.",
     ),
+    ("Arquivo ou imagem…", "File or image…"),
     ("Arquivo vazio.", "Empty file."),
     ("Arquivos", "Files"),
     ("Arquivos ({})", "Files ({})"),
@@ -915,6 +916,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Search files by name…  (> for commands)",
     ),
     ("Buscar atualização", "Check for updates"),
+    ("Buscar branch", "Search branches"),
     ("Buscar conectores", "Search connectors"),
     ("Buscar configurações", "Search Settings"),
     ("Buscar conta", "Search accounts"),
@@ -930,6 +932,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Buscar por título, repositório, autor ou #",
         "Search by title, repository, author or #",
     ),
+    ("Buscar projeto", "Search projects"),
     ("Buscar projetos…", "Search projects…"),
     ("Buscar skills", "Search skills"),
     (
@@ -991,6 +994,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Captura de anexo inválida.", "Invalid attachment snapshot."),
     ("Captura de janela", "Window snap"),
+    ("Captura de tela", "Screenshot"),
     ("Captura de uma seleção", "Selection screenshot"),
     (
         "Captura de uma seleção (para a área de transferência)",
@@ -1059,6 +1063,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Click to keep the history for this message",
     ),
     ("Clássico", "Classic"),
+    ("Colar da área de transferência", "Paste from the clipboard"),
     ("Colar token", "Paste token"),
     (
         "Cole email:token (um API token da Atlassian) ou um access token do repositório. Sem token, o Sirus usa as credenciais do Git para bitbucket.org.",
@@ -1117,7 +1122,6 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Comportamento do chat", "Chat behavior"),
     ("Composer rápido", "Quick composer"),
     ("Composer rápido (⌥Espaço)", "Quick composer (⌥Space)"),
-    ("Composer rápido do Sirus ({})", "Sirus quick composer ({})"),
     (
         "Composer rápido do Sirus (⌥Espaço)",
         "Sirus quick composer (⌥Space)",
@@ -1479,7 +1483,6 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Endereço inválido.", "Invalid address."),
     ("Entendi", "Got it"),
     ("Enter durante o ditado", "Enter while dictating"),
-    ("Enter envia · Esc fecha", "Enter sends · Esc closes"),
     ("Entrada", "Input"),
     ("Entrada em cache", "Cached input"),
     (
@@ -1651,6 +1654,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Escrita de cache", "Cache write"),
     ("Escuro", "Dark"),
+    ("Esforço", "Effort"),
     ("Esforço e velocidade", "Effort and speed"),
     (
         "Esforço gerenciado pelo provedor; esta CLI/modelo não expõe ajuste manual.",
@@ -2567,10 +2571,12 @@ const ENTRIES: &[(&str, &str)] = &[
         "In the sidebar, conversations where an agent is working or waiting for your approval sit in a group above the dates.",
     ),
     ("Na fila", "Queue"),
+    ("Na pasta do projeto", "In the project's folder"),
     (
         "Na tomada, o Mac não entra em repouso e seus aparelhos sempre o alcançam. A tela continua apagando e bloqueando; na bateria, o repouso funciona normalmente. Fechar a tampa ainda põe o Mac em repouso.",
         "While plugged in, the Mac does not go to sleep, so your devices can always reach it. The screen still turns off and locks; on battery, sleep works as usual. Closing the lid still puts it to sleep.",
     ),
+    ("Nada encontrado", "Nothing found"),
     ("Nada encontrado.", "Nothing matches."),
     ("Nada foi desfeito.", "Nothing was undone."),
     (
@@ -4040,8 +4046,8 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Período", "Time"),
     ("Pesquisar por \"{}\"", "Search for \"{}\""),
     ("Pessoal", "Personal"),
-    ("Peça algo ao agente…", "Ask the agent something…"),
     ("Peça qualquer coisa", "Ask for anything"),
+    ("Peça qualquer coisa no {}…", "Ask anything in {}…"),
     ("Planejamento", "Planning"),
     ("Planejamento é só leitura", "Planning stays read-only"),
     (
@@ -4059,6 +4065,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Porta inválida.", "Invalid port."),
     ("Posição do terminal", "Terminal position"),
     ("Precisa de aprovação", "Needs approval"),
+    ("Precisa de um repositório Git", "Needs a Git repository"),
     ("Precisa de você", "Needs you"),
     ("Precisam entrar", "Need to sign in"),
     (
@@ -4783,6 +4790,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Uma conversa à parte.", "A separate conversation."),
     (
+        "Uma cópia isolada, numa branch nova",
+        "An isolated copy, on a new branch",
+    ),
+    (
         "Uma equipe precisa de 1 a 3 tarefas.",
         "A team needs 1 to 3 tasks.",
     ),
@@ -5091,6 +5102,8 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("e mais {} arquivos", "and {} more files"),
     ("editor desconhecido", "unknown editor"),
+    ("enviar", "send"),
+    ("enviar e abrir", "send and open"),
     ("escolha uma pasta pai", "choose a parent folder"),
     ("escopo MCP desconhecido", "unknown MCP scope"),
     ("esta conversa não tem equipe", "this session has no team"),
@@ -5447,8 +5460,8 @@ const ENTRIES: &[(&str, &str)] = &[
     ("{}% restante", "{}% left"),
     ("{}% usado", "{}% used"),
     (
-        "{}, de qualquer app, ou o ícone do Sirus na barra de menus abre um campo para começar uma conversa sem abrir a janela. O atalho muda em Atalhos.",
-        "{}, from any app, or the Sirus icon in the menu bar opens a field to start a conversation without opening the window. Change the shortcut in Shortcuts.",
+        "{}, de qualquer app, abre um campo para começar uma conversa sem abrir a janela. O atalho muda em Atalhos.",
+        "{}, from any app, opens a field to start a conversation without opening the window. Change the shortcut in Shortcuts.",
     ),
     ("À direita", "On the right"),
     ("À esquerda", "On the left"),
@@ -5470,10 +5483,6 @@ const ENTRIES: &[(&str, &str)] = &[
     ("últimas 24 horas", "last 24 hours"),
     ("últimos {} dias", "last {} days"),
     ("… {} linhas a mais", "… {} more lines"),
-    (
-        "⌥Espaço, de qualquer app, ou o ícone do Sirus na barra de menus abre um campo para começar uma conversa sem abrir a janela.",
-        "⌥Space from any app, or the Sirus icon in the menu bar, opens a field to start a conversation without opening the window.",
-    ),
 ];
 
 #[cfg(test)]

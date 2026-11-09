@@ -50,6 +50,9 @@ mod composer_queue;
 /// Quote blocks that hold their own reply, in the composer and in sent messages (ADR-198).
 #[path = "composer_quote.rs"]
 mod composer_quote;
+/// The quick composer's launches and what it reads from the window (quick_composer.rs).
+#[path = "quick_launch.rs"]
+mod quick_launch;
 use composer_quote::Seg;
 /// The composer's context ring, its popup, Compact and Compact and send (ADR-057).
 #[path = "context_meter.rs"]
@@ -845,7 +848,7 @@ fn provider_path(provider: &str) -> &'static str {
 
 /// A provider's mark in its own colours: Codex's is a gradient, so
 /// it is an image; the rest are one colour.
-fn provider_mark(provider: &str, side: f32) -> AnyElement {
+pub(crate) fn provider_mark(provider: &str, side: f32) -> AnyElement {
     if provider == "codex" {
         return gpui::img("codex.svg")
             .size(px(side))
@@ -895,7 +898,7 @@ struct Mention {
     hits: Vec<(String, String)>,
 }
 
-fn effort_label(effort: &str) -> String {
+pub(crate) fn effort_label(effort: &str) -> String {
     match effort {
         "none" => t("Sem esforço"),
         "minimal" => t("Mínimo"),
@@ -911,7 +914,7 @@ fn effort_label(effort: &str) -> String {
 }
 
 /// Access by risk: asking is neutral, automatic review blue, full access orange, on any theme.
-fn access_look(mode: &str) -> (&'static str, &'static str, &'static str, gpui::Hsla) {
+pub(crate) fn access_look(mode: &str) -> (&'static str, &'static str, &'static str, gpui::Hsla) {
     match mode {
         "ask" => (
             "hand",
@@ -997,8 +1000,15 @@ enum Waiting {
     PromptLinkCopy,
     /// The conversation a prompt link asked for, and the prompt that goes in its composer.
     LinkCreated(String),
-    /// The quick composer's conversation exists: its text goes out (quick_composer.rs).
-    QuickCreated(String),
+    /// The quick composer's conversation exists: its text goes out (quick_launch.rs).
+    QuickCreated(Box<crate::quick_composer::QuickLaunch>),
+    /// The project checkout moved to the quick composer's branch; the conversation follows.
+    QuickCheckout(Box<crate::quick_composer::QuickLaunch>),
+    /// The quick composer's files reached the host: the conversation they wait for, whether
+    /// ⌘↵ opens it, and the project and tab to go back to otherwise.
+    QuickAttached(usize, bool, (Option<usize>, u64)),
+    /// `list_branches` for the quick composer's branch list: the project asked about.
+    QuickBranches(String),
     Session,
     /// A queued request sent to the host: its session and queue item.
     Queued(String, String),
@@ -2272,8 +2282,19 @@ impl Shell {
                 Some(Waiting::PromptLink) => self.prompt_link_resolved(ok, &value, cx),
                 Some(Waiting::PromptLinkCopy) => self.prompt_link_copied(ok, &value, cx),
                 Some(Waiting::LinkCreated(prompt)) if ok => self.link_created(prompt, &value, cx),
-                Some(Waiting::QuickCreated(prompt)) if ok => self.quick_created(prompt, &value, cx),
+                Some(Waiting::QuickCreated(launch)) if ok => {
+                    self.quick_created(*launch, &value, cx)
+                }
                 Some(Waiting::QuickCreated(_)) => self.problem = Some(error_text(&value)),
+                Some(Waiting::QuickCheckout(launch)) => {
+                    self.quick_checked_out(*launch, ok, &value, cx)
+                }
+                Some(Waiting::QuickAttached(ix, foreground, before)) => {
+                    self.quick_attached(ix, foreground, before, ok, &value, cx)
+                }
+                Some(Waiting::QuickBranches(project)) => {
+                    crate::quick_composer::branches_arrived(&project, ok.then_some(&value), cx)
+                }
                 Some(Waiting::Queued(session, item)) => {
                     self.queued_reply(&session, &item, ok, &value, cx)
                 }
@@ -6524,45 +6545,6 @@ impl Shell {
     /// Settings → Geral → "Composer rápido", on unless turned off.
     pub(crate) fn quick_composer_enabled(&self) -> bool {
         self.settings["quickComposer"] != json!(false)
-    }
-
-    /// The projects the quick composer offers, the open one first.
-    pub(crate) fn quick_projects(&self) -> Vec<(String, String)> {
-        let mut order: Vec<usize> = self.current_project.into_iter().collect();
-        order.extend(
-            self.project_order
-                .iter()
-                .copied()
-                .filter(|p| Some(*p) != self.current_project),
-        );
-        order
-            .into_iter()
-            .filter_map(|p| self.projects.get(p))
-            .map(|p| (p.id.clone(), p.name.clone()))
-            .collect()
-    }
-
-    /// The quick composer's Enter: a new conversation in the project, which sends the text as soon
-    /// as it exists.
-    pub(crate) fn quick_send(&mut self, project: &str, text: String, cx: &mut Context<Self>) {
-        let active = self.active_conversation();
-        let agent = self.new_session_agent(active);
-        let call = self.backend.invoke(
-            "create_session",
-            json!({ "request": { "projectId": project, "agent": agent, "isolatedWorktree": false } }),
-        );
-        self.waiting.insert(call, Waiting::QuickCreated(text));
-        cx.notify();
-    }
-
-    fn quick_created(&mut self, prompt: String, value: &Value, cx: &mut Context<Self>) {
-        let ix = self.add_session(value);
-        self.conversations[ix].loaded = true;
-        self.open(ix, cx);
-        self.drafts.insert(ix, Draft::with_text(prompt));
-        self.touch_drafts();
-        self.send(cx);
-        cx.notify();
     }
 
     /// Sends files to the back end, which keeps them for this conversation's next message.
@@ -11523,19 +11505,41 @@ impl Shell {
         let Some(model) = conversation.model.clone() else {
             return;
         };
-        if conversation.provider == "cursor"
+        let provider = conversation.provider;
+        if let Some(next) = self.save_execution(provider, &model, field, value) {
+            let ix = self.active_conversation();
+            let session = self.conversations[ix].session_id.clone();
+            self.conversations[ix].model = Some(next.clone());
+            let call = self.backend.invoke(
+                "set_session_model",
+                json!({ "sessionId": session, "agent": "cursor", "model": next }),
+            );
+            self.waiting.insert(call, Waiting::Session);
+        }
+    }
+
+    /// Saves effort or Fast for a model in the settings. Cursor's plain models carry both in
+    /// their id, so for those nothing is saved and the model with the new preset comes back.
+    fn save_execution(
+        &mut self,
+        provider: &str,
+        model: &str,
+        field: &str,
+        value: Value,
+    ) -> Option<String> {
+        if provider == "cursor"
             && self
                 .models
                 .get("cursor")
                 .and_then(|l| l.iter().find(|m| m.id == model))
                 .is_some_and(|m| !m.parameterized)
         {
-            let (stem, effort, fast) = cursor_preset(&model);
+            let (stem, effort, fast) = cursor_preset(model);
             let (effort, fast) = match field {
                 "effort" => (value.as_str().map(str::to_owned), fast),
                 _ => (effort.map(str::to_owned), value.as_bool().unwrap_or(fast)),
             };
-            let next = self.models["cursor"]
+            return self.models["cursor"]
                 .iter()
                 .find(|m| {
                     let preset = cursor_preset(&m.id);
@@ -11545,25 +11549,15 @@ impl Shell {
                         && preset.2 == fast
                 })
                 .map(|m| m.id.clone());
-            if let Some(next) = next {
-                let ix = self.active_conversation();
-                let session = self.conversations[ix].session_id.clone();
-                self.conversations[ix].model = Some(next.clone());
-                let call = self.backend.invoke(
-                    "set_session_model",
-                    json!({ "sessionId": session, "agent": "cursor", "model": next }),
-                );
-                self.waiting.insert(call, Waiting::Session);
-            }
-            return;
         }
-        let key = format!("{}::{model}", conversation.provider);
+        let key = format!("{provider}::{model}");
         if !self.settings["modelExecution"].is_object() {
             self.settings["modelExecution"] = json!({});
         }
         self.settings["modelExecution"][key][field] = value;
         self.backend
             .invoke("save_settings", json!({ "settings": self.settings }));
+        None
     }
 
     fn pick_effort_at(&mut self, x: f32, cx: &mut Context<Self>) {
@@ -11653,69 +11647,82 @@ impl Shell {
                 .filter(|p| *p == self.model_scope)
                 .collect()
         };
+        let current = (conversation.provider, conversation.model.as_deref());
         let mut rows = Vec::new();
         for provider in providers {
-            let list = self.models.get(provider).map_or(&[][..], Vec::as_slice);
-            let mut group: Vec<ModelRow> = list
-                .iter()
-                .filter(|m| m.available)
-                .filter_map(|m| {
-                    let favorite = favorites.contains(&format!("{provider}::{}", m.id));
-                    let current = conversation.provider == provider
-                        && conversation.model.as_deref() == Some(m.id.as_str());
-                    if !needle.is_empty() {
-                        if !format!("{} {} {}", m.id, m.name, provider_title(provider))
-                            .to_lowercase()
-                            .contains(&needle)
-                        {
-                            return None;
-                        }
-                    } else if !current && !favorite {
-                        if m.id.eq_ignore_ascii_case("default")
-                            || m.name.to_lowercase().starts_with("default")
-                        {
-                            return None;
-                        }
-                    }
-                    let name = if m.name.is_empty() {
-                        m.id.clone()
-                    } else {
-                        m.name.strip_prefix("Claude ").unwrap_or(&m.name).to_owned()
-                    };
-                    Some(ModelRow {
-                        provider,
-                        id: m.id.clone(),
-                        name,
-                        favorite,
-                        selected: current,
-                    })
-                })
-                .collect();
-            if provider == "cursor" {
-                let mut families: Vec<String> = Vec::new();
-                group.retain(|row| {
-                    let parameterized = list.iter().any(|m| m.id == row.id && m.parameterized);
-                    let family = cursor_preset(&row.id).0;
-                    if parameterized || row.selected || !families.contains(&family) {
-                        families.push(family);
-                        true
-                    } else {
-                        false
-                    }
-                });
-            }
-            group.sort_by(|a, b| {
-                model_line(&b.name)
-                    .map(|l| l.1)
-                    .cmp(&model_line(&a.name).map(|l| l.1))
-                    .then_with(|| a.name.cmp(&b.name))
-            });
-            rows.extend(group);
+            rows.extend(self.provider_model_rows(provider, current, &needle, &favorites));
         }
         if self.model_scope == "favorites" {
             rows.retain(|row| row.favorite);
         }
         rows
+    }
+
+    /// One provider's rows for the model picker: available models, the newest of each line
+    /// first, with `current` (provider and model) marked selected. The quick composer lists the
+    /// same rows, grouped by provider.
+    fn provider_model_rows(
+        &self,
+        provider: &'static str,
+        current: (&str, Option<&str>),
+        needle: &str,
+        favorites: &[String],
+    ) -> Vec<ModelRow> {
+        let list = self.models.get(provider).map_or(&[][..], Vec::as_slice);
+        let mut group: Vec<ModelRow> = list
+            .iter()
+            .filter(|m| m.available)
+            .filter_map(|m| {
+                let favorite = favorites.contains(&format!("{provider}::{}", m.id));
+                let selected = current.0 == provider && current.1 == Some(m.id.as_str());
+                if !needle.is_empty() {
+                    if !format!("{} {} {}", m.id, m.name, provider_title(provider))
+                        .to_lowercase()
+                        .contains(needle)
+                    {
+                        return None;
+                    }
+                } else if !selected
+                    && !favorite
+                    && (m.id.eq_ignore_ascii_case("default")
+                        || m.name.to_lowercase().starts_with("default"))
+                {
+                    return None;
+                }
+                let name = if m.name.is_empty() {
+                    m.id.clone()
+                } else {
+                    m.name.strip_prefix("Claude ").unwrap_or(&m.name).to_owned()
+                };
+                Some(ModelRow {
+                    provider,
+                    id: m.id.clone(),
+                    name,
+                    favorite,
+                    selected,
+                })
+            })
+            .collect();
+        if provider == "cursor" {
+            let mut families: Vec<String> = Vec::new();
+            group.retain(|row| {
+                let parameterized = list.iter().any(|m| m.id == row.id && m.parameterized);
+                let family = cursor_preset(&row.id).0;
+                if parameterized || row.selected || !families.contains(&family) {
+                    families.push(family);
+                    true
+                } else {
+                    false
+                }
+            });
+        }
+        group.sort_by(|a, b| {
+            model_line(&b.name)
+                .map(|l| l.1)
+                .cmp(&model_line(&a.name).map(|l| l.1))
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        group
     }
 
     fn browse_models(&mut self, scope: &str, cx: &mut Context<Self>) {

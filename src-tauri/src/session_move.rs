@@ -396,6 +396,7 @@ pub async fn import_session(
                     isolated_worktree: false,
                     model: request.model.clone(),
                     share_worktree_of: None,
+                    base_branch: None,
                 },
                 "HEAD",
             )?;

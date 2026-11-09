@@ -2186,7 +2186,7 @@ pub struct TextField {
     anchor: usize,
     cursor: usize,
     marked: Option<Range<usize>>,
-    placeholder: &'static str,
+    placeholder: gpui::SharedString,
     focus: FocusHandle,
     focus_pending: bool,
     /// Shows bullets instead of the text and never copies it (a password).
@@ -2195,6 +2195,8 @@ pub struct TextField {
     bare: bool,
     /// Only ⌘↩ submits; a plain Enter does nothing.
     command_submit: bool,
+    /// The placeholder stays, after the caret, while the empty field is focused.
+    placeholder_focused: bool,
 }
 
 impl EventEmitter<TextFieldEvent> for TextField {}
@@ -2206,13 +2208,25 @@ impl TextField {
             anchor: 0,
             cursor: 0,
             marked: None,
-            placeholder,
+            placeholder: placeholder.into(),
             focus: cx.focus_handle(),
             focus_pending: false,
             masked: false,
             bare: false,
             command_submit: false,
+            placeholder_focused: false,
         }
+    }
+
+    /// Changes the grey text shown while the field is empty.
+    pub fn set_placeholder(&mut self, text: impl Into<gpui::SharedString>, cx: &mut Context<Self>) {
+        self.placeholder = text.into();
+        cx.notify();
+    }
+
+    /// Keeps the placeholder, after the caret, while the empty field is focused.
+    pub fn set_placeholder_focused(&mut self, on: bool) {
+        self.placeholder_focused = on;
     }
 
     /// Makes only ⌘↩ submit; a plain Enter is ignored.
@@ -2382,7 +2396,19 @@ impl Render for TextField {
         let body = if self.text.is_empty() && !focused {
             div()
                 .text_color(content(0.35))
-                .child(self.placeholder)
+                .child(self.placeholder.clone())
+                .into_any_element()
+        } else if self.text.is_empty() && self.placeholder_focused {
+            div()
+                .flex()
+                .items_center()
+                .child(div().w(px(1.)).h(px(15.)).flex_shrink_0().bg(accent()))
+                .child(
+                    div()
+                        .whitespace_nowrap()
+                        .text_color(content(0.35))
+                        .child(self.placeholder.clone()),
+                )
                 .into_any_element()
         } else {
             div()

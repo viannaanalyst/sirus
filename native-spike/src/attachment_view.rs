@@ -228,7 +228,10 @@ fn check_limits(sizes: &[u64], existing: usize) -> Result<(), &'static str> {
 
 /// Reads the files the person chose into the host's `{name, data}` form. Meant for a thread; sizes
 /// are checked from the file system first, so a huge file is refused unread.
-fn prepare_files(paths: &[std::path::PathBuf], existing: usize) -> Result<Vec<Value>, String> {
+pub(super) fn prepare_files(
+    paths: &[std::path::PathBuf],
+    existing: usize,
+) -> Result<Vec<Value>, String> {
     let sizes: Vec<u64> = paths
         .iter()
         .map(|path| {

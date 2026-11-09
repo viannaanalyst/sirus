@@ -73,6 +73,7 @@ pub async fn launch(
             isolated_worktree: request.isolated_worktree,
             model: request.model.clone(),
             share_worktree_of: None,
+            base_branch: None,
         };
         native_task(move || {
             let start = if share_worktree.is_some() {

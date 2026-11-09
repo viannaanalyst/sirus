@@ -1,6 +1,8 @@
+import { getImageAsync, hasImageAsync } from "expo-clipboard";
 import * as DocumentPicker from "expo-document-picker";
-import { File } from "expo-file-system";
+import { File, Paths } from "expo-file-system";
 import * as ImagePicker from "expo-image-picker";
+import { useEffect, useState } from "react";
 
 import type { PromptAttachment } from "@sirus/client/types";
 
@@ -36,6 +38,37 @@ export async function pickAttachments(kind: "photos" | "files"): Promise<PickedF
   const result = await DocumentPicker.getDocumentAsync({ multiple: true, copyToCacheDirectory: true });
   if (result.canceled) return [];
   return Promise.all(result.assets.slice(0, MAX_FILES).map(async (asset) => ({ name: asset.name, data: await new File(asset.uri).base64(), uri: asset.uri, mimeType: asset.mimeType })));
+}
+
+/**
+ * The image on the clipboard (a screenshot, a photo copied from Photos) as an attachment: the text
+ * field only pastes text. Encoded as JPEG at the picker's quality, so it stays well under the
+ * 10 MiB limit like a picked photo. iOS may ask once to allow the paste.
+ */
+export async function pasteClipboardImage(): Promise<PickedFile[]> {
+  const image = await getImageAsync({ format: "jpeg", jpegQuality: 0.75 });
+  if (!image) throw new Error("Não há imagem copiada para colar.");
+  const data = image.data.slice(image.data.indexOf(",") + 1);
+  const name = `imagem-colada-${Date.now().toString(36)}.jpg`;
+  // A local copy only so the composer can show a thumbnail; it is the OS's cache to clear.
+  const file = new File(Paths.cache, name);
+  file.write(data, { encoding: "base64" });
+  return [{ name, data, uri: file.uri, mimeType: "image/jpeg" }];
+}
+
+/**
+ * Whether the clipboard holds an image, asked while `active` (the + sheet is open). It only asks,
+ * never reads, so iOS shows no paste prompt until "Colar imagem" is chosen.
+ */
+export function useClipboardHasImage(active: boolean): boolean {
+  const [has, setHas] = useState(false);
+  useEffect(() => {
+    if (!active) return;
+    let live = true;
+    hasImageAsync().then((value) => live && setHas(value), () => live && setHas(false));
+    return () => { live = false; };
+  }, [active]);
+  return has;
 }
 
 export function attachmentOwner(sessionId: string) {

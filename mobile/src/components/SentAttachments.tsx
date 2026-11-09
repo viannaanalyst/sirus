@@ -4,6 +4,7 @@ import { Image, Pressable, View } from "react-native";
 import type { MessageAttachment } from "@sirus/client/types";
 import { splitAttachments } from "@sirus/lib/sent-attachments";
 
+import { offerSaveImage } from "../data/save-image";
 import { useSirus } from "../data/store";
 import { SymbolView } from "./AppSymbol";
 import { AppText } from "./AppText";
@@ -22,7 +23,7 @@ export function SentAttachments(props: { readonly attachments: readonly MessageA
     return splitAttachments(props.attachments, (id) => transport?.thumbnailUrl?.(id));
   }, [props.attachments, props.computerId]);
   return <View className="max-w-[88%] flex-row flex-wrap justify-end gap-1.5 self-end">
-    {images.map((image, index) => <Pressable key={image.key} onPress={() => setOpen(index)} accessibilityRole="imagebutton" accessibilityLabel={`Abrir ${image.name}`} className="active:opacity-80">
+    {images.map((image, index) => <Pressable key={image.key} onPress={() => setOpen(index)} onLongPress={() => offerSaveImage(image.full)} delayLongPress={350} accessibilityRole="imagebutton" accessibilityLabel={`Abrir ${image.name}`} className="active:opacity-80">
       <Image source={{ uri: image.small }} style={{ width: SIDE, height: SIDE, borderRadius: 16 }} className="bg-card" resizeMode="cover" />
     </Pressable>)}
     {files.map((file, index) => <View key={`${file.id ?? file.name}:${index}`} className="h-8 max-w-[200px] flex-row items-center gap-1.5 rounded-full bg-card px-2.5">

@@ -20,7 +20,7 @@ import { useNow } from "./thread/use-now";
 const t = (key: string, params?: Record<string, string | number>) => translate("pt-BR", key, params);
 
 /** The conversation's folder and how to open one of its files (file references in replies). */
-export type ReplyFiles = { readonly cwd: string; readonly open: (path: string) => void };
+export type ReplyFiles = { readonly cwd: string; readonly open: (path: string) => void; readonly image?: (link: string) => Promise<string> };
 
 /** Steps that count in "23 passos": not the finished-task markers nor background shells. */
 const countsAsStep = (item: ActivityItem) => !item.finishedTask && !item.shell;

@@ -13,7 +13,7 @@ import type { ExpoConfig } from "expo/config";
  * `RUNTIME_VERSION` whenever native code changes, so an update never runs on the wrong build.
  */
 const UPDATE_URL = process.env.SIRUS_UPDATE_URL;
-const RUNTIME_VERSION = "4";
+const RUNTIME_VERSION = "5";
 
 const config: ExpoConfig = {
   name: "Sirus",
@@ -49,6 +49,8 @@ const config: ExpoConfig = {
     "expo-web-browser",
     ["expo-camera", { cameraPermission: "O Sirus usa a câmera para ler o QR de conexão do seu Mac.", microphonePermission: false, recordAudioAndroid: false }],
     ["expo-image-picker", { photosPermission: "O Sirus anexa fotos às mensagens que você manda aos agentes.", cameraPermission: false, microphonePermission: false }],
+    // Saving a reply's picture only adds to Photos (ADR-198): no read access is asked for. The read string stays the picker's, so the two plugins never disagree.
+    ["expo-media-library", { savePhotosPermission: "O Sirus salva em Fotos as imagens que você escolhe nas respostas.", photosPermission: "O Sirus anexa fotos às mensagens que você manda aos agentes.", granularPermissions: ["photo"] }],
     // After the two above: their `microphonePermission: false` deletes the key, and iOS closes an app that opens the microphone without it.
     ["expo-speech-recognition", {
       microphonePermission: "O Sirus usa o microfone para ditar mensagens aos agentes.",

@@ -726,6 +726,39 @@ fn palette_match(title: &str, needle: &str) -> Option<std::ops::Range<usize>> {
     Some(start..start + needle.len())
 }
 
+/// The usage popup keeps this height for every provider; room for three limit rows.
+const USAGE_POPUP_HEIGHT: f32 = 350.;
+
+/// How one limit row of the usage popup is drawn: the size of its percentage and of its bar.
+#[derive(Debug, PartialEq)]
+struct UsageRowStyle {
+    percent_size: f32,
+    bar_height: f32,
+}
+
+/// The rows of the limits block, one per limit the provider has and no more; a lone limit gets
+/// the large percentage and the thicker bar.
+fn usage_row_styles(count: usize) -> Vec<UsageRowStyle> {
+    let lone = count == 1;
+    (0..count)
+        .map(|_| UsageRowStyle {
+            percent_size: if lone { 22. } else { 12.5 },
+            bar_height: if lone { 7. } else { 5. },
+        })
+        .collect()
+}
+
+/// A provider's name in the usage tabs: the short one once there are three or more.
+fn usage_tab_name(provider: &str, tabs: usize) -> &'static str {
+    if tabs < 3 {
+        return provider_title(provider);
+    }
+    match provider {
+        "claude" => "Claude",
+        other => provider_title(other),
+    }
+}
+
 fn provider_title(provider: &str) -> &'static str {
     match provider {
         "claude" => "Claude Code",
@@ -3800,6 +3833,7 @@ impl Shell {
     }
 
     fn toggle_usage_popup(&mut self, cx: &mut Context<Self>) {
+        crate::segment_pill::forget("usage-tabs");
         self.usage_accounts = None;
         self.usage_tab = None;
         self.usage_popup = match self.usage_popup {
@@ -3979,9 +4013,12 @@ impl Shell {
                 .as_str()
                 .is_some_and(|id| id.starts_with("base_model_inference/"))
         });
+        let styles = usage_row_styles(windows.len());
         let cards: Vec<AnyElement> = windows
             .iter()
-            .map(|window| {
+            .zip(styles)
+            .enumerate()
+            .map(|(ix, (window, style))| {
                 let used = window["usedPercent"].as_f64();
                 let label = usage_window_label(
                     window["id"].as_str().unwrap_or(""),
@@ -3995,52 +4032,57 @@ impl Shell {
                     }
                 });
                 div()
-                    .mt(px(8.))
+                    .flex_1()
+                    .min_h_0()
                     .px(px(12.))
-                    .py(px(11.))
-                    .rounded(px(crate::theme::RADIUS_LG))
-                    .border_1()
-                    .border_color(crate::theme::border())
-                    .bg(content(0.03))
+                    .py(px(8.))
                     .flex()
                     .flex_col()
+                    .justify_center()
+                    .when(ix > 0, |d| {
+                        d.border_t_1().border_color(crate::theme::border())
+                    })
                     .child(
                         div()
                             .flex()
                             .justify_between()
+                            .items_baseline()
                             .gap(px(8.))
-                            .text_size(px(13.))
+                            .text_size(px(12.5))
                             .child(
                                 div()
                                     .min_w_0()
                                     .truncate()
-                                    .font_weight(FontWeight::MEDIUM)
                                     .text_color(content(0.72))
                                     .child(label),
                             )
                             .child(
                                 div()
                                     .flex_shrink_0()
+                                    .text_size(px(style.percent_size))
                                     .font_weight(FontWeight::SEMIBOLD)
+                                    .font_features(crate::theme::tabular())
                                     .text_color(content(0.95))
-                                    .child(used.map_or_else(
-                                        || "—".to_owned(),
-                                        |u| tf("{} usado", &[&format!("{u:.0}%")]),
-                                    )),
+                                    .child(
+                                        used.map_or_else(|| "—".to_owned(), |u| format!("{u:.0}%")),
+                                    ),
                             ),
                     )
                     .when_some(used, |d, used| {
                         d.child(
                             div()
-                                .my(px(9.))
-                                .h(px(6.))
+                                .mt(px(if style.bar_height > 5. { 10. } else { 7. }))
+                                .mb(px(if style.bar_height > 5. { 8. } else { 5. }))
+                                .h(px(style.bar_height))
                                 .rounded_full()
                                 .bg(content(0.08))
                                 .overflow_hidden()
                                 .child(
                                     div()
                                         .h_full()
-                                        .w(gpui::relative(used.clamp(0., 100.) as f32 / 100.))
+                                        .w(gpui::relative(
+                                            (used.clamp(0., 100.) as f32 / 100.).max(0.015),
+                                        ))
                                         .rounded_full()
                                         .bg(usage_bar_color(used)),
                                 ),
@@ -4051,8 +4093,9 @@ impl Shell {
                             .flex()
                             .justify_between()
                             .gap(px(8.))
-                            .text_size(px(11.5))
-                            .text_color(content(0.45))
+                            .text_size(px(11.))
+                            .text_color(content(0.5))
+                            .font_features(crate::theme::tabular())
                             .children(used.map(|u| {
                                 div().child(tf(
                                     "{} restante",
@@ -4066,16 +4109,14 @@ impl Shell {
             .collect();
         let empty = cards.is_empty();
         let note = value["note"].as_str().map(str::to_owned);
-        let action = |id: &'static str,
-                      glyph: &'static str,
-                      label: &'static str,
-                      cx: &mut Context<Self>| {
+        let outline = |id: &'static str| {
             div()
                 .id(id)
                 .flex_1()
                 .h(px(28.))
-                .rounded(px(crate::theme::RADIUS_MD))
-                .bg(content(0.04))
+                .rounded(px(crate::theme::RADIUS_SM))
+                .border_1()
+                .border_color(crate::theme::border())
                 .flex()
                 .items_center()
                 .justify_center()
@@ -4083,25 +4124,9 @@ impl Shell {
                 .text_size(px(11.5))
                 .text_color(content(0.72))
                 .cursor_pointer()
-                .hover(|s| s.bg(content(0.09)).text_color(content(0.95)))
-                .on_click(cx.listener(|this, _, _, cx| this.open_settings_page("Provedores", cx)))
-                .child(icon(glyph, 13.).text_color(content(0.6)))
-                .child(label)
+                .hover(|s| s.bg(content(0.05)).text_color(content(0.95)))
         };
-        let add = div()
-            .id("usage-account")
-            .flex_1()
-            .h(px(28.))
-            .rounded(px(crate::theme::RADIUS_MD))
-            .bg(content(0.04))
-            .flex()
-            .items_center()
-            .justify_center()
-            .gap(px(6.))
-            .text_size(px(11.5))
-            .text_color(content(0.72))
-            .cursor_pointer()
-            .hover(|s| s.bg(content(0.09)).text_color(content(0.95)))
+        let add = outline("usage-account")
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.usage_accounts = Some(AccountsPage {
                     provider,
@@ -4112,12 +4137,10 @@ impl Shell {
             }))
             .child(icon("plus", 13.).text_color(content(0.6)))
             .child(crate::i18n::t("Conta"));
-        let providers = action(
-            "usage-providers",
-            "settings",
-            crate::i18n::t("Provedores"),
-            cx,
-        );
+        let providers = outline("usage-providers")
+            .on_click(cx.listener(|this, _, _, cx| this.open_settings_page("Provedores", cx)))
+            .child(icon("settings", 13.).text_color(content(0.6)))
+            .child(crate::i18n::t("Provedores"));
         let left = self
             .usage_chip
             .get()
@@ -4138,6 +4161,7 @@ impl Shell {
                 .left(px(left.min(self.viewport_width - 320.).max(8.)))
                 .w(px(310.))
                 .p(px(14.))
+                .when(self.usage_accounts.is_none(), |d| d.h(px(USAGE_POPUP_HEIGHT)))
                 .flex()
                 .flex_col()
                 .opacity(t)
@@ -4148,33 +4172,42 @@ impl Shell {
                 .shadow_lg()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .when(tabs.len() > 1, |d| {
+                    let chosen = tabs.iter().position(|t| *t == provider).unwrap_or(0);
                     d.child(
                         div()
+                            .relative()
                             .mb(px(10.))
-                            .p(px(3.))
-                            .rounded(px(crate::theme::RADIUS_MD))
-                            .bg(content(0.05))
                             .flex()
-                            .gap(px(2.))
-                            .children(tabs.iter().map(|&tab| {
+                            .p(px(2.))
+                            .rounded(px(crate::theme::RADIUS_SM))
+                            .border_1()
+                            .border_color(crate::theme::border())
+                            .child(crate::segment_pill::pill_for(
+                                "usage-tabs",
+                                chosen,
+                                accent_wash(0.18),
+                                crate::theme::RADIUS_SM,
+                                0.28,
+                            ))
+                            .children(tabs.iter().enumerate().map(|(ix, &tab)| {
                                 let on = tab == provider;
                                 div()
                                     .id(SharedString::from(format!("usage-tab-{tab}")))
+                                    .relative()
+                                    .child(crate::segment_pill::probe("usage-tabs", ix))
+                                    .sinks()
                                     .flex_1()
-                                    .h(px(26.))
+                                    .h(px(24.))
+                                    .px(px(6.))
                                     .rounded(px(crate::theme::RADIUS_SM))
                                     .flex()
                                     .items_center()
                                     .justify_center()
                                     .gap(px(6.))
                                     .text_size(px(12.))
-                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(if on { accent() } else { content(0.55) })
+                                    .when(!on, |d| d.hover(|s| s.text_color(content(0.9))))
                                     .cursor_pointer()
-                                    .when(on, |d| d.bg(content(0.1)).text_color(content(0.97)))
-                                    .when(!on, |d| {
-                                        d.text_color(content(0.55))
-                                            .hover(|s| s.bg(content(0.05)).text_color(content(0.8)))
-                                    })
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.usage_tab = Some(tab);
                                         this.usage_accounts = None;
@@ -4189,7 +4222,7 @@ impl Shell {
                                         Face::provider(tab),
                                         provider_glyph(tab, 9.),
                                     ))
-                                    .child(provider_title(tab))
+                                    .child(usage_tab_name(tab, tabs.len()))
                             })),
                     )
                 })
@@ -4202,19 +4235,6 @@ impl Shell {
                             .flex()
                             .items_center()
                             .gap(px(10.))
-                            .child(
-                                div()
-                                    .size(px(34.))
-                                    .flex_shrink_0()
-                                    .rounded(px(crate::theme::RADIUS_MD))
-                                    .border_1()
-                                    .border_color(crate::theme::border())
-                                    .bg(content(0.05))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .child(provider_mark(provider, 18.)),
-                            )
                             .child(
                                 div()
                                     .flex_1()
@@ -4321,16 +4341,34 @@ impl Shell {
                         )
                     },
                 )
-                .when(self.usage_accounts.is_none(), |d| d.children(cards))
-                .when(empty && self.usage_accounts.is_none(), |d| {
+                .when(self.usage_accounts.is_none(), |d| {
                     d.child(
                         div()
+                            .flex_1()
+                            .min_h_0()
                             .mt(px(10.))
-                            .text_size(px(12.5))
-                            .text_color(content(0.5))
-                            .child(note.unwrap_or_else(|| {
-                                crate::i18n::t("Este provedor não informa uso.").to_owned()
-                            })),
+                            .flex()
+                            .flex_col()
+                            .rounded(px(crate::theme::RADIUS_MD))
+                            .border_1()
+                            .border_color(crate::theme::border())
+                            .overflow_hidden()
+                            .children(cards)
+                            .when(empty, |d| {
+                                d.child(
+                                    div()
+                                        .flex_1()
+                                        .px(px(12.))
+                                        .flex()
+                                        .items_center()
+                                        .text_size(px(12.5))
+                                        .text_color(content(0.5))
+                                        .child(note.unwrap_or_else(|| {
+                                            crate::i18n::t("Este provedor não informa uso.")
+                                                .to_owned()
+                                        })),
+                                )
+                            }),
                     )
                 })
                 .when(self.usage_accounts.is_none(), |d| {
@@ -18925,6 +18963,21 @@ impl Render for Shell {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn usage_rows_follow_the_limits_the_provider_has() {
+        assert!(usage_row_styles(0).is_empty());
+        assert_eq!(usage_row_styles(2).len(), 2);
+        assert_eq!(usage_row_styles(3).len(), 3);
+        let one = usage_row_styles(1);
+        assert_eq!(one.len(), 1);
+        assert_eq!((one[0].percent_size, one[0].bar_height), (22., 7.));
+        for style in usage_row_styles(3) {
+            assert_eq!((style.percent_size, style.bar_height), (12.5, 5.));
+        }
+        assert_eq!(usage_tab_name("claude", 2), "Claude Code");
+        assert_eq!(usage_tab_name("claude", 3), "Claude");
+    }
 
     #[test]
     fn links_open_where_the_settings_say() {

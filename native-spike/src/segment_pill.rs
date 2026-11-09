@@ -132,6 +132,17 @@ pub fn row_thumb(key: &'static str, chosen: usize, color: Hsla, bar: Hsla) -> im
 
 /// The thumb, under the segments.
 pub fn pill(key: &'static str, chosen: usize, color: Hsla, radius: f32) -> impl IntoElement {
+    pill_for(key, chosen, color, radius, SLIDE)
+}
+
+/// The same thumb with its own slide length, in seconds.
+pub fn pill_for(
+    key: &'static str,
+    chosen: usize,
+    color: Hsla,
+    radius: f32,
+    slide: f32,
+) -> impl IntoElement {
     canvas(
         |_, _: &mut Window, _: &mut App| {},
         move |bounds, _, window: &mut Window, cx: &mut App| {
@@ -146,7 +157,7 @@ pub fn pill(key: &'static str, chosen: usize, color: Hsla, radius: f32) -> impl 
                 f32::from(target.size.height),
             ];
             let now = Instant::now();
-            let length = if cx.reduce_motion() { 0. } else { SLIDE };
+            let length = if cx.reduce_motion() { 0. } else { slide };
             let thumb = THUMBS.with(|thumbs| {
                 let mut thumbs = thumbs.borrow_mut();
                 let thumb = thumbs.entry(key).or_insert_with(|| Thumb::at(rest, now));

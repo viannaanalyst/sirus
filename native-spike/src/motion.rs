@@ -15,6 +15,8 @@ pub enum Curve {
     Quad,
     /// cubic-bezier(.22, 1, .36, 1).
     Expo,
+    /// cubic-bezier(.2, .9, .25, 1.05): lands a little past its target and settles back.
+    Spring,
 }
 
 fn bezier(t: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
@@ -41,6 +43,7 @@ pub fn eased(t: f32, curve: Curve) -> f32 {
     match curve {
         Curve::Quad => 1. - (1. - t) * (1. - t),
         Curve::Expo => bezier(t, 0.22, 1., 0.36, 1.),
+        Curve::Spring => bezier(t, 0.2, 0.9, 0.25, 1.05),
     }
 }
 

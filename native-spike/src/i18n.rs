@@ -502,6 +502,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Open Sirus data directory",
     ),
     ("Abrir em abas", "Open in tabs"),
+    ("Abrir lado a lado", "Open side by side"),
     ("Abrir links no", "Open links in"),
     ("Abrir no GitHub", "Open on GitHub"),
     ("Abrir no editor", "Open in the editor"),
@@ -1605,6 +1606,8 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Espaçosa", "Spacious"),
     ("Esperando o primeiro passo…", "Waiting for its first step…"),
+    ("Esperando sua aprovação", "Waiting for your approval"),
+    ("Esperando sua resposta", "Waiting for your answer"),
     (
         "Espere o turno atual terminar",
         "Wait for the current turn to finish",
@@ -4432,6 +4435,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Tentar de novo", "Try again"),
     ("Tentar novamente", "Try again"),
     ("Terminou", "Finished"),
+    ("Terminou agora", "Finished just now"),
     ("Testar notificação", "Test notification"),
     ("Teste", "Test"),
     (

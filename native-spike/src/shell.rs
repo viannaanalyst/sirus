@@ -47,6 +47,10 @@ mod agent_resources;
 /// The message queue, steering and the composer keys that go with them.
 #[path = "composer_queue.rs"]
 mod composer_queue;
+/// Quote blocks that hold their own reply, in the composer and in sent messages (ADR-198).
+#[path = "composer_quote.rs"]
+mod composer_quote;
+use composer_quote::Seg;
 /// The composer's context ring, its popup, Compact and Compact and send (ADR-057).
 #[path = "context_meter.rs"]
 pub(crate) mod context_meter;
@@ -199,6 +203,10 @@ struct Draft {
     text: String,
     cursor: usize,
     anchor: usize,
+    /// With quote blocks, every segment of the draft, the one the caret is in being `active`
+    /// (its text lives in `text`). Empty for a plain text draft (composer_quote.rs).
+    segs: Vec<Seg>,
+    active: usize,
 }
 
 impl Draft {
@@ -209,6 +217,7 @@ impl Draft {
             text,
             cursor,
             anchor: cursor,
+            ..Default::default()
         }
     }
     fn selection(&self) -> Range<usize> {
@@ -284,11 +293,7 @@ fn draft_save_delay(edited: Instant, now: Instant) -> Option<Duration> {
 
 /// A draft restored from the host, its caret at the end.
 fn restored_draft(text: &str) -> Draft {
-    Draft {
-        text: text.to_owned(),
-        cursor: text.len(),
-        anchor: text.len(),
-    }
+    Draft::from_saved(text)
 }
 
 /// Fills each conversation's empty composer from the host's drafts. `sessions` lists the session
@@ -302,7 +307,7 @@ fn restore_drafts(
         let Some(text) = saved.get(&draft_key(session)) else {
             continue;
         };
-        if drafts.get(&ix).is_none_or(|d| d.text.is_empty()) {
+        if drafts.get(&ix).is_none_or(|d| d.is_empty()) {
             drafts.insert(ix, restored_draft(text));
         }
     }
@@ -4746,7 +4751,7 @@ impl Shell {
                 let text = self
                     .drafts
                     .get(&ix)
-                    .map_or(String::new(), |d| d.text.clone());
+                    .map_or(String::new(), |d| d.full_text());
                 (draft_key(&conversation.session_id), text)
             })
             .collect();
@@ -6124,7 +6129,7 @@ impl Shell {
                 if self
                     .drafts
                     .get(&self.active_conversation())
-                    .is_none_or(|draft| draft.text.is_empty()) =>
+                    .is_none_or(|draft| draft.is_empty()) =>
             {
                 self.step_project(key == "right", cx);
                 cx.stop_propagation();
@@ -6169,6 +6174,9 @@ impl Shell {
                 self.stop_or_start_dictation(send, cx);
                 cx.stop_propagation();
             }
+            (false, false, false, "enter") if self.quote_enter(cx) => {
+                cx.stop_propagation();
+            }
             (false, false, false, "enter") => {
                 self.send(cx);
                 cx.stop_propagation();
@@ -6177,6 +6185,16 @@ impl Shell {
                 self.draft().insert("\n");
                 cx.stop_propagation();
                 cx.notify();
+            }
+            // In a quote block's reply: Backspace on an empty one removes the block, and the
+            // arrows at the ends of a line go on to the line above or below.
+            (false, false, false, "backspace" | "up" | "down" | "left" | "right")
+                if !keys.modifiers.alt && self.quote_key(key, cx) =>
+            {
+                cx.stop_propagation();
+            }
+            (true, true, false, "l") if self.add_selection_to_chat(window, cx) => {
+                cx.stop_propagation();
             }
             (
                 _,
@@ -12973,7 +12991,7 @@ impl Shell {
         let secret = self.secrets.first().cloned();
         let secret_entry = self.secret_entry.clone();
         let draft = self.drafts.get(&ix).cloned().unwrap_or_default();
-        let has_text = !draft.text.trim().is_empty() || !attached.is_empty();
+        let has_text = draft.has_content() || !attached.is_empty();
         // While the agent works Stop and Send sit side by side, and what is sent joins the
         // queue. With only a queue waiting and nothing written, none.
         let approvals_pending = conversation
@@ -13005,11 +13023,16 @@ impl Shell {
         let selection = shown.range_to_shown(draft.selection());
         let caret_at = shown.to_shown(draft.cursor);
         let caret_key = (draft.cursor, draft.text.len());
+        // With quote blocks the box measures the whole stack, not the active line.
+        let quoted = draft.quoted();
+        let stack_top = Rc::new(Cell::new(0f32));
+        let overlay_top = stack_top.clone();
         let composer_scroll = self.composer_scroll.clone();
         let caret_seen = self.composer_caret_seen.clone();
         let (caret_moved, caret_drawn) = (self.caret_moved.clone(), self.caret_drawn.clone());
         self.caret_blinks.set(typing && selection.is_empty());
         let text_width = self.composer_width.clone();
+        let stack_width = text_width.clone();
         let (no_effort, no_access_label) = composer_fits(self.composer_width.get());
         // The box slides to the height of the text, which the overlay below measures.
         let (text_height, box_height) = {
@@ -13036,16 +13059,19 @@ impl Shell {
                 if shown > 0. { shown } else { COMPOSER_LINE },
             )
         };
+        let stack_height = text_height.clone();
         // The caret and the selection are painted over the laid out text, so the text never moves.
         let overlay = gpui::canvas(
             |_, _, _| {},
             move |bounds, _, window, _| {
                 let line = layout.line_height();
-                text_width.set(f32::from(bounds.size.width));
-                if text_height.replace(f32::from(bounds.size.height))
-                    != f32::from(bounds.size.height)
-                {
-                    window.on_next_frame(|window, _| window.refresh());
+                if !quoted {
+                    text_width.set(f32::from(bounds.size.width));
+                    if text_height.replace(f32::from(bounds.size.height))
+                        != f32::from(bounds.size.height)
+                    {
+                        window.on_next_frame(|window, _| window.refresh());
+                    }
                 }
                 // Only a caret that moved pulls the text along, so the wheel stays free.
                 let moved = caret_seen.replace(caret_key) != caret_key;
@@ -13053,7 +13079,12 @@ impl Shell {
                     caret_moved.set(Instant::now());
                 }
                 if moved && let Some(at) = layout.position_for_index(caret_at) {
-                    let top = at.y - bounds.origin.y;
+                    let origin = if quoted {
+                        px(overlay_top.get())
+                    } else {
+                        bounds.origin.y
+                    };
+                    let top = at.y - origin;
                     // Where the box is heading: while it slides, the text needs no scroll.
                     let seen = bounds.size.height.min(px(COMPOSER_MAX));
                     let scrolled = -composer_scroll.offset().y;
@@ -13096,12 +13127,30 @@ impl Shell {
         .top_0()
         .left_0()
         .size_full();
+        // What shows while the line is empty: in a block, its reply; below the last block, the
+        // free line's own hint.
+        let placeholder: Option<&'static str> = if !quoted {
+            Some(if approvals_pending {
+                "Ou diga ao agente o que fazer em vez disso (recusa a aprovação)…"
+            } else {
+                "Peça qualquer coisa"
+            })
+        } else if draft.in_reply() {
+            Some("Sua resposta a este trecho…")
+        } else if draft.active + 1 == draft.segs.len() {
+            Some("Escreva outra coisa, fora da citação…")
+        } else {
+            None
+        };
         let text = div()
             .relative()
             .w_full()
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                    if quoted {
+                        cx.stop_propagation();
+                    }
                     let index = this
                         .composer_layout
                         .borrow()
@@ -13126,7 +13175,7 @@ impl Shell {
             .child(styled)
             .child(badges)
             .child(overlay)
-            .when(draft.text.is_empty(), |d| {
+            .when_some(placeholder.filter(|_| draft.text.is_empty()), |d, text| {
                 d.child(
                     div()
                         .absolute()
@@ -13134,14 +13183,37 @@ impl Shell {
                         // Clear of the caret, which sits at the very start.
                         .left(px(3.))
                         .text_color(content(0.4))
-                        .child(if approvals_pending {
-                            t("Ou diga ao agente o que fazer em vez disso (recusa a aprovação)…")
-                        } else {
-                            t("Peça qualquer coisa")
-                        }),
+                        .child(t(text)),
                 )
             })
             .into_any_element();
+        let text = if quoted {
+            let stack = self.quote_stack(&draft, text, cx);
+            div()
+                .relative()
+                .w_full()
+                .child(
+                    gpui::canvas(
+                        move |bounds, _, _| stack_top.set(f32::from(bounds.origin.y)),
+                        move |bounds, _, window, _| {
+                            stack_width.set(f32::from(bounds.size.width));
+                            if stack_height.replace(f32::from(bounds.size.height))
+                                != f32::from(bounds.size.height)
+                            {
+                                window.on_next_frame(|window, _| window.refresh());
+                            }
+                        },
+                    )
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full(),
+                )
+                .child(stack)
+                .into_any_element()
+        } else {
+            text
+        };
         let pending = conversation.pending.first().cloned();
         let round = |id: &'static str, name: &'static str| {
             div()
@@ -13590,6 +13662,11 @@ impl Shell {
                             .child(
                                 div()
                                     .id("composer-text")
+                                    // Empty space in the text area is the last free line.
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _, cx| this.focus_last_line(cx)),
+                                    )
                                     .on_mouse_down(
                                         MouseButton::Right,
                                         cx.listener(|this, event: &MouseDownEvent, window, cx| {
@@ -14620,7 +14697,14 @@ impl Shell {
                                         prompt_motion,
                                         bubble_width,
                                         prompt_collapsed,
-                                        {
+                                        if composer_quote::has_quotes(&turn.user) {
+                                            self.quoted_bubble(
+                                                conversation,
+                                                index,
+                                                &composer_quote::parse(&turn.user),
+                                                cx,
+                                            )
+                                        } else {
                                             crate::inline_badges::sync(&self.skills, &self.files);
                                             let shown = crate::inline_badges::shown_for(
                                                 &turn.user, true, 14., cx,
@@ -19139,6 +19223,7 @@ mod tests {
                 text: "typed".into(),
                 cursor: 5,
                 anchor: 5,
+                ..Default::default()
             },
         );
         restore_drafts(&mut drafts, &sessions, &saved);

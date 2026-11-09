@@ -1587,6 +1587,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "Escreva a meta e aperte Enter",
         "Write the goal and press Enter",
     ),
+    (
+        "Escreva outra coisa, fora da citação…",
+        "Write something else, outside the quote…",
+    ),
     ("Escreva um comentário…", "Write a comment…"),
     (
         "Escreva um pedido dentro do limite de 64 KiB, incluindo os anexos.",
@@ -4128,6 +4132,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Answer every native question exactly once",
     ),
     ("Responder", "Reply"),
+    ("Resposta do", "Reply from"),
     (
         "Resposta do Codex desatualizada ou de outra conversa",
         "Stale or foreign Codex response",
@@ -4408,6 +4413,8 @@ const ENTRIES: &[(&str, &str)] = &[
         "Sua conta do GitHub não pode alterar este repositório.",
         "Your GitHub account cannot change this repository.",
     ),
+    ("Sua mensagem", "Your message"),
+    ("Sua resposta a este trecho…", "Your reply to this passage…"),
     ("Suave", "Smooth"),
     ("Suavização de fontes", "Font smoothing"),
     ("Subagente desconhecido.", "Unknown subagent."),

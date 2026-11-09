@@ -258,10 +258,7 @@ impl Shell {
                 let conversation = &self.conversations[ix];
                 let free = conversation.is_blank()
                     && !conversation.working()
-                    && self
-                        .drafts
-                        .get(&ix)
-                        .is_none_or(|d| d.text.trim().is_empty());
+                    && self.drafts.get(&ix).is_none_or(|d| !d.has_content());
                 free.then(|| {
                     self.tabs
                         .iter()
@@ -306,7 +303,7 @@ impl Shell {
 
     /// Puts the prompt in the conversation's composer, caret at the end. Nothing is sent.
     fn place_link_draft(&mut self, ix: usize, prompt: String) {
-        self.drafts.insert(ix, restored_draft(&prompt));
+        self.drafts.insert(ix, Draft::with_text(prompt));
         self.touch_drafts();
     }
 
@@ -334,7 +331,11 @@ impl Shell {
     pub(super) fn copy_prompt_link(&mut self) {
         let ix = self.active_conversation();
         let conversation = &self.conversations[ix];
-        let draft = self.drafts.get(&ix).map_or("", |d| d.text.as_str());
+        let draft = self
+            .drafts
+            .get(&ix)
+            .map_or(String::new(), |d| d.full_text());
+        let draft = draft.as_str();
         let project = self.project_of(ix).map(|p| self.projects[p].id.clone());
         let Some(args) = copy_args(
             project.as_deref(),

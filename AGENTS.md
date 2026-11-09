@@ -38,6 +38,7 @@ Use `CARGO_TARGET_DIR=../native-spike/target/host-check` for the `src-tauri` com
 
 - Keep shared types aligned between Rust `models.rs` and `mobile/src/shared/client/types.ts` (`camelCase` JSON); a protocol change updates the phone's copy by hand.
 - Shared Rust code imports `AppHandle`, `Emitter`, `Manager`, `State` and `async_runtime` from `crate::runtime`, never from a UI framework (ADR-131). A new host command goes in its module and in `src-tauri/src/commands.list`.
+- Phone JavaScript reaches the iPhone over the air (ADR-135 addendum): `cd mobile && node scripts/publish-update.mjs` publishes it to the Mac host (served at the public route's `/api/app-update/manifest`), and the app picks it up at its next launch. A full build (`renew-iphone.sh --force` in the spike after `SIRUS_UPDATE_URL=https://native.siruscode.com/api/app-update/manifest npx expo prebuild --platform ios`) is still needed for native modules, `app.config.ts`, icon or splash changes, and each one also bumps `RUNTIME_VERSION`.
 - Persistence is one SQLite database in the app data folder (`state.db`: settings, projects, sessions, one row per message, …; ADR-114). `persist.rs` is the interface; `store.rs` implements it.
 - The owner often works in the repo at the same time: format only the files you touched.
 - Ask before destructive Git operations (force-push, `reset --hard`, deleting branches or worktrees).

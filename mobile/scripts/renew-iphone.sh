@@ -28,6 +28,23 @@ if ! xcrun devicectl list devices 2>/dev/null | grep -F "$DEVICE" | grep -qE "av
   exit 0
 fi
 
+# The update address baked into the app is the computer's public route (the only way the phone
+# reaches it, ADR-155), read from the same `remote-public.json` that pairing uses; only its
+# `url` is read, never the Access token. Override with SIRUS_UPDATE_URL. It is applied by
+# `expo prebuild` (Expo.plist); a mismatch with the generated project means prebuild is due.
+DATA="$HOME/Library/Application Support/com.siruscode.native"
+if [[ -z "${SIRUS_UPDATE_URL:-}" && -f "$DATA/remote-public.json" ]]; then
+  route=$(/usr/bin/plutil -extract url raw -o - "$DATA/remote-public.json" 2>/dev/null)
+  [[ "$route" == https://* ]] && SIRUS_UPDATE_URL="${route%/}/api/app-update/manifest"
+fi
+export SIRUS_UPDATE_URL
+if [[ -n "${SIRUS_UPDATE_URL:-}" ]]; then
+  baked=$(/usr/bin/plutil -extract EXUpdatesURL raw -o - "$ROOT/ios/Sirus/Supporting/Expo.plist" 2>/dev/null)
+  [[ "$baked" == "$SIRUS_UPDATE_URL" ]] || log "warning: ios/ has updates URL '${baked:-none}', expected $SIRUS_UPDATE_URL; run expo prebuild with SIRUS_UPDATE_URL"
+else
+  log "warning: no remote-public.json route; the build has updates off"
+fi
+
 log "building"
 if ! xcodebuild -workspace "$ROOT/ios/Sirus.xcworkspace" -scheme Sirus -configuration Release \
     -destination generic/platform=iOS -derivedDataPath "$BUILD" -allowProvisioningUpdates build \

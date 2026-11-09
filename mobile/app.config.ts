@@ -27,7 +27,9 @@ const config: ExpoConfig = {
     url: UPDATE_URL,
     checkAutomatically: "ON_LOAD",
     fallbackToCacheTimeout: 0,
-    requestHeaders: { Authorization: "" },
+    // Declared empty here; the app fills them at launch (the public route sits behind
+    // Cloudflare Access, which wants its service token on every request, ADR-155).
+    requestHeaders: { Authorization: "", "CF-Access-Client-Id": "", "CF-Access-Client-Secret": "" },
   },
   orientation: "portrait",
   icon: "./assets/icon.png",

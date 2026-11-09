@@ -16,12 +16,17 @@ export async function checkForAppUpdate(interactive = false): Promise<"none" | "
   if (!url) return "unavailable";
   const origin = new URL(url).origin;
   // A computer paired again at its public address keeps its old address for this.
-  const token = useSirus.getState().computers
+  const paired = useSirus.getState().computers
     .flatMap((item) => [item, ...(item.previous ? [item.previous] : [])])
-    .find((item) => new URL(item.baseUrl).origin === origin)?.token;
-  if (!token) return "unavailable";
-  // The header is declared empty in the build; only its value changes here.
-  Updates.setUpdateRequestHeadersOverride({ Authorization: `Bearer ${token}` });
+    .find((item) => new URL(item.baseUrl).origin === origin);
+  if (!paired?.token) return "unavailable";
+  // The headers are declared empty in the build; only their values change here. The Access
+  // service token goes along because the public route is behind Cloudflare Access.
+  Updates.setUpdateRequestHeadersOverride({
+    Authorization: `Bearer ${paired.token}`,
+    "CF-Access-Client-Id": paired.access?.clientId ?? "",
+    "CF-Access-Client-Secret": paired.access?.clientSecret ?? "",
+  });
   try {
     const check = await Updates.checkForUpdateAsync();
     if (!check.isAvailable) return "none";

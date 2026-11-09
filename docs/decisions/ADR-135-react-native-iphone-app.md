@@ -66,3 +66,8 @@ The Capacitor shell (ADR-134) runs the phone web UI in a web view. Native touche
 - **Segmented controls** (Conversas, Pull requests) are a native `UISegmentedControl` in the theme's colours (`SirusNativeControls`, in the `sirus-terminal` module's pod); a build without that view falls back to the untinted `@expo/ui` control.
 - **Enriched markdown 1.2.0-sirus.15** (T3's 1.2.0-t3.15 repacked) and `expo-glass-effect` 58.0.4, which made our patch for it unnecessary.
 - **Pull request search** in the header with GitHub-style filters (`label:`, `-label:`, `author:` with `@me`, `draft:`, `review:`, `status:`; links and `owner/repo#n` match too), parsed on the phone by `src/lib/pull-request-query.ts`.
+
+## Addendum (2026-11-09): updates over the public route
+
+- **Address.** Tailscale is gone (ADR-198), so the only address the phone reaches is the Cloudflare route in `remote-public.json` (`https://native.siruscode.com`); the build's update URL is that plus `/api/app-update/manifest`. `renew-iphone.sh` derives it from the file's `url` (never the Access token) and warns when `ios/` was prebuilt with another.
+- **Access headers.** The route is behind Cloudflare Access, which answers `expo-updates` with a login redirect unless the service token travels along. `app.config.ts` declares `CF-Access-Client-Id` and `CF-Access-Client-Secret` empty next to `Authorization`, and `checkForAppUpdate` fills all three from the paired computer. Runtime 5 builds from before this cannot update.

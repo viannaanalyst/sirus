@@ -709,11 +709,27 @@ export interface GitWorkspaceSnapshot {
   historyTruncated: boolean;
 }
 
+/** One file a commit changed against its first parent; counts are null for a binary file. */
+export interface GitCommitFile {
+  path: string;
+  kind: FileChange["kind"];
+  additions: number | null;
+  deletions: number | null;
+}
+
+/** A local commit not pushed yet (`outgoing`), with the files it changed. */
+export interface GitOutgoingCommit extends GitHistoryEntry {
+  files: GitCommitFile[];
+  filesTruncated: boolean;
+}
+
+/** `commitDiff` (one file of one commit) answers with the `diff` variant. */
 export type GitWorkspaceResponse =
   | { type: "snapshot"; snapshot: GitWorkspaceSnapshot }
   | { type: "diff"; diff: string }
   | { type: "history"; entries: GitHistoryEntry[]; truncated: boolean }
-  | { type: "pulled"; branch: string; summary: string };
+  | { type: "pulled"; branch: string; summary: string }
+  | { type: "outgoing"; base: string | null; upstream: boolean; commits: GitOutgoingCommit[]; truncated: boolean };
 
 export type TranscriptResponse =
   /** `start` is the first message's index in the transcript of `total` (older hosts omit both). */

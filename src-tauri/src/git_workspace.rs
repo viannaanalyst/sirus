@@ -55,6 +55,17 @@ pub enum Action {
         from: String,
         skip: u32,
     },
+    /// The local commits not pushed yet: ahead of the upstream, or of the base branch when the
+    /// branch has none, each with the files it changed.
+    Outgoing {
+        session_id: String,
+    },
+    /// One file's diff in one commit reachable from HEAD, against its first parent.
+    CommitDiff {
+        session_id: String,
+        hash: String,
+        path: String,
+    },
     /// Explicit fast-forward-only pull of the session branch from origin.
     Pull {
         session_id: String,
@@ -70,6 +81,8 @@ impl Action {
             | Self::Discard { session_id, .. }
             | Self::Diff { session_id, .. }
             | Self::History { session_id, .. }
+            | Self::Outgoing { session_id }
+            | Self::CommitDiff { session_id, .. }
             | Self::Pull { session_id, .. } => session_id,
         }
     }
@@ -91,6 +104,14 @@ pub enum Response {
         branch: String,
         summary: String,
     },
+    Outgoing {
+        /// What the commits are ahead of (`origin/main`, `main`, ...); None when nothing to compare.
+        base: Option<String>,
+        /// The base is the branch's upstream, not a guessed base branch.
+        upstream: bool,
+        commits: Vec<OutgoingCommit>,
+        truncated: bool,
+    },
 }
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -109,6 +130,24 @@ pub struct HistoryEntry {
     pub author: String,
     pub authored_at: String,
     pub refs: Vec<String>,
+}
+/// One file a commit changed, against its first parent.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitFile {
+    pub path: String,
+    pub kind: ChangeKind,
+    /// None for a binary file.
+    pub additions: Option<u32>,
+    pub deletions: Option<u32>,
+}
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OutgoingCommit {
+    #[serde(flatten)]
+    pub entry: HistoryEntry,
+    pub files: Vec<CommitFile>,
+    pub files_truncated: bool,
 }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -327,6 +366,218 @@ fn history_page(cwd: &Path, from: &str, skip: u32) -> Result<(Vec<HistoryEntry>,
     entries.truncate(HISTORY_LIMIT);
     Ok((entries, truncated))
 }
+/// Files listed per outgoing commit; a bigger commit is cut here.
+const COMMIT_FILE_LIMIT: usize = 300;
+
+fn valid_hash(value: &str) -> bool {
+    matches!(value.len(), 40 | 64) && value.bytes().all(|c| c.is_ascii_hexdigit())
+}
+
+/// What HEAD's unpushed commits are counted from: the upstream when the branch has one, else
+/// origin's default branch, else a local `main` or `master` that is not HEAD's own branch.
+/// Returns the base's commit, its name and whether it is the upstream.
+fn outgoing_base(cwd: &Path) -> Result<Option<(String, String, bool)>> {
+    let resolve = |rev: &str| -> Result<Option<String>> {
+        let result = crate::git::bounded_run(cwd, &["rev-parse", "--verify", "--quiet", rev])?;
+        let hash = String::from_utf8_lossy(&result.stdout).trim().to_owned();
+        Ok((result.status.success() && valid_hash(&hash)).then_some(hash))
+    };
+    if let Some(hash) = resolve("@{upstream}^{commit}")? {
+        let name = crate::git::bounded_run(
+            cwd,
+            &[
+                "rev-parse",
+                "--abbrev-ref",
+                "--symbolic-full-name",
+                "@{upstream}",
+            ],
+        )?;
+        let name = String::from_utf8_lossy(&name.stdout).trim().to_owned();
+        return Ok(Some((hash, name, true)));
+    }
+    let current = crate::git::bounded_run(cwd, &["symbolic-ref", "--quiet", "--short", "HEAD"])?;
+    let current = String::from_utf8_lossy(&current.stdout).trim().to_owned();
+    let mut candidates = vec![];
+    if let Some(branch) = crate::git::origin_default_branch(cwd) {
+        candidates.push(format!("origin/{branch}"));
+    }
+    candidates.extend(["main", "master"].map(str::to_owned));
+    for name in candidates {
+        if name == current {
+            continue;
+        }
+        let full = match name.strip_prefix("origin/") {
+            Some(branch) => format!("refs/remotes/origin/{branch}^{{commit}}"),
+            None => format!("refs/heads/{name}^{{commit}}"),
+        };
+        if let Some(hash) = resolve(&full)? {
+            return Ok(Some((hash, name, false)));
+        }
+    }
+    Ok(None)
+}
+
+/// One commit's files as `parse_commit_files` reads them: hash, files, and whether it was cut.
+pub(crate) type CommitFiles = (String, Vec<CommitFile>, bool);
+
+/// Reads `git log -z --format=%x01%H --raw --numstat`: per commit, its files with their change
+/// kind and line counts, in Git's order. Paths come whole from NUL-separated fields, so no name
+/// can pass for a commit marker or a count.
+pub(crate) fn parse_commit_files(raw: &[u8]) -> Result<Vec<CommitFiles>> {
+    let invalid = || Error::git("Invalid Git commit files");
+    let mut commits: Vec<CommitFiles> = vec![];
+    let mut kinds: std::collections::HashMap<String, ChangeKind> = Default::default();
+    let mut fields = raw.split(|c| *c == 0);
+    while let Some(field) = fields.next() {
+        let field = field.strip_prefix(b"\n").unwrap_or(field);
+        if field.is_empty() {
+            continue;
+        }
+        if let Some(hash) = field.strip_prefix(b"\x01") {
+            let hash = String::from_utf8_lossy(hash).into_owned();
+            if !valid_hash(&hash) {
+                return Err(invalid());
+            }
+            kinds.clear();
+            commits.push((hash, vec![], false));
+            continue;
+        }
+        let Some((_, files, truncated)) = commits.last_mut() else {
+            return Err(invalid());
+        };
+        if field.starts_with(b":") {
+            // ":<mode> <mode> <sha> <sha> <status>", then the path in its own field.
+            let status = field
+                .rsplit(|c| *c == b' ')
+                .next()
+                .and_then(|status| status.first().copied())
+                .ok_or_else(invalid)?;
+            let path = fields.next().ok_or_else(invalid)?;
+            kinds.insert(String::from_utf8_lossy(path).into_owned(), kind(status));
+            continue;
+        }
+        // "<added>\t<removed>\t<path>"; "-" counts mean binary.
+        let text = String::from_utf8_lossy(field);
+        let mut parts = text.splitn(3, '\t');
+        let (Some(added), Some(removed), Some(path)) = (parts.next(), parts.next(), parts.next())
+        else {
+            return Err(invalid());
+        };
+        let count = |value: &str| -> Result<Option<u32>> {
+            match value {
+                "-" => Ok(None),
+                value => value.parse().map(Some).map_err(|_| invalid()),
+            }
+        };
+        let file = CommitFile {
+            path: path.to_owned(),
+            kind: kinds.get(path).cloned().unwrap_or(ChangeKind::Modified),
+            additions: count(added)?,
+            deletions: count(removed)?,
+        };
+        if files.len() < COMMIT_FILE_LIMIT {
+            files.push(file);
+        } else {
+            *truncated = true;
+        }
+    }
+    Ok(commits)
+}
+
+/// What `outgoing` found: the base's name, whether it is the upstream, the commits newest first,
+/// and whether there were more than the history page holds.
+pub type Outgoing = (Option<String>, bool, Vec<OutgoingCommit>, bool);
+
+/// The commits HEAD has that its base does not, newest first and bounded like the history.
+pub fn outgoing(cwd: &Path) -> Result<Outgoing> {
+    if head(cwd)?.is_none() {
+        return Ok((None, false, vec![], false));
+    }
+    let Some((base, name, upstream)) = outgoing_base(cwd)? else {
+        return Ok((None, false, vec![], false));
+    };
+    let range = format!("{base}..HEAD");
+    let (entries, truncated) = history_page(cwd, &range, 0)?;
+    if entries.is_empty() {
+        return Ok((Some(name), upstream, vec![], false));
+    }
+    let count = format!("--max-count={}", entries.len());
+    let raw = output(
+        cwd,
+        &[
+            "log",
+            "--topo-order",
+            &count,
+            "--no-renames",
+            "--diff-merges=first-parent",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-abbrev",
+            "--format=%x01%H",
+            "--raw",
+            "--numstat",
+            "-z",
+            &range,
+            "--",
+        ],
+    )?;
+    let mut files: std::collections::HashMap<String, (Vec<CommitFile>, bool)> =
+        parse_commit_files(&raw)?
+            .into_iter()
+            .map(|(hash, files, truncated)| (hash, (files, truncated)))
+            .collect();
+    let commits = entries
+        .into_iter()
+        .map(|entry| {
+            let (files, files_truncated) = files.remove(&entry.hash).unwrap_or_default();
+            OutgoingCommit {
+                entry,
+                files,
+                files_truncated,
+            }
+        })
+        .collect();
+    Ok((Some(name), upstream, commits, truncated))
+}
+
+/// One file's diff in `hash` (a commit HEAD contains) against its first parent, or the empty tree
+/// for a root commit. The path is repository-relative and matched literally.
+pub fn commit_diff(cwd: &Path, hash: &str, path: &str) -> Result<String> {
+    if !valid_hash(hash) {
+        return Err(Error::git("Invalid commit"));
+    }
+    if !valid_name(path) {
+        return Err(Error::invalid_path("Invalid workspace Git path"));
+    }
+    let contained = crate::git::bounded_run(cwd, &["merge-base", "--is-ancestor", hash, "HEAD"])?;
+    if !contained.status.success() {
+        return Err(Error::git("Commit is not on this branch"));
+    }
+    let parents = text(cwd, &["rev-list", "--parents", "-n", "1", hash, "--"])?;
+    let base = match parents.split_whitespace().nth(1) {
+        Some(parent) if valid_hash(parent) => parent.to_owned(),
+        Some(_) => return Err(Error::git("Invalid commit")),
+        None => text(cwd, &["hash-object", "-t", "tree", "/dev/null"])?,
+    };
+    // Commit paths are repository-root relative, and every command runs with
+    // `--literal-pathspecs`, so the diff runs at the root and the path needs no magic.
+    let root = std::fs::canonicalize(text(cwd, &["rev-parse", "--show-toplevel"])?)?;
+    text(
+        &root,
+        &[
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-renames",
+            "--no-color",
+            &base,
+            hash,
+            "--",
+            path,
+        ],
+    )
+}
+
 pub fn snapshot(cwd: &Path) -> Result<Snapshot> {
     let cwd = std::fs::canonicalize(cwd)?;
     let root = PathBuf::from(text(&cwd, &["rev-parse", "--show-toplevel"])?);
@@ -1171,6 +1422,124 @@ mod tests {
         run_ok(&other.cwd(), &["config", "--unset", "filter.hostile.clean"]).unwrap();
         run_ok(&other.cwd(), &["config", "hook.hostile.command", "false"]).unwrap();
         assert!(snapshot(&other.cwd()).is_err());
+    }
+
+    #[test]
+    fn commit_files_parse_raw_kinds_numstat_counts_and_odd_names() {
+        let a = "a".repeat(40);
+        let b = "b".repeat(40);
+        let z = "0".repeat(40);
+        let raw = format!(
+            "\x01{a}\0\n:000000 100644 {z} {z} A\0new.txt\0:100644 100644 {z} {z} M\0\x01tricky\0\
+             :100644 000000 {z} {z} D\0gone\tname\0\n3\t0\tnew.txt\0-\t-\t\x01tricky\0\
+             0\t2\tgone\tname\0\x01{b}\0"
+        );
+        let commits = parse_commit_files(raw.as_bytes()).unwrap();
+        assert_eq!(commits.len(), 2);
+        let (hash, files, truncated) = &commits[0];
+        assert_eq!((hash.as_str(), *truncated), (a.as_str(), false));
+        assert_eq!(
+            files,
+            &vec![
+                CommitFile {
+                    path: "new.txt".into(),
+                    kind: ChangeKind::Added,
+                    additions: Some(3),
+                    deletions: Some(0),
+                },
+                CommitFile {
+                    path: "\x01tricky".into(),
+                    kind: ChangeKind::Modified,
+                    additions: None,
+                    deletions: None,
+                },
+                CommitFile {
+                    path: "gone\tname".into(),
+                    kind: ChangeKind::Deleted,
+                    additions: Some(0),
+                    deletions: Some(2),
+                },
+            ]
+        );
+        assert_eq!(commits[1], (b, vec![], false));
+        assert!(parse_commit_files(b"1\t2\tbefore-any-commit\0").is_err());
+        assert!(parse_commit_files(b"\x01not-a-hash\0").is_err());
+        assert!(parse_commit_files(format!("\x01{a}\0x\ty\tpath\0").as_bytes()).is_err());
+    }
+
+    #[test]
+    fn outgoing_lists_commits_ahead_of_upstream_or_base_and_diffs_one_file() {
+        let repo = Repo::new();
+        let cwd = repo.cwd();
+        run_ok(&cwd, &["branch", "-M", "main"]).unwrap();
+        // On the base branch itself, with no upstream, nothing is ahead.
+        assert_eq!(outgoing(&cwd).unwrap().0, None);
+        run_ok(&cwd, &["checkout", "-qb", "feature"]).unwrap();
+        fs::write(cwd.join("file.txt"), "before\nafter\n").unwrap();
+        fs::write(cwd.join("new.txt"), "new\n").unwrap();
+        run_ok(&cwd, &["add", "."]).unwrap();
+        run_ok(&cwd, &["commit", "-qm", "first change"]).unwrap();
+        run_ok(&cwd, &["rm", "-q", "new.txt"]).unwrap();
+        run_ok(&cwd, &["commit", "-qm", "second change"]).unwrap();
+
+        let (base, upstream, commits, truncated) = outgoing(&cwd).unwrap();
+        assert_eq!(
+            (base.as_deref(), upstream, truncated),
+            (Some("main"), false, false)
+        );
+        assert_eq!(
+            commits
+                .iter()
+                .map(|c| c.entry.subject.as_str())
+                .collect::<Vec<_>>(),
+            vec!["second change", "first change"]
+        );
+        assert_eq!(commits[0].files.len(), 1);
+        assert_eq!(commits[0].files[0].kind, ChangeKind::Deleted);
+        let first = &commits[1];
+        assert_eq!(
+            first
+                .files
+                .iter()
+                .map(|f| (f.path.as_str(), f.kind.clone(), f.additions))
+                .collect::<Vec<_>>(),
+            vec![
+                ("file.txt", ChangeKind::Modified, Some(1)),
+                ("new.txt", ChangeKind::Added, Some(1)),
+            ]
+        );
+        let diff = commit_diff(&cwd, &first.entry.hash, "file.txt").unwrap();
+        assert!(diff.contains("+after") && !diff.contains("new.txt"));
+        assert!(commit_diff(&cwd, &first.entry.hash, "../file.txt").is_err());
+        assert!(commit_diff(&cwd, "HEAD", "file.txt").is_err());
+
+        // With an upstream, only what it lacks is outgoing.
+        run_ok(&cwd, &["branch", "-q", "published", "HEAD~1"]).unwrap();
+        run_ok(&cwd, &["branch", "-q", "--set-upstream-to=published"]).unwrap();
+        let (base, upstream, commits, _) = outgoing(&cwd).unwrap();
+        assert_eq!((base.as_deref(), upstream), (Some("published"), true));
+        assert_eq!(commits.len(), 1);
+        assert_eq!(commits[0].entry.subject, "second change");
+
+        // A commit off the branch cannot be read through it.
+        run_ok(&cwd, &["checkout", "-q", "main"]).unwrap();
+        assert!(commit_diff(&cwd, &first.entry.hash, "file.txt").is_err());
+    }
+
+    #[test]
+    fn action_schema_accepts_outgoing_and_commit_diff() {
+        assert!(serde_json::from_value::<Action>(
+            serde_json::json!({"type":"outgoing", "sessionId":"owned"})
+        )
+        .is_ok());
+        assert!(serde_json::from_value::<Action>(
+            serde_json::json!({"type":"commitDiff", "sessionId":"owned", "hash":"a", "path":"b"})
+        )
+        .is_ok());
+        assert!(serde_json::from_value::<Action>(
+            serde_json::json!({"type":"commitDiff", "sessionId":"owned", "hash":"a", "path":"b", "args":[]})
+        )
+        .is_err());
     }
 
     #[test]

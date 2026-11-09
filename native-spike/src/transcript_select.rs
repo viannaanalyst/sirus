@@ -198,7 +198,8 @@ fn extract(texts: &[String], a: Pos, b: Pos) -> Option<String> {
         let r = slice(a, b, seq, text.len());
         let (s, e) = (snap(text, r.start), snap(text, r.end));
         if s < e {
-            parts.push(text[s..e].to_owned());
+            // A message with inline badges is drawn with gaps in place of them; copy the real text.
+            parts.push(crate::inline_badges::plain_slice(text, s..e));
         }
     }
     // A piece of a flowing paragraph reads on into the next; anything else starts a new line.
@@ -741,7 +742,7 @@ impl Shell {
             return Vec::new();
         };
         if reply.user {
-            vec![turn.user.clone()]
+            vec![crate::inline_badges::displayed(&turn.user)]
         } else {
             // The same rendering as on screen: drawn diagrams and formulas change which pieces of
             // text exist, and a selection is addressed by piece.

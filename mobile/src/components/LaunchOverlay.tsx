@@ -1,121 +1,174 @@
-import { useEffect, useState } from "react";
-import { AccessibilityInfo, Image, StyleSheet, View } from "react-native";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AccessibilityInfo, StyleSheet, View, useWindowDimensions } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as SplashScreen from "expo-splash-screen";
 import Animated, {
   Easing,
-  cancelAnimation,
   runOnJS,
   useAnimatedStyle,
   useSharedValue,
-  withDelay,
-  withRepeat,
-  withSequence,
   withTiming,
+  type SharedValue,
 } from "react-native-reanimated";
 
 import { useSirus } from "../data/store";
+import { DOT_GRID, LAUNCH_DOTS } from "./launchDots";
 
-const FRAME = require("../../assets/launch/frame.png");
-const DOTS = require("../../assets/launch/dots.png");
-const CHEVRON = require("../../assets/launch/chevron.png");
-const CURSOR = require("../../assets/launch/cursor.png");
+const BUST = require("../../assets/splash.png");
 
-/** The same dark as the system splash, in light mode too, so the hand-over shows no seam. */
+/** The same dark and picture size as the system splash (app.config.ts), so the hand-over shows no seam. */
 const BACKGROUND = "#0f0f12";
-/** Logo drawn at this width; the layers are 556×446. */
-const WIDTH = 168;
-const HEIGHT = (WIDTH * 446) / 556;
-const SCALE = WIDTH / 556;
-/** Where the cursor sits in the layer, in its pixels. */
-const CURSOR_FROM = 303 * SCALE;
-const CURSOR_TO = 435 * SCALE;
-/** Shortest time on screen, and the longest it waits for the computers to answer. */
-const MIN_MS = 1500;
+const BUST_SIZE = 309;
+const CELL = BUST_SIZE / DOT_GRID;
+const DOT_COLOR = "#f2efe9";
+/** The dots reach the list rows at this time (ms); the overlay then waits for the data and fades. */
+const SETTLE_MS = 1060;
+const FADE_MS = 240;
+/** Shortest time on screen (1.3 s in all) and the longest the overlay can ever stay. */
+const MIN_MS = 1300;
 const MAX_MS = 5000;
-const OPEN_MS = 700;
-const CLOSE_MS = 320;
-const SQUASHED = 0.012;
-const SMOOTH = Easing.bezier(0.2, 0.8, 0.2, 1);
+/** Where the home list's rows sit, used as the dots' destinations. */
+const ROW_TOP = 68;
+const ROW_STEP = 72;
+const ROW_COUNT = 5;
+
+function clamp(v: number, a: number, b: number) {
+  "worklet";
+  return Math.min(b, Math.max(a, v));
+}
+function seg(t: number, a: number, b: number) {
+  "worklet";
+  return clamp((t - a) / (b - a), 0, 1);
+}
+function outCubic(p: number) {
+  "worklet";
+  return 1 - Math.pow(1 - p, 3);
+}
+function inOutCubic(p: number) {
+  "worklet";
+  return p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2;
+}
+
+type Dot = { readonly sx: number; readonly sy: number; readonly r: number; readonly tx: number; readonly ty: number; readonly nx: number; readonly ny: number; readonly bend: number; readonly h1: number; readonly h2: number };
+
+/** Each bust dot gets a destination (in the picture's own coordinates) on a row of the list, in reading order, and a sideways bend for its path. */
+function buildDots(width: number, height: number, top: number): Dot[] {
+  const originX = (width - BUST_SIZE) / 2;
+  const originY = (height - BUST_SIZE) / 2;
+  const targets: { x: number; y: number }[] = [];
+  for (let row = 0; row < ROW_COUNT; row++) {
+    const rowTop = top + ROW_TOP + row * ROW_STEP;
+    for (let y = rowTop + 10; y <= rowTop + 54; y += 7) for (let x = 30; x <= width - 30; x += 7) targets.push({ x: x - originX, y: y - originY });
+  }
+  const count = LAUNCH_DOTS.length;
+  return LAUNCH_DOTS.map(([fx, fy, radius, h1, h2, h3], index) => {
+    const sx = fx * BUST_SIZE;
+    const sy = fy * BUST_SIZE;
+    const target = targets[Math.floor((index * targets.length) / count)] ?? { x: sx, y: sy };
+    const length = Math.hypot(target.x - sx, target.y - sy) || 1;
+    return { sx, sy, r: Math.max(0.5, radius * CELL), tx: target.x, ty: target.y, nx: -(target.y - sy) / length, ny: (target.x - sx) / length, bend: (h3 - 0.5) * 90, h1, h2 };
+  });
+}
+
+const DotView = memo(function DotView({ dot, t }: { readonly dot: Dot; readonly t: SharedValue<number> }) {
+  const style = useAnimatedStyle(() => {
+    const time = t.value;
+    const appear = outCubic(seg(time, dot.h1 * 120, dot.h1 * 120 + 200));
+    const start = 320 + dot.h2 * 140;
+    const p = inOutCubic(seg(time, start, start + 600));
+    const off = dot.bend * Math.sin(Math.PI * p);
+    const radius = (dot.r * (1 - p) + 1.5 * p) * appear;
+    return {
+      transform: [
+        { translateX: (dot.tx - dot.sx) * p + dot.nx * off },
+        { translateY: (dot.ty - dot.sy) * p + dot.ny * off },
+        { scale: radius / dot.r },
+      ],
+    };
+  });
+  return <Animated.View style={[styles.dot, { left: dot.sx - dot.r, top: dot.sy - dot.r, width: dot.r * 2, height: dot.r * 2, borderRadius: dot.r }, style]} />;
+});
 
 /**
- * The app's opening, like a monitor switching on: a line of light opens into the terminal, the
- * cursor blinks until the computers answer (or five seconds pass), then the terminal closes back
- * into the line, which goes out and leaves Home. Reduce Motion skips it.
+ * The app's opening: the halftone bust of the system splash dissolves into dots that fly out and
+ * settle on the home list's rows, then the overlay fades and shows the real screen. It holds the
+ * dots on the rows until the computers answer (five seconds at most). Reduce Motion gets a quick
+ * crossfade instead. Anything that fails hides the overlay.
  */
 export function LaunchOverlay() {
   const ready = useSirus((state) => state.ready && (state.computers.length === 0 || state.computers.some((computer) => !!state.data[computer.id])));
-  const [phase, setPhase] = useState<"open" | "close" | "done">("open");
-  const [started] = useState(() => Date.now());
+  const { width, height } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const [done, setDone] = useState(false);
+  const [reduced, setReduced] = useState<boolean | null>(null);
+  const [settled, setSettled] = useState(false);
   const [waited, setWaited] = useState(false);
-
-  const line = useSharedValue(0);
-  const lineAlpha = useSharedValue(1);
-  const height = useSharedValue(SQUASHED);
-  const parts = useSharedValue(0);
-  const chevron = useSharedValue(0);
-  const cursor = useSharedValue(0);
-  const blink = useSharedValue(1);
+  const started = useRef(0);
+  const begun = useRef(false);
+  const t = useSharedValue(0);
   const overlay = useSharedValue(1);
+  const dots = useMemo(() => buildDots(width, height, insets.top), [width, height, insets.top]);
 
-  useEffect(() => {
+  const finish = useCallback(() => setDone(true), []);
+
+  const begin = useCallback(() => {
+    if (begun.current) return;
+    begun.current = true;
+    started.current = Date.now();
     void SplashScreen.hideAsync().catch(() => undefined);
-    void AccessibilityInfo.isReduceMotionEnabled().then((reduced) => { if (reduced) setPhase("done"); });
-    line.value = withTiming(1, { duration: 280, easing: SMOOTH });
-    height.value = withDelay(260, withTiming(1, { duration: 400, easing: SMOOTH }));
-    lineAlpha.value = withDelay(460, withTiming(0, { duration: 180 }));
-    parts.value = withDelay(500, withTiming(1, { duration: 130 }));
-    chevron.value = withDelay(OPEN_MS, withTiming(1, { duration: 130 }));
-    cursor.value = withDelay(OPEN_MS + 130, withTiming(1, { duration: 180, easing: Easing.linear }));
-    blink.value = withDelay(OPEN_MS + 380, withRepeat(withSequence(withTiming(0, { duration: 1 }), withDelay(320, withTiming(1, { duration: 1 })), withDelay(320, withTiming(1, { duration: 1 }))), -1));
-    const timer = setTimeout(() => setWaited(true), MAX_MS);
-    return () => clearTimeout(timer);
-  }, [blink, chevron, cursor, height, line, lineAlpha, parts]);
+    void AccessibilityInfo.isReduceMotionEnabled().then(setReduced, () => setReduced(false));
+  }, []);
+
+  // The system splash goes once the picture is drawn, so the first frame matches it; a timer covers a load that never reports.
+  useEffect(() => {
+    const timers = [setTimeout(begin, 400), setTimeout(() => setWaited(true), MAX_MS), setTimeout(finish, MAX_MS + 2000)];
+    return () => timers.forEach(clearTimeout);
+  }, [begin, finish]);
 
   useEffect(() => {
-    if (phase !== "open" || !(ready || waited)) return;
-    const timer = setTimeout(() => setPhase("close"), Math.max(0, MIN_MS - (Date.now() - started)));
-    return () => clearTimeout(timer);
-  }, [phase, ready, waited, started]);
+    if (reduced === null) return;
+    try {
+      if (reduced) {
+        setSettled(true);
+        return;
+      }
+      t.value = withTiming(SETTLE_MS, { duration: SETTLE_MS, easing: Easing.linear }, (finished) => { if (finished) runOnJS(setSettled)(true); });
+    } catch {
+      finish();
+    }
+  }, [reduced, t, finish]);
 
   useEffect(() => {
-    if (phase !== "close") return;
-    cancelAnimation(blink);
-    blink.value = 1;
-    height.value = withTiming(SQUASHED, { duration: CLOSE_MS, easing: Easing.bezier(0.6, 0, 0.8, 0.4) });
-    lineAlpha.value = withTiming(1, { duration: 160 });
-    parts.value = withDelay(CLOSE_MS - 40, withTiming(0, { duration: 40 }));
-    line.value = withDelay(CLOSE_MS, withTiming(0, { duration: 240, easing: Easing.in(Easing.cubic) }));
-    overlay.value = withDelay(CLOSE_MS + 100, withTiming(0, { duration: 260 }, (finished) => { if (finished) runOnJS(setPhase)("done"); }));
-  }, [phase, blink, height, line, lineAlpha, overlay, parts]);
+    if (!settled || !(ready || waited)) return;
+    const wait = reduced ? 0 : Math.max(0, MIN_MS - FADE_MS - (Date.now() - started.current));
+    const timer = setTimeout(() => {
+      try {
+        overlay.value = withTiming(0, { duration: reduced ? 200 : FADE_MS, easing: Easing.inOut(Easing.cubic) }, (finished) => { if (finished) runOnJS(finish)(); });
+      } catch {
+        finish();
+      }
+    }, wait);
+    return () => clearTimeout(timer);
+  }, [settled, ready, waited, reduced, overlay, finish]);
 
   const overlayStyle = useAnimatedStyle(() => ({ opacity: overlay.value }));
-  const lineStyle = useAnimatedStyle(() => ({ opacity: lineAlpha.value, transform: [{ scaleX: line.value }] }));
-  const logoStyle = useAnimatedStyle(() => ({ opacity: parts.value > 0 || height.value > SQUASHED ? 1 : 0, transform: [{ scaleY: height.value }] }));
-  const dotsStyle = useAnimatedStyle(() => ({ opacity: parts.value }));
-  const chevronStyle = useAnimatedStyle(() => ({ opacity: chevron.value * parts.value }));
-  const cursorStyle = useAnimatedStyle(() => ({ opacity: blink.value * parts.value, width: CURSOR_FROM + (CURSOR_TO - CURSOR_FROM) * cursor.value }));
+  const bustStyle = useAnimatedStyle(() => {
+    const dissolve = inOutCubic(seg(t.value, 0, 320));
+    return { opacity: 1 - dissolve, transform: [{ scale: 1 - 0.05 * dissolve }] };
+  });
 
-  if (phase === "done") return null;
+  if (done) return null;
   return <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, styles.overlay, overlayStyle]}>
-    <Animated.View style={[styles.logo, logoStyle]}>
-      <Image source={FRAME} style={styles.layer} />
-      <Animated.Image source={DOTS} style={[styles.layer, dotsStyle]} />
-      <Animated.Image source={CHEVRON} style={[styles.layer, chevronStyle]} />
-      <Animated.View style={[styles.clip, cursorStyle]}>
-        <Image source={CURSOR} style={styles.layer} />
-      </Animated.View>
-    </Animated.View>
-    <View style={styles.lineSlot} pointerEvents="none">
-      <Animated.View style={[styles.line, lineStyle]} />
+    <View style={[styles.box, { left: (width - BUST_SIZE) / 2, top: (height - BUST_SIZE) / 2 }]}>
+      <Animated.Image source={BUST} onLoadEnd={begin} onError={finish} style={[styles.bust, bustStyle]} />
+      {reduced ? null : dots.map((dot, index) => <DotView key={index} dot={dot} t={t} />)}
     </View>
   </Animated.View>;
 }
 
 const styles = StyleSheet.create({
-  overlay: { backgroundColor: BACKGROUND, alignItems: "center", justifyContent: "center" },
-  logo: { width: WIDTH, height: HEIGHT },
-  layer: { position: "absolute", left: 0, top: 0, width: WIDTH, height: HEIGHT },
-  clip: { position: "absolute", left: 0, top: 0, height: HEIGHT, overflow: "hidden" },
-  lineSlot: { position: "absolute", width: WIDTH * 1.4, alignItems: "center" },
-  line: { width: "100%", height: 2.4, borderRadius: 2, backgroundColor: "#ffffff", shadowColor: "#bdb4f2", shadowOpacity: 0.9, shadowRadius: 8, shadowOffset: { width: 0, height: 0 } },
+  overlay: { backgroundColor: BACKGROUND },
+  box: { position: "absolute", width: BUST_SIZE, height: BUST_SIZE },
+  bust: { width: BUST_SIZE, height: BUST_SIZE },
+  dot: { position: "absolute", backgroundColor: DOT_COLOR },
 });

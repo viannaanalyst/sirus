@@ -76,7 +76,7 @@ pub struct Known {
 }
 
 /// Built in the composer itself, besides the skills the host lists.
-const BUILT_IN: [&str; 3] = ["commit", "stage", "compact"];
+const BUILT_IN: [&str; 4] = ["commit", "stage", "compact", "clear"];
 
 impl Known {
     pub fn new(

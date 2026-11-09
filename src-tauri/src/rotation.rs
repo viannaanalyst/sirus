@@ -99,6 +99,7 @@ fn newest_within(lines: Vec<String>, budget: usize) -> Vec<String> {
 
 /// The deterministic brief a rotated session starts with. Empty when there is nothing to carry.
 pub fn brief(messages: &[Message]) -> String {
+    let messages = crate::transcript::since_clear(messages);
     let all = exchanges(messages);
     if all.is_empty() {
         return String::new();

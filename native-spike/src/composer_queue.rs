@@ -614,6 +614,9 @@ impl Shell {
         if self.typed_compact(ix, &typed, files, cx) {
             return;
         }
+        if self.typed_clear(ix, &typed, files, cx) {
+            return;
+        }
         if self.typed_git(ix, &typed, files, cx) {
             return;
         }

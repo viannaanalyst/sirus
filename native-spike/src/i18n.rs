@@ -611,6 +611,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "There is nothing to compact yet: this conversation has not started.",
     ),
     (
+        "Ainda não há o que limpar: esta conversa não começou.",
+        "There is nothing to clear yet: this conversation has not started.",
+    ),
+    (
         "Ainda não verificado no GitHub",
         "Not checked on GitHub yet",
     ),
@@ -1214,6 +1218,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "Contexto do título do commit indisponível",
         "Commit title context unavailable",
     ),
+    (
+        "Contexto limpo · nova sessão",
+        "Context cleared · new session",
+    ),
     ("Contexto não compactado", "Context not compacted"),
     ("Conteúdo não exibido", "Content not shown"),
     ("Continuar", "Continue"),
@@ -1541,6 +1549,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Enviar mensagem", "Send message"),
     ("Enviar para segundo plano", "Send to background"),
     ("Enviar {} para o remoto?", "Push {} to the remote?"),
+    (
+        "Envie /clear sozinho, sem anexos.",
+        "Send /clear on its own, without attachments.",
+    ),
     (
         "Envie /compact sozinho, sem anexos e sem os modos equipe ou depuração.",
         "Send /compact on its own, without attachments, team or debug mode.",
@@ -4588,6 +4600,10 @@ const ENTRIES: &[(&str, &str)] = &[
     (
         "Só conversas do Codex e do Claude Code podem ser compactadas.",
         "Only Codex and Claude Code conversations can be compacted.",
+    ),
+    (
+        "Só conversas do Codex, do Claude Code e do OpenCode podem ser limpas.",
+        "Only Codex, Claude Code and OpenCode conversations can be cleared.",
     ),
     ("Só em um projeto", "Only in one project"),
     (

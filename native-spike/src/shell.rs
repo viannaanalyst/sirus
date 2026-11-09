@@ -966,7 +966,7 @@ enum Waiting {
     LinkCreated(String),
     /// The quick composer's conversation exists: its text goes out (quick_composer.rs).
     QuickCreated(String),
-    Session(usize),
+    Session,
     /// A queued request sent to the host: its session and queue item.
     Queued(String, String),
     Steered(composer_queue::SteerWait),
@@ -1183,7 +1183,6 @@ pub struct Shell {
     env_servers: Vec<String>,
     env_editors: Vec<(String, String)>,
     env_icons: HashMap<String, std::path::PathBuf>,
-    commit_message: Option<String>,
     /// The Settings text field being typed in: its key and text.
     setting_edit: Option<(&'static str, String)>,
     /// Each side panel, per conversation; they keep their state while hidden.
@@ -1646,7 +1645,6 @@ impl Shell {
             env_servers: Vec::new(),
             env_editors: Vec::new(),
             env_icons: HashMap::new(),
-            commit_message: None,
             setting_edit: None,
             pane_views: HashMap::new(),
             settings_data: HashMap::new(),
@@ -2263,8 +2261,7 @@ impl Shell {
                 Some(Waiting::IncomingPull(generation, then_push)) => {
                     self.git_pulled(generation, then_push, ok, &value, cx)
                 }
-                Some(Waiting::Session(usize::MAX)) => {}
-                Some(Waiting::Session(_)) if ok => self.session_updated(&value, cx),
+                Some(Waiting::Session) if ok => self.session_updated(&value, cx),
                 Some(_) | None if !ok => {
                     let message = error_text(&value);
                     if !is_not_a_repository(&message) {
@@ -4650,9 +4647,6 @@ impl Shell {
         if let Some((_, value)) = self.setting_edit.as_mut() {
             return Some(value);
         }
-        if let Some(message) = self.commit_message.as_mut() {
-            return Some(message);
-        }
         if self.env_open == Some("branch") {
             if let Some(draft) = self.branch_draft.as_mut() {
                 return Some(draft);
@@ -5724,20 +5718,6 @@ impl Shell {
                 _ => {
                     if let Some(draft) = self.branch_draft.as_mut() {
                         draft.pop();
-                    }
-                }
-            }
-            cx.stop_propagation();
-            cx.notify();
-            return;
-        }
-        if self.commit_message.is_some() && matches!(key, "enter" | "escape" | "backspace") {
-            match key {
-                "enter" => self.commit_now(cx),
-                "escape" => self.commit_message = None,
-                _ => {
-                    if let Some(message) = self.commit_message.as_mut() {
-                        message.pop();
                     }
                 }
             }
@@ -11527,7 +11507,7 @@ impl Shell {
                     "set_session_model",
                     json!({ "sessionId": session, "agent": "cursor", "model": next }),
                 );
-                self.waiting.insert(call, Waiting::Session(ix));
+                self.waiting.insert(call, Waiting::Session);
             }
             return;
         }
@@ -11728,7 +11708,7 @@ impl Shell {
             "set_session_model",
             json!({ "sessionId": session, "agent": provider, "model": id }),
         );
-        self.waiting.insert(call, Waiting::Session(ix));
+        self.waiting.insert(call, Waiting::Session);
         self.model_query.clear();
         self.snap_effort_bar();
         if let Some((which, _)) = self.composer_menu.as_mut() {
@@ -15671,33 +15651,8 @@ impl Shell {
                     .invoke("local_servers_list", json!({ "sessionId": session }));
                 self.waiting.insert(id, Waiting::Servers);
             }
-            "commit" => {
-                self.commit_message = if self.env_open.is_some() {
-                    Some(String::new())
-                } else {
-                    None
-                };
-            }
             _ => {}
         }
-        if row != "commit" {
-            self.commit_message = None;
-        }
-    }
-
-    fn commit_now(&mut self, cx: &mut Context<Self>) {
-        let Some(message) = self.commit_message.clone().filter(|m| !m.trim().is_empty()) else {
-            return;
-        };
-        let ix = self.active_conversation();
-        let id = self.backend.invoke(
-            "git_commit",
-            json!({ "sessionId": self.conversations[ix].session_id, "message": message }),
-        );
-        self.waiting.insert(id, Waiting::Session(usize::MAX));
-        self.commit_message = Some(String::new());
-        self.refresh_diff();
-        cx.notify();
     }
 
     /// The Ambiente card, compact: one 26 px row per function, each opening in place. Same
@@ -15716,8 +15671,6 @@ impl Shell {
         let ix = self.active_conversation();
         let conversation = &self.conversations[ix];
         let session = conversation.session_id.clone();
-        let (added, removed) = self.diff_stat();
-        let (add_color, remove_color) = diff_colors(self.look.diff);
         let row = |id: &'static str, glyph: &'static str, label: String| {
             crate::hover_track::list("environment").row_named(
                 div()
@@ -15800,22 +15753,6 @@ impl Shell {
             let shown = fold.at(now).clamp(0., 1.);
             (shown > 0.001).then_some(shown)
         };
-        let small = |id: &'static str, label: &'static str, main: bool| {
-            div()
-                .id(id)
-                .flex_1()
-                .h(px(22.))
-                .rounded(px(crate::theme::RADIUS_SM))
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_size(px(11.5))
-                .cursor_pointer()
-                .text_color(if main { on_accent() } else { content(0.85) })
-                .bg(if main { accent() } else { content(0.08) })
-                .hover(|s| s.opacity(0.88))
-                .child(label)
-        };
         let mut rows: Vec<AnyElement> = vec![
             div()
                 .h(px(22.))
@@ -15826,24 +15763,6 @@ impl Shell {
                 .text_size(px(12.))
                 .text_color(content(0.45))
                 .child(t("Ambiente"))
-                .into_any_element(),
-            row("env-changes", "git-compare", t("Alterações").into())
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.environment = None;
-                    this.open_pane(CHANGES_PANE, cx);
-                }))
-                .child(
-                    div()
-                        .text_size(px(11.5))
-                        .text_color(add_color)
-                        .child(format!("+{added}")),
-                )
-                .child(
-                    div()
-                        .text_size(px(11.5))
-                        .text_color(remove_color)
-                        .child(format!("-{removed}")),
-                )
                 .into_any_element(),
             expand(
                 "branch",
@@ -15947,72 +15866,6 @@ impl Shell {
                 ));
             }
             rows.push(sub(fold, list).into_any_element());
-        }
-        rows.push(
-            expand(
-                "commit",
-                "upload",
-                t("Commit, push e PR"),
-                String::new(),
-                cx,
-            )
-            .into_any_element(),
-        );
-        if let Some(fold) = fold_of("commit", moving) {
-            let session_push = session.clone();
-            let message = self.commit_message.clone().unwrap_or_default();
-            rows.push(
-                sub(
-                    fold,
-                    vec![
-                        div()
-                            .h(px(24.))
-                            .mb(px(3.))
-                            .px(px(6.))
-                            .rounded(px(crate::theme::RADIUS_SM))
-                            .border_1()
-                            .border_color(crate::theme::border())
-                            .flex()
-                            .items_center()
-                            .gap(px(1.))
-                            .text_size(px(12.))
-                            .when(message.is_empty(), |d| {
-                                d.child(div().w(px(1.5)).h(px(13.)).bg(accent())).child(
-                                    div()
-                                        .text_color(content(0.4))
-                                        .child(t("Mensagem do commit")),
-                                )
-                            })
-                            .when(!message.is_empty(), |d| {
-                                d.child(
-                                    div()
-                                        .min_w_0()
-                                        .truncate()
-                                        .text_color(content(0.95))
-                                        .child(message.clone()),
-                                )
-                                .child(div().w(px(1.5)).h(px(13.)).bg(accent()))
-                            })
-                            .into_any_element(),
-                        div()
-                            .flex()
-                            .gap(px(3.))
-                            .child(
-                                small("env-commit", "Commit", true)
-                                    .on_click(cx.listener(|this, _, _, cx| this.commit_now(cx))),
-                            )
-                            .child(small("env-push", "Push", false).on_click(cx.listener(
-                                move |this, _, _, cx| {
-                                    this.backend
-                                        .invoke("git_push", json!({ "sessionId": session_push }));
-                                    cx.notify();
-                                },
-                            )))
-                            .into_any_element(),
-                    ],
-                )
-                .into_any_element(),
-            );
         }
         rows.push(
             expand(
@@ -18665,9 +18518,6 @@ impl Render for Shell {
         // A field whose page closed must not keep the typing, or the composer stops taking it.
         if self.appearance.is_none() {
             self.setting_edit = None;
-        }
-        if self.environment.is_none() {
-            self.commit_message = None;
         }
         if let Some(kind) = self
             .dock_active

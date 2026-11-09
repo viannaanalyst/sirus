@@ -403,7 +403,7 @@ fn working_dir(cwd: &str) -> std::path::PathBuf {
 }
 
 /// Where a terminal asks for its project's Infisical keys (ADR-198): the host fetches them for
-/// the conversation's project when "Usar as chaves do Infisical nos scripts e no terminal" is on.
+/// the conversation's project when it is linked and its "Terminal" switch is on (the default).
 #[derive(Clone)]
 pub struct KeySource {
     pub backend: crate::backend::Backend,

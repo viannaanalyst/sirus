@@ -44,6 +44,13 @@ pub struct ProjectScripts {
     /// Infisical keys (ADR-198). The agents' own environment is never touched.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub infisical_run: Option<String>,
+    /// The owner turned the Infisical keys off for this project. A linked project uses them by
+    /// default (ADR-198), so only the opt-out is kept.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub infisical_off: bool,
+    /// The Infisical project found by name for a project with no `.infisical.json` (ADR-198).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub infisical_auto: Option<String>,
 }
 
 impl ProjectScripts {
@@ -52,6 +59,8 @@ impl ProjectScripts {
             && self.on_finish.is_none()
             && self.preview_url.is_none()
             && self.infisical_run.is_none()
+            && !self.infisical_off
+            && self.infisical_auto.is_none()
     }
     fn get(&self, kind: ScriptKind) -> Option<&str> {
         match kind {
@@ -252,6 +261,13 @@ pub enum Action {
     },
 }
 
+/// The project's Infisical switch: an environment turns the keys on with it, `None` turns them off
+/// (a linked project has them on until then, ADR-198).
+pub(crate) fn set_infisical(scripts: &mut ProjectScripts, environment: Option<String>) {
+    scripts.infisical_off = environment.is_none();
+    scripts.infisical_run = environment;
+}
+
 /// Closed project-script surface. `Save` returns the project; the other actions
 /// publish the session through `session-updated`.
 pub async fn project_scripts_action(
@@ -274,7 +290,7 @@ pub async fn project_scripts_action(
                 on_finish: validate(on_finish)?,
                 open_preview: open_preview && preview_url.is_some(),
                 preview_url,
-                infisical_run: None,
+                ..ProjectScripts::default()
             };
             crate::commands::native_task(move || {
                 let mut data = state.data.lock();
@@ -285,6 +301,8 @@ pub async fn project_scripts_action(
                     .find(|row| row.id == project_id)
                     .ok_or_else(|| Error::not_found("project not found"))?;
                 scripts.infisical_run = project.scripts.infisical_run.clone();
+                scripts.infisical_off = project.scripts.infisical_off;
+                scripts.infisical_auto = project.scripts.infisical_auto.clone();
                 let previous = std::mem::replace(&mut project.scripts, scripts);
                 let saved = project.clone();
                 if let Err(error) = crate::persist::save(&state.data_path, &data) {
@@ -318,12 +336,13 @@ pub async fn project_scripts_action(
                     .iter_mut()
                     .find(|row| row.id == project_id)
                     .ok_or_else(|| Error::not_found("project not found"))?;
-                let previous = std::mem::replace(&mut project.scripts.infisical_run, environment);
+                let previous = project.scripts.clone();
+                set_infisical(&mut project.scripts, environment);
                 let saved = project.clone();
                 if let Err(error) = crate::persist::save(&state.data_path, &data) {
                     if let Some(project) = data.projects.iter_mut().find(|row| row.id == project_id)
                     {
-                        project.scripts.infisical_run = previous;
+                        project.scripts = previous;
                     }
                     return Err(error);
                 }
@@ -471,12 +490,13 @@ fn start(
     let Some(script) = project.scripts.get(kind).map(str::to_owned) else {
         return Ok(None);
     };
-    let script = match project.scripts.infisical_run.as_deref() {
-        Some(environment) => {
-            let workspace = crate::infisical::read_link(Path::new(&project.path))
-                .map(|(workspace, _)| workspace);
-            crate::infisical::wrap_script(&script, environment, workspace.as_deref())
-        }
+    let link = crate::infisical::project_link(project);
+    let script = match crate::infisical::effective_environment(&project.scripts, link.as_ref()) {
+        Some(environment) => crate::infisical::wrap_script(
+            &script,
+            &environment,
+            link.as_ref().map(|link| link.workspace.as_str()),
+        ),
         None => script,
     };
     if !session.worktree.isolated {

@@ -114,6 +114,7 @@ fn live_tool_definitions() -> Vec<Value> {
         .filter(|_| browser)
         .chain(crate::sirus_tools::live_tool_definitions())
         .chain(crate::secrets::tool_definitions())
+        .chain(crate::infisical_setup::tool_definitions())
         .chain(crate::pr_watch::tool_definitions())
         .collect()
 }
@@ -374,6 +375,10 @@ fn execute(
         // Private secret requests (ADR-077); blocks while the person answers.
         return crate::secrets::execute(app, session_id, tool, &args);
     }
+    if tool == "infisical_setup_project" {
+        // Puts the project's keys in Infisical (ADR-198); values never reach the reply.
+        return crate::infisical_setup::execute(app, session_id, &args);
+    }
     if matches!(tool, "watch_pull_request" | "unwatch_pull_request") {
         // PR watch (ADR-079): only ever for the session that owns this token.
         return crate::pr_watch::agent_tool(app, session_id, tool);
@@ -439,6 +444,7 @@ fn tool_definitions() -> Vec<Value> {
         .filter(|_| browser)
         .chain(crate::sirus_tools::tool_definitions())
         .chain(crate::secrets::tool_definitions())
+        .chain(crate::infisical_setup::tool_definitions())
         .chain(crate::pr_watch::tool_definitions())
         .collect()
 }
@@ -511,6 +517,7 @@ mod tests {
                     || name.starts_with("sirus_")
                     || name.starts_with("visual_")
                     || name.ends_with("_secret")
+                    || name.starts_with("infisical_")
                     || name.ends_with("_pull_request")));
             assert!(tool["description"]
                 .as_str()

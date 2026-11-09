@@ -53,8 +53,8 @@ const LABEL: &str = "cd-label";
 /// A text edit that goes nowhere: parks typing when a dialog control other than a field is used.
 const IDLE: &str = "cd-idle";
 
-const MENU_TIME: f32 = 0.12;
-const DIALOG_TIME: f32 = 0.18;
+pub(crate) const MENU_TIME: f32 = 0.12;
+pub(crate) const DIALOG_TIME: f32 = 0.18;
 
 // Assets: the brand marks and the few icons the menu needs.
 
@@ -80,6 +80,14 @@ const ICONS: &[(&str, &str)] = &[
     (
         "power",
         r#"<path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.77.04"/>"#,
+    ),
+    (
+        "key-round",
+        r#"<path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5"/>"#,
+    ),
+    (
+        "external-link",
+        r#"<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>"#,
     ),
     (
         "ellipsis",
@@ -228,7 +236,10 @@ pub fn enter_saves(key: &str) -> bool {
 
 pub fn wants_keys() -> bool {
     let now = state();
-    now.menu.is_some() || now.dialog.is_some() || now.accounts.is_some()
+    now.menu.is_some()
+        || now.dialog.is_some()
+        || now.accounts.is_some()
+        || crate::settings_infisical::wants_keys()
 }
 
 /// A finished text edit of this page. True when the key was one of its own.
@@ -551,6 +562,12 @@ pub fn index_groups() -> Vec<(String, Vec<(String, String)>)> {
             .iter()
             .filter(|entry| entry.2 == *category)
             .map(|entry| (catalog_key(entry).to_string(), t(entry.3).to_string()))
+            .chain((*category == crate::settings_infisical::CATEGORY).then(|| {
+                (
+                    crate::settings_infisical::KEY.to_string(),
+                    t(crate::settings_infisical::ABOUT).to_string(),
+                )
+            }))
             .collect();
         groups.push((t(title).to_string(), rows));
     }
@@ -563,7 +580,7 @@ fn success() -> Hsla {
     rgb(0x4cc38a).into()
 }
 
-fn danger() -> Hsla {
+pub(crate) fn danger() -> Hsla {
     rgb(0xec8a85).into()
 }
 
@@ -644,7 +661,7 @@ fn agent_mark(id: &str) -> &'static str {
 
 /// Runs `then` after `ms`, on the interface thread. A sign-in waits a moment so the settings
 /// saved just before it have reached the host.
-fn after<V: 'static>(
+pub(crate) fn after<V: 'static>(
     cx: &mut Context<V>,
     ms: u64,
     then: impl FnOnce(&mut V, &mut Context<V>) + 'static,
@@ -1106,10 +1123,12 @@ pub fn view<V: 'static>(
             ])
         })
         .collect();
-    let mut any = !shown.is_empty();
-    if !shown.is_empty() {
+    // Infisical is connected through its own machine identity (ADR-198), not as an MCP server.
+    let infisical = crate::settings_infisical::connected_card(&matches, cx, run);
+    let mut any = !shown.is_empty() || infisical.is_some();
+    if any {
         let services: Vec<Option<&str>> = shown.iter().map(|c| c.catalog.as_deref()).collect();
-        let items: Vec<AnyElement> = account_rows(&services)
+        let mut items: Vec<AnyElement> = account_rows(&services)
             .into_iter()
             .map(|row| {
                 let accounts: Vec<&Conn> = row.iter().map(|at| shown[*at]).collect();
@@ -1141,12 +1160,13 @@ pub fn view<V: 'static>(
                 }
             })
             .collect();
+        items.extend(infisical);
         page = page.child(section(t("Conectados"), items, cols));
     }
 
     // The catalog.
     for (category, title) in CONNECTOR_GROUPS {
-        let items: Vec<AnyElement> = CATALOG
+        let mut items: Vec<AnyElement> = CATALOG
             .iter()
             .filter(|e| e.2 == *category && matches(&[e.1, t(e.3)]))
             .map(|e| {
@@ -1175,6 +1195,9 @@ pub fn view<V: 'static>(
                 )
             })
             .collect();
+        if *category == crate::settings_infisical::CATEGORY {
+            items.extend(crate::settings_infisical::catalog_card(&matches, cx));
+        }
         if !items.is_empty() {
             any = true;
             page = page.child(section(t(title), items, cols));
@@ -1389,7 +1412,7 @@ pub(crate) fn signed_in_badge() -> AnyElement {
 }
 
 /// A square icon button at the end of a row.
-fn icon_button<V: 'static>(
+pub(crate) fn icon_button<V: 'static>(
     id: String,
     icon: &'static str,
     cx: &mut Context<V>,
@@ -2016,24 +2039,7 @@ fn more_menu<V: 'static>(
                         .text_color(content(0.55)),
                 )
         };
-        shaped.on_click(cx.listener(move |_, _, _, cx| {
-            let mut now = state();
-            let reopened = now
-                .menu_closed
-                .is_some_and(|at| at.elapsed() < Duration::from_millis(250));
-            let here = now.menu.as_ref().is_some_and(|m| m.id == id && !m.closing);
-            if here {
-                drop(now);
-                close_menu(cx);
-            } else if !reopened {
-                now.menu = Some(Menu {
-                    id: id.clone(),
-                    closing: false,
-                });
-                drop(now);
-            }
-            cx.notify();
-        }))
+        shaped.on_click(cx.listener(move |_, _, _, cx| toggle_menu(&id, cx)))
     };
     let mut holder = div()
         .relative()
@@ -2139,12 +2145,47 @@ fn more_menu<V: 'static>(
             cx.notify();
         }),
     );
+    let panel = menu_panel(&c.id, rows, vec![remove], at == MenuAt::Chip, closing, cx);
+    holder = holder.child(panel);
+    holder.into_any_element()
+}
+
+/// The "⋯" button's click: opens its menu, or closes it when it is the open one. A click right
+/// after a menu closed (the click that closed it) does not reopen it.
+fn toggle_menu<V: 'static>(id: &str, cx: &mut Context<V>) {
+    let mut now = state();
+    let reopened = now
+        .menu_closed
+        .is_some_and(|at| at.elapsed() < Duration::from_millis(250));
+    let here = now.menu.as_ref().is_some_and(|m| m.id == id && !m.closing);
+    if here {
+        drop(now);
+        close_menu(cx);
+    } else if !reopened {
+        now.menu = Some(Menu {
+            id: id.to_owned(),
+            closing: false,
+        });
+        drop(now);
+    }
+    cx.notify();
+}
+
+/// An open menu under its button: the rows, then the destructive ones below a line, sliding in.
+fn menu_panel<V: 'static>(
+    id: &str,
+    rows: Vec<AnyElement>,
+    destructive: Vec<AnyElement>,
+    left: bool,
+    closing: bool,
+    cx: &mut Context<V>,
+) -> AnyElement {
     let panel = div()
-        .id(format!("cn-menu-{}", c.id))
+        .id(format!("cn-menu-{id}"))
         .absolute()
         .top(px(32.))
-        .when(at == MenuAt::Chip, |d| d.left(px(0.)))
-        .when(at != MenuAt::Chip, |d| d.right(px(0.)))
+        .when(left, |d| d.left(px(0.)))
+        .when(!left, |d| d.right(px(0.)))
         .w(px(190.))
         .p(px(4.))
         .rounded(px(crate::theme::RADIUS_LG))
@@ -2155,10 +2196,12 @@ fn more_menu<V: 'static>(
         .occlude()
         .on_mouse_down_out(cx.listener(|_, _, _, cx| close_menu(cx)))
         .children(rows)
-        .child(div().h(px(1.)).my(px(4.)).bg(content(0.08)))
-        .child(remove)
+        .when(!destructive.is_empty(), |d| {
+            d.child(div().h(px(1.)).my(px(4.)).bg(content(0.08)))
+                .children(destructive)
+        })
         .with_animation(
-            format!("cn-menu-{}-{closing}", c.id),
+            format!("cn-menu-{id}-{closing}"),
             Animation::new(Duration::from_secs_f32(MENU_TIME))
                 .with_easing(|t| eased(t, Curve::Expo)),
             move |el, t| {
@@ -2166,8 +2209,74 @@ fn more_menu<V: 'static>(
                 el.opacity(p).top(px(32. - (1. - p) * 4.))
             },
         );
-    holder = holder.child(gpui::deferred(panel).with_priority(10));
-    holder.into_any_element()
+    gpui::deferred(panel).with_priority(10).into_any_element()
+}
+
+/// One entry of a row's "⋯" menu: icon, label, whether it is destructive (those go below a line)
+/// and what it does.
+pub(crate) type MenuEntry<V> = (
+    &'static str,
+    String,
+    bool,
+    Box<dyn Fn(&mut V, &mut Context<V>)>,
+);
+
+/// A "⋯" button and, while open, its menu: the same button, panel and motion as a connector's row,
+/// for rows that are not connectors (Infisical, ADR-198).
+pub(crate) fn row_menu<V: 'static>(
+    id: &str,
+    entries: Vec<MenuEntry<V>>,
+    cx: &mut Context<V>,
+) -> AnyElement {
+    let open = state()
+        .menu
+        .as_ref()
+        .filter(|m| m.id == id)
+        .map(|m| m.closing);
+    let key = id.to_owned();
+    let trigger = div()
+        .id(format!("cn-more-{id}"))
+        .flex_shrink_0()
+        .rounded(px(crate::theme::RADIUS_MD))
+        .flex()
+        .items_center()
+        .cursor_pointer()
+        .size(px(28.))
+        .justify_center()
+        .hover(|s| s.bg(content(0.07)))
+        .child(
+            svg()
+                .path("connector-ui/ellipsis")
+                .size(px(15.))
+                .text_color(content(0.55)),
+        )
+        .on_click(cx.listener(move |_, _, _, cx| toggle_menu(&key, cx)));
+    let holder = div().relative().flex_shrink_0().child(trigger);
+    let Some(closing) = open else {
+        return holder.into_any_element();
+    };
+    let (mut rows, mut destructive) = (Vec::new(), Vec::new());
+    for (index, (icon, label, danger, action)) in entries.into_iter().enumerate() {
+        let row = menu_row(
+            format!("cn-menu-{id}-{index}"),
+            icon,
+            label,
+            danger,
+            cx.listener(move |this, _, _, cx| {
+                close_menu(cx);
+                action(this, cx);
+                cx.notify();
+            }),
+        );
+        if danger {
+            destructive.push(row);
+        } else {
+            rows.push(row);
+        }
+    }
+    holder
+        .child(menu_panel(id, rows, destructive, false, closing, cx))
+        .into_any_element()
 }
 
 fn menu_row(
@@ -2277,7 +2386,13 @@ pub fn overlay<V: 'static>(
     }
     let (d, projects) = {
         let now = state();
-        (now.dialog.clone()?, now.projects.clone())
+        match now.dialog.clone() {
+            Some(d) => (d, now.projects.clone()),
+            None => {
+                drop(now);
+                return crate::settings_infisical::overlay(editing, edit, run, cx);
+            }
+        }
     };
     let list = settings["connectors"]
         .as_array()
@@ -2717,7 +2832,7 @@ fn park<V: 'static>(view: &mut V, pending: &Pending, edit: Edit<V>, cx: &mut Con
     }
 }
 
-fn field_block(label: &str, control: AnyElement, help: Option<String>) -> AnyElement {
+pub(crate) fn field_block(label: &str, control: AnyElement, help: Option<String>) -> AnyElement {
     div()
         .flex()
         .flex_col()
@@ -2987,6 +3102,9 @@ pub fn key<V: 'static>(
     match key {
         "escape" if dialog => close_dialog(cx),
         "escape" if menu => close_menu(cx),
+        "escape" if crate::settings_infisical::wants_keys() => {
+            crate::settings_infisical::close_dialog(cx)
+        }
         "escape" if state().accounts.is_some() => close_accounts(cx),
         "enter" if dialog => {
             let list = list.as_array().cloned().unwrap_or_default();

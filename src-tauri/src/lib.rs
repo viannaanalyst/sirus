@@ -55,6 +55,7 @@ mod goals;
 mod html_preview;
 mod idle_compaction;
 mod infisical;
+mod infisical_setup;
 mod issue_ref;
 mod keep_awake;
 #[cfg(target_os = "macos")]

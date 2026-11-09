@@ -20,7 +20,9 @@ const API: &str = "https://app.infisical.com";
 const ACCOUNT: &str = "sirus";
 const ID_SERVICE: &str = "Sirus Infisical client id";
 const SECRET_SERVICE: &str = "Sirus Infisical client secret";
-const LINK_FILE: &str = ".infisical.json";
+pub(crate) const LINK_FILE: &str = ".infisical.json";
+/// The environment a link uses when nothing says otherwise.
+pub(crate) const DEFAULT_ENVIRONMENT: &str = "dev";
 const MAX_VALUE: usize = 16 * 1024;
 /// A token this close to expiring is renewed.
 const TOKEN_MARGIN: Duration = Duration::from_secs(60);
@@ -195,7 +197,7 @@ pub(crate) fn save_body(workspace_id: &str, environment: &str, value: &str) -> V
     })
 }
 
-fn unreadable() -> Error {
+pub(crate) fn unreadable() -> Error {
     Error::agent("Infisical answered something unreadable.")
 }
 
@@ -207,7 +209,7 @@ fn not_connected() -> Error {
     Error::agent("Infisical is not connected.")
 }
 
-fn http_status_error(status: u16) -> Error {
+pub(crate) fn http_status_error(status: u16) -> Error {
     Error::agent(match status {
         401 | 403 => "Infisical refused the credentials or this project is out of their reach.",
         404 => "That Infisical project, environment or secret was not found.",
@@ -276,7 +278,11 @@ async fn token() -> Result<String> {
 }
 
 /// One authorized call; a rejected token is renewed once.
-async fn api(method: Method, url: reqwest::Url, body: Option<Value>) -> Result<(u16, Value)> {
+pub(crate) async fn api(
+    method: Method,
+    url: reqwest::Url,
+    body: Option<Value>,
+) -> Result<(u16, Value)> {
     for attempt in 0..2 {
         let bearer = token().await?;
         let (status, reply) =
@@ -369,14 +375,182 @@ pub(crate) fn terminal_source_in(
         .iter()
         .find(|project| project.id == session.project_id)
         .ok_or_else(|| Error::not_found("That project is not in Sirus."))?;
-    let Some(environment) = project.scripts.infisical_run.as_deref() else {
+    let Some(link) = project_link(project) else {
         return Ok(None);
     };
-    if !valid_slug(environment) {
-        return Ok(None);
+    Ok(effective_environment(&project.scripts, Some(&link)).map(|env| (link.workspace, env)))
+}
+
+// ---- Which Infisical project a Sirus project uses ----
+
+/// Where a project's link comes from, strongest first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LinkSource {
+    /// `.infisical.json` in the project's own folder (what the owner picks is written there).
+    Folder,
+    /// `.infisical.json` at the root of the repository the folder belongs to.
+    Repo,
+    /// An Infisical project with the same name, found automatically.
+    Name,
+}
+
+impl LinkSource {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Folder => "folder",
+            Self::Repo => "repo",
+            Self::Name => "name",
+        }
     }
-    Ok(read_link(Path::new(&project.path))
-        .map(|(workspace, _)| (workspace, environment.to_owned())))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Link {
+    pub workspace: String,
+    pub environment: String,
+    pub source: LinkSource,
+}
+
+/// The root of the git repository `folder` is in (a folder holding `.git`), when there is one.
+pub(crate) fn repo_root(folder: &Path) -> Option<PathBuf> {
+    folder
+        .ancestors()
+        .take(32)
+        .find(|dir| dir.join(".git").exists())
+        .map(Path::to_path_buf)
+}
+
+/// The Infisical project a folder uses: its own `.infisical.json`, else the repository root's,
+/// else the project found by name (`auto`, in the default environment). What the owner chose is
+/// always a file, so it wins over the automatic match.
+pub(crate) fn resolve_link(folder: &Path, auto: Option<&str>) -> Option<Link> {
+    if let Some((workspace, environment)) = read_link(folder) {
+        return Some(Link {
+            workspace,
+            environment,
+            source: LinkSource::Folder,
+        });
+    }
+    if let Some(root) = repo_root(folder).filter(|root| root != folder) {
+        if let Some((workspace, environment)) = read_link(&root) {
+            return Some(Link {
+                workspace,
+                environment,
+                source: LinkSource::Repo,
+            });
+        }
+    }
+    auto.filter(|id| valid_workspace(id)).map(|id| Link {
+        workspace: id.to_owned(),
+        environment: DEFAULT_ENVIRONMENT.to_owned(),
+        source: LinkSource::Name,
+    })
+}
+
+pub(crate) fn project_link(project: &crate::models::Project) -> Option<Link> {
+    resolve_link(
+        Path::new(&project.path),
+        project.scripts.infisical_auto.as_deref(),
+    )
+}
+
+/// The environment a project's terminals and scripts take keys from. On by default for a linked
+/// project (the link's environment); the owner's own choice of environment wins, and turning it
+/// off in the project's details stops it.
+pub(crate) fn effective_environment(
+    scripts: &crate::project_scripts::ProjectScripts,
+    link: Option<&Link>,
+) -> Option<String> {
+    if scripts.infisical_off {
+        return None;
+    }
+    if let Some(chosen) = scripts.infisical_run.as_deref() {
+        return valid_slug(chosen).then(|| chosen.to_owned());
+    }
+    link.map(|link| link.environment.clone())
+}
+
+/// The Infisical project whose name is the Sirus project's (ignoring case and the spaces around
+/// it), when exactly one has it.
+pub(crate) fn name_match(name: &str, infisical: &[(String, String)]) -> Option<String> {
+    let wanted = name.trim().to_lowercase();
+    if wanted.is_empty() {
+        return None;
+    }
+    let mut found = infisical
+        .iter()
+        .filter(|(_, other)| other.trim().to_lowercase() == wanted);
+    match (found.next(), found.next()) {
+        (Some((id, _)), None) => Some(id.clone()),
+        _ => None,
+    }
+}
+
+/// The automatic links to change, as `(project id, new value)`: a project without a link file
+/// gets the Infisical project of the same name; one whose match disappeared, or that now has a
+/// file, loses it.
+pub(crate) fn auto_link_changes(
+    projects: &[crate::models::Project],
+    infisical: &[(String, String)],
+) -> Vec<(String, Option<String>)> {
+    projects
+        .iter()
+        .filter_map(|project| {
+            let has_file = resolve_link(Path::new(&project.path), None).is_some();
+            let wanted = if has_file {
+                None
+            } else {
+                name_match(&project.name, infisical)
+            };
+            (wanted != project.scripts.infisical_auto).then(|| (project.id.clone(), wanted))
+        })
+        .collect()
+}
+
+/// Applies `auto_link_changes` and saves; a failed save only logs.
+fn auto_link(state: &AppState, infisical: &[(String, String)]) {
+    let mut data = state.data.lock();
+    let changes = auto_link_changes(&data.projects, infisical);
+    if changes.is_empty() {
+        return;
+    }
+    for (id, auto) in changes {
+        if let Some(project) = data.projects.iter_mut().find(|p| p.id == id) {
+            project.scripts.infisical_auto = auto;
+        }
+    }
+    if let Err(error) = crate::persist::save(&state.data_path, &data) {
+        tracing::warn!(%error, "the automatic Infisical links could not be saved");
+    }
+}
+
+/// Each Sirus project's link and whether its terminals use the keys, for the window.
+fn links_reply(state: &AppState) -> Vec<Value> {
+    let data = state.data.lock();
+    data.projects
+        .iter()
+        .map(|project| {
+            let mut reply = link_value(project);
+            reply["projectPath"] = json!(project.path);
+            reply
+        })
+        .collect()
+}
+
+fn link_value(project: &crate::models::Project) -> Value {
+    let link = project_link(project);
+    let terminal = effective_environment(&project.scripts, link.as_ref());
+    match link {
+        Some(link) => json!({
+            "kind": "link",
+            "linked": true,
+            "workspaceId": link.workspace,
+            "environment": terminal.clone().unwrap_or(link.environment),
+            "source": link.source.as_str(),
+            "terminal": terminal.is_some(),
+        }),
+        None => json!({ "kind": "link", "linked": false, "terminal": false }),
+    }
 }
 
 /// The keys a terminal starts with, for the `(workspace, environment)` of `terminal_source`
@@ -397,7 +571,7 @@ pub(crate) async fn terminal_env_pairs(
 
 // ---- The link file ----
 
-fn valid_slug(text: &str) -> bool {
+pub(crate) fn valid_slug(text: &str) -> bool {
     !text.is_empty()
         && text.len() <= 64
         && text
@@ -449,15 +623,6 @@ pub(crate) fn read_link(root: &Path) -> Option<(String, String)> {
     Some((workspace.to_owned(), environment.to_owned()))
 }
 
-fn link_reply(root: &Path) -> Value {
-    match read_link(root) {
-        Some((workspace, environment)) => {
-            json!({ "kind": "link", "linked": true, "workspaceId": workspace, "environment": environment })
-        }
-        None => json!({ "kind": "link", "linked": false }),
-    }
-}
-
 // ---- Scripts ----
 
 /// `script` run under `infisical-run`, so it gets the project's keys. A worktree may not have the
@@ -480,14 +645,29 @@ pub fn valid_environment(text: &str) -> bool {
 
 // ---- Actions ----
 
-fn project_root(state: &AppState, project_path: &str) -> Result<PathBuf> {
+/// The Sirus project at `project_path`, as `f` sees it.
+fn with_project<T>(
+    state: &AppState,
+    project_path: &str,
+    f: impl FnOnce(&crate::models::Project) -> T,
+) -> Result<T> {
     let wanted = project_path.trim_end_matches('/');
     let data = state.data.lock();
     data.projects
         .iter()
         .find(|project| project.path.trim_end_matches('/') == wanted)
-        .map(|project| PathBuf::from(&project.path))
+        .map(f)
         .ok_or_else(|| Error::not_found("That project is not in Sirus."))
+}
+
+fn project_root(state: &AppState, project_path: &str) -> Result<PathBuf> {
+    with_project(state, project_path, |project| PathBuf::from(&project.path))
+}
+
+fn link_reply(state: &AppState, project_path: &str) -> Result<Value> {
+    let mut reply = with_project(state, project_path, link_value)?;
+    reply["projectPath"] = json!(project_path);
+    Ok(reply)
 }
 
 fn linked(state: &AppState, project_path: &str, environment: &str) -> Result<String> {
@@ -496,9 +676,8 @@ fn linked(state: &AppState, project_path: &str, environment: &str) -> Result<Str
             "The Infisical project or environment is not valid.",
         ));
     }
-    let root = project_root(state, project_path)?;
-    read_link(&root)
-        .map(|(workspace, _)| workspace)
+    with_project(state, project_path, project_link)?
+        .map(|link| link.workspace)
         .ok_or_else(|| Error::agent("This project is not linked to Infisical."))
 }
 
@@ -554,7 +733,7 @@ pub(crate) async fn save_for_session(
     key: &str,
     value: &str,
 ) -> Result<()> {
-    let root = {
+    let link = {
         let data = state.data.lock();
         let session = data
             .sessions
@@ -564,7 +743,7 @@ pub(crate) async fn save_for_session(
         data.projects
             .iter()
             .find(|project| project.id == session.project_id)
-            .map(|project| PathBuf::from(&project.path))
+            .map(project_link)
             .ok_or_else(|| Error::not_found("That project is not in Sirus."))?
     };
     if !valid_slug(environment) {
@@ -572,8 +751,9 @@ pub(crate) async fn save_for_session(
             "The Infisical project or environment is not valid.",
         ));
     }
-    let (workspace, _) =
-        read_link(&root).ok_or_else(|| Error::agent("This project is not linked to Infisical."))?;
+    let workspace = link
+        .map(|link| link.workspace)
+        .ok_or_else(|| Error::agent("This project is not linked to Infisical."))?;
     save_secret(&workspace, environment, key, value).await
 }
 
@@ -583,9 +763,10 @@ pub async fn infisical_action(state: State<'_, Arc<AppState>>, action: Action) -
     match action {
         Action::Status => {
             if credentials().is_none() {
-                return Ok(
-                    json!({ "kind": "status", "connected": false, "loggedIn": false, "projects": [] }),
-                );
+                return Ok(json!({
+                    "kind": "status", "connected": false, "loggedIn": false, "projects": [],
+                    "links": links_reply(state),
+                }));
             }
             let listed = api(
                 Method::GET,
@@ -593,14 +774,25 @@ pub async fn infisical_action(state: State<'_, Arc<AppState>>, action: Action) -
                 None,
             )
             .await;
-            Ok(match listed {
-                Ok((status, reply)) if (200..300).contains(&status) => json!({
-                    "kind": "status",
-                    "connected": true,
-                    "loggedIn": true,
-                    "identity": ACCOUNT,
-                    "projects": projects_of(&reply),
-                }),
+            let mut reply = match listed {
+                Ok((status, reply)) if (200..300).contains(&status) => {
+                    let projects = projects_of(&reply);
+                    let named: Vec<(String, String)> = projects
+                        .iter()
+                        .filter_map(|p| {
+                            Some((p["id"].as_str()?.to_owned(), p["name"].as_str()?.to_owned()))
+                        })
+                        .collect();
+                    // Projects without a link file take the Infisical project of the same name.
+                    auto_link(state, &named);
+                    json!({
+                        "kind": "status",
+                        "connected": true,
+                        "loggedIn": true,
+                        "identity": ACCOUNT,
+                        "projects": projects,
+                    })
+                }
                 Ok((status, _)) => json!({
                     "kind": "status", "connected": true, "loggedIn": false, "identity": ACCOUNT,
                     "projects": [], "error": http_status_error(status).to_string(),
@@ -609,7 +801,9 @@ pub async fn infisical_action(state: State<'_, Arc<AppState>>, action: Action) -
                     "kind": "status", "connected": true, "loggedIn": false, "identity": ACCOUNT,
                     "projects": [], "error": error.to_string(),
                 }),
-            })
+            };
+            reply["links"] = json!(links_reply(state));
+            Ok(reply)
         }
         Action::Connect {
             client_id,
@@ -646,16 +840,9 @@ pub async fn infisical_action(state: State<'_, Arc<AppState>>, action: Action) -
         } => {
             let root = project_root(state, &project_path)?;
             write_link(&root, &workspace_id, &environment)?;
-            let mut reply = link_reply(&root);
-            reply["projectPath"] = json!(project_path);
-            Ok(reply)
+            link_reply(state, &project_path)
         }
-        Action::ProjectLink { project_path } => {
-            let root = project_root(state, &project_path)?;
-            let mut reply = link_reply(&root);
-            reply["projectPath"] = json!(project_path);
-            Ok(reply)
-        }
+        Action::ProjectLink { project_path } => link_reply(state, &project_path),
         Action::ListKeys {
             project_path,
             environment,
@@ -786,6 +973,121 @@ mod tests {
         let projects = projects_of(&reply);
         assert_eq!(projects.len(), 1);
         assert_eq!(projects[0]["environments"][1]["slug"], "prod");
+    }
+
+    fn project(id: &str, name: &str, path: &Path) -> crate::models::Project {
+        crate::models::Project {
+            id: id.into(),
+            name: name.into(),
+            path: path.to_string_lossy().into_owned(),
+            added_at: String::new(),
+            last_opened_at: String::new(),
+            look: Default::default(),
+            appearance: None,
+            scripts: Default::default(),
+        }
+    }
+
+    #[test]
+    fn a_link_comes_from_the_folder_then_the_repo_root_then_the_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        let app = repo.join("apps/web");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        std::fs::create_dir_all(&app).unwrap();
+        // Only the name: the default environment.
+        let named = resolve_link(&app, Some("by-name")).unwrap();
+        assert_eq!(named.source, LinkSource::Name);
+        assert_eq!(named.environment, "dev");
+        assert_eq!(resolve_link(&app, None), None);
+        // The repository's file wins over the name.
+        write_link(repo, "repo-ws", "staging").unwrap();
+        let from_repo = resolve_link(&app, Some("by-name")).unwrap();
+        assert_eq!(
+            (from_repo.workspace.as_str(), from_repo.source),
+            ("repo-ws", LinkSource::Repo)
+        );
+        // The folder's own file (what the owner picks) wins over both.
+        write_link(&app, "mine", "prod").unwrap();
+        let own = resolve_link(&app, Some("by-name")).unwrap();
+        assert_eq!(
+            (own.workspace.as_str(), own.environment.as_str(), own.source),
+            ("mine", "prod", LinkSource::Folder)
+        );
+    }
+
+    #[test]
+    fn a_project_takes_the_one_infisical_project_with_its_name() {
+        let infisical = vec![
+            ("w1".to_owned(), "Sirus".to_owned()),
+            ("w2".to_owned(), "App".to_owned()),
+            ("w3".to_owned(), "app ".to_owned()),
+        ];
+        assert_eq!(name_match("sirus", &infisical).as_deref(), Some("w1"));
+        // Two projects answer to "app": too ambiguous to pick one.
+        assert_eq!(name_match("App", &infisical), None);
+        assert_eq!(name_match("other", &infisical), None);
+        assert_eq!(name_match("  ", &infisical), None);
+
+        let dir = tempfile::tempdir().unwrap();
+        let plain = dir.path().join("sirus");
+        let filed = dir.path().join("filed");
+        std::fs::create_dir_all(&plain).unwrap();
+        std::fs::create_dir_all(&filed).unwrap();
+        write_link(&filed, "chosen", "dev").unwrap();
+        let mut projects = vec![
+            project("p1", "Sirus", &plain),
+            project("p2", "Sirus", &filed),
+            project("p3", "gone", &plain),
+        ];
+        projects[2].scripts.infisical_auto = Some("old".into());
+        let changes = auto_link_changes(&projects, &infisical);
+        // The explicit file wins: p2 gets nothing; p3's match disappeared.
+        assert_eq!(
+            changes,
+            vec![
+                ("p1".to_owned(), Some("w1".to_owned())),
+                ("p3".to_owned(), None)
+            ]
+        );
+        projects[0].scripts.infisical_auto = Some("w1".into());
+        projects[2].scripts.infisical_auto = None;
+        assert!(auto_link_changes(&projects, &infisical).is_empty());
+    }
+
+    #[test]
+    fn the_keys_are_on_by_default_for_a_linked_project_and_can_be_turned_off() {
+        use crate::project_scripts::{set_infisical, ProjectScripts};
+        let link = Link {
+            workspace: "w".into(),
+            environment: "staging".into(),
+            source: LinkSource::Name,
+        };
+        let mut scripts = ProjectScripts::default();
+        assert_eq!(
+            effective_environment(&scripts, Some(&link)).as_deref(),
+            Some("staging")
+        );
+        assert_eq!(effective_environment(&scripts, None), None);
+        set_infisical(&mut scripts, None);
+        assert!(scripts.infisical_off);
+        assert_eq!(effective_environment(&scripts, Some(&link)), None);
+        set_infisical(&mut scripts, Some("prod".into()));
+        assert!(!scripts.infisical_off);
+        assert_eq!(
+            effective_environment(&scripts, Some(&link)).as_deref(),
+            Some("prod")
+        );
+        // The opt-out is saved; the default is not written at all.
+        assert!(ProjectScripts::default().is_empty());
+        let off = ProjectScripts {
+            infisical_off: true,
+            ..ProjectScripts::default()
+        };
+        assert_eq!(
+            serde_json::to_value(&off).unwrap(),
+            json!({"infisicalOff": true})
+        );
     }
 
     #[test]

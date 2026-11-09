@@ -261,7 +261,6 @@ pub fn page<V: 'static>(
         body.push(crate::settings_connectors::view(
             settings, data, editing, save, edit, run, cx,
         ));
-        body.push(crate::settings_infisical::view(editing, edit, run, cx));
     }
     for group in shown.groups {
         body.push(group_view(group, &mut ui, cx));

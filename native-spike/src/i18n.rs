@@ -158,6 +158,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("1 caractere", "1 character"),
     ("1 falhou", "1 failed"),
     ("1 passo", "1 step"),
+    ("1 pasta sem projeto", "1 folder without a project"),
     ("1 pedido na fila", "1 queued request"),
     ("1 repositório indisponível.", "1 repository unavailable."),
     ("1 subagente", "1 subagent"),
@@ -515,6 +516,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Abrir lado a lado", "Open side by side"),
     ("Abrir links no", "Open links in"),
     ("Abrir no GitHub", "Open on GitHub"),
+    ("Abrir no Infisical", "Open in Infisical"),
     ("Abrir no editor", "Open in the editor"),
     ("Abrir no navegador padrão", "Open in default browser"),
     ("Abrir ou fechar a sidebar", "Open or close the sidebar"),
@@ -956,6 +958,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "Cada pergunta leva o que a sessão principal está fazendo agora. Começa em só leitura e usa o mesmo workspace.",
         "Each question carries what the main session is doing right now. It starts read-only and uses the same workspace.",
     ),
+    (
+        "Cada projeto do Sirus usa as chaves de um projeto do Infisical. Um projeto com .infisical.json, ou com o mesmo nome no Infisical, já vem escolhido. Terminais novos e scripts recebem as chaves.",
+        "Each Sirus project uses the keys of an Infisical project. A project with .infisical.json, or with the same name in Infisical, comes already chosen. New terminals and scripts get the keys.",
+    ),
     ("Cada script tem até 8 KiB.", "Each script is up to 8 KiB."),
     (
         "Cada tarefa da equipe precisa de 1 a 8 caminhos.",
@@ -1013,6 +1019,18 @@ const ENTRIES: &[(&str, &str)] = &[
     (
         "Chave guardada só nesta conversa. O agente a recebeu sem ver o valor.",
         "Key kept only for this conversation. The agent received it without seeing the value.",
+    ),
+    (
+        "Chaves de 1 projeto · como {}",
+        "Keys for 1 project · as {}",
+    ),
+    (
+        "Chaves de {} projetos · como {}",
+        "Keys for {} projects · as {}",
+    ),
+    (
+        "Chaves dos projetos nos terminais, scripts e agentes",
+        "Project keys in terminals, scripts and agents",
     ),
     ("Checkout atual", "Current checkout"),
     ("Ciano", "Cyan"),
@@ -1118,17 +1136,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Concluir", "Done"),
     ("Concluída", "Done"),
     ("Concluídas", "Done"),
+    ("Concluído", "Done"),
     ("Conectadas", "Connected"),
     ("Conectado", "Connected"),
     ("Conectado como {}", "Signed in as {}"),
-    (
-        "Conectado como {} · 1 projeto",
-        "Connected as {} · 1 project",
-    ),
-    (
-        "Conectado como {} · {} projetos",
-        "Connected as {} · {} projects",
-    ),
     (
         "Conectado pelo glab em {}.",
         "Signed in through glab on {}.",
@@ -1139,6 +1150,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Conectando à tela…", "Connecting to the screen…"),
     ("Conectando…", "Connecting…"),
     ("Conectar", "Connect"),
+    ("Conectar Infisical", "Connect Infisical"),
     ("Conectar outra conta", "Connect another account"),
     ("Conectar um aparelho", "Connect a device"),
     ("Conectar {}", "Connect {}"),
@@ -2636,6 +2648,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "No project here matches “{}”, so the draft is in the current project.",
     ),
     ("Nenhum projeto no Infisical.", "No projects in Infisical."),
+    (
+        "Nenhum projeto no Sirus ainda.",
+        "No projects in Sirus yet.",
+    ),
     ("Nenhum provedor selecionado.", "No providers selected."),
     ("Nenhum pull request aberto.", "No open pull requests."),
     ("Nenhum pull request fechado.", "No closed pull requests."),
@@ -4050,6 +4066,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "Unknown device preset.",
     ),
     (
+        "Preencha o ID e o segredo do cliente.",
+        "Fill in the client ID and the client secret.",
+    ),
+    (
         "Preencher o código de {}",
         "Fill the authenticator code for {}",
     ),
@@ -4094,11 +4114,12 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Projeto {}", "Project {}"),
     ("Projetos", "Projects"),
-    ("Projetos do Sirus", "Sirus projects"),
     (
         "Projetos e branches de Postgres serverless",
         "Serverless Postgres projects and branches",
     ),
+    ("Projetos e chaves", "Projects and keys"),
+    ("Projetos e chaves…", "Projects and keys…"),
     (
         "Projetos fixados ficam primeiro. Arrastar uma pasta ativa a ordem manual.",
         "Pinned projects stay first. Dragging a folder switches to manual order.",
@@ -4437,7 +4458,6 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Sem login", "Not signed in"),
     ("Sem resposta", "No reply"),
     ("Sem saída.", "No output."),
-    ("Sem vínculo com o Infisical", "Not linked to Infisical"),
     ("Semanal · Opus", "Weekly · Opus"),
     ("Semanal · Sonnet", "Weekly · Sonnet"),
     ("Semanal · apps OAuth", "Weekly · OAuth apps"),
@@ -4787,7 +4807,6 @@ const ENTRIES: &[(&str, &str)] = &[
         "Uma vez, na primeira abertura de cada versão.",
         "Once, on the first launch of each version.",
     ),
-    ("Usa as chaves de {}", "Uses the keys of {}"),
     (
         "Usada a chave {} do Infisical. O agente a recebeu sem ver o valor.",
         "Used the key {} from Infisical. The agent received it without seeing the value.",
@@ -4795,10 +4814,6 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Usar", "Use"),
     ("Usar Este Mac", "Use this Mac"),
     ("Usar a ferramenta {}", "Use the {} tool"),
-    (
-        "Usar as chaves do Infisical nos scripts e no terminal",
-        "Use the Infisical keys in scripts and the terminal",
-    ),
     ("Usar do Infisical…", "Use from Infisical…"),
     ("Usar esta conta", "Use this account"),
     ("Usar fonte do sistema na interface", "Use system UI font"),
@@ -4868,7 +4883,6 @@ const ENTRIES: &[(&str, &str)] = &[
         "Vale para código nas transcrições, diffs e no editor.",
         "Applies to code in transcripts, diffs and the editor.",
     ),
-    ("Vale para terminais novos.", "Applies to new terminals."),
     ("Vale por {} · uso único", "Valid for {} · single use"),
     (
         "Valores salvos das células. Fórmulas não são recalculadas; gráficos e formatação não são exibidos.",
@@ -5413,6 +5427,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "{} no longer recognises this Mac. Pair it again in Settings → Connections.",
     ),
     ("{} passos", "{} steps"),
+    ("{} pastas sem projeto", "{} folders without a project"),
     ("{} pedidos na fila", "{} queued requests"),
     ("{} quer usar {}", "{} wants to use {}"),
     (

@@ -3423,6 +3423,14 @@ impl Shell {
         .detach();
     }
 
+    /// The provider a conversation runs on, for the agent's pointer (agent_pointer.rs).
+    pub(crate) fn provider_of(&self, session: &str) -> Option<&'static str> {
+        self.conversations
+            .iter()
+            .find(|c| c.session_id == session)
+            .map(|c| c.provider)
+    }
+
     /// An agent opened a page: the conversation it works for shows it in the Navegador pane,
     /// unless Settings → Navegador says to leave the pane as it is.
     pub(crate) fn reveal_browser(&mut self, session: &str, cx: &mut Context<Self>) {

@@ -491,6 +491,10 @@ pub fn provider_tile(provider: &str) -> Option<(Hsla, Hsla)> {
     Some((rgb(top).into(), rgb(bottom).into()))
 }
 pub fn provider_glyph(provider: &str, side: f32) -> AnyElement {
+    provider_glyph_in(provider, side, gpui::white())
+}
+/// A provider's one-colour mark in `color`.
+pub fn provider_glyph_in(provider: &str, side: f32, color: Hsla) -> AnyElement {
     let path = match provider {
         "claude" => "claude.svg",
         "codex" => "codex-glyph.svg",
@@ -506,7 +510,7 @@ pub fn provider_glyph(provider: &str, side: f32) -> AnyElement {
     svg()
         .path(path)
         .size(px(side))
-        .text_color(gpui::white())
+        .text_color(color)
         .flex_shrink_0()
         .into_any_element()
 }

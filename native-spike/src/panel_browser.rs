@@ -1047,6 +1047,22 @@ impl Browser {
 
     // ---- Agent tools ----
 
+    /// What the agent's pointer draws with on the active page (agent_pointer.rs): the provider's
+    /// colour and mark, and one screen point in CSS pixels whatever the zoom or device frame.
+    pub fn pointer_config(&self, tool: &str, provider: &str) -> Value {
+        let scale =
+            crate::agent_pointer::page_scale(self.shared.applied_zoom.get(), self.user_zoom);
+        let accent = crate::agent_pointer::rgb_of(crate::theme::accent());
+        let mut config = crate::agent_pointer::page_config(
+            provider,
+            accent,
+            crate::prefs::reduce_motion(),
+            scale,
+        );
+        config["kind"] = json!(tool);
+        config
+    }
+
     /// Starts one browser tool. Arguments were validated by the host (`browser_bridge.rs`).
     pub fn tool(&mut self, tool: &str, args: &Value, cx: &mut Context<Self>) -> Step {
         let mtm = MainThreadMarker::new();
@@ -1120,15 +1136,15 @@ impl Browser {
                 }
             }
             "browser_snapshot" => page(self, browser_js::SNAPSHOT, json!({})),
-            "browser_click" => page(self, browser_js::CLICK, args.clone()),
-            "browser_type" => page(self, browser_js::TYPE, args.clone()),
+            "browser_click" => page(self, &browser_js::pointed(browser_js::CLICK), args.clone()),
+            "browser_type" => page(self, &browser_js::pointed(browser_js::TYPE), args.clone()),
             "browser_press" => page(self, browser_js::PRESS, args.clone()),
             "browser_wait_for" => page(self, browser_js::WAIT, args.clone()),
-            "browser_scroll" => page(self, browser_js::SCROLL, args.clone()),
+            "browser_scroll" => page(self, &browser_js::pointed(browser_js::SCROLL), args.clone()),
             "browser_logs" => page(self, browser_js::LOGS, args.clone()),
             "browser_hover" => page(self, browser_js::HOVER, args.clone()),
             "browser_select" => page(self, browser_js::SELECT, args.clone()),
-            "browser_drag" => page(self, browser_js::DRAG, args.clone()),
+            "browser_drag" => page(self, &browser_js::pointed(browser_js::DRAG), args.clone()),
             "browser_upload" => page(self, browser_js::UPLOAD, args.clone()),
             "browser_network" => page(self, browser_js::NETWORK_READ, args.clone()),
             "page_script" => {

@@ -26,6 +26,13 @@ script!(SELECT, "select.js");
 script!(DRAG, "drag.js");
 script!(UPLOAD, "upload.js");
 script!(NETWORK_READ, "network_read.js");
+// Runs first in the pointed tools: draws the agent's pointer (ADR-198) and never throws.
+script!(POINTER, "pointer.js");
+
+/// A tool body with the agent's pointer drawn before it acts.
+pub fn pointed(body: &str) -> String {
+    format!("{POINTER}\n{body}")
+}
 
 // Plain expressions evaluated in the page (the element picker).
 script!(ANNOTATE_START, "annotate_start.js");

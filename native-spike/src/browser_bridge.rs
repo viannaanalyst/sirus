@@ -54,6 +54,14 @@ const ON_PAGE: [&str; 12] = [
     "browser_network",
 ];
 
+/// Tools the agent's pointer shows on the page (`browser_js/pointer.js`).
+const POINTED: [&str; 4] = [
+    "browser_click",
+    "browser_type",
+    "browser_scroll",
+    "browser_drag",
+];
+
 /// How long a page may take to answer a tool (waiting scripts run up to 8 s inside it).
 const PAGE_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -62,6 +70,7 @@ pub fn start(backend: Backend, cx: &mut App) {
     let requests = backend.subscribe("browser_tool_request");
     let logins = backend.subscribe("login-vault-state");
     let computer = backend.subscribe("computer-state");
+    crate::pointer_overlay::start(&backend, cx);
     cx.spawn(async move |cx| {
         while let Ok(request) = requests.recv().await {
             let backend = backend.clone();
@@ -130,6 +139,7 @@ async fn run(
     if session.is_empty() {
         return Err("missing session".into());
     }
+    let mut provider = None;
     let entity = cx.update(|app| {
         let entity = panel_browser::entity_for(session, backend, app);
         // The web views hang off the window's content view, which a panel that was never
@@ -140,14 +150,27 @@ async fn run(
                     .read(app)
                     .set_parent(panel_browser::parent_of(window));
             });
-            if matches!(tool, "browser_open" | "browser_navigate")
-                && let Some(shell) = window.downcast::<crate::shell::Shell>()
-            {
-                let _ = shell.update(app, |shell, _, cx| shell.reveal_browser(session, cx));
+            if let Some(shell) = window.downcast::<crate::shell::Shell>() {
+                provider = shell
+                    .read(app)
+                    .ok()
+                    .and_then(|shell| shell.provider_of(session));
+                if matches!(tool, "browser_open" | "browser_navigate") {
+                    let _ = shell.update(app, |shell, _, cx| shell.reveal_browser(session, cx));
+                }
             }
         }
         entity
     });
+    // Clicks, typing, scrolls and drags show the agent's pointer on the page (ADR-198).
+    let mut args = args.clone();
+    if POINTED.contains(&tool) && args.is_object() {
+        let config = entity.update(cx, |browser, _| {
+            browser.pointer_config(tool, provider.unwrap_or_default())
+        });
+        args["sirusPointer"] = config;
+    }
+    let args = &args;
     if ON_PAGE.contains(&tool) || tool == "browser_screenshot" {
         settle(&entity, cx).await;
     }

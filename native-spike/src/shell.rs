@@ -1057,6 +1057,34 @@ const PEEK_EDGE: f32 = 6.;
 const PEEK_INSET: f32 = 6.;
 const PEEK_DRIFT: f32 = 12.;
 const PEEK_CLOSE: Duration = Duration::from_millis(180);
+
+/// Whether the peek must stay open for a menu or page it opened. The menus are drawn outside
+/// the peek's bounds, so the pointer on them is "off the panel"; while any is open (the options
+/// menu included, while it fades out) the peek waits.
+fn peek_stays_open(
+    page: bool,
+    project_menu: bool,
+    context_menu: bool,
+    session_filter: bool,
+    sidebar_options: bool,
+) -> bool {
+    page || project_menu || context_menu || session_filter || sidebar_options
+}
+
+#[cfg(test)]
+mod peek_tests {
+    use super::peek_stays_open;
+
+    #[test]
+    fn peek_waits_for_any_menu() {
+        assert!(!peek_stays_open(false, false, false, false, false));
+        assert!(peek_stays_open(false, false, false, false, true));
+        assert!(peek_stays_open(false, true, false, false, false));
+        assert!(peek_stays_open(false, false, true, false, false));
+        assert!(peek_stays_open(false, false, false, true, false));
+        assert!(peek_stays_open(true, false, false, false, false));
+    }
+}
 /// Settings, same pages in the same order as Sirus's SettingsSidebar.
 pub(crate) const SETTINGS_NAV: [(&str, &[(&str, &str)]); 3] = [
     (
@@ -10832,11 +10860,13 @@ impl Shell {
         if on_edge
             || on_toggle
             || on_panel
-            || self.palette_ui.is_some()
-            || self.appearance.is_some()
-            || self.project_menu.is_some()
-            || self.context_menu.is_some()
-            || self.session_filter.open.is_some()
+            || peek_stays_open(
+                self.palette_ui.is_some() || self.appearance.is_some(),
+                self.project_menu.is_some(),
+                self.context_menu.is_some(),
+                self.session_filter.open.is_some(),
+                self.sidebar_options.is_some(),
+            )
         {
             if on_edge {
                 self.set_peek(true, cx);
@@ -12384,14 +12414,14 @@ impl Shell {
         let chip = div()
             .id("workspace-chip")
             .relative()
-            .h(px(26.))
+            .h(px(28.))
             .px(px(8.))
             .rounded(px(crate::theme::RADIUS_SM))
             .flex()
             .items_center()
-            .gap(px(6.))
-            .text_size(px(12.5))
-            .text_color(content(0.6))
+            .gap(px(8.))
+            .text_size(px(13.))
+            .text_color(content(0.55))
             .when(interactive, |d| {
                 d.cursor_pointer()
                     .when(open, |d| d.bg(content(0.07)))
@@ -12412,7 +12442,7 @@ impl Shell {
                 } else {
                     "folder"
                 },
-                14.,
+                16.,
             ))
             .child(label)
             .when(!branch.is_empty(), |d| {
@@ -12420,17 +12450,17 @@ impl Shell {
                     div()
                         .flex()
                         .items_center()
-                        .gap(px(4.))
-                        .text_color(content(0.4))
-                        .child(icon("branch", 12.))
+                        .gap(px(8.))
+                        .ml(px(28.))
+                        .text_color(content(0.55))
+                        .child(icon("branch", 16.))
                         .child(branch),
                 )
             });
         Some(
             div()
                 .w_full()
-                .px(px(2.))
-                .pt(px(6.))
+                .pt(px(10.))
                 .flex()
                 .child(chip)
                 .into_any_element(),

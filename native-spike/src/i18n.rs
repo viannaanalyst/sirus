@@ -150,10 +150,12 @@ const ENTRIES: &[(&str, &str)] = &[
     ("(vazio)", "(empty)"),
     ("+{} aviso", "+{} notice"),
     ("+{} avisos", "+{} notices"),
+    (".env.local do projeto", ".env.local in the project"),
     ("1 agente", "1 agent"),
     ("1 anexo", "1 attachment"),
     ("1 arquivo", "1 file"),
     ("1 arquivo alterado", "1 changed file"),
+    ("1 caractere", "1 character"),
     ("1 falhou", "1 failed"),
     ("1 passo", "1 step"),
     ("1 pedido na fila", "1 queued request"),
@@ -292,6 +294,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("A gravação é longa demais.", "The recording is too long."),
     (
+        "A identidade de máquina “sirus” (Universal Auth). Fica no Keychain, nunca nos ajustes.",
+        "The “sirus” machine identity (Universal Auth). It stays in the Keychain, never in the settings.",
+    ),
+    (
         "A imagem deve ter no máximo 10 MiB.",
         "The image must be at most 10 MiB.",
     ),
@@ -332,6 +338,10 @@ const ENTRIES: &[(&str, &str)] = &[
     (
         "A operação nativa não pôde ser concluída.",
         "Native operation could not complete.",
+    ),
+    (
+        "A pasta de trabalho da conversa não está disponível.",
+        "The conversation's workspace is unavailable.",
     ),
     (
         "A pasta desta conversa está ausente e não pode ser restaurada.",
@@ -726,8 +736,16 @@ const ENTRIES: &[(&str, &str)] = &[
         "Changes that are not in a commit yet will be lost. This cannot be undone.",
     ),
     (
+        "As chaves ficam no Infisical. O Sirus só mostra os nomes delas e entrega o valor ao agente sem que ele o veja. Os scripts do projeto rodam com as chaves; o ambiente dos agentes não muda.",
+        "The keys stay in Infisical. Sirus shows only their names and hands a value to the agent without the agent seeing it. Project scripts run with the keys; the agents' own environment does not change.",
+    ),
+    (
         "As combinações de atalho devem ser únicas.",
         "Shortcut combinations must be unique.",
+    ),
+    (
+        "As credenciais estão salvas, mas o login falhou.",
+        "The credentials are saved, but the sign-in failed.",
     ),
     (
         "As dimensões da imagem excedem o limite seguro.",
@@ -885,6 +903,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Busca o branch padrão do origin e baseia novos worktrees nele, e não no branch local. Sem origin ou sem rede, eles começam do branch local.",
         "Fetches origin's default branch and bases new worktrees on it instead of the local branch. Without origin or a network, they start from the local branch.",
     ),
+    ("Buscando as chaves…", "Looking up the keys…"),
     ("Buscando atualização…", "Looking for an update…"),
     ("Buscando…", "Searching…"),
     ("Buscar", "Search"),
@@ -991,6 +1010,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Chamada de ferramenta", "Tool call"),
     ("Chat lateral", "Side chat"),
     ("Chave conectada · {}", "Key connected · {}"),
+    (
+        "Chave guardada só nesta conversa. O agente a recebeu sem ver o valor.",
+        "Key kept only for this conversation. The agent received it without seeing the value.",
+    ),
     ("Checkout atual", "Current checkout"),
     ("Ciano", "Cyan"),
     ("Claro", "Light"),
@@ -1099,6 +1122,14 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Conectadas", "Connected"),
     ("Conectado", "Connected"),
     ("Conectado como {}", "Signed in as {}"),
+    (
+        "Conectado como {} · 1 projeto",
+        "Connected as {} · 1 project",
+    ),
+    (
+        "Conectado como {} · {} projetos",
+        "Connected as {} · {} projects",
+    ),
     (
         "Conectado pelo glab em {}.",
         "Signed in through glab on {}.",
@@ -1288,6 +1319,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Descartar alterações?", "Discard changes?"),
     ("Descartar todas as alterações?", "Discard all changes?"),
     ("Descartar tudo", "Discard all"),
+    ("Desconectar", "Disconnect"),
     ("Desconhecido", "Unknown"),
     ("Descrição (opcional)", "Description (optional)"),
     (
@@ -1325,6 +1357,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Digite o valor e aperte Enter",
         "Type the value and press Enter",
     ),
+    ("Digite ou cole o valor", "Type or paste the value"),
     ("Digite um endereço", "Type an address"),
     (
         "Digite um valor de até 16 KB.",
@@ -1580,6 +1613,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Escolher imagem", "Choose image"),
     ("Escolher outra pasta…", "Choose another folder…"),
     ("Escolher pasta", "Choose folder"),
+    ("Escolher projeto", "Choose a project"),
     ("Escolher uma imagem", "Choose an image"),
     ("Escolher uma pasta…", "Choose a folder…"),
     ("Esconder arquivos ignorados", "Hide ignored files"),
@@ -1658,6 +1692,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "That 1Password item is not valid.",
     ),
     (
+        "Esse nome de chave não é válido.",
+        "That secret name is not valid.",
+    ),
+    (
         "Esse perfil do navegador não está disponível.",
         "That browser profile is not available.",
     ),
@@ -1668,6 +1706,14 @@ const ENTRIES: &[(&str, &str)] = &[
     (
         "Esse processo não pertence a esta conversa, então ele continua em execução.",
         "That process does not belong to this conversation, so it is left running.",
+    ),
+    (
+        "Esse projeto não está no Sirus.",
+        "That project is not in Sirus.",
+    ),
+    (
+        "Esse projeto, ambiente ou chave do Infisical não foi encontrado.",
+        "That Infisical project, environment or secret was not found.",
     ),
     (
         "Esse provedor só roda com um acesso mais amplo do que esta conversa permite; escolha outro provedor ou altere o modo de acesso.",
@@ -1708,6 +1754,10 @@ const ENTRIES: &[(&str, &str)] = &[
     (
         "Esta conversa não está mais em execução.",
         "This conversation is no longer running.",
+    ),
+    (
+        "Esta conversa não existe mais.",
+        "This conversation no longer exists.",
     ),
     (
         "Esta conversa não faz parte deste pull request.",
@@ -1854,8 +1904,16 @@ const ENTRIES: &[(&str, &str)] = &[
         "This request already attempted to start. To change its text, cancel it and add another request.",
     ),
     (
+        "Este pedido não traz o nome de uma variável para salvar.",
+        "This request has no variable name to save under.",
+    ),
+    (
         "Este perfil pertence a conversas existentes. Adicione outra conta.",
         "This profile belongs to existing sessions. Add another account instead.",
+    ),
+    (
+        "Este projeto não está ligado ao Infisical.",
+        "This project is not linked to Infisical.",
     ),
     (
         "Este projeto não tem script desse tipo.",
@@ -2089,6 +2147,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "A command is running in \"{}\". Closing ends the shell and whatever runs in it.",
     ),
     ("ID de modelo do Cursor inválido", "Invalid Cursor model ID"),
+    ("ID do cliente", "Client ID"),
     (
         "Identidade da pergunta desconhecida",
         "Unknown question identity",
@@ -2100,6 +2159,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Indisponível", "Unavailable"),
     ("Informado pelo provedor", "Reported by the provider"),
     ("Informar", "Provide"),
+    (
+        "Informe o ID do cliente e o segredo do cliente.",
+        "Enter the client ID and the client secret.",
+    ),
     (
         "Informe um predefinido de dispositivo ou largura e altura.",
         "Give a device preset, or both width and height.",
@@ -2565,6 +2628,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Nenhum projeto aqui corresponde a “{}”, então o rascunho está no projeto atual.",
         "No project here matches “{}”, so the draft is in the current project.",
     ),
+    ("Nenhum projeto no Infisical.", "No projects in Infisical."),
     ("Nenhum provedor selecionado.", "No providers selected."),
     ("Nenhum pull request aberto.", "No open pull requests."),
     ("Nenhum pull request fechado.", "No closed pull requests."),
@@ -2583,6 +2647,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Nenhuma alteração.", "No changes."),
     ("Nenhuma atividade ainda.", "No activity yet."),
     ("Nenhuma ação ainda.", "No actions yet."),
+    (
+        "Nenhuma chave neste ambiente.",
+        "No keys in this environment.",
+    ),
     ("Nenhuma configuração encontrada", "No settings found"),
     (
         "Nenhuma conta do GitHub conectada.",
@@ -2655,6 +2723,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Novo terminal", "New Terminal"),
     ("Novo worktree", "New worktree"),
     ("Não", "No"),
+    ("Não conectado", "Not connected"),
     (
         "Não consegui copiar os dados do Sirus.",
         "Could not copy the Sirus data.",
@@ -2675,6 +2744,10 @@ const ENTRIES: &[(&str, &str)] = &[
     (
         "Não deu para falar com o 1Password.",
         "1Password could not be reached.",
+    ),
+    (
+        "Não deu para falar com o Infisical.",
+        "Infisical could not be reached.",
     ),
     (
         "Não deu para gerar a mensagem do commit.",
@@ -2754,6 +2827,10 @@ const ENTRIES: &[(&str, &str)] = &[
     (
         "Não foi possível executar o git: {}",
         "Could not run git: {}",
+    ),
+    (
+        "Não foi possível gravar o arquivo .env.local.",
+        "The .env.local file could not be written.",
     ),
     (
         "Não foi possível guardar o token do Bitbucket.",
@@ -2877,6 +2954,10 @@ const ENTRIES: &[(&str, &str)] = &[
     (
         "Não foi possível salvar as alterações do agente auxiliar antes da limpeza.",
         "Cannot save a helper's changes before cleanup.",
+    ),
+    (
+        "Não foi possível salvar o arquivo .infisical.json.",
+        "The .infisical.json file could not be saved.",
     ),
     (
         "Não foi possível salvar o login.",
@@ -3059,6 +3140,30 @@ const ENTRIES: &[(&str, &str)] = &[
     (
         "O HEAD do Git mudou desde esta resposta ({} para {}): houve commit, checkout, rebase ou pull. Nada será desfeito. Abra o diff e reverta à mão, ou use git revert no novo commit.",
         "Git HEAD moved since this reply ({} to {}): a commit, checkout, rebase or pull happened. Nothing is undone. Open the diff and revert it by hand, or use git revert on the new commit.",
+    ),
+    (
+        "O Infisical não está conectado.",
+        "Infisical is not connected.",
+    ),
+    (
+        "O Infisical recusou as credenciais, ou este projeto está fora do alcance delas.",
+        "Infisical refused the credentials or this project is out of their reach.",
+    ),
+    (
+        "O Infisical recusou o login. Confira o ID do cliente e o segredo.",
+        "Infisical refused the sign-in. Check the client ID and the secret.",
+    ),
+    (
+        "O Infisical recusou o pedido.",
+        "Infisical refused the request.",
+    ),
+    (
+        "O Infisical respondeu algo ilegível.",
+        "Infisical answered something unreadable.",
+    ),
+    (
+        "O Keychain não conseguiu guardar as credenciais do Infisical.",
+        "The Keychain could not save the Infisical credentials.",
     ),
     (
         "O Keychain não liberou a chave do Chrome. Permita o Sirus quando o macOS perguntar e tente de novo.",
@@ -3493,6 +3598,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "Native process ended before accepting response",
     ),
     ("O projeto não é válido.", "Its project is not valid."),
+    (
+        "O projeto ou o ambiente do Infisical não é válido.",
+        "The Infisical project or environment is not valid.",
+    ),
     (
         "O prompt só tinha caracteres ocultos, então pode ser malicioso.",
         "Its prompt had only hidden characters, so it may be malicious.",
@@ -3974,6 +4083,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Projeto {}", "Project {}"),
     ("Projetos", "Projects"),
+    ("Projetos do Sirus", "Sirus projects"),
     (
         "Projetos e branches de Postgres serverless",
         "Serverless Postgres projects and branches",
@@ -4213,6 +4323,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Rodar de novo", "Run again"),
     ("Rodar preparação", "Run setup"),
     (
+        "Rodar scripts com as chaves do Infisical",
+        "Run scripts with the Infisical keys",
+    ),
+    (
         "Rode `glab auth login` no terminal para ver e criar merge requests.",
         "Run `glab auth login` in a terminal to see and open merge requests.",
     ),
@@ -4231,6 +4345,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Salvando…", "Saving…"),
     ("Salvar", "Save"),
     ("Salvar automaticamente", "Save automatically"),
+    ("Salvar em", "Save to"),
     ("Salvar login", "Save login"),
     ("Salvar login de {}?", "Save login for {}?"),
     ("Salvar scripts", "Save scripts"),
@@ -4238,6 +4353,10 @@ const ENTRIES: &[(&str, &str)] = &[
     (
         "Salve um comando do projeto para rodar com um clique.",
         "Save a project command to run with one click.",
+    ),
+    (
+        "Salvo no {}. O agente recebeu a chave sem ver o valor.",
+        "Saved to {}. The agent received the key without seeing the value.",
     ),
     (
         "Salvo. Digite outro para trocar, ou um traço para remover",
@@ -4271,6 +4390,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Segredo do autenticador (opcional)",
         "Authenticator secret (optional)",
     ),
+    ("Segredo do cliente", "Client secret"),
     ("Seguir o sistema", "Follow the system"),
     ("Segurança", "Safety"),
     ("Selecionar elemento", "Select an element"),
@@ -4309,6 +4429,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Sem login", "Not signed in"),
     ("Sem resposta", "No reply"),
     ("Sem saída.", "No output."),
+    ("Sem vínculo com o Infisical", "Not linked to Infisical"),
     ("Semanal · Opus", "Weekly · Opus"),
     ("Semanal · Sonnet", "Weekly · Sonnet"),
     ("Semanal · apps OAuth", "Weekly · OAuth apps"),
@@ -4438,6 +4559,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Só nas sessões vazias, ou em todas as conversas.",
         "Only in empty sessions, or in every conversation.",
     ),
+    ("Só nesta conversa", "Only in this conversation"),
     ("Só vazias", "Empty only"),
     ("Tamanho da fonte da interface", "UI font size"),
     ("Tamanho da fonte de código", "Code font size"),
@@ -4653,9 +4775,15 @@ const ENTRIES: &[(&str, &str)] = &[
         "Uma vez, na primeira abertura de cada versão.",
         "Once, on the first launch of each version.",
     ),
+    ("Usa as chaves de {}", "Uses the keys of {}"),
+    (
+        "Usada a chave {} do Infisical. O agente a recebeu sem ver o valor.",
+        "Used the key {} from Infisical. The agent received it without seeing the value.",
+    ),
     ("Usar", "Use"),
     ("Usar Este Mac", "Use this Mac"),
     ("Usar a ferramenta {}", "Use the {} tool"),
+    ("Usar do Infisical…", "Use from Infisical…"),
     ("Usar esta conta", "Use this account"),
     ("Usar fonte do sistema na interface", "Use system UI font"),
     ("Usar o padrão do provedor", "Use provider default"),
@@ -4733,6 +4861,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Variáveis: {session-name} {id}. O identificador mantém branches únicas.",
         "Variables: {session-name} {id}. The identifier keeps branches unique.",
     ),
+    ("Vazio", "Empty"),
     (
         "Velocidade do corredor do composer",
         "Composer runner speed",
@@ -5218,6 +5347,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("{} assumiu", "{} took over"),
     ("{} atualizada a partir de {}", "{} updated from {}"),
+    ("{} caracteres", "{} characters"),
     ("{} commit novo em {}", "{} new commit on {}"),
     ("{} commits novos em {}", "{} new commits on {}"),
     ("{} contas", "{} accounts"),

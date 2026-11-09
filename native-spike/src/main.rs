@@ -74,6 +74,7 @@ mod reply_view;
 mod segment_pill;
 mod send_morph;
 mod settings_connectors;
+mod settings_infisical;
 mod settings_pages;
 mod settings_pair;
 mod settings_search;
@@ -215,6 +216,9 @@ impl AssetSource for Assets {
             "sun" => include_bytes!("../assets/sun.svg"),
             "moon" => include_bytes!("../assets/moon.svg"),
             "eye" => include_bytes!("../assets/eye.svg"),
+            "eye-off" => include_bytes!("../assets/eye-off.svg"),
+            "clipboard" => include_bytes!("../assets/clipboard.svg"),
+            "lock" => include_bytes!("../assets/lock.svg"),
             "file-text" => include_bytes!("../assets/file-text.svg"),
             "wrench" => include_bytes!("../assets/wrench.svg"),
             "arrow-left" => include_bytes!("../assets/arrow-left.svg"),

@@ -40,11 +40,18 @@ pub struct ProjectScripts {
     /// Open `preview_url` in the session's browser once it answers after Setup starts.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub open_preview: bool,
+    /// Run the scripts under `infisical-run` with this environment, so they get the project's
+    /// Infisical keys (ADR-198). The agents' own environment is never touched.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub infisical_run: Option<String>,
 }
 
 impl ProjectScripts {
     pub fn is_empty(&self) -> bool {
-        self.setup.is_none() && self.on_finish.is_none() && self.preview_url.is_none()
+        self.setup.is_none()
+            && self.on_finish.is_none()
+            && self.preview_url.is_none()
+            && self.infisical_run.is_none()
     }
     fn get(&self, kind: ScriptKind) -> Option<&str> {
         match kind {
@@ -226,6 +233,11 @@ pub enum Action {
         #[serde(default)]
         open_preview: bool,
     },
+    /// Turns "run the scripts with the Infisical keys" on (in `environment`) or off.
+    SetInfisical {
+        project_id: String,
+        environment: Option<String>,
+    },
     /// Runs the project's script of `kind` again in the session's worktree.
     Run {
         session_id: String,
@@ -257,11 +269,12 @@ pub async fn project_scripts_action(
             open_preview,
         } => {
             let preview_url = validate_preview_url(preview_url)?;
-            let scripts = ProjectScripts {
+            let mut scripts = ProjectScripts {
                 setup: validate(setup)?,
                 on_finish: validate(on_finish)?,
                 open_preview: open_preview && preview_url.is_some(),
                 preview_url,
+                infisical_run: None,
             };
             crate::commands::native_task(move || {
                 let mut data = state.data.lock();
@@ -271,12 +284,46 @@ pub async fn project_scripts_action(
                     .iter_mut()
                     .find(|row| row.id == project_id)
                     .ok_or_else(|| Error::not_found("project not found"))?;
+                scripts.infisical_run = project.scripts.infisical_run.clone();
                 let previous = std::mem::replace(&mut project.scripts, scripts);
                 let saved = project.clone();
                 if let Err(error) = crate::persist::save(&state.data_path, &data) {
                     if let Some(project) = data.projects.iter_mut().find(|row| row.id == project_id)
                     {
                         project.scripts = previous;
+                    }
+                    return Err(error);
+                }
+                Ok(Some(saved))
+            })
+            .await
+        }
+        Action::SetInfisical {
+            project_id,
+            environment,
+        } => {
+            if environment
+                .as_deref()
+                .is_some_and(|name| !crate::infisical::valid_environment(name))
+            {
+                return Err(Error::agent(
+                    "The Infisical project or environment is not valid.",
+                ));
+            }
+            crate::commands::native_task(move || {
+                let mut data = state.data.lock();
+                state.ensure_running()?;
+                let project = data
+                    .projects
+                    .iter_mut()
+                    .find(|row| row.id == project_id)
+                    .ok_or_else(|| Error::not_found("project not found"))?;
+                let previous = std::mem::replace(&mut project.scripts.infisical_run, environment);
+                let saved = project.clone();
+                if let Err(error) = crate::persist::save(&state.data_path, &data) {
+                    if let Some(project) = data.projects.iter_mut().find(|row| row.id == project_id)
+                    {
+                        project.scripts.infisical_run = previous;
                     }
                     return Err(error);
                 }
@@ -423,6 +470,14 @@ fn start(
         .ok_or_else(|| Error::not_found("project not found"))?;
     let Some(script) = project.scripts.get(kind).map(str::to_owned) else {
         return Ok(None);
+    };
+    let script = match project.scripts.infisical_run.as_deref() {
+        Some(environment) => {
+            let workspace = crate::infisical::read_link(Path::new(&project.path))
+                .map(|(workspace, _)| workspace);
+            crate::infisical::wrap_script(&script, environment, workspace.as_deref())
+        }
+        None => script,
     };
     if !session.worktree.isolated {
         return Err(Error::agent(

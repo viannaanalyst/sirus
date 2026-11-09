@@ -1,0 +1,1178 @@
+//! The secret request card (ADR-198): an agent asks for a key and the person types it here, masked,
+//! and picks where it is kept: the linked Infisical project (dev or prod), the workspace's
+//! `.env.local`, or only this conversation. Or "Usar do Infisical…" hands over a key that is
+//! already there. The value is typed in a real field (caret, selection, ⌘A, paste, undo, arrows,
+//! a reveal toggle), sent once to the host, and never logged or shown to the agent.
+
+use super::*;
+use gpui::{Hsla, rgb};
+
+const AMBER: u32 = 0xf0a35e;
+/// How many characters of a long value fit the field; the window follows the caret.
+const VISIBLE: usize = 46;
+const MAX_UNDO: usize = 100;
+
+fn amber(alpha: f32) -> Hsla {
+    Hsla {
+        a: alpha,
+        ..Hsla::from(rgb(AMBER))
+    }
+}
+
+/// Where the typed value is kept.
+#[derive(Clone, PartialEq, Debug)]
+pub(crate) enum Dest {
+    /// An environment of the linked Infisical project.
+    Infisical(String),
+    /// `.env.local` in the conversation's workspace.
+    DotEnv,
+    /// Only for this conversation (the agent's `use_secret`).
+    Conversation,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum CardMenu {
+    Where,
+    From,
+}
+
+pub(crate) enum Keys {
+    Idle,
+    Loading,
+    Names(Vec<String>),
+    Failed(String),
+}
+
+pub(crate) struct SecretCard {
+    pub request: String,
+    pub draft: Draft,
+    undo: Vec<(String, usize)>,
+    redo: Vec<(String, usize)>,
+    pub reveal: bool,
+    pub focused: bool,
+    /// What the person picked; `None` follows the default.
+    pub chosen: Option<Dest>,
+    pub menu: Option<CardMenu>,
+    pub keys: Keys,
+}
+
+impl Drop for SecretCard {
+    fn drop(&mut self) {
+        for text in std::iter::once(&mut self.draft.text)
+            .chain(self.undo.iter_mut().map(|(text, _)| text))
+            .chain(self.redo.iter_mut().map(|(text, _)| text))
+        {
+            let mut bytes = std::mem::take(text).into_bytes();
+            bytes.iter_mut().for_each(|byte| *byte = 0);
+            std::hint::black_box(&bytes);
+        }
+    }
+}
+
+impl SecretCard {
+    pub fn new(request: String) -> Self {
+        Self {
+            request,
+            draft: Draft::default(),
+            undo: Vec::new(),
+            redo: Vec::new(),
+            reveal: false,
+            focused: false,
+            chosen: None,
+            menu: None,
+            keys: Keys::Idle,
+        }
+    }
+
+    fn remember(&mut self) {
+        if self.undo.len() >= MAX_UNDO {
+            self.undo.remove(0);
+        }
+        self.undo.push((self.draft.text.clone(), self.draft.cursor));
+        self.redo.clear();
+    }
+
+    /// Replaces the selection (or inserts at the caret). Line breaks and NULs never get in.
+    pub fn insert(&mut self, text: &str) {
+        let clean: String = text
+            .chars()
+            .filter(|c| !matches!(c, '\n' | '\r' | '\0'))
+            .collect();
+        if clean.is_empty() && self.draft.selection().is_empty() {
+            return;
+        }
+        self.remember();
+        self.draft.insert(&clean);
+    }
+
+    pub fn select_all(&mut self) {
+        self.draft.anchor = 0;
+        self.draft.cursor = self.draft.text.len();
+    }
+
+    pub fn undo(&mut self) {
+        if let Some((text, cursor)) = self.undo.pop() {
+            self.redo.push((self.draft.text.clone(), self.draft.cursor));
+            self.draft.text = text;
+            self.draft.cursor = cursor.min(self.draft.text.len());
+            self.draft.anchor = self.draft.cursor;
+        }
+    }
+
+    pub fn redo(&mut self) {
+        if let Some((text, cursor)) = self.redo.pop() {
+            self.undo.push((self.draft.text.clone(), self.draft.cursor));
+            self.draft.text = text;
+            self.draft.cursor = cursor.min(self.draft.text.len());
+            self.draft.anchor = self.draft.cursor;
+        }
+    }
+
+    fn before(&self, at: usize) -> usize {
+        self.draft.text[..at]
+            .char_indices()
+            .next_back()
+            .map_or(0, |(i, _)| i)
+    }
+
+    fn after(&self, at: usize) -> usize {
+        self.draft.text[at..]
+            .chars()
+            .next()
+            .map_or(at, |c| at + c.len_utf8())
+    }
+
+    /// Moves or deletes for an editing key. True when the key was one of those.
+    pub fn edit_key(&mut self, key: &str, cmd: bool, alt: bool, shift: bool) -> bool {
+        let d = &self.draft;
+        let at = d.cursor;
+        let target = match key {
+            "backspace" | "left" if cmd => 0,
+            "backspace" | "left" if alt => d.word_left(at),
+            "backspace" | "left" => self.before(at),
+            "delete" | "right" if cmd => d.text.len(),
+            "delete" | "right" if alt => d.word_right(at),
+            "delete" | "right" => self.after(at),
+            "home" | "up" => 0,
+            "end" | "down" => d.text.len(),
+            _ => return false,
+        };
+        if matches!(key, "backspace" | "delete") {
+            if self.draft.anchor == self.draft.cursor {
+                self.draft.anchor = target;
+            }
+            if self.draft.selection().is_empty() {
+                return true;
+            }
+            self.remember();
+            self.draft.insert("");
+        } else {
+            let selection = self.draft.selection();
+            let collapsing = !shift && !selection.is_empty();
+            self.draft.cursor = if collapsing && key == "left" {
+                selection.start
+            } else if collapsing && key == "right" {
+                selection.end
+            } else {
+                target
+            };
+            if !shift {
+                self.draft.anchor = self.draft.cursor;
+            }
+        }
+        true
+    }
+
+    /// The value as the host takes it, or `None` while empty.
+    pub fn value(&self) -> Option<String> {
+        (!self.draft.text.is_empty()).then(|| self.draft.text.clone())
+    }
+}
+
+/// The field's text as it is drawn: three runs (before the selection, the selection, after it) and
+/// whether the caret sits among them, cropped to what fits around the caret.
+pub(crate) fn runs(card: &SecretCard) -> (String, String, String) {
+    let shown = |text: &str| -> Vec<char> {
+        if card.reveal {
+            text.chars().collect()
+        } else {
+            text.chars().map(|_| '•').collect()
+        }
+    };
+    let text = &card.draft.text;
+    let selection = card.draft.selection();
+    let before = shown(&text[..selection.start]);
+    let middle = shown(&text[selection.clone()]);
+    let after = shown(&text[selection.end..]);
+    let total = before.len() + middle.len() + after.len();
+    let caret = if card.draft.cursor == selection.start {
+        before.len()
+    } else {
+        before.len() + middle.len()
+    };
+    let (lo, hi) = if total <= VISIBLE {
+        (0, total)
+    } else {
+        let lo = caret
+            .saturating_sub(VISIBLE - 6)
+            .min(total.saturating_sub(VISIBLE));
+        (lo, lo + VISIBLE)
+    };
+    let cut = |from: usize, chars: &[char]| -> String {
+        chars
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| (lo..hi).contains(&(from + i)))
+            .map(|(_, c)| *c)
+            .collect()
+    };
+    (
+        cut(0, &before),
+        cut(before.len(), &middle),
+        cut(before.len() + middle.len(), &after),
+    )
+}
+
+/// "N caracteres" or "Vazio".
+pub(crate) fn count_text(characters: usize) -> String {
+    match characters {
+        0 => t("Vazio").to_owned(),
+        1 => t("1 caractere").to_owned(),
+        n => tf("{} caracteres", &[&n]),
+    }
+}
+
+fn destination_label(dest: &Dest, project: &str) -> String {
+    match dest {
+        Dest::Infisical(env) => format!("Infisical · {project} · {env}"),
+        Dest::DotEnv => t(".env.local do projeto").to_owned(),
+        Dest::Conversation => t("Só nesta conversa").to_owned(),
+    }
+}
+
+impl Shell {
+    /// The path of the project a secret request belongs to.
+    fn secret_project(&self, request: &Value) -> Option<String> {
+        let session = request["sessionId"].as_str()?;
+        let conversation = self
+            .conversations
+            .iter()
+            .position(|c| !c.session_id.is_empty() && c.session_id == session)?;
+        let project = self.project_of(conversation)?;
+        Some(self.projects[project].path.clone())
+    }
+
+    /// Keeps the card in step with the host's waiting requests: one card for the first of them.
+    pub(super) fn sync_secret_card(&mut self) {
+        let Some(request) = self.secrets.first().cloned() else {
+            self.secret_card = None;
+            return;
+        };
+        let id = request["id"].as_str().unwrap_or("").to_owned();
+        if self.secret_card.as_ref().is_some_and(|c| c.request == id) {
+            return;
+        }
+        self.secret_card = Some(SecretCard::new(id));
+        self.secret_done = None;
+        if let Some(path) = self.secret_project(&request)
+            && crate::settings_infisical::should_ask(&path, true)
+        {
+            let call = self.backend.invoke(
+                "infisical_action",
+                crate::settings_infisical::link_args(&path),
+            );
+            self.waiting.insert(call, Waiting::Infisical);
+        }
+    }
+
+    /// The project link and its Infisical project's name, for the request on show.
+    fn secret_link(&self, request: &Value) -> Option<(String, String, String)> {
+        let path = self.secret_project(request)?;
+        let (workspace, env) = crate::settings_infisical::link(&path)?;
+        let name = crate::settings_infisical::infisical_name(&workspace)
+            .unwrap_or_else(|| workspace.chars().take(8).collect());
+        Some((path, name, env))
+    }
+
+    fn card_dest(&self, request: &Value) -> Dest {
+        let linked = self.secret_link(request).is_some();
+        match self.secret_card.as_ref().and_then(|c| c.chosen.clone()) {
+            Some(Dest::Infisical(env)) if linked => Dest::Infisical(env),
+            Some(Dest::Infisical(_)) => Dest::Conversation,
+            Some(other) => other,
+            None if linked => Dest::Infisical("dev".to_owned()),
+            None => Dest::Conversation,
+        }
+    }
+
+    /// Typing and pasting go to the card's field while it has the focus.
+    pub(super) fn card_typing(&self) -> bool {
+        self.secret_card.as_ref().is_some_and(|c| c.focused)
+    }
+
+    /// Text from the input method, over `range` (UTF-16) when it names one.
+    pub(super) fn card_replace(
+        &mut self,
+        range: Option<Range<usize>>,
+        text: &str,
+        mark: bool,
+    ) -> bool {
+        let marked = self.marked.take();
+        let Some(card) = self.secret_card.as_mut().filter(|c| c.focused) else {
+            self.marked = marked;
+            return false;
+        };
+        if let Some(range) = range.or(marked) {
+            card.draft.anchor = byte_at(&card.draft.text, range.start);
+            card.draft.cursor = byte_at(&card.draft.text, range.end);
+        }
+        let start = data::utf16_len(&card.draft.text[..card.draft.selection().start]);
+        card.insert(text);
+        if mark {
+            self.marked = Some(start..start + data::utf16_len(text));
+        }
+        self.caret_moved.set(Instant::now());
+        true
+    }
+
+    /// The field's text and selection for the input method.
+    pub(super) fn card_text(&self) -> Option<(String, Range<usize>, bool)> {
+        let card = self.secret_card.as_ref().filter(|c| c.focused)?;
+        let text = &card.draft.text;
+        let selection = card.draft.selection();
+        Some((
+            text.clone(),
+            data::utf16_len(&text[..selection.start])..data::utf16_len(&text[..selection.end]),
+            card.draft.cursor < card.draft.anchor,
+        ))
+    }
+
+    /// The keys of the card: editing, ⌘A, ⌘V, undo, Enter to save, Esc to cancel. True when used.
+    pub(super) fn secret_card_key(
+        &mut self,
+        keys: &gpui::Keystroke,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(request) = self.secrets.first().cloned() else {
+            return false;
+        };
+        let Some(card) = self.secret_card.as_mut() else {
+            return false;
+        };
+        let key = keys.key.as_str();
+        let (cmd, alt, shift) = (
+            keys.modifiers.platform,
+            keys.modifiers.alt,
+            keys.modifiers.shift,
+        );
+        if key == "escape" && card.menu.take().is_some() {
+            return true;
+        }
+        if !card.focused {
+            // Enter and Esc still answer the card, so the mouse is never needed.
+            return match key {
+                "escape" => {
+                    let id = card.request.clone();
+                    self.respond_secret(&id, None, cx);
+                    true
+                }
+                "enter" if card.value().is_some() => {
+                    self.card_save(&request, cx);
+                    true
+                }
+                _ => false,
+            };
+        }
+        self.caret_moved.set(Instant::now());
+        match (cmd, key) {
+            (_, "enter") => self.card_save(&request, cx),
+            (_, "escape") => {
+                let id = card.request.clone();
+                self.respond_secret(&id, None, cx);
+            }
+            (true, "a") => card.select_all(),
+            (true, "v") => {
+                if let Some(pasted) = cx.read_from_clipboard().and_then(|item| item.text()) {
+                    card.insert(pasted.trim());
+                }
+            }
+            (true, "z") if shift => card.redo(),
+            (true, "z") => card.undo(),
+            // A masked value is not copied out; the rest of ⌘ keys belong to the app.
+            (true, "c" | "x") => {}
+            (true, "left" | "right" | "backspace" | "delete" | "up" | "down") => {
+                card.edit_key(key, true, false, shift);
+            }
+            (true, _) => return false,
+            _ => {
+                if !card.edit_key(key, false, alt, shift) {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// Sends the typed value to where it goes; the card collapses to its done line.
+    pub(super) fn card_save(&mut self, request: &Value, cx: &mut Context<Self>) {
+        let Some(card) = self.secret_card.as_ref() else {
+            return;
+        };
+        let Some(value) = card.value() else {
+            return;
+        };
+        let id = card.request.clone();
+        let dest = self.card_dest(request);
+        let link = self.secret_link(request);
+        let mut action = json!({"type": "respond", "requestId": id, "value": value});
+        match &dest {
+            Dest::Infisical(env) => action["infisicalEnv"] = json!(env),
+            Dest::DotEnv => action["dotenv"] = json!(true),
+            Dest::Conversation => {}
+        }
+        let call = self
+            .backend
+            .invoke("secret_action", json!({ "action": action }));
+        // A failed save (a tracked file, Infisical unreachable) shows as the window's problem.
+        self.waiting.insert(call, Waiting::ScriptAction);
+        let project = link.map(|(_, name, _)| name).unwrap_or_default();
+        self.finish_secret(
+            &id,
+            match &dest {
+                Dest::Conversation => {
+                    t("Chave guardada só nesta conversa. O agente a recebeu sem ver o valor.")
+                        .to_owned()
+                }
+                other => tf(
+                    "Salvo no {}. O agente recebeu a chave sem ver o valor.",
+                    &[&destination_label(other, &project)],
+                ),
+            },
+            cx,
+        );
+    }
+
+    /// Closes the card and shows `line` in its place for a few seconds.
+    fn finish_secret(&mut self, id: &str, line: String, cx: &mut Context<Self>) {
+        self.secret_card = None;
+        self.secrets.retain(|r| r["id"].as_str() != Some(id));
+        self.secret_done = Some(line.clone());
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_secs(7)).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.secret_done.as_deref() == Some(line.as_str()) {
+                    this.secret_done = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// "Usar do Infisical…": the names of the keys in the linked environment.
+    fn card_open_keys(&mut self, request: &Value, cx: &mut Context<Self>) {
+        let Some((path, _, env)) = self.secret_link(request) else {
+            return;
+        };
+        let Some(card) = self.secret_card.as_mut() else {
+            return;
+        };
+        if card.menu == Some(CardMenu::From) {
+            card.menu = None;
+            return;
+        }
+        card.menu = Some(CardMenu::From);
+        card.keys = Keys::Loading;
+        let call = self.backend.invoke(
+            "infisical_action",
+            json!({"action": {"type": "listKeys", "projectPath": path, "environment": env}}),
+        );
+        self.waiting.insert(call, Waiting::SecretCard);
+        cx.notify();
+    }
+
+    fn card_use_key(&mut self, request: &Value, key: String, cx: &mut Context<Self>) {
+        let Some((path, _, env)) = self.secret_link(request) else {
+            return;
+        };
+        let Some(card) = self.secret_card.as_mut() else {
+            return;
+        };
+        card.keys = Keys::Loading;
+        let call = self.backend.invoke(
+            "infisical_action",
+            json!({"action": {"type": "answer", "requestId": card.request, "projectPath": path, "environment": env, "key": key}}),
+        );
+        self.waiting.insert(call, Waiting::SecretCard);
+        self.secret_picked = Some(key);
+        cx.notify();
+    }
+
+    /// The host's reply to a key list or to a key being handed over.
+    pub(super) fn secret_card_reply(&mut self, ok: bool, value: &Value, cx: &mut Context<Self>) {
+        if !ok {
+            if let Some(card) = self.secret_card.as_mut() {
+                card.keys = Keys::Failed(crate::i18n::from_host(
+                    value["message"]
+                        .as_str()
+                        .or(value.as_str())
+                        .unwrap_or("Infisical refused the request."),
+                ));
+            }
+            self.secret_picked = None;
+            cx.notify();
+            return;
+        }
+        match value["kind"].as_str() {
+            Some("keys") => {
+                if let Some(card) = self.secret_card.as_mut() {
+                    card.keys = Keys::Names(
+                        value["keys"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|k| k.as_str().map(str::to_owned))
+                            .collect(),
+                    );
+                }
+            }
+            Some("answered") => {
+                let key = self.secret_picked.take().unwrap_or_default();
+                if let Some(id) = self.secret_card.as_ref().map(|c| c.request.clone()) {
+                    self.finish_secret(
+                        &id,
+                        tf(
+                            "Usada a chave {} do Infisical. O agente a recebeu sem ver o valor.",
+                            &[&key],
+                        ),
+                        cx,
+                    );
+                }
+            }
+            _ => {}
+        }
+        cx.notify();
+    }
+
+    fn card_button(
+        id: &'static str,
+        label: &str,
+        hint: Option<&'static str>,
+        primary: bool,
+        ghost: bool,
+    ) -> Stateful<Div> {
+        div()
+            .id(id)
+            .h(px(30.))
+            .px(px(12.))
+            .flex_shrink_0()
+            .rounded(px(crate::theme::RADIUS_SM))
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .text_size(px(12.5))
+            .font_weight(FontWeight::SEMIBOLD)
+            .cursor_pointer()
+            .text_color(if primary {
+                on_accent()
+            } else if ghost {
+                content(0.55)
+            } else {
+                content(0.85)
+            })
+            .when(!ghost, |d| {
+                d.border_1()
+                    .border_color(if primary {
+                        transparent()
+                    } else {
+                        crate::theme::border()
+                    })
+                    .bg(if primary { accent() } else { content(0.03) })
+            })
+            .hover(|s| {
+                if primary {
+                    s.opacity(0.9)
+                } else {
+                    s.bg(content(0.08))
+                }
+            })
+            .child(label.to_owned())
+            .children(hint.map(|hint| {
+                div()
+                    .text_size(px(10.5))
+                    .font_weight(FontWeight::NORMAL)
+                    .opacity(0.6)
+                    .child(hint)
+            }))
+    }
+
+    fn card_icon_button(id: &'static str, name: &'static str) -> Stateful<Div> {
+        div()
+            .id(id)
+            .size(px(30.))
+            .flex_shrink_0()
+            .rounded(px(7.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_pointer()
+            .hover(|s| s.bg(content(0.08)))
+            .child(icon(name, 16.).text_color(content(0.55)))
+    }
+
+    fn card_menu_surface(&self) -> Div {
+        div()
+            .absolute()
+            .w(px(250.))
+            .p(px(5.))
+            .rounded(px(crate::theme::RADIUS_MD))
+            .border_1()
+            .border_color(crate::theme::border())
+            .bg(crate::theme::opaque_floating())
+            .shadow_lg()
+            .occlude()
+            .flex()
+            .flex_col()
+    }
+
+    fn card_menu_row(id: (&'static str, usize), text: String, on: bool) -> Stateful<Div> {
+        div()
+            .id(id)
+            .px(px(8.))
+            .py(px(7.))
+            .rounded(px(7.))
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .text_size(px(12.5))
+            .text_color(content(0.9))
+            .cursor_pointer()
+            .hover(|s| s.bg(content(0.08)))
+            .child(div().flex_1().min_w_0().truncate().child(text))
+            .when(on, |d| d.child(icon("check", 13.).text_color(content(0.6))))
+    }
+
+    /// The card that replaces the old one-line request.
+    pub(super) fn secret_card_view(&self, request: &Value, cx: &mut Context<Self>) -> AnyElement {
+        let id = request["id"].as_str().unwrap_or("").to_owned();
+        let label = request["label"].as_str().unwrap_or("").to_owned();
+        let env_name = request["envName"].as_str().map(str::to_owned);
+        let about = request["description"].as_str().unwrap_or("").to_owned();
+        let Some(card) = self.secret_card.as_ref().filter(|c| c.request == id) else {
+            return div().into_any_element();
+        };
+        let link = self.secret_link(request);
+        let dest = self.card_dest(request);
+        let project = link.as_ref().map(|l| l.1.clone()).unwrap_or_default();
+        let chars = card.draft.text.chars().count();
+        let focused = card.focused;
+        let reveal = card.reveal;
+        let menu = card.menu;
+
+        // The caret blinks with the composer's clock; it rests lit while the window is idle.
+        let lit = !focused || caret_lit(self.caret_moved.get().elapsed().as_secs_f32());
+        if focused {
+            self.caret_drawn.set(lit);
+            self.caret_blinks.set(card.draft.selection().is_empty());
+        }
+        let (before, middle, after) = runs(card);
+        let caret = |on: bool| {
+            div().w(px(1.5)).h(px(16.)).flex_shrink_0().bg(if on {
+                content(0.95)
+            } else {
+                transparent()
+            })
+        };
+        let text = |s: String| div().flex_shrink_0().whitespace_nowrap().child(s);
+        let content_row = if chars == 0 {
+            div()
+                .flex()
+                .items_center()
+                .when(focused, |d| d.child(caret(lit)))
+                .child(
+                    div()
+                        .ml(px(if focused { 2. } else { 0. }))
+                        .font_family(".SystemUIFont")
+                        .text_color(content(0.35))
+                        .child(t("Digite ou cole o valor")),
+                )
+        } else {
+            let selecting = !middle.is_empty();
+            div()
+                .flex()
+                .items_center()
+                .text_color(content(0.92))
+                .child(text(before))
+                .when(!selecting, |d| d.child(caret(focused && lit)))
+                .when(selecting, |d| {
+                    d.child(
+                        div()
+                            .flex_shrink_0()
+                            .whitespace_nowrap()
+                            .bg(accent_wash(0.4))
+                            .child(middle),
+                    )
+                })
+                .child(text(after))
+        };
+
+        let focus_id = id.clone();
+        let field = div()
+            .id("secret-field")
+            .flex()
+            .items_center()
+            .h(px(40.))
+            .pl(px(12.))
+            .pr(px(4.))
+            .gap(px(2.))
+            .rounded(px(crate::theme::RADIUS_MD))
+            .border_1()
+            .border_color(if focused {
+                accent_wash(0.55)
+            } else {
+                crate::theme::border()
+            })
+            .bg(content(0.03))
+            .font_family("Menlo")
+            .text_size(px(13.5))
+            .cursor_text()
+            .on_click(cx.listener(move |this, _, window, cx| {
+                if let Some(card) = this.secret_card.as_mut().filter(|c| c.request == focus_id) {
+                    card.focused = true;
+                    card.menu = None;
+                }
+                this.caret_moved.set(Instant::now());
+                window.focus(&this.focus, cx);
+                cx.notify();
+            }))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .child(content_row),
+            )
+            .child(
+                Self::card_icon_button("secret-eye", if reveal { "eye-off" } else { "eye" })
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if let Some(card) = this.secret_card.as_mut() {
+                            card.reveal = !card.reveal;
+                            card.focused = true;
+                        }
+                        this.caret_moved.set(Instant::now());
+                        cx.notify();
+                    })),
+            )
+            .child(
+                Self::card_icon_button("secret-paste", "clipboard").on_click(cx.listener(
+                    |this, _, _, cx| {
+                        if let Some(pasted) = cx.read_from_clipboard().and_then(|item| item.text())
+                            && let Some(card) = this.secret_card.as_mut()
+                        {
+                            card.insert(pasted.trim());
+                            card.focused = true;
+                        }
+                        this.caret_moved.set(Instant::now());
+                        cx.notify();
+                    },
+                )),
+            );
+        // The focus ring sits around the field without moving it.
+        let field = div()
+            .mx(px(-3.))
+            .p(px(3.))
+            .rounded(px(crate::theme::RADIUS_MD + 3.))
+            .bg(if focused {
+                accent_wash(0.12)
+            } else {
+                transparent()
+            })
+            .child(field);
+
+        // "Salvar em" with its menu.
+        let options: Vec<(Dest, String)> = link
+            .iter()
+            .flat_map(|(_, name, _)| {
+                ["dev", "prod"].map(|env| {
+                    let dest = Dest::Infisical(env.to_owned());
+                    let label = destination_label(&dest, name);
+                    (dest, label)
+                })
+            })
+            .chain([
+                (Dest::DotEnv, destination_label(&Dest::DotEnv, "")),
+                (
+                    Dest::Conversation,
+                    destination_label(&Dest::Conversation, ""),
+                ),
+            ])
+            .collect();
+        let where_label = destination_label(&dest, &project);
+        let where_button = div()
+            .id("secret-where")
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .px(px(6.))
+            .py(px(3.))
+            .mr(px(-6.))
+            .rounded(px(7.))
+            .text_color(content(0.75))
+            .cursor_pointer()
+            .hover(|s| s.bg(content(0.06)))
+            .on_click(cx.listener(|this, _, _, cx| {
+                if let Some(card) = this.secret_card.as_mut() {
+                    card.menu = (card.menu != Some(CardMenu::Where)).then_some(CardMenu::Where);
+                }
+                cx.notify();
+            }))
+            .child(
+                icon(
+                    match dest {
+                        Dest::Infisical(_) => "key",
+                        Dest::DotEnv => "file-text",
+                        Dest::Conversation => "message-square",
+                    },
+                    13.,
+                )
+                .text_color(content(0.6)),
+            )
+            .child(where_label)
+            .child(icon("chevron-down", 12.).text_color(content(0.5)));
+        let where_menu = (menu == Some(CardMenu::Where)).then(|| {
+            let rows: Vec<AnyElement> = options
+                .iter()
+                .enumerate()
+                .map(|(at, (option, text))| {
+                    let option = option.clone();
+                    Self::card_menu_row(("secret-dest", at), text.clone(), dest == option)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if let Some(card) = this.secret_card.as_mut() {
+                                card.chosen = Some(option.clone());
+                                card.menu = None;
+                            }
+                            cx.notify();
+                        }))
+                        .into_any_element()
+                })
+                .collect();
+            gpui::deferred(
+                self.card_menu_surface()
+                    .top(px(24.))
+                    .right(px(-6.))
+                    .child(
+                        div()
+                            .px(px(8.))
+                            .pt(px(5.))
+                            .pb(px(3.))
+                            .text_size(px(11.))
+                            .text_color(content(0.45))
+                            .child(t("Salvar em")),
+                    )
+                    .children(rows),
+            )
+            .with_priority(6)
+        });
+
+        // "Usar do Infisical…" with its list of names.
+        let from_menu = (menu == Some(CardMenu::From)).then(|| {
+            let header = link
+                .as_ref()
+                .map(|(_, name, env)| format!("{name} · {env}"))
+                .unwrap_or_default();
+            let body: Vec<AnyElement> = match &card.keys {
+                Keys::Idle | Keys::Loading => vec![
+                    div()
+                        .px(px(8.))
+                        .py(px(6.))
+                        .text_size(px(12.5))
+                        .text_color(content(0.6))
+                        .child(t("Buscando as chaves…"))
+                        .into_any_element(),
+                ],
+                Keys::Failed(problem) => vec![
+                    div()
+                        .px(px(8.))
+                        .py(px(6.))
+                        .text_size(px(12.5))
+                        .text_color(content(0.75))
+                        .child(problem.clone())
+                        .into_any_element(),
+                ],
+                Keys::Names(names) if names.is_empty() => vec![
+                    div()
+                        .px(px(8.))
+                        .py(px(6.))
+                        .text_size(px(12.5))
+                        .text_color(content(0.6))
+                        .child(t("Nenhuma chave neste ambiente."))
+                        .into_any_element(),
+                ],
+                Keys::Names(names) => names
+                    .iter()
+                    .cloned()
+                    .enumerate()
+                    .map(|(at, name)| {
+                        let (request, picked) = (request.clone(), name.clone());
+                        Self::card_menu_row(("secret-key", at), name, false)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.card_use_key(&request, picked.clone(), cx)
+                            }))
+                            .into_any_element()
+                    })
+                    .collect(),
+            };
+            gpui::deferred(
+                self.card_menu_surface()
+                    .bottom(px(36.))
+                    .left(px(0.))
+                    .max_h(px(240.))
+                    .child(
+                        div()
+                            .px(px(8.))
+                            .pt(px(5.))
+                            .pb(px(3.))
+                            .text_size(px(11.))
+                            .text_color(content(0.45))
+                            .child(header),
+                    )
+                    .child(
+                        div()
+                            .id("secret-keys")
+                            .max_h(px(200.))
+                            .overflow_y_scroll()
+                            .flex()
+                            .flex_col()
+                            .children(body),
+                    ),
+            )
+            .with_priority(6)
+        });
+
+        let (save_request, from_request) = (request.clone(), request.clone());
+        let (decline_id, op_id, op_label) = (id.clone(), id.clone(), label.clone());
+        let ready = chars > 0;
+        let bar = div()
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .px(px(12.))
+            .py(px(10.))
+            .border_t_1()
+            .border_color(crate::theme::border())
+            .bg(content(0.02))
+            .rounded_b(px(crate::theme::RADIUS_LG))
+            .child(
+                Self::card_button("secret-save", t("Salvar"), Some("↩"), true, false)
+                    .when(!ready, |d| d.opacity(0.5))
+                    .on_click(cx.listener(move |this, _, _, cx| this.card_save(&save_request, cx))),
+            )
+            .children(link.is_some().then(|| {
+                div()
+                    .relative()
+                    .child(
+                        Self::card_button(
+                            "secret-from",
+                            t("Usar do Infisical…"),
+                            None,
+                            false,
+                            false,
+                        )
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| {
+                                this.card_open_keys(&from_request, cx)
+                            }),
+                        ),
+                    )
+                    .children(from_menu)
+            }))
+            .child(
+                Self::card_button("secret-onepassword", "1Password", None, false, false).on_click(
+                    cx.listener(move |this, _, _, cx| {
+                        this.start_op_pick(op_id.clone(), op_label.clone(), cx)
+                    }),
+                ),
+            )
+            .child(div().flex_1())
+            .child(
+                Self::card_button("secret-decline", t("Cancelar"), Some("esc"), false, true)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.respond_secret(&decline_id, None, cx)
+                    })),
+            );
+
+        div()
+            .mb(px(8.))
+            .rounded(px(crate::theme::RADIUS_LG))
+            .border_1()
+            .border_color(crate::theme::border())
+            .bg(field_fill())
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .flex()
+                    .gap(px(12.))
+                    .px(px(16.))
+                    .pt(px(14.))
+                    .pb(px(12.))
+                    .child(
+                        div()
+                            .size(px(34.))
+                            .flex_shrink_0()
+                            .rounded(px(9.))
+                            .border_1()
+                            .border_color(amber(0.25))
+                            .bg(amber(0.11))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(icon("lock", 17.).text_color(amber(1.))),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(6.))
+                                    .child(
+                                        div()
+                                            .min_w_0()
+                                            .truncate()
+                                            .text_size(px(14.))
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(content(0.95))
+                                            .child(label),
+                                    )
+                                    .children(env_name.map(|name| {
+                                        div()
+                                            .flex_shrink_0()
+                                            .px(px(5.))
+                                            .py(px(1.))
+                                            .rounded(px(5.))
+                                            .bg(amber(0.1))
+                                            .font_family("Menlo")
+                                            .text_size(px(12.5))
+                                            .text_color(Hsla::from(rgb(0xffd9b0)))
+                                            .child(name)
+                                    })),
+                            )
+                            .when(!about.is_empty(), |d| {
+                                d.child(
+                                    div()
+                                        .mt(px(3.))
+                                        .text_size(px(12.5))
+                                        .line_height(px(18.))
+                                        .text_color(content(0.55))
+                                        .child(about),
+                                )
+                            }),
+                    ),
+            )
+            .child(
+                div().relative().px(px(16.)).pb(px(14.)).child(field).child(
+                    div()
+                        .relative()
+                        .flex()
+                        .justify_between()
+                        .items_center()
+                        .mt(px(7.))
+                        .mx(px(2.))
+                        .text_size(px(11.5))
+                        .text_color(content(0.42))
+                        .child(count_text(chars))
+                        .child(div().relative().child(where_button).children(where_menu)),
+                ),
+            )
+            .child(bar)
+            .into_any_element()
+    }
+
+    /// The card's collapsed line once the key has gone.
+    pub(super) fn secret_done_view(&self, line: &str) -> AnyElement {
+        div()
+            .mb(px(8.))
+            .px(px(14.))
+            .py(px(10.))
+            .rounded(px(crate::theme::RADIUS_LG))
+            .border_1()
+            .border_color(crate::theme::border())
+            .bg(field_fill())
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .text_size(px(12.5))
+            .text_color(content(0.75))
+            .child(icon("lock", 14.).text_color(amber(1.)))
+            .child(div().flex_1().min_w_0().child(line.to_owned()))
+            .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn typed(text: &str) -> SecretCard {
+        let mut card = SecretCard::new("r".into());
+        card.insert(text);
+        card
+    }
+
+    #[test]
+    fn typing_inserts_at_the_caret_and_select_all_replaces() {
+        let mut card = typed("sk_test");
+        card.edit_key("left", false, false, false);
+        card.insert("X");
+        assert_eq!(card.draft.text, "sk_tesXt");
+        card.select_all();
+        card.insert("new");
+        assert_eq!(card.draft.text, "new");
+    }
+
+    #[test]
+    fn backspace_delete_and_undo_work_on_the_value() {
+        let mut card = typed("abc");
+        card.edit_key("backspace", false, false, false);
+        assert_eq!(card.draft.text, "ab");
+        card.edit_key("home", false, false, false);
+        card.edit_key("delete", false, false, false);
+        assert_eq!(card.draft.text, "b");
+        card.undo();
+        assert_eq!(card.draft.text, "ab");
+        card.undo();
+        assert_eq!(card.draft.text, "abc");
+        card.redo();
+        assert_eq!(card.draft.text, "ab");
+    }
+
+    #[test]
+    fn line_breaks_never_enter_and_the_value_is_hidden_until_revealed() {
+        let mut card = typed("a\nb\r\0c");
+        assert_eq!(card.draft.text, "abc");
+        let (before, _, after) = runs(&card);
+        assert_eq!(format!("{before}{after}"), "•••");
+        card.reveal = true;
+        let (before, _, after) = runs(&card);
+        assert_eq!(format!("{before}{after}"), "abc");
+    }
+
+    #[test]
+    fn a_long_value_is_cropped_around_the_caret() {
+        let card = typed(&"k".repeat(120));
+        let (before, middle, after) = runs(&card);
+        assert!(before.chars().count() + middle.chars().count() + after.chars().count() <= VISIBLE);
+    }
+
+    #[test]
+    fn the_count_reads_in_portuguese() {
+        assert_eq!(count_text(0), "Vazio");
+        assert_eq!(count_text(1), "1 caractere");
+    }
+}

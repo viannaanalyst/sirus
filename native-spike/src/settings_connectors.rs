@@ -233,6 +233,9 @@ pub fn wants_keys() -> bool {
 
 /// A finished text edit of this page. True when the key was one of its own.
 pub fn commit(key: &str, text: &str) -> bool {
+    if crate::settings_infisical::commit(key, text) {
+        return true;
+    }
     if !matches!(
         key,
         SEARCH | ACCOUNT_SEARCH | NAME | URL | TOKEN | REF | LABEL | IDLE
@@ -244,6 +247,9 @@ pub fn commit(key: &str, text: &str) -> bool {
 }
 
 fn set_field(key: &str, text: &str) {
+    if crate::settings_infisical::commit(key, text) {
+        return;
+    }
     let mut now = state();
     if key == SEARCH {
         now.query = text.trim().to_string();
@@ -274,7 +280,7 @@ fn set_field(key: &str, text: &str) {
 }
 
 /// The text being edited, carried into click handlers so a click elsewhere keeps it.
-type Pending = Option<(String, String)>;
+pub(crate) type Pending = Option<(String, String)>;
 
 fn flush(pending: &Pending) {
     if let Some((key, text)) = pending {
@@ -1183,7 +1189,7 @@ pub fn view<V: 'static>(
     .into_any_element()
 }
 
-fn foot(text: &str) -> AnyElement {
+pub(crate) fn foot(text: &str) -> AnyElement {
     div()
         .mt(px(18.))
         .text_size(px(12.))
@@ -1193,7 +1199,7 @@ fn foot(text: &str) -> AnyElement {
 }
 
 /// A heading and its items in `cols` columns.
-fn section(title: &str, items: Vec<AnyElement>, cols: usize) -> AnyElement {
+pub(crate) fn section(title: &str, items: Vec<AnyElement>, cols: usize) -> AnyElement {
     let mut rows = Vec::new();
     let mut items = items.into_iter();
     loop {
@@ -1289,7 +1295,7 @@ fn letter(frame: gpui::Div, name: &str) -> AnyElement {
 }
 
 /// One row: the mark, a name line, a description line and the actions at the end.
-fn item(
+pub(crate) fn item(
     id: String,
     mark: AnyElement,
     name_line: Vec<AnyElement>,
@@ -1342,7 +1348,7 @@ fn item(
     .into_any_element()
 }
 
-fn tag(text: String, project: bool) -> AnyElement {
+pub(crate) fn tag(text: String, project: bool) -> AnyElement {
     div()
         .min_w_0()
         .truncate()
@@ -1360,7 +1366,7 @@ fn tag(text: String, project: bool) -> AnyElement {
         .into_any_element()
 }
 
-fn signed_in_badge() -> AnyElement {
+pub(crate) fn signed_in_badge() -> AnyElement {
     div()
         .flex_shrink_0()
         .flex()
@@ -2739,7 +2745,7 @@ fn field_block(label: &str, control: AnyElement, help: Option<String>) -> AnyEle
 /// A labeled text field. Clicking it starts the shell's text editing for `key`; the text is kept
 /// in the dialog on Enter, or when another control is used.
 #[allow(clippy::too_many_arguments)]
-fn input<V: 'static>(
+pub(crate) fn input<V: 'static>(
     key: &'static str,
     label: &str,
     value: &str,

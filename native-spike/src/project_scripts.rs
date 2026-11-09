@@ -36,6 +36,8 @@ pub struct Saved {
     pub finish: String,
     pub preview: String,
     pub open_preview: bool,
+    /// The Infisical environment the scripts run under (ADR-198), when that is on.
+    pub infisical: Option<String>,
 }
 
 impl Saved {
@@ -47,6 +49,7 @@ impl Saved {
             finish: text("onFinish"),
             preview: text("previewUrl"),
             open_preview: scripts["openPreview"].as_bool() == Some(true),
+            infisical: scripts["infisicalRun"].as_str().map(str::to_owned),
         }
     }
 

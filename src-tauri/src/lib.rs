@@ -54,6 +54,7 @@ mod github_inbox;
 mod goals;
 mod html_preview;
 mod idle_compaction;
+mod infisical;
 mod issue_ref;
 mod keep_awake;
 #[cfg(target_os = "macos")]

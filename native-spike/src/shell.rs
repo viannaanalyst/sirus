@@ -102,6 +102,9 @@ mod problem_toast;
 /// The ⌥Tab switcher's cards (project_switch.rs).
 #[path = "project_switch.rs"]
 mod project_switch;
+/// The secret request card and its field (secret_card.rs).
+#[path = "secret_card.rs"]
+mod secret_card;
 /// Several conversations picked in the sidebar (sidebar_pick.rs).
 #[path = "sidebar_pick.rs"]
 mod sidebar_pick;
@@ -933,6 +936,10 @@ enum Waiting {
     /// A provider_usage reply for one of the bottom bar's chosen providers.
     BarUsage(&'static str),
     SettingsData(&'static str),
+    /// An `infisical_action` reply for the settings page or the secret card's link.
+    Infisical,
+    /// An `infisical_action` reply for the secret card's key list or hand-over.
+    SecretCard,
     Usage,
     CliAgents,
     CliProbe(String),
@@ -1265,8 +1272,12 @@ pub struct Shell {
     models: HashMap<&'static str, Vec<ModelInfo>>,
     skills: Vec<(String, String)>,
     secrets: Vec<Value>,
-    /// The secret being typed: its request and value, shown masked and sent once.
-    secret_entry: Option<(String, String)>,
+    /// The secret request on show: its field, where it is saved and its menus (secret_card.rs).
+    secret_card: Option<secret_card::SecretCard>,
+    /// What the card says for a few seconds once the key has gone.
+    secret_done: Option<String>,
+    /// The Infisical key being handed to a request.
+    secret_picked: Option<String>,
     /// A secret card's 1Password list while it is open (onepassword_pick.rs).
     op_pick: Option<onepassword_pick::OpPick>,
     mention_selected: usize,
@@ -1686,7 +1697,9 @@ impl Shell {
             models: HashMap::new(),
             skills: Vec::new(),
             secrets: Vec::new(),
-            secret_entry: None,
+            secret_card: None,
+            secret_done: None,
+            secret_picked: None,
             op_pick: None,
             mention_selected: 0,
             mention_dismissed: None,
@@ -1875,6 +1888,20 @@ impl Shell {
                     };
                     self.cli_reply("cliLogins", id, reply);
                 }
+                Some(Waiting::Infisical) => {
+                    let refresh = crate::settings_infisical::reply(ok, &value);
+                    let linked =
+                        ok && value["kind"] == "link" && value["linked"].as_bool() == Some(true);
+                    if refresh {
+                        self.load_infisical();
+                    } else if linked && !crate::settings_infisical::status_known() {
+                        let call = self
+                            .backend
+                            .invoke("infisical_action", crate::settings_infisical::status_args());
+                        self.waiting.insert(call, Waiting::Infisical);
+                    }
+                }
+                Some(Waiting::SecretCard) => self.secret_card_reply(ok, &value, cx),
                 Some(Waiting::ScriptAction) if !ok => {
                     self.problem = Some(error_text(&value));
                 }
@@ -2259,7 +2286,8 @@ impl Shell {
                     self.subagents.feed_event(&payload);
                 }
                 "secret-state" => {
-                    self.secrets = payload["requests"].as_array().cloned().unwrap_or_default()
+                    self.secrets = payload["requests"].as_array().cloned().unwrap_or_default();
+                    self.sync_secret_card();
                 }
                 _ => {}
             },
@@ -2611,10 +2639,31 @@ impl Shell {
             .collect()
     }
 
+    /// Infisical's status and each project's link, for the Conectores page.
+    fn load_infisical(&mut self) {
+        let call = self
+            .backend
+            .invoke("infisical_action", crate::settings_infisical::status_args());
+        self.waiting.insert(call, Waiting::Infisical);
+        let paths: Vec<String> = self.projects.iter().map(|p| p.path.clone()).collect();
+        for path in paths {
+            if crate::settings_infisical::should_ask(&path, true) {
+                let call = self.backend.invoke(
+                    "infisical_action",
+                    crate::settings_infisical::link_args(&path),
+                );
+                self.waiting.insert(call, Waiting::Infisical);
+            }
+        }
+    }
+
     fn load_settings_page(&mut self) {
         self.publish_computers();
         if self.settings_page == "Provedores" {
             self.refresh_cli_diagnostics();
+        }
+        if self.settings_page == "Conectores" {
+            self.load_infisical();
         }
         for (key, command, args) in crate::settings_pages::loads(self.settings_page) {
             if command == "native_github_list" {
@@ -2831,6 +2880,22 @@ impl Shell {
             "forge_action" => {
                 let id = self.backend.invoke(command, args);
                 self.waiting.insert(id, Waiting::SettingsData("forges"));
+            }
+            "infisical_action" => {
+                let id = self.backend.invoke(command, args);
+                self.waiting.insert(id, Waiting::Infisical);
+            }
+            // "Rodar scripts com as chaves do Infisical" for a project (ADR-198).
+            "native_infisical_scripts" => {
+                let project = text("projectId");
+                let environment = args["environment"].as_str().map(str::to_owned);
+                if let Some(row) = self.projects.iter_mut().find(|p| p.id == project) {
+                    row.scripts.infisical = environment.clone();
+                }
+                self.script_action(
+                    json!({"action": {"type": "setInfisical", "projectId": project, "environment": environment}}),
+                    cx,
+                );
             }
             "connector_action" => {
                 // The reply is the sign-in states; it lands in the page when a sign-in is over.
@@ -3090,7 +3155,7 @@ impl Shell {
         if self.palette_ui.is_some()
             || self.appearance.is_some()
             || self.usage_page_open()
-            || self.secret_entry.is_some()
+            || self.card_typing()
             || self.grabs_typing()
         {
             return None;
@@ -4574,9 +4639,6 @@ impl Shell {
         if self.find.typing() {
             return Some(&mut self.find.query);
         }
-        if let Some((_, value)) = self.secret_entry.as_mut() {
-            return Some(value);
-        }
         if let Some((_, value)) = self.setting_edit.as_mut() {
             return Some(value);
         }
@@ -4635,7 +4697,8 @@ impl Shell {
 
     /// Whether a popup's search or name field takes the keys instead of the composer.
     fn grabs_typing(&self) -> bool {
-        self.actions.dialog.is_some()
+        self.card_typing()
+            || self.actions.dialog.is_some()
             || self.find.typing()
             || self.queues.is_editing()
             || self.subagents.composing(&self.active_session_id())
@@ -5734,22 +5797,7 @@ impl Shell {
             cx.notify();
             return;
         }
-        if self.secret_entry.is_some() && matches!(key, "enter" | "escape" | "backspace") {
-            match key {
-                "enter" => {
-                    if let Some((id, value)) = self.secret_entry.take() {
-                        if !value.is_empty() {
-                            self.respond_secret(&id, Some(value), cx);
-                        }
-                    }
-                }
-                "escape" => self.secret_entry = None,
-                _ => {
-                    if let Some((_, value)) = self.secret_entry.as_mut() {
-                        value.pop();
-                    }
-                }
-            }
+        if self.secret_card_key(keys, cx) {
             cx.stop_propagation();
             cx.notify();
             return;
@@ -6416,7 +6464,7 @@ impl Shell {
             "secret_action",
             json!({ "action": { "type": "respond", "requestId": id, "value": value } }),
         );
-        self.secret_entry = None;
+        self.secret_card = None;
         self.secrets.retain(|r| r["id"].as_str() != Some(id));
         cx.notify();
     }
@@ -12971,7 +13019,6 @@ impl Shell {
         let attached = self.attachments.get(&ix).cloned().unwrap_or_default();
         let attachment_chips = self.attachment_chips(&attached, cx);
         let secret = self.secrets.first().cloned();
-        let secret_entry = self.secret_entry.clone();
         let draft = self.drafts.get(&ix).cloned().unwrap_or_default();
         let has_text = !draft.text.trim().is_empty() || !attached.is_empty();
         // While the agent works Stop and Send sit side by side, and what is sent joins the
@@ -13271,118 +13318,16 @@ impl Shell {
             // A request for a secret: the value is typed here, masked, and the agent never sees it.
             .when_some(secret, |d, request| {
                 let id = request["id"].as_str().unwrap_or("").to_owned();
-                let label = request["envName"]
-                    .as_str()
-                    .or(request["label"].as_str())
-                    .unwrap_or("")
-                    .to_owned();
-                let about = request["description"].as_str().unwrap_or("").to_owned();
-                let typing_secret = secret_entry.as_ref().is_some_and(|(entry, _)| *entry == id);
-                let masked = secret_entry
-                    .as_ref()
-                    .filter(|_| typing_secret)
-                    .map_or(String::new(), |(_, value)| {
-                        "•".repeat(value.chars().count())
-                    });
-                let (open_id, decline_id) = (id.clone(), id.clone());
-                let (op_id, op_label) = (id.clone(), label.clone());
                 let d = match self.op_pick_view(&id, cx) {
                     Some(list) => d.child(list),
                     None => d,
                 };
-                d.child(
-                    div()
-                        .mb(px(8.))
-                        .h(px(40.))
-                        .px(px(10.))
-                        .rounded(px(crate::theme::RADIUS_LG))
-                        .border_1()
-                        .border_color(accent())
-                        .bg(field_fill())
-                        .flex()
-                        .items_center()
-                        .gap(px(8.))
-                        .text_size(px(13.))
-                        .child(icon("key", 15.).text_color(accent()))
-                        .child(div().flex_shrink_0().text_color(content(0.95)).child(label))
-                        .child(if typing_secret {
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .text_color(content(0.9))
-                                .child(if masked.is_empty() {
-                                    t("Digite o valor e aperte Enter").to_owned()
-                                } else {
-                                    masked
-                                })
-                        } else {
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .text_size(px(12.))
-                                .text_color(content(0.5))
-                                .child(about)
-                        })
-                        .when(!typing_secret, |d| {
-                            d.child(
-                                div()
-                                    .id("secret-decline")
-                                    .h(px(26.))
-                                    .px(px(10.))
-                                    .rounded(px(crate::theme::RADIUS_MD))
-                                    .flex()
-                                    .items_center()
-                                    .text_size(px(12.5))
-                                    .text_color(content(0.75))
-                                    .cursor_pointer()
-                                    .hover(|s| s.bg(content(0.07)))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.respond_secret(&decline_id, None, cx)
-                                    }))
-                                    .child(t("Recusar")),
-                            )
-                            .child(
-                                div()
-                                    .id("secret-onepassword")
-                                    .h(px(26.))
-                                    .px(px(10.))
-                                    .rounded(px(crate::theme::RADIUS_MD))
-                                    .flex()
-                                    .items_center()
-                                    .text_size(px(12.5))
-                                    .text_color(content(0.85))
-                                    .bg(content(0.08))
-                                    .cursor_pointer()
-                                    .hover(|s| s.bg(content(0.12)))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.start_op_pick(op_id.clone(), op_label.clone(), cx)
-                                    }))
-                                    .child("1Password"),
-                            )
-                            .child(
-                                div()
-                                    .id("secret-open")
-                                    .h(px(26.))
-                                    .px(px(10.))
-                                    .rounded(px(crate::theme::RADIUS_MD))
-                                    .flex()
-                                    .items_center()
-                                    .text_size(px(12.5))
-                                    .text_color(on_accent())
-                                    .bg(accent())
-                                    .cursor_pointer()
-                                    .hover(|s| s.opacity(0.88))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.secret_entry = Some((open_id.clone(), String::new()));
-                                        cx.notify();
-                                    }))
-                                    .child(t("Informar")),
-                            )
-                        }),
-                )
+                d.child(self.secret_card_view(&request, cx))
             })
+            .when_some(
+                self.secret_done.clone().filter(|_| self.secrets.is_empty()),
+                |d, line| d.child(self.secret_done_view(&line)),
+            )
             .when_some(pending, |d, request| {
                 let kind = &request["kind"];
                 let question = kind["type"] == "userInput";
@@ -16486,6 +16431,17 @@ impl Shell {
                 self.appearance_page(cx),
             )
         } else {
+            crate::settings_infisical::set_projects(
+                self.projects
+                    .iter()
+                    .map(|p| crate::settings_infisical::ProjectRow {
+                        id: p.id.clone(),
+                        name: p.name.clone(),
+                        path: p.path.clone(),
+                        scripts: p.scripts.infisical.clone(),
+                    })
+                    .collect(),
+            );
             crate::settings_connectors::set_context(
                 self.projects
                     .iter()
@@ -18482,9 +18438,10 @@ impl EntityInputHandler for Shell {
         _: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<String> {
-        let text = match self.query_target() {
-            Some(query) => query.clone(),
-            None => self.draft().text.clone(),
+        let text = match (self.card_text(), self.query_target()) {
+            (Some((text, _, _)), _) => text,
+            (None, Some(query)) => query.clone(),
+            (None, None) => self.draft().text.clone(),
         };
         let (start, end) = (byte_at(&text, range.start), byte_at(&text, range.end));
         *adjusted = Some(range);
@@ -18496,6 +18453,9 @@ impl EntityInputHandler for Shell {
         _: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
+        if let Some((_, range, reversed)) = self.card_text() {
+            return Some(UTF16Selection { range, reversed });
+        }
         if let Some(query) = self.query_target() {
             let end = data::utf16_len(query);
             return Some(UTF16Selection {
@@ -18527,6 +18487,10 @@ impl EntityInputHandler for Shell {
         if self.first_run.active() {
             return;
         }
+        if self.card_replace(range.clone(), text, false) {
+            cx.notify();
+            return;
+        }
         self.replace_selected_name();
         let marked = self.marked.take();
         self.mention_selected = 0;
@@ -18556,6 +18520,10 @@ impl EntityInputHandler for Shell {
         cx: &mut Context<Self>,
     ) {
         if self.first_run.active() {
+            return;
+        }
+        if self.card_replace(range.clone(), new_text, true) {
+            cx.notify();
             return;
         }
         self.replace_selected_name();

@@ -345,7 +345,7 @@ fn now() -> i64 {
 
 // ---- HTTP ----
 
-fn http() -> Result<&'static reqwest::Client> {
+pub(crate) fn http() -> Result<&'static reqwest::Client> {
     static HTTP: OnceLock<std::result::Result<reqwest::Client, String>> = OnceLock::new();
     HTTP.get_or_init(|| {
         reqwest::Client::builder()

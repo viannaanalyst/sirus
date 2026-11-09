@@ -269,7 +269,12 @@ pub fn upsert_dotenv(existing: &str, name: &str, value: &str) -> String {
 
 /// `export NAME='value'` for a POSIX shell to source.
 pub fn shell_export(name: &str, value: &str) -> String {
-    format!("export {name}='{}'\n", value.replace('\'', "'\\''"))
+    format!("export {name}={}\n", shell_quote(value))
+}
+
+/// `text` as one single-quoted POSIX shell word.
+pub fn shell_quote(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "'\\''"))
 }
 
 fn session_root(app: &AppHandle, session_id: &str) -> Result<PathBuf, String> {
@@ -563,16 +568,80 @@ pub enum Action {
         request_id: String,
         /// `None` declines.
         value: Option<String>,
+        /// Also save the value in the linked Infisical project, in this environment (ADR-198).
+        #[serde(default)]
+        infisical_env: Option<String>,
+        /// Also write it to `.env.local` in the conversation's workspace, under the requested name.
+        #[serde(default)]
+        dotenv: bool,
     },
 }
 
 /// Closed secret-card surface: status, provide or decline. Values are never echoed back.
 pub async fn secret_action(state: State<'_, Arc<AppState>>, action: Action) -> IpcResult<Snapshot> {
     state.ensure_running()?;
-    if let Action::Respond { request_id, value } = action {
+    if let Action::Respond {
+        request_id,
+        value,
+        infisical_env,
+        dotenv,
+    } = action
+    {
+        // Saved first, from the value still in hand; the agent is answered either way.
+        let mut saved = Ok(());
+        if let (Some(environment), Some(typed)) = (infisical_env.as_deref(), value.as_deref()) {
+            let asked = snapshot()
+                .requests
+                .into_iter()
+                .find(|request| request.id == request_id);
+            if let Some(request) = asked {
+                let key = request
+                    .env_name
+                    .clone()
+                    .unwrap_or_else(|| request.label.clone());
+                saved = crate::infisical::save_for_session(
+                    state.inner(),
+                    &request.session_id,
+                    environment,
+                    &key,
+                    typed,
+                )
+                .await;
+            }
+        }
+        if let (true, Some(typed)) = (dotenv, value.as_deref()) {
+            saved = save_dotenv(state.inner(), &request_id, typed);
+        }
         respond(&request_id, value)?;
+        saved?;
     }
     Ok(snapshot())
+}
+
+/// The card's ".env.local do projeto": the value is written to that untracked file in the
+/// conversation's workspace, as `NAME=value`.
+fn save_dotenv(state: &AppState, request_id: &str, value: &str) -> IpcResult<()> {
+    let request = snapshot()
+        .requests
+        .into_iter()
+        .find(|request| request.id == request_id)
+        .ok_or_else(|| Error::agent("That request is no longer waiting."))?;
+    let name = request
+        .env_name
+        .ok_or_else(|| Error::agent("This request has no variable name to save under."))?;
+    let root = {
+        let data = state.data.lock();
+        let session = data
+            .sessions
+            .iter()
+            .find(|session| session.id == request.session_id)
+            .ok_or_else(|| Error::agent("This conversation no longer exists."))?;
+        crate::commands::session_cwd(&data, session)
+            .map_err(|_| Error::agent("The conversation's workspace is unavailable."))?
+    };
+    write_file(&root, ".env.local", Some(&name), value)
+        .map(|_| ())
+        .map_err(|_| Error::agent("The .env.local file could not be written."))
 }
 
 /// Answers a waiting request: the value goes to the agent's side and the card closes.

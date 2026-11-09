@@ -115,6 +115,8 @@ pub struct Conversation {
     pub created_at: String,
     /// It was delegated by another session and its reply notifies that one (`delegatedBy.notify`).
     pub delegated_notify: bool,
+    /// The session that delegated this one, when its reply notifies that one (`delegatedBy`).
+    pub parent_session: Option<String>,
     pub worktree: String,
     pub branch: String,
     /// The provider account the session uses, for the message queue's binding.
@@ -186,6 +188,7 @@ impl Conversation {
             last_activity: String::new(),
             created_at: String::new(),
             delegated_notify: false,
+            parent_session: None,
             worktree: String::new(),
             branch: String::new(),
             account: "default".into(),
@@ -230,6 +233,14 @@ impl Conversation {
         self.last_activity = session["lastActivityAt"].as_str().unwrap_or("").to_owned();
         self.created_at = session["createdAt"].as_str().unwrap_or("").to_owned();
         self.delegated_notify = session["delegatedBy"]["notify"].as_bool() == Some(true);
+        self.parent_session = self
+            .delegated_notify
+            .then(|| {
+                session["delegatedBy"]["sessionId"]
+                    .as_str()
+                    .map(str::to_owned)
+            })
+            .flatten();
         self.worktree = session["worktree"]["path"]
             .as_str()
             .unwrap_or("")

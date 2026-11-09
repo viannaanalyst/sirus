@@ -35,3 +35,7 @@ The owner asked for a chat to hand a task to another provider or model without a
 - The wake-up message is a visible user turn in the parent, like an Astro's report notice.
 - Recording runs in the renderer and depends on WebKit's MediaRecorder; frame rate follows how fast snapshots return.
 - A floating tab is not shown in the pane, which offers to bring it back.
+
+## Addendum: delegated tasks, T3 Code style (2026-11-09)
+
+A delegated task that waits on an approval or a question now shows that request inside its row in the parent's task card, with the approval card its own tab uses (`pending_request_card`), and answering there resolves it in the task. The person is still the only one who answers questions. The host also wakes the parent once per waiting episode (`DelegatedBy.asked`, cleared when the request is answered or the task settles) with a short prompt that names the task and points to `sirus_answer_approval` (decline always, accept only with full access) or to telling the person; a busy or stopped parent is not woken and gets it when it settles. Delegated tasks no longer list as conversations: the sidebar nests them, collapsed, under their parent row behind an "N tarefas" disclosure that shows a dot while one of them waits, they are never restored as tabs on launch, and a task whose parent is gone stays in the list. Two or more tasks of one reply form a foldable group ("3 tarefas delegadas · 2 concluídas") and each row shows its elapsed time. Delegating never opens a tab by itself.

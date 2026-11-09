@@ -520,6 +520,7 @@ pub fn execute(
                         notify: false,
                         settled: false,
                         delivered: false,
+                        asked: false,
                     }),
                     share_worktree: None,
                 },

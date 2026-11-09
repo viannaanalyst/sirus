@@ -1245,6 +1245,10 @@ pub fn monitor(
                     session.pending_requests.push(pending);
                     session.status = SessionStatus::Waiting;
                     crate::notifications::publish(&app, &state, session);
+                    // A delegated task asking the person also reaches its parent (ADR-111).
+                    if session.delegated_by.as_ref().is_some_and(|by| by.notify) {
+                        crate::delegation::waiting(&app, &state, &session_id);
+                    }
                 }
                 Event::Answered(id) => {
                     session
@@ -1253,6 +1257,7 @@ pub fn monitor(
                     if session.pending_requests.is_empty() {
                         session.status = SessionStatus::Running;
                     }
+                    crate::delegation::answered(session);
                 }
             }
             crate::activity::sync(session);

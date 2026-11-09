@@ -284,7 +284,7 @@ export interface Session {
   /** An "Ask" conversation about a GitHub pull request or issue: hidden from session lists, read-only on every turn (ADR-050). */
   pullAsk?: PullAskOrigin | null;
   /** The session that delegated this one (`sirus_delegate`) or started it (`sirus_create_session`), ADR-111. */
-  delegatedBy?: { sessionId: string; turn: string; notify: boolean; settled: boolean; delivered: boolean } | null;
+  delegatedBy?: { sessionId: string; turn: string; notify: boolean; settled: boolean; delivered: boolean; asked?: boolean } | null;
   /** Project script runs in this session's worktree; `setupPending` until its first turn (ADR-078). */
   scripts?: { setupPending?: boolean; runs?: ScriptRun[] } | null;
 }

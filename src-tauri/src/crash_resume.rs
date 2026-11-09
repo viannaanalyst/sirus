@@ -254,6 +254,7 @@ mod tests {
             notify: true,
             settled: false,
             delivered: false,
+            asked: false,
         });
         let interrupted: Vec<String> = ["a", "side", "child"].map(String::from).to_vec();
         let a = vec!["a".to_string()];

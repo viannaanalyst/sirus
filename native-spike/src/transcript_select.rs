@@ -729,7 +729,7 @@ impl Element for Selected {
 // ---- The window's side: keys, copy, menu ---------------------------------------------------
 
 const MENU_OPEN: f32 = 0.12;
-const MENU_WIDTH: f32 = 164.;
+const MENU_WIDTH: f32 = 200.;
 
 impl Shell {
     /// The fragments of a reply in render order, from its current source.
@@ -741,7 +741,13 @@ impl Shell {
         else {
             return Vec::new();
         };
-        if reply.user {
+        if reply.user && super::composer_quote::has_quotes(&turn.user) {
+            // A message with quote blocks: each reply and each free line is a piece.
+            super::composer_quote::fragments(&super::composer_quote::parse(&turn.user))
+                .iter()
+                .map(|piece| crate::inline_badges::displayed(piece))
+                .collect()
+        } else if reply.user {
             vec![crate::inline_badges::displayed(&turn.user)]
         } else {
             // The same rendering as on screen: drawn diagrams and formulas change which pieces of
@@ -816,22 +822,6 @@ impl Shell {
         true
     }
 
-    /// Puts a selected passage at the end of the composer's draft, on its own paragraph, with the
-    /// caret on a new one below it.
-    fn add_to_chat(&mut self, text: &str) {
-        let draft = self.draft();
-        let separator = if draft.text.is_empty() || draft.text.ends_with("\n\n") {
-            ""
-        } else if draft.text.ends_with('\n') {
-            "\n"
-        } else {
-            "\n\n"
-        };
-        draft.text = format!("{}{separator}{}\n\n", draft.text, text.trim());
-        draft.cursor = draft.text.len();
-        draft.anchor = draft.cursor;
-    }
-
     pub(super) fn select_menu_view(
         &self,
         now: Instant,
@@ -874,6 +864,7 @@ impl Shell {
         };
         let copy = text.clone();
         let ask = text;
+        let from = self.select.reply();
         const HEIGHT: f32 = 60.;
         let left = (f32::from(anchor.x) - MENU_WIDTH / 2.)
             .min(self.viewport_width - MENU_WIDTH - 8.)
@@ -914,18 +905,26 @@ impl Shell {
                     0,
                     false,
                 ))
-                .child(track.row(
-                    item("selection-add-chat", "comment-add", "Adicionar ao chat").on_click(
-                        cx.listener(move |this, _, window, cx| {
-                            this.select.clear();
-                            this.add_to_chat(&ask);
-                            this.keep_typing_focus(window, cx);
-                            cx.notify();
-                        }),
+                .child(
+                    track.row(
+                        item("selection-add-chat", "comment-add", "Adicionar ao chat")
+                            .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .text_size(px(11.))
+                                    .text_color(content(0.4))
+                                    .child("⌘⇧L"),
+                            )
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.select.clear();
+                                this.add_to_chat(&ask, from);
+                                this.keep_typing_focus(window, cx);
+                                cx.notify();
+                            })),
+                        1,
+                        false,
                     ),
-                    1,
-                    false,
-                ))
+                )
                 .into_any_element(),
         )
     }

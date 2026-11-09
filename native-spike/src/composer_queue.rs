@@ -609,7 +609,7 @@ impl Shell {
         let typed = self
             .drafts
             .get(&ix)
-            .map_or(String::new(), |d| d.text.clone());
+            .map_or(String::new(), |d| d.full_text());
         let files = self.attachments.get(&ix).is_some_and(|a| !a.is_empty());
         if self.typed_compact(ix, &typed, files, cx) {
             return;
@@ -633,7 +633,7 @@ impl Shell {
         let draft = self
             .drafts
             .get(&ix)
-            .map_or(String::new(), |d| d.text.clone());
+            .map_or(String::new(), |d| d.full_text());
         let text = draft.trim().to_owned();
         let attachments = self.attachments.get(&ix).cloned().unwrap_or_default();
         // Attachments alone are enough, as in Sirus.
@@ -807,7 +807,7 @@ impl Shell {
             }
             // The draft goes only if it was left as it was sent.
             if let Some((ix, draft, files)) = wait.draft {
-                if self.drafts.get(&ix).is_some_and(|d| d.text == draft)
+                if self.drafts.get(&ix).is_some_and(|d| d.full_text() == draft)
                     && self.attachments.get(&ix).cloned().unwrap_or_default() == files
                 {
                     self.drafts.remove(&ix);
@@ -1078,8 +1078,7 @@ impl Shell {
         let draft = self
             .drafts
             .get(&ix)
-            .map_or("", |d| d.text.as_str())
-            .to_owned();
+            .map_or(String::new(), |d| d.full_text());
         let state = self.queues.recall.get(&ix).cloned().unwrap_or_default();
         if state.index.is_none() && (!up || !draft.is_empty()) {
             return false;

@@ -11414,17 +11414,25 @@ impl Shell {
                         })
                         .into_any_element();
                 }
-                // A user message past four wrapped lines collapses (prompt_overflows in turn_body).
-                if let Some(text) = this.conversations[index]
-                    .turns
-                    .get(item - 1)
-                    .map(|turn| turn.user.clone())
-                    .filter(|text| !text.trim().is_empty())
+                // A user message past four wrapped lines collapses (prompt_overflows in turn_body);
+                // so does one sent into the running reply (steer_bubble).
                 {
                     let view = this.view_sizes.get(&index).map_or(0., |size| size.0);
                     let column = if view > 0. { view.min(832.) } else { 832. } - 46.;
-                    let over = prompt_lines_over(&text, column.min(576.) - 24., window) > 4;
-                    this.prompt_overflow.insert((index, item - 1), over);
+                    let wrap = column.min(576.) - 24.;
+                    let mut measured = Vec::new();
+                    if let Some(turn) = this.conversations[index].turns.get(item - 1) {
+                        measured.push(((index, item - 1), turn.user.clone()));
+                        for (at, steer) in turn.steers.iter().enumerate() {
+                            measured
+                                .push((steer_prompt_key(index, item - 1, at), steer.text.clone()));
+                        }
+                    }
+                    for (key, text) in measured {
+                        let over = !text.trim().is_empty()
+                            && prompt_folds(prompt_lines_over(&text, wrap, window));
+                        this.prompt_overflow.insert(key, over);
+                    }
                 }
                 let Some(turn) = this.conversations[index].turns.get(item - 1) else {
                     return div().into_any_element();
@@ -14434,6 +14442,46 @@ impl Shell {
             .into_any_element()
     }
 
+    /// The "Mostrar mais" / "Mostrar menos" button under a folded message.
+    fn prompt_more(
+        &self,
+        id: (&'static str, usize),
+        key: (usize, usize),
+        collapsed: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        div()
+            .flex()
+            .child(
+                div()
+                    .id(id)
+                    .mt_1()
+                    .px_1()
+                    // Its label lines up with the text; the padding is for the hover.
+                    .ml(px(-4.))
+                    .py(px(2.))
+                    .rounded(px(crate::theme::RADIUS_SM))
+                    .text_size(px(12.))
+                    .line_height(px(16.))
+                    .text_color(content(0.6))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+                    .child(if collapsed {
+                        t("Mostrar mais")
+                    } else {
+                        t("Mostrar menos")
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if !this.expanded_prompts.remove(&key) {
+                            this.expanded_prompts.insert(key);
+                        }
+                        this.prompt_moved.insert(key, Instant::now());
+                        cx.notify();
+                    })),
+            )
+            .into_any_element()
+    }
+
     /// What the person sent into the running reply, as a message of theirs, where it arrived.
     fn steer_bubble(
         &self,
@@ -14462,6 +14510,9 @@ impl Shell {
                 ))
             })
             .when(!steer_data.text.is_empty(), |d| {
+                let key = steer_prompt_key(conversation, index, steer);
+                let folds = self.prompt_overflow.get(&key).copied().unwrap_or(false);
+                let collapsed = folds && !self.expanded_prompts.contains(&key);
                 d.child(
                     div()
                         .max_w(px(576.))
@@ -14473,7 +14524,16 @@ impl Shell {
                         .text_size(px(14.))
                         .line_height(px(20.))
                         .text_color(content(1.))
-                        .child(steer_data.text.clone()),
+                        // Four lines while folded; the button stays inside the bubble.
+                        .child(prompt_frame(
+                            None,
+                            px(0.),
+                            collapsed,
+                            div().child(steer_data.text.clone()).into_any_element(),
+                        ))
+                        .when(folds, |d| {
+                            d.child(self.prompt_more(("steer-more", key.1), key, collapsed, cx))
+                        }),
                 )
             })
             .into_any_element()
@@ -14951,44 +15011,12 @@ impl Shell {
                                         },
                                     ))
                                     .when(prompt_overflows, |d| {
-                                        d.child(
-                                            div().flex().child(
-                                                div()
-                                                    .id(("prompt-more", index))
-                                                    .mt_1()
-                                                    .px_1()
-                                                    // Its label lines up with the text; the padding is for the hover.
-                                                    .ml(px(-4.))
-                                                    .py(px(2.))
-                                                    .rounded(px(crate::theme::RADIUS_SM))
-                                                    .text_size(px(12.))
-                                                    .line_height(px(16.))
-                                                    .text_color(content(0.6))
-                                                    .cursor_pointer()
-                                                    .hover(|s| {
-                                                        s.bg(content(0.08)).text_color(content(1.))
-                                                    })
-                                                    .child(if prompt_collapsed {
-                                                        "Show more"
-                                                    } else {
-                                                        "Show less"
-                                                    })
-                                                    .on_click(cx.listener(
-                                                        move |this, _, _, cx| {
-                                                            if !this
-                                                                .expanded_prompts
-                                                                .remove(&prompt_key)
-                                                            {
-                                                                this.expanded_prompts
-                                                                    .insert(prompt_key);
-                                                            }
-                                                            this.prompt_moved
-                                                                .insert(prompt_key, Instant::now());
-                                                            cx.notify();
-                                                        },
-                                                    )),
-                                            ),
-                                        )
+                                        d.child(self.prompt_more(
+                                            ("prompt-more", index),
+                                            prompt_key,
+                                            prompt_collapsed,
+                                            cx,
+                                        ))
                                     }),
                             ),
                         ),
@@ -17912,6 +17940,20 @@ mod live_header_tests {
     }
 }
 
+/// Wrapped lines a user message shows before it folds behind "Mostrar mais".
+const PROMPT_FOLD_LINES: usize = 4;
+
+/// Whether a message of `lines` wrapped lines folds.
+fn prompt_folds(lines: usize) -> bool {
+    lines > PROMPT_FOLD_LINES
+}
+
+/// The fold key of an instruction sent into a running reply: apart from every turn's own message,
+/// which is keyed by its turn index.
+fn steer_prompt_key(conversation: usize, turn: usize, steer: usize) -> (usize, usize) {
+    (conversation, (1 << 32) + turn * 4096 + steer)
+}
+
 /// Wrapped lines of a user message at the bubble's text width, shaped as the bubble draws it.
 fn prompt_lines_over(text: &str, wrap: f32, window: &Window) -> usize {
     let text = text.trim_end();
@@ -19808,5 +19850,58 @@ mod trail_tests {
     fn at_the_bottom_the_last_turn_is_current() {
         assert_eq!(current_turn(3, &[-120., 300.], 10, true), 9);
         assert_eq!(current_turn(0, &[0.], 1, true), 0);
+    }
+}
+
+#[cfg(test)]
+mod prompt_fold_tests {
+    use super::*;
+    use gpui::{Render, TestAppContext};
+
+    struct Probe;
+    impl Render for Probe {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+        }
+    }
+
+    #[test]
+    fn a_message_folds_past_four_lines() {
+        assert!(!prompt_folds(0));
+        assert!(!prompt_folds(4));
+        assert!(prompt_folds(5));
+        assert!(prompt_folds(28));
+    }
+
+    #[test]
+    fn a_steer_keeps_its_own_fold_key() {
+        let mut keys = HashSet::new();
+        for turn in 0..300 {
+            // A turn's own message is keyed by its index.
+            assert!(keys.insert((2, turn)));
+            for steer in 0..8 {
+                assert!(keys.insert(steer_prompt_key(2, turn, steer)));
+            }
+        }
+        assert_ne!(steer_prompt_key(1, 0, 0), steer_prompt_key(2, 0, 0));
+    }
+
+    #[gpui::test]
+    fn a_28_line_message_counts_as_28_lines_or_more(cx: &mut TestAppContext) {
+        let window = cx.add_window(|_, _| Probe);
+        let text = (1..=28)
+            .map(|n| format!("linha {n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let lines = window
+            .update(cx, |_, window, _| prompt_lines_over(&text, 552., window))
+            .unwrap();
+        assert!(lines >= 28 && prompt_folds(lines), "{lines}");
+    }
+
+    #[test]
+    fn the_fold_button_has_english() {
+        assert!(crate::i18n::with_locale(true, || t("Mostrar mais") == "Show more"));
+        assert!(crate::i18n::with_locale(true, || t("Mostrar menos") == "Show less"));
     }
 }

@@ -1589,8 +1589,7 @@ pub struct Shell {
     /// A streaming reply's paced reveal, by conversation and turn.
     pacers: std::cell::RefCell<HashMap<(usize, usize), paced::Pacer>>,
     /// The live steps' bounded window of each turn, scrolled to follow the newest step.
-    phase_scrolls:
-        std::cell::RefCell<HashMap<(usize, usize), (gpui::ScrollHandle, std::cell::Cell<f32>)>>,
+    phase_scrolls: std::cell::RefCell<HashMap<(usize, usize), gpui::ScrollHandle>>,
     /// The panes beside each other, when there are several (split_panes.rs).
     split: split_panes::State,
     jump: Tween,
@@ -15094,28 +15093,34 @@ impl Shell {
         }
         // At most 280 px or 45% of the view; it follows the newest step while the reader has not
         // scrolled up, and the steps fade at the edges with no colour laid over the glass.
-        let body_height = rows.len() as f32 * STEP_ROW;
+        let rows_height = live_tree_height(steps.len());
         let view = self
             .view_sizes
             .get(&conversation)
             .map_or(600., |size| size.1);
-        let max_height = 280f32.min(view * 0.45).max(96.);
-        let (handle, was_at_bottom, offset, max) = {
+        let max_height = live_window_max(view);
+        let window_height = rows_height.min(max_height);
+        let scroll = live_scroll(rows_height, window_height);
+        let (handle, offset) = {
             let mut scrolls = self.phase_scrolls.borrow_mut();
-            let entry = scrolls
+            let handle = scrolls
                 .entry((conversation, index * 4096 + start))
-                .or_insert_with(|| (gpui::ScrollHandle::new(), std::cell::Cell::new(0.)));
-            let offset = -f32::from(entry.0.offset().y);
-            let max = f32::from(entry.0.max_offset().y);
-            let was_at_bottom = offset >= entry.1.get() - 1.;
-            entry.1.set(max);
-            (entry.0.clone(), was_at_bottom, offset, max)
+                .or_default()
+                .clone();
+            let offset = -f32::from(handle.offset().y);
+            let max = f32::from(handle.max_offset().y);
+            // At the bottom (or before its first scroll), pin to the newest step from this
+            // frame's rows, so a row that just arrived is in place in this same frame rather
+            // than waiting for the next one to be measured.
+            if offset >= max - 1. {
+                handle.set_offset(gpui::point(px(0.), px(-scroll)));
+                (handle, scroll)
+            } else {
+                (handle, offset)
+            }
         };
-        if was_at_bottom {
-            handle.scroll_to_bottom();
-        }
         let top_fade = if offset > 1. { 24. } else { 0. };
-        let bottom_fade = if max - offset > 1. { 32. } else { 0. };
+        let bottom_fade = if scroll - offset > 1. { 32. } else { 0. };
         let mask = |begin: bool| {
             gpui::canvas(
                 |_, _, _| {},
@@ -15142,7 +15147,7 @@ impl Shell {
         let window_body = div()
             .relative()
             .w_full()
-            .h(px(body_height.min(max_height)))
+            .h(px(window_height))
             .overflow_hidden()
             .child(mask(true))
             .child(
@@ -18601,6 +18606,21 @@ fn model_name(provider: &str) -> &'static str {
     }
 }
 
+/// The live tree's height with one fixed row per step.
+fn live_tree_height(steps: usize) -> f32 {
+    steps as f32 * STEP_ROW
+}
+
+/// The tallest the live tree's window grows: 280 px or 45% of the view, never below 96 px.
+fn live_window_max(view_height: f32) -> f32 {
+    280f32.min(view_height * 0.45).max(96.)
+}
+
+/// How far the live tree scrolls to keep its newest row in view; zero while they all fit.
+fn live_scroll(rows_height: f32, window_height: f32) -> f32 {
+    (rows_height - window_height).max(0.)
+}
+
 /// The live phase's header: "Rodando 11 comandos · Explorou o projeto".
 fn live_summary(steps: &[data::Step]) -> String {
     let count = |kind: &str| steps.iter().filter(|s| s.kind == kind).count();
@@ -18642,6 +18662,23 @@ mod live_header_tests {
             target: None,
             caption: String::new(),
         }
+    }
+
+    #[test]
+    fn the_live_window_grows_with_its_rows_and_stops_at_a_share_of_the_view() {
+        assert_eq!(live_tree_height(0), 0.);
+        assert_eq!(live_tree_height(2), 56.);
+        // Two rows fit: the window is the rows themselves and nothing scrolls.
+        assert_eq!((live_window_max(800.), live_scroll(56., 56.)), (280., 0.));
+        // Eleven rows do not: the window stops and the newest row is a scroll away.
+        assert_eq!(
+            (live_window_max(800.), live_scroll(308., 280.)),
+            (280., 28.)
+        );
+        // A short view takes 45% of it, but never less than 96 px.
+        assert_eq!(live_window_max(400.), 180.);
+        assert_eq!(live_window_max(100.), 96.);
+        assert_eq!(live_scroll(84., 96.), 0.);
     }
 
     #[test]

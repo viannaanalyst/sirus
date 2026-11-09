@@ -6,10 +6,7 @@
 //! click on one of those shows its diff; the arrow goes back a step. The
 //! host back end has no such request, so those two are read with `git` in the worktree, on a
 //! background thread (local_git.rs). The footer commits the staged files with the title typed in
-//! its field. The changes view (+N −N) has a switch, Alterações | Commits (N): Commits lists the
-//! branch's unpushed commits, ahead of its upstream or of the base branch, from the host's
-//! `outgoing`; one opens in the same file list and diff as a Histórico commit, its diffs read
-//! with the host's `commitDiff`.
+//! its field.
 use crate::backend::Backend;
 use crate::i18n::{t, tf};
 use crate::local_git::{self, CommitFiles};
@@ -17,7 +14,6 @@ use crate::motion::{Curve, eased};
 use crate::panel_files::{TextField, TextFieldEvent};
 use crate::panels::PanelContext;
 use crate::project_files::run_blocking;
-use crate::theme::Sinks as _;
 use crate::theme::{accent, accent_wash, content, diff_colors, on_accent};
 use gpui::{
     Animation, AnimationExt, AnyElement, AnyView, App, Context, Div, Entity, Hsla, Render,
@@ -78,8 +74,6 @@ fn build(context: PanelContext, mode: Mode, cx: &mut App) -> AnyView {
             error: None,
             opened: None,
             commit_view: None,
-            review_tab: ReviewTab::Changes,
-            outgoing: None,
             amending: false,
             older: None,
             loading_older: false,
@@ -177,28 +171,9 @@ struct Opened {
     lines: Lines,
 }
 
-/// What the changes view lists under its switch: the working tree or the unpushed commits.
-#[derive(Clone, Copy, PartialEq)]
-enum ReviewTab {
-    Changes,
-    Commits,
-}
-
-/// The local commits not pushed yet, as the host's `outgoing` lists them.
-struct OutgoingList {
-    /// What they are ahead of (`origin/main`, `main`, ...); None when there is nothing to compare.
-    base: Option<String>,
-    /// The base is the branch's upstream rather than a guessed base branch.
-    upstream: bool,
-    commits: Vec<(Commit, Rc<CommitFiles>)>,
-    truncated: bool,
-}
-
 /// A commit of the Histórico opened to see what it changed.
 struct CommitView {
     commit: Commit,
-    /// An unpushed commit of the changes view: its diffs come from the host, not local `git`.
-    outgoing: bool,
     files: CommitFilesState,
     /// The file whose diff is on screen; None while the file list is.
     diff: Option<CommitDiff>,
@@ -236,8 +211,6 @@ enum Menu {
 /// The header bar's height, and where the Commit button's menu starts under it.
 const TITLE: f32 = 34.;
 const COMMIT_BAR: f32 = 8. + 34. + 8. + 32. + 4.;
-/// The Alterações | Commits switch above the Commit bar: its top margin, border, padding and row.
-const SWITCH: f32 = 8. + 2. + 4. + 22.;
 /// The branch and Commit menus fade and slide for this many seconds.
 const MENU_TIME: f32 = 0.14;
 
@@ -267,10 +240,6 @@ struct ChangesPanel {
     opened: Option<Opened>,
     /// The commit opened from the Histórico; shown instead of the list while it is Some.
     commit_view: Option<CommitView>,
-    /// The changes view's switch: Alterações or Commits.
-    review_tab: ReviewTab,
-    /// The unpushed commits, read with every refresh of the changes view.
-    outgoing: Option<OutgoingList>,
     /// The next commit replaces the last one.
     amending: bool,
     older: Option<Older>,
@@ -532,7 +501,6 @@ impl ChangesPanel {
         let (root, sha) = (self.root.clone(), commit.hash.clone());
         self.commit_view = Some(CommitView {
             commit,
-            outgoing: false,
             files: CommitFilesState::Loading,
             diff: None,
         });
@@ -561,17 +529,6 @@ impl ChangesPanel {
         cx.notify();
     }
 
-    /// Opens an unpushed commit of the changes view: the host already listed its files.
-    fn open_outgoing(&mut self, commit: Commit, files: Rc<CommitFiles>, cx: &mut Context<Self>) {
-        self.commit_view = Some(CommitView {
-            commit,
-            outgoing: true,
-            files: CommitFilesState::Ready(files),
-            diff: None,
-        });
-        cx.notify();
-    }
-
     /// Shows one file's diff of the opened commit.
     fn open_commit_file(&mut self, path: String, cx: &mut Context<Self>) {
         let Some(view) = self.commit_view.as_mut() else {
@@ -582,30 +539,15 @@ impl ChangesPanel {
             path: path.clone(),
             lines: Lines::Loading,
         });
-        // An unpushed commit asks the host (the paths it listed are the repository's); a Histórico
-        // commit is read with `git` here.
-        let host = view.outgoing.then(|| {
-            self.backend.request(
-                "git_workspace_action",
-                json!({ "action": { "type": "commitDiff", "sessionId": self.session_id, "hash": sha.clone(), "path": path.clone() } }),
-            )
-        });
+        // A commit of the Histórico is read with `git` in the worktree, off the main thread.
         let root = self.root.clone();
-        let local = host.is_none().then(|| {
-            let (sha, path) = (sha.clone(), path.clone());
-            run_blocking(move || local_git::commit_file_diff(&root, &sha, &path))
-        });
+        let (diff_sha, diff_path) = (sha.clone(), path.clone());
+        let rx = run_blocking(move || local_git::commit_file_diff(&root, &diff_sha, &diff_path));
         cx.spawn(async move |this, cx| {
-            let diff = match (host, local) {
-                (Some(rx), _) => settle(rx)
-                    .await
-                    .map(|value| value["diff"].as_str().unwrap_or("").to_owned()),
-                (None, Some(rx)) => rx
-                    .recv()
-                    .await
-                    .unwrap_or_else(|_| Err(t("Não foi possível ler o diff.").into())),
-                (None, None) => Err(t("Não foi possível ler o diff.").into()),
-            };
+            let diff = rx
+                .recv()
+                .await
+                .unwrap_or_else(|_| Err(t("Não foi possível ler o diff.").into()));
             let lines = match diff {
                 Ok(diff) => Lines::Ready(Rc::new(diff.lines().map(str::to_owned).collect())),
                 Err(error) => Lines::Failed(error),
@@ -657,14 +599,15 @@ impl ChangesPanel {
         self.error = None;
         self.title_note = None;
         self.push.result = None;
-        let rx = self.backend.request(
-            "git_commit",
-            json!({ "sessionId": self.session_id, "message": message, "expectedIndex": token, "amend": amend }),
-        );
+        let backend = self.backend.clone();
+        let session = self.session_id.clone();
+        let args = json!({ "sessionId": &session, "message": message, "expectedIndex": token, "amend": amend });
         cx.spawn(async move |this, cx| {
-            let reply = settle(rx).await;
+            let (reply, refreshed) =
+                with_fresh_index(&backend, &session, "git_commit", args, TokenIn::Arguments).await;
             let _ = this.update(cx, |this, cx| {
                 this.committing = false;
+                this.note_snapshot(refreshed);
                 match reply {
                     Ok(_) => {
                         this.commit.update(cx, |field, cx| field.set_text("", cx));
@@ -1045,6 +988,16 @@ impl ChangesPanel {
             .into_any_element()
     }
 
+    /// Applies a snapshot read while retrying a stale index token, so the rows and the token
+    /// are the ones the retried action used.
+    fn note_snapshot(&mut self, refreshed: Option<Value>) {
+        if let Some(value) = refreshed
+            && let Some(snapshot) = snapshot_of(&value)
+        {
+            self.snapshot = Some(snapshot);
+        }
+    }
+
     /// Files changed on disk (an agent, a terminal, an editor): read the status again, unless a
     /// read or a commit is already on its way, which will see them.
     fn disk_changed(&mut self, cx: &mut Context<Self>) {
@@ -1063,22 +1016,11 @@ impl ChangesPanel {
         let counts = self
             .backend
             .request("git_status", json!({ "sessionId": self.session_id }));
-        // Only the changes view has the Commits switch.
-        let outgoing = (self.mode == Mode::Review).then(|| {
-            self.backend.request(
-                "git_workspace_action",
-                json!({ "action": { "type": "outgoing", "sessionId": self.session_id } }),
-            )
-        });
         let stat_tx = self.stat_tx.clone();
         let root = self.root.clone();
         cx.spawn(async move |this, cx| {
             let snapshot = settle(status).await;
             let counts = settle(counts).await.ok();
-            let outgoing = match outgoing {
-                Some(rx) => settle(rx).await.ok().map(|value| outgoing_of(&value)),
-                None => None,
-            };
             let _ = this.update(cx, |this, cx| {
                 this.loading = false;
                 match snapshot {
@@ -1088,10 +1030,6 @@ impl ChangesPanel {
                         }
                     }
                     Err(error) => this.error = Some(error),
-                }
-                // A failed read (an old host, a broken base) keeps the last list.
-                if outgoing.is_some() {
-                    this.outgoing = outgoing;
                 }
                 if let Some(counts) = counts {
                     this.counts = counts_of(&counts);
@@ -1125,14 +1063,21 @@ impl ChangesPanel {
         self.busy = true;
         self.error = None;
         let action = if staged { "unstage" } else { "stage" };
-        let rx = self.backend.request(
-            "git_workspace_action",
-            json!({ "action": { "type": action, "sessionId": self.session_id, "paths": [path], "expectedIndex": token } }),
-        );
+        let backend = self.backend.clone();
+        let session = self.session_id.clone();
+        let args = json!({ "action": { "type": action, "sessionId": &session, "paths": [path], "expectedIndex": token } });
         cx.spawn(async move |this, cx| {
-            let reply = settle(rx).await;
+            let (reply, refreshed) = with_fresh_index(
+                &backend,
+                &session,
+                "git_workspace_action",
+                args,
+                TokenIn::Action,
+            )
+            .await;
             let _ = this.update(cx, |this, cx| {
                 this.busy = false;
+                this.note_snapshot(refreshed);
                 if let Err(error) = reply {
                     this.error = Some(error);
                 }
@@ -1156,12 +1101,19 @@ impl ChangesPanel {
             staged,
             lines: Lines::Loading,
         });
-        let rx = self.backend.request(
-            "git_workspace_action",
-            json!({ "action": { "type": "diff", "sessionId": self.session_id, "path": path.clone(), "staged": staged, "expectedIndex": token } }),
-        );
+        let backend = self.backend.clone();
+        let session = self.session_id.clone();
+        let args = json!({ "action": { "type": "diff", "sessionId": &session, "path": path.clone(), "staged": staged, "expectedIndex": token } });
         cx.spawn(async move |this, cx| {
-            let lines = match settle(rx).await {
+            let (reply, refreshed) = with_fresh_index(
+                &backend,
+                &session,
+                "git_workspace_action",
+                args,
+                TokenIn::Action,
+            )
+            .await;
+            let lines = match reply {
                 Ok(value) => Lines::Ready(Rc::new(
                     value["diff"]
                         .as_str()
@@ -1173,6 +1125,7 @@ impl ChangesPanel {
                 Err(error) => Lines::Failed(error),
             };
             let _ = this.update(cx, |this, cx| {
+                this.note_snapshot(refreshed);
                 if let Some(opened) = this
                     .opened
                     .as_mut()
@@ -1568,14 +1521,21 @@ impl ChangesPanel {
         }
         self.busy = true;
         self.error = None;
-        let rx = self.backend.request(
-            "git_workspace_action",
-            json!({ "action": discard_action(&self.session_id, &ask.paths, &token) }),
-        );
+        let backend = self.backend.clone();
+        let session = self.session_id.clone();
+        let args = json!({ "action": discard_action(&session, &ask.paths, &token) });
         cx.spawn(async move |this, cx| {
-            let reply = settle(rx).await;
+            let (reply, refreshed) = with_fresh_index(
+                &backend,
+                &session,
+                "git_workspace_action",
+                args,
+                TokenIn::Action,
+            )
+            .await;
             let _ = this.update(cx, |this, cx| {
                 this.busy = false;
+                this.note_snapshot(refreshed);
                 if let Err(error) = reply {
                     this.error = Some(error);
                 }
@@ -1726,14 +1686,21 @@ impl ChangesPanel {
         self.busy = true;
         self.error = None;
         let action = if staged { "unstage" } else { "stage" };
-        let rx = self.backend.request(
-            "git_workspace_action",
-            json!({ "action": { "type": action, "sessionId": self.session_id, "paths": paths, "expectedIndex": token } }),
-        );
+        let backend = self.backend.clone();
+        let session = self.session_id.clone();
+        let args = json!({ "action": { "type": action, "sessionId": &session, "paths": paths, "expectedIndex": token } });
         cx.spawn(async move |this, cx| {
-            let reply = settle(rx).await;
+            let (reply, refreshed) = with_fresh_index(
+                &backend,
+                &session,
+                "git_workspace_action",
+                args,
+                TokenIn::Action,
+            )
+            .await;
             let _ = this.update(cx, |this, cx| {
                 this.busy = false;
+                this.note_snapshot(refreshed);
                 if let Err(error) = reply {
                     this.error = Some(error);
                 }
@@ -1970,7 +1937,7 @@ impl ChangesPanel {
                 );
             }
             Menu::Commit => {
-                top = TITLE + SWITCH + COMMIT_BAR;
+                top = TITLE + COMMIT_BAR;
                 let both_on = ready && can_push;
                 items.push(
                     self.menu_item("menu-commit-push", t("Commit e Push"), false, both_on)
@@ -2400,122 +2367,6 @@ impl ChangesPanel {
             .into_any_element()
     }
 
-    /// The changes view's switch, "Alterações | Commits (N)", as the Files panel's Preview | Source.
-    fn review_switch(&self, cx: &mut Context<Self>) -> AnyElement {
-        let commits = self.outgoing.as_ref().map_or(0, |list| list.commits.len());
-        let more = self.outgoing.as_ref().is_some_and(|list| list.truncated);
-        let changes = self
-            .snapshot
-            .as_ref()
-            .map_or(0, |s| s.staged.len() + s.unstaged.len());
-        let segment = |id: &'static str, ix: usize, label: String, tab: ReviewTab| {
-            let on = self.review_tab == tab;
-            div()
-                .id(id)
-                .relative()
-                .child(crate::segment_pill::probe("changes-tab", ix))
-                .sinks()
-                .h(px(22.))
-                .px(px(9.))
-                .rounded(px(crate::theme::RADIUS_SM))
-                .flex()
-                .items_center()
-                .text_size(px(11.5))
-                .text_color(if on { on_accent() } else { content(0.5) })
-                .when(!on, |segment| {
-                    segment.hover(|style| style.bg(content(0.06)))
-                })
-                .cursor_pointer()
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.review_tab = tab;
-                    cx.notify();
-                }))
-                .child(label)
-        };
-        div()
-            .px(px(12.))
-            .pt(px(8.))
-            .flex()
-            .flex_shrink_0()
-            .child(
-                div()
-                    .relative()
-                    .flex()
-                    .items_center()
-                    .p(px(2.))
-                    .rounded(px(crate::theme::RADIUS_MD))
-                    .border_1()
-                    .border_color(crate::theme::border())
-                    .child(crate::segment_pill::pill(
-                        "changes-tab",
-                        usize::from(self.review_tab == ReviewTab::Commits),
-                        accent(),
-                        crate::theme::RADIUS_SM,
-                    ))
-                    .child(segment(
-                        "tab-changes",
-                        0,
-                        switch_label(t("Alterações"), changes, false),
-                        ReviewTab::Changes,
-                    ))
-                    .child(segment(
-                        "tab-commits",
-                        1,
-                        switch_label(t("Commits"), commits, more),
-                        ReviewTab::Commits,
-                    )),
-            )
-            .into_any_element()
-    }
-
-    /// The Commits side of the changes view: the branch's unpushed commits, newest first, each
-    /// with its subject, short hash, age and file count; a click opens its files.
-    fn outgoing_list(&self, cx: &mut Context<Self>) -> AnyElement {
-        let mut blocks = Vec::new();
-        match &self.outgoing {
-            None => blocks.push(note(t("Carregando…"), false)),
-            Some(list) if list.base.is_none() => blocks.push(note(
-                t("Sem upstream nem branch base para comparar."),
-                false,
-            )),
-            Some(list) => {
-                let base = list.base.clone().unwrap_or_default();
-                blocks.push(
-                    div()
-                        .px(px(14.))
-                        .py(px(6.))
-                        .text_size(px(11.5))
-                        .text_color(content(0.45))
-                        .child(if list.upstream {
-                            tf("Ainda não enviados para {}", &[&base])
-                        } else {
-                            tf("À frente de {} (sem upstream)", &[&base])
-                        })
-                        .into_any_element(),
-                );
-                if list.commits.is_empty() {
-                    blocks.push(note(t("Nenhum commit local para enviar."), false));
-                }
-                for (commit, files) in &list.commits {
-                    blocks.push(outgoing_row(commit, files, cx));
-                }
-                if list.truncated {
-                    blocks.push(note(t("Mostrando os 50 commits mais recentes."), false));
-                }
-            }
-        }
-        div()
-            .id("outgoing-list")
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .pb(px(8.))
-            .flex()
-            .flex_col()
-            .children(blocks)
-            .into_any_element()
-    }
-
     fn diff(&self, lines: &Lines) -> AnyElement {
         match lines {
             Lines::Loading => div()
@@ -2705,21 +2556,13 @@ impl Render for ChangesPanel {
                     Some(snapshot) if snapshot.repo => self.commit_bar(snapshot, cx),
                     _ => div().into_any_element(),
                 };
-                let repo = self.snapshot.as_ref().is_some_and(|s| s.repo);
-                let commits = repo && self.review_tab == ReviewTab::Commits;
                 let body = div()
                     .flex_1()
                     .min_h_0()
                     .flex()
                     .flex_col()
-                    .when(repo, |body| body.child(self.review_switch(cx)))
-                    .map(|body| {
-                        if commits {
-                            body.child(self.outgoing_list(cx))
-                        } else {
-                            body.child(bar).child(self.review_list(cx))
-                        }
-                    });
+                    .child(bar)
+                    .child(self.review_list(cx));
                 (header.into_any_element(), body.into_any_element())
             }
             (None, None) => {
@@ -2822,6 +2665,59 @@ impl Render for ChangesPanel {
             .children(overlay)
             .children(confirm)
     }
+}
+
+/// The host's refusal of an index token that no longer matches the workspace.
+const STALE_PREPARATION: &str = "Git preparation changed. Refresh before continuing.";
+
+/// Whether a reply is that stale-token refusal, which the pane fixes by retrying once.
+fn stale_preparation(error: &str) -> bool {
+    error == STALE_PREPARATION
+}
+
+/// Where a request keeps the index token: inside a `git_workspace_action`'s `action`, or at the
+/// top of `git_commit`'s arguments.
+#[derive(Clone, Copy)]
+enum TokenIn {
+    Action,
+    Arguments,
+}
+
+/// The request with a fresh index token where its command keeps it.
+fn with_token(mut args: Value, index: &str, token: TokenIn) -> Value {
+    match token {
+        TokenIn::Action => args["action"]["expectedIndex"] = json!(index),
+        TokenIn::Arguments => args["expectedIndex"] = json!(index),
+    }
+    args
+}
+
+/// Sends a request that carries the index token. A stale token is not an error for the person:
+/// the pane reads the snapshot again, sends the same request once more with the new token, and
+/// answers the fresh snapshot too. Only a retry that also fails reaches the person.
+async fn with_fresh_index(
+    backend: &Backend,
+    session_id: &str,
+    command: &'static str,
+    mut args: Value,
+    token: TokenIn,
+) -> (Result<Value, String>, Option<Value>) {
+    let mut reply = settle(backend.request(command, args.clone())).await;
+    let mut refreshed = None;
+    if matches!(&reply, Err(error) if stale_preparation(error)) {
+        let snapshot = backend.request(
+            "git_workspace_action",
+            json!({ "action": { "type": "snapshot", "sessionId": session_id } }),
+        );
+        if let Ok(value) = settle(snapshot).await {
+            if let Some(index) = value["snapshot"]["indexToken"].as_str() {
+                args = with_token(args, index, token);
+                reply = settle(backend.request(command, args)).await;
+            }
+            refreshed = Some(value);
+        }
+    }
+    (reply, refreshed)
 }
 
 /// Resolves a back end request: the value, or the error's message.
@@ -3225,123 +3121,6 @@ fn commits_of(list: &Value) -> Vec<Commit> {
         .collect()
 }
 
-/// The host's `outgoing` reply: each commit with its files as the opened-commit view lists them.
-/// A merge's files are against its first parent, as the host diffs them.
-fn outgoing_of(value: &Value) -> OutgoingList {
-    let entries = value["commits"].as_array().cloned().unwrap_or_default();
-    let commits = commits_of(&value["commits"])
-        .into_iter()
-        .zip(entries)
-        .map(|(commit, entry)| {
-            let files = entry["files"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|file| {
-                    Some(local_git::CommitFile {
-                        path: file["path"].as_str()?.to_owned(),
-                        status: match file["kind"].as_str() {
-                            Some("added") => 'A',
-                            Some("deleted") => 'D',
-                            Some("renamed") => 'R',
-                            _ => 'M',
-                        },
-                        added: file["additions"].as_u64(),
-                        removed: file["deletions"].as_u64(),
-                    })
-                })
-                .collect();
-            let files = CommitFiles {
-                files,
-                merge: commit.parents.len() > 1,
-                truncated: entry["filesTruncated"].as_bool().unwrap_or(false),
-            };
-            (commit, Rc::new(files))
-        })
-        .collect();
-    OutgoingList {
-        base: value["base"].as_str().map(str::to_owned),
-        upstream: value["upstream"].as_bool().unwrap_or(false),
-        commits,
-        truncated: value["truncated"].as_bool().unwrap_or(false),
-    }
-}
-
-/// A side of the changes view's switch: its name and, when there is any, the count ("50+" when
-/// the list was cut).
-fn switch_label(name: &str, count: usize, more: bool) -> String {
-    match (count, more) {
-        (0, _) => name.to_owned(),
-        (count, true) => format!("{name} ({count}+)"),
-        (count, false) => format!("{name} ({count})"),
-    }
-}
-
-/// One unpushed commit: its subject over the short hash, its age and how many files it changed.
-fn outgoing_row(
-    commit: &Commit,
-    files: &Rc<CommitFiles>,
-    cx: &mut Context<ChangesPanel>,
-) -> AnyElement {
-    let short: String = commit.hash.chars().take(7).collect();
-    let count = files.files.len();
-    let count = match (count, files.truncated) {
-        (count, true) => tf("{}+ arquivos", &[&count]),
-        (1, false) => t("1 arquivo").to_owned(),
-        (count, false) => tf("{} arquivos", &[&count]),
-    };
-    let mut meta = vec![short, count];
-    let when = age(&commit.when);
-    if !when.is_empty() {
-        meta.insert(1, when);
-    }
-    let (picked, files) = (commit.clone(), files.clone());
-    div()
-        .id(format!("outgoing:{}", commit.hash))
-        .flex()
-        .items_center()
-        .gap(px(8.))
-        .px(px(14.))
-        .py(px(5.))
-        .cursor_pointer()
-        .hover(|style| style.bg(content(0.05)))
-        .on_click(
-            cx.listener(move |this, _, _, cx| {
-                this.open_outgoing(picked.clone(), files.clone(), cx)
-            }),
-        )
-        .child(
-            svg()
-                .path("commit")
-                .size(px(14.))
-                .text_color(content(0.5))
-                .flex_shrink_0(),
-        )
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .child(
-                    div()
-                        .truncate()
-                        .text_size(px(12.5))
-                        .text_color(content(0.9))
-                        .child(commit.subject.clone()),
-                )
-                .child(
-                    div()
-                        .truncate()
-                        .font_family("Menlo")
-                        .text_size(px(11.))
-                        .text_color(content(0.4))
-                        .child(meta.join(" · ")),
-                ),
-        )
-        .into_any_element()
-}
-
 /// How long ago a commit was made, in the sidebar's short units ("agora", "12 min", "3 h", "2 d").
 pub(crate) fn age(when: &str) -> String {
     let Ok(when) = chrono::DateTime::parse_from_rfc3339(when) else {
@@ -3574,6 +3353,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_changed_preparation_is_retried_with_the_fresh_token() {
+        assert!(stale_preparation(
+            "Git preparation changed. Refresh before continuing."
+        ));
+        assert!(!stale_preparation("Commit requires a staged set"));
+        let action = json!({ "action": { "type": "stage", "expectedIndex": "old" } });
+        let retried = with_token(action, "new", TokenIn::Action);
+        assert_eq!(retried["action"]["expectedIndex"], "new");
+        let commit = json!({ "sessionId": "s", "expectedIndex": "old" });
+        let retried = with_token(commit, "new", TokenIn::Arguments);
+        assert_eq!(retried["expectedIndex"], "new");
+    }
+
+    #[test]
     fn side_branches_bend_tight_and_straight_lines_stay_straight() {
         assert_eq!(stroke_of(0, 0, 0, false), Stroke::Straight);
         assert_eq!(stroke_of(0, 1, 0, false), Stroke::Leave);
@@ -3698,58 +3491,6 @@ mod tests {
             split_path("README.md"),
             (String::new(), "README.md".to_owned())
         );
-    }
-
-    #[test]
-    fn outgoing_reply_becomes_commits_with_their_files() {
-        let list = outgoing_of(&json!({
-            "type": "outgoing",
-            "base": "origin/main",
-            "upstream": true,
-            "truncated": false,
-            "commits": [
-                {
-                    "hash": "a".repeat(40), "parents": ["b".repeat(40), "c".repeat(40)],
-                    "subject": "Merge", "author": "Ana", "authoredAt": "2026-11-01T10:00:00Z",
-                    "refs": [], "filesTruncated": true,
-                    "files": [
-                        { "path": "src/new.rs", "kind": "added", "additions": 4, "deletions": 0 },
-                        { "path": "logo.png", "kind": "modified", "additions": null, "deletions": null },
-                        { "path": "old.rs", "kind": "deleted", "additions": 0, "deletions": 9 }
-                    ]
-                }
-            ]
-        }));
-        assert_eq!(list.base.as_deref(), Some("origin/main"));
-        assert!(list.upstream && !list.truncated);
-        let (commit, files) = &list.commits[0];
-        assert_eq!(
-            (commit.subject.as_str(), commit.when.as_str()),
-            ("Merge", "2026-11-01T10:00:00Z")
-        );
-        assert!(files.merge && files.truncated);
-        let read: Vec<_> = files
-            .files
-            .iter()
-            .map(|f| (f.path.as_str(), f.status, f.added, f.removed))
-            .collect();
-        assert_eq!(
-            read,
-            vec![
-                ("src/new.rs", 'A', Some(4), Some(0)),
-                ("logo.png", 'M', None, None),
-                ("old.rs", 'D', Some(0), Some(9)),
-            ]
-        );
-        let empty = outgoing_of(&json!({ "base": null, "upstream": false, "commits": [] }));
-        assert!(empty.base.is_none() && empty.commits.is_empty());
-    }
-
-    #[test]
-    fn the_switch_counts_only_what_exists() {
-        assert_eq!(switch_label("Commits", 0, false), "Commits");
-        assert_eq!(switch_label("Commits", 3, false), "Commits (3)");
-        assert_eq!(switch_label("Commits", 50, true), "Commits (50+)");
     }
 
     #[test]

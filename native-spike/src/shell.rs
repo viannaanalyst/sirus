@@ -1266,6 +1266,15 @@ struct TabDrag {
     active: bool,
 }
 
+/// A held sidebar navigation row: the pointer's y at the press, the row's top then, its top now.
+struct NavDrag {
+    id: &'static str,
+    origin: f32,
+    start: f32,
+    top: f32,
+    active: bool,
+}
+
 struct Menu {
     tab: u64,
     at: Point<Pixels>,
@@ -1602,6 +1611,11 @@ pub struct Shell {
     history_at: usize,
     rolls: HashMap<(usize, usize), Tween>,
     drag: Option<TabDrag>,
+    /// The sidebar navigation row being dragged to a new place, each row's eased top, and whether
+    /// the last press became a drag (so its click is ignored).
+    nav_drag: Option<NavDrag>,
+    nav_motion: HashMap<&'static str, Tween>,
+    nav_dragged: bool,
     menu: Option<Menu>,
     sidebar_width: f32,
     sidebar_open: bool,
@@ -2015,6 +2029,9 @@ impl Shell {
             history_at: 0,
             rolls: HashMap::new(),
             drag: None,
+            nav_drag: None,
+            nav_motion: HashMap::new(),
+            nav_dragged: false,
             menu: None,
             sidebar_width: SIDEBAR_MIN,
             sidebar_open: true,
@@ -5740,6 +5757,9 @@ impl Shell {
         if self.split_move(event, cx) {
             return;
         }
+        if self.nav_move(event, cx) {
+            return;
+        }
         if self.select.dragging() {
             if event.pressed_button != Some(MouseButton::Left) {
                 self.select.stop_drag();
@@ -5822,6 +5842,7 @@ impl Shell {
 
     fn mouse_up(&mut self, _: &MouseUpEvent, _window: &mut Window, cx: &mut Context<Self>) {
         self.split_release(cx);
+        self.nav_release(cx);
         if self.select.release() {
             if let Some(url) = self.select.take_link() {
                 let held = _window.modifiers();
@@ -7845,6 +7866,7 @@ impl Shell {
         *moving |= !self.sidebar.done(now);
         let (rows, height, rows_moving) = self.layout_rows(now, reduced);
         *moving |= rows_moving;
+        let nav = self.layout_nav(now, reduced, moving);
         let width = self.sidebar_width;
         let active = self.active_conversation();
         let mut drawn = Vec::new();
@@ -7884,15 +7906,7 @@ impl Shell {
                 .flex()
                 .flex_col()
                 .child(this.project_header(cx))
-                .child(
-                    div()
-                        .relative()
-                        .flex_shrink_0()
-                        .child(crate::hover_track::list("sidebar-nav").pill())
-                        .children(this.sidebar_new(cx))
-                        .children(this.sidebar_pulls(cx))
-                        .children(this.sidebar_tasks(cx)),
-                )
+                .child(this.sidebar_nav(&nav, cx))
                 .child(
                     div()
                         .relative()
@@ -11111,123 +11125,270 @@ impl Shell {
             .hover(|s| s.text_color(content(1.)))
     }
 
+    /// The navigation rows in the owner's order (dragged into place), shown ones only.
+    fn nav_visible(&self) -> Vec<&'static str> {
+        let saved: Vec<String> = self.settings["sidebarNavOrder"]
+            .as_array()
+            .map(|ids| {
+                ids.iter()
+                    .filter_map(|id| id.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default();
+        crate::sidebar_items::merge_order(&saved, &crate::sidebar_items::NAV)
+            .into_iter()
+            .filter(|id| self.sidebar_items.shown(id))
+            .collect()
+    }
+
+    /// Where each navigation row sits (its top, in px, inside the group) and which one is lifted.
+    /// The rows ease into their slots; while one is dragged the others open a gap where it will
+    /// land and the lifted one follows the pointer.
+    fn layout_nav(
+        &mut self,
+        now: Instant,
+        reduced: bool,
+        moving: &mut bool,
+    ) -> Vec<(&'static str, f32, bool)> {
+        use crate::sidebar_items::{NAV_SLOT, slot_at};
+        let visible = self.nav_visible();
+        let lifted = self
+            .nav_drag
+            .as_ref()
+            .filter(|d| d.active && visible.contains(&d.id))
+            .map(|d| (d.id, d.top));
+        let mut preview = visible.clone();
+        if let Some((id, top)) = lifted {
+            let to = slot_at(top, visible.len());
+            preview.retain(|i| *i != id);
+            preview.insert(to.min(preview.len()), id);
+        }
+        let duration = if reduced { 0. } else { REORDER + 0.04 };
+        let mut placed = Vec::new();
+        for (slot, id) in preview.iter().enumerate() {
+            let target = slot as f32 * NAV_SLOT;
+            let motion = self
+                .nav_motion
+                .entry(*id)
+                .or_insert_with(|| Tween::still(target, now));
+            match lifted {
+                Some((lifted_id, top)) if lifted_id == *id => {
+                    motion.snap(top, now);
+                    placed.push((*id, top, true));
+                    continue;
+                }
+                _ => motion.set(target, now, duration, Curve::Expo),
+            }
+            *moving |= !motion.done(now);
+            placed.push((*id, motion.at(now), false));
+        }
+        // The lifted row is drawn last, above the others. A row settling after a drop is still moving.
+        placed.sort_by_key(|(_, _, lifted)| *lifted);
+        placed
+    }
+
+    /// The group of navigation rows under the project's name: slots the rows ease between.
+    fn sidebar_nav(
+        &self,
+        rows: &[(&'static str, f32, bool)],
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let height = rows.len() as f32 * crate::sidebar_items::NAV_SLOT;
+        div()
+            .relative()
+            .flex_shrink_0()
+            .mx(px(6.))
+            .when(!rows.is_empty(), |d| d.mt(px(4.)).mb(px(6.)))
+            .h(px(height))
+            .child(crate::hover_track::list("sidebar-nav").pill())
+            .children(rows.iter().map(|(id, top, lifted)| {
+                let row = match *id {
+                    "new" => self.sidebar_new(cx),
+                    "pulls" => self.sidebar_pulls(cx),
+                    _ => self.sidebar_tasks(cx),
+                };
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .top(px(*top))
+                    .h(px(crate::sidebar_items::NAV_SLOT))
+                    .rounded(px(crate::theme::RADIUS_MD))
+                    .when(*lifted, |d| d.bg(content(0.14)).shadow_md())
+                    .child(row)
+            }))
+            .into_any_element()
+    }
+
+    /// A press on a navigation row: it becomes a drag only after a few pixels of movement, so a
+    /// plain click still opens the row.
+    fn nav_press(&mut self, id: &'static str, event: &MouseDownEvent) {
+        let top = self.nav_motion.get(id).map_or(0., |m| m.at(Instant::now()));
+        self.nav_dragged = false;
+        self.nav_drag = Some(NavDrag {
+            id,
+            origin: f32::from(event.position.y),
+            start: top,
+            top,
+            active: false,
+        });
+    }
+
+    /// Follows the pointer while a navigation row is held; true while it handled the move.
+    fn nav_move(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) -> bool {
+        let Some(drag) = self.nav_drag.as_mut() else {
+            return false;
+        };
+        if event.pressed_button != Some(MouseButton::Left) {
+            self.nav_drag = None;
+            cx.notify();
+            return false;
+        }
+        let delta = f32::from(event.position.y) - drag.origin;
+        if !drag.active && delta.abs() < crate::sidebar_items::NAV_DRAG_AFTER {
+            return true;
+        }
+        drag.active = true;
+        self.nav_dragged = true;
+        let last = (self.nav_visible().len().max(1) - 1) as f32 * crate::sidebar_items::NAV_SLOT;
+        let drag = self.nav_drag.as_mut().expect("held above");
+        drag.top = (drag.start + delta).clamp(0., last);
+        cx.notify();
+        true
+    }
+
+    /// Lets go of a navigation row: the order is saved and the row eases from the pointer into
+    /// its slot.
+    fn nav_release(&mut self, cx: &mut Context<Self>) {
+        let Some(drag) = self.nav_drag.take() else {
+            return;
+        };
+        if !drag.active {
+            return;
+        }
+        let visible = self.nav_visible();
+        let to = crate::sidebar_items::slot_at(drag.top, visible.len());
+        let saved: Vec<String> = self.settings["sidebarNavOrder"]
+            .as_array()
+            .map(|ids| {
+                ids.iter()
+                    .filter_map(|i| i.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let full = crate::sidebar_items::merge_order(&saved, &crate::sidebar_items::NAV);
+        let order =
+            crate::sidebar_items::place(&full, drag.id, to, |id| self.sidebar_items.shown(id));
+        self.settings["sidebarNavOrder"] = json!(order);
+        self.backend
+            .invoke("save_settings", json!({ "settings": self.settings }));
+        cx.notify();
+    }
+
     /// "New" (⌘T), at the top of the sidebar: opens a new conversation.
-    fn sidebar_new(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !self.sidebar_items.shown("new") {
-            return None;
-        }
-        Some(
-            div()
-                .flex_shrink_0()
-                .px(px(6.))
-                .pt(px(4.))
-                .child(
-                    crate::hover_track::list("sidebar-nav")
-                        .row_named(Self::sidebar_nav_row("sidebar-new", false), "new", false)
-                        .on_click(cx.listener(|this, _, _, cx| this.new_conversation(None, cx)))
-                        .child(icon("square-plus", 16.).text_color(content(0.35)))
-                        .child(div().flex_1().min_w_0().truncate().child(t("Novo")))
-                        .child(
-                            div()
-                                .flex_shrink_0()
-                                .text_size(px(12.))
-                                .font_weight(FontWeight::NORMAL)
-                                .text_color(content(0.35))
-                                .child("⌘T"),
-                        ),
-                )
-                .into_any_element(),
-        )
+    fn sidebar_new(&self, cx: &mut Context<Self>) -> AnyElement {
+        crate::hover_track::list("sidebar-nav")
+            .row_named(
+                Self::sidebar_nav_row("sidebar-new", false).on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, event: &MouseDownEvent, _, _| this.nav_press("new", event)),
+                ),
+                "new",
+                false,
+            )
+            .on_click(cx.listener(|this, _, _, cx| {
+                if !this.nav_dragged {
+                    this.new_conversation(None, cx)
+                }
+            }))
+            .child(icon("square-plus", 16.).text_color(content(0.35)))
+            .child(div().flex_1().min_w_0().truncate().child(t("Novo")))
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .text_size(px(12.))
+                    .font_weight(FontWeight::NORMAL)
+                    .text_color(content(0.35))
+                    .child("⌘T"),
+            )
+            .into_any_element()
     }
 
-    /// The Pull requests entry below "New", marked while its tab is the one showing.
-    fn sidebar_pulls(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !self.sidebar_items.shown("pulls") {
-            return None;
-        }
+    /// The Pull requests entry, marked while its tab is the one showing.
+    fn sidebar_pulls(&self, cx: &mut Context<Self>) -> AnyElement {
         let active = self.term.pulls_active;
-        Some(
-            div()
-                .flex_shrink_0()
-                .px(px(6.))
-                .pb(px(if self.sidebar_items.shown("tasks") {
-                    0.
-                } else {
-                    6.
-                }))
-                .child(
-                    crate::hover_track::list("sidebar-nav")
-                        .row_named(
-                            Self::sidebar_nav_row("sidebar-pulls", active),
-                            "pulls",
-                            active,
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| this.open_pull_requests(cx)))
-                        .child(icon("git-pull-request", 16.).text_color(content(if active {
-                            0.7
-                        } else {
-                            0.35
-                        })))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .child(t("Pull requests")),
-                        ),
-                )
-                .into_any_element(),
-        )
+        crate::hover_track::list("sidebar-nav")
+            .row_named(
+                Self::sidebar_nav_row("sidebar-pulls", active).on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, event: &MouseDownEvent, _, _| {
+                        this.nav_press("pulls", event)
+                    }),
+                ),
+                "pulls",
+                active,
+            )
+            .on_click(cx.listener(|this, _, _, cx| {
+                if !this.nav_dragged {
+                    this.open_pull_requests(cx)
+                }
+            }))
+            .child(icon("git-pull-request", 16.).text_color(content(if active {
+                0.7
+            } else {
+                0.35
+            })))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .child(t("Pull requests")),
+            )
+            .into_any_element()
     }
 
-    /// The Tarefas entry below Pull requests: opens the page of scheduled prompts, with how many
-    /// tasks will still run.
-    fn sidebar_tasks(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !self.sidebar_items.shown("tasks") {
-            return None;
-        }
+    /// The Tarefas entry: opens the page of scheduled prompts, with how many tasks will still run.
+    fn sidebar_tasks(&self, cx: &mut Context<Self>) -> AnyElement {
         let active = self.tasks_page_open();
         let count = self.tasks_active();
-        Some(
-            div()
-                .flex_shrink_0()
-                .px(px(6.))
-                .pb(px(6.))
-                .child(
-                    crate::hover_track::list("sidebar-nav")
-                        .row_named(
-                            Self::sidebar_nav_row("sidebar-tasks", active),
-                            "tasks",
-                            active,
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| this.toggle_tasks_page(cx)))
-                        .child(icon("task-clock", 16.).text_color(content(if active {
-                            0.7
-                        } else {
-                            0.35
-                        })))
-                        .child(div().flex_1().min_w_0().truncate().child(t("Tarefas")))
-                        .when(count > 0, |d| {
-                            d.child(
-                                div()
-                                    .flex_shrink_0()
-                                    .min_w(px(18.))
-                                    .h(px(18.))
-                                    .px(px(5.))
-                                    .rounded_full()
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .bg(content(0.1))
-                                    .text_size(px(11.))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(content(0.7))
-                                    .child(count.to_string()),
-                            )
-                        }),
+        crate::hover_track::list("sidebar-nav")
+            .row_named(
+                Self::sidebar_nav_row("sidebar-tasks", active).on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, event: &MouseDownEvent, _, _| {
+                        this.nav_press("tasks", event)
+                    }),
+                ),
+                "tasks",
+                active,
+            )
+            .on_click(cx.listener(|this, _, _, cx| {
+                if !this.nav_dragged {
+                    this.toggle_tasks_page(cx)
+                }
+            }))
+            .child(icon("task-clock", 16.).text_color(content(if active { 0.7 } else { 0.35 })))
+            .child(div().flex_1().min_w_0().truncate().child(t("Tarefas")))
+            .when(count > 0, |d| {
+                d.child(
+                    div()
+                        .flex_shrink_0()
+                        .min_w(px(18.))
+                        .h(px(18.))
+                        .px(px(5.))
+                        .rounded_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .bg(content(0.1))
+                        .text_size(px(11.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(content(0.7))
+                        .child(count.to_string()),
                 )
-                .into_any_element(),
-        )
+            })
+            .into_any_element()
     }
 
     /// Opens the three-dots menu, or fades it out when it is open.
@@ -11475,7 +11636,11 @@ impl Shell {
     ) -> AnyElement {
         let conversation = &self.conversations[index];
         // Settling fades a row toward its limit and fills the bar under it (ADR-198).
-        let (fade, fill) = self.fade_of(index, Utc::now());
+        let shell_settle::Fade {
+            opacity: fade,
+            fill,
+            texture,
+        } = self.fade_of(index, Utc::now());
         // The draft title while this row is being renamed in place.
         let draft: Option<String> = if self.inline_rename_row() == Some(index) {
             self.context_menu.as_ref().and_then(|m| m.renaming.clone())
@@ -11541,6 +11706,7 @@ impl Shell {
                 }
             })
             .child(place.probe())
+            .children(shell_settle::settle_texture(texture))
             // The 2 px gap under the row belongs to it, so the pointer crosses rows unbroken.
             .child(
                 div()
@@ -11548,19 +11714,9 @@ impl Shell {
                     .left_0()
                     .right_0()
                     .top(px(CONV_ROW - 2.))
-                    .h(px(2.))
-                    .when(fill > 0., |d| {
-                        d.child(
-                            div()
-                                .absolute()
-                                .left_0()
-                                .top_0()
-                                .h(px(2.))
-                                .w(gpui::relative(fill))
-                                .bg(accent()),
-                        )
-                    }),
+                    .h(px(2.)),
             )
+            .children(shell_settle::settle_bar(fill, fade))
             .child(self.conversation_mark(conversation, now, active))
             .child(match &draft {
                 Some(text) => inline_name_field(

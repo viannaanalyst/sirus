@@ -1,12 +1,26 @@
 //! Idle conversations settle (ADR-198). A conversation's age is the time since its last activity,
 //! or since the owner last opened it when that is later. Its sidebar row fades as the age nears the
-//! limit, a thin bar under it fills, and at the limit it leaves the list for the docked group. These
+//! limit, a thin bar under it fills (once it is a day old), past half the limit a faint dotted
+//! texture appears behind it, and at the limit it leaves the list for the docked group. These
 //! functions are the whole decision; `shell_settle.rs` draws and stops what they say.
 
 use chrono::{DateTime, Duration, Utc};
 
 /// A row's opacity at the limit. It fades linearly from full when the conversation is fresh.
 pub const FADED: f64 = 0.45;
+
+/// A conversation younger than this shows no bar, so "Hoje" has nothing to puzzle over.
+pub const BAR_FROM: Duration = Duration::days(1);
+
+/// The bar's opacity, and that of the faint track behind it.
+pub const BAR_ALPHA: f32 = 0.55;
+pub const TRACK_ALPHA: f32 = 0.06;
+
+/// The texture shows past this share of the limit; its dots go from the first to the second
+/// opacity at the limit, `TEXTURE_GAP` px apart.
+pub const TEXTURE_FROM: f64 = 0.5;
+pub const TEXTURE_ALPHA: (f32, f32) = (0.05, 0.08);
+pub const TEXTURE_GAP: f32 = 6.;
 
 /// The longest limit the Settings field takes; the host refuses more.
 pub const MAX_DAYS: u32 = 365;
@@ -37,9 +51,24 @@ pub fn opacity(age: Duration, limit: Duration) -> f32 {
     (1. - (1. - FADED) * progress(age, limit)) as f32
 }
 
-/// The accent bar's share of the row's width: 0 when fresh, the whole width at the limit.
+/// The accent bar's share of the row's width: 0 under a day old (no bar), then proportional to
+/// the age, the whole width at the limit.
 pub fn fill(age: Duration, limit: Duration) -> f32 {
+    if age < BAR_FROM {
+        return 0.;
+    }
     progress(age, limit) as f32
+}
+
+/// The opacity of the dotted texture behind a row: 0 up to half the limit, then rising to
+/// `TEXTURE_ALPHA.1` at the limit.
+pub fn texture(age: Duration, limit: Duration) -> f32 {
+    let progress = progress(age, limit);
+    if progress <= TEXTURE_FROM {
+        return 0.;
+    }
+    let (low, high) = TEXTURE_ALPHA;
+    low + (high - low) * ((progress - TEXTURE_FROM) / (1. - TEXTURE_FROM)) as f32
 }
 
 /// The later of the last activity and the time the owner last opened the conversation.
@@ -100,13 +129,25 @@ mod tests {
     }
 
     #[test]
-    fn the_bar_fills_with_the_age_and_stops_at_full() {
-        assert!(close(fill(Duration::days(7) / 2, week()), 0.5));
+    fn the_bar_is_hidden_under_a_day_and_fills_with_the_age_after() {
+        assert!(close(fill(Duration::hours(23), week()), 0.));
+        assert!(close(fill(Duration::days(1), week()), 1. / 7.));
+        assert!(close(fill(Duration::hours(84), week()), 0.5));
         assert!(close(fill(week(), week()), 1.));
         assert!(close(fill(Duration::days(9), week()), 1.));
         assert!(close(fill(-Duration::days(1), week()), 0.));
         // No limit, nothing to fill toward.
         assert!(close(fill(Duration::days(9), Duration::zero()), 0.));
+    }
+
+    #[test]
+    fn the_texture_starts_past_half_the_limit() {
+        assert!(close(texture(Duration::days(1), week()), 0.));
+        assert!(close(texture(Duration::hours(84), week()), 0.));
+        assert!(texture(Duration::days(4), week()) > 0.05);
+        assert!(close(texture(week(), week()), 0.08));
+        assert!(close(texture(Duration::days(30), week()), 0.08));
+        assert!(close(texture(Duration::days(9), Duration::zero()), 0.));
     }
 
     #[test]

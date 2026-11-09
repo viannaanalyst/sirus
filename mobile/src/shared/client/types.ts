@@ -494,6 +494,8 @@ export interface AppSettings {
   settleIdleEnabled: boolean;
   /** When each settled conversation was last opened or sent to, by session id (ADR-198). */
   settleRevived: Record<string, string>;
+  /** Order of the sidebar's navigation rows, by id, as dragged on the Mac (ADR-198). */
+  sidebarNavOrder: string[];
   pinnedProjectIds: string[];
   /** Switcher folders that group projects (display only). */
   projectFolders: ProjectFolder[];

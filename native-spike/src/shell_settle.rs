@@ -11,6 +11,83 @@ use chrono::{DateTime, Utc};
 /// How often the window checks which conversations have settled.
 pub(super) const SETTLE_CHECK: std::time::Duration = std::time::Duration::from_secs(60);
 
+/// How an idle row is drawn (see `conversation_settle`).
+pub(super) struct Fade {
+    pub opacity: f32,
+    pub fill: f32,
+    pub texture: f32,
+}
+
+/// The row's left and right padding: the bar runs between them, under the provider tile.
+pub(super) const BAR_LEFT: f32 = 10.;
+pub(super) const BAR_RIGHT: f32 = 8.;
+
+/// The thin bar under a row: a faint track with the accent bar filled `fill` of it, rounded.
+pub(super) fn settle_bar(fill: f32, row_fade: f32) -> Option<Div> {
+    if fill <= 0. {
+        return None;
+    }
+    // The row's own fade also covers the bar, so it is lifted back to the wanted opacity.
+    let lift = |alpha: f32| (alpha / row_fade.max(0.1)).min(1.);
+    Some(
+        div()
+            .absolute()
+            .left(px(BAR_LEFT))
+            .right(px(BAR_RIGHT))
+            .top(px(super::CONV_ROW - 2.))
+            .h(px(2.))
+            .rounded_full()
+            .bg(content(lift(settle::TRACK_ALPHA)))
+            .child(
+                div()
+                    .h(px(2.))
+                    .w(gpui::relative(fill))
+                    .rounded_full()
+                    .bg(crate::theme::accent_wash(lift(settle::BAR_ALPHA))),
+            ),
+    )
+}
+
+/// The faint grid of dots behind an old row, painted as small quads only for those rows.
+pub(super) fn settle_texture(alpha: f32) -> Option<impl IntoElement> {
+    if alpha <= 0. {
+        return None;
+    }
+    Some(
+        gpui::canvas(
+            |_, _, _| {},
+            move |bounds, _, window, _| {
+                let gap = settle::TEXTURE_GAP;
+                let dot = px(1.4);
+                let color = content(alpha);
+                let (width, height) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
+                let mut y = gap / 2.;
+                while y < height {
+                    let mut x = gap / 2.;
+                    while x < width {
+                        window.paint_quad(
+                            gpui::fill(
+                                Bounds::new(
+                                    bounds.origin + gpui::point(px(x), px(y)),
+                                    gpui::size(dot, dot),
+                                ),
+                                color,
+                            )
+                            .corner_radii(dot),
+                        );
+                        x += gap;
+                    }
+                    y += gap;
+                }
+            },
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full(),
+    )
+}
+
 impl Shell {
     /// The idle limit from Settings → Geral, or None when settling is off.
     pub(super) fn settle_limit(&self) -> Option<chrono::Duration> {
@@ -61,13 +138,22 @@ impl Shell {
         settled
     }
 
-    /// A row's opacity and accent-bar fill at `now`. With settling off, a row is opaque, no bar.
-    pub(super) fn fade_of(&self, index: usize, now: DateTime<Utc>) -> (f32, f32) {
+    /// A row's look at `now`: opacity, accent-bar fill and texture opacity. With settling off, a
+    /// row is opaque with no bar and no texture.
+    pub(super) fn fade_of(&self, index: usize, now: DateTime<Utc>) -> Fade {
         let (Some(limit), Some(activity)) = (self.settle_limit(), self.activity_of(index)) else {
-            return (1., 0.);
+            return Fade {
+                opacity: 1.,
+                fill: 0.,
+                texture: 0.,
+            };
         };
         let age = now - activity;
-        (settle::opacity(age, limit), settle::fill(age, limit))
+        Fade {
+            opacity: settle::opacity(age, limit),
+            fill: settle::fill(age, limit),
+            texture: settle::texture(age, limit),
+        }
     }
 
     /// The conversations on screen: the active tab's, while a tab is active, and those in the

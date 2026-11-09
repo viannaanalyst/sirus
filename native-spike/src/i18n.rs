@@ -1072,7 +1072,6 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Commit feito: {title}", "Committed: {title}"),
     ("Commit inválido.", "Invalid commit."),
     ("Commit não encontrado.", "Commit not found."),
-    ("Commit, push e PR", "Commit, push and PR"),
     (
         "Como a imagem é desenhada atrás das conversas.",
         "How the image is drawn behind the conversations.",
@@ -2435,7 +2434,6 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Medindo…", "Measuring…"),
     ("Memória", "Memory"),
     ("Mensagem (⌘↩ para commit)", "Message (⌘↩ to commit)"),
-    ("Mensagem do commit", "Commit message"),
     ("Mensagem durante a resposta", "Message during a reply"),
     ("Mensagem para este subagente", "Message for this subagent"),
     ("Merge request criado", "Merge request opened"),

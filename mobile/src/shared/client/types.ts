@@ -106,7 +106,7 @@ export interface TurnReview {
 
 export interface TurnActivity {
   review?: TurnReview | null;
-  provider: AgentProviderId; model: string | null; startedAt: number; endedAt: number | null;
+  provider: AgentProviderId; model: string | null; effort?: string | null; fast?: boolean; startedAt: number; endedAt: number | null;
   waitingSince: number | null; pausedMs: number; status: SessionStatus; items: ActivityItem[]; truncated: boolean;
   /** First sentence of the agent's latest reasoning while the turn runs (ADR-101); live only, never in transcript files. */
   thought?: string | null;

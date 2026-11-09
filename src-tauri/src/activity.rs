@@ -207,6 +207,12 @@ fn close_steps(steps: &mut [ActivityStep], stopped: bool) {
 pub struct TurnActivity {
     pub provider: AgentProviderId,
     pub model: Option<String>,
+    /// The effort and Fast mode this turn was sent with, so the transcript can show a change
+    /// between turns (ADR-198). Turns saved before this have neither.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fast: Option<bool>,
     pub started_at: i64,
     pub ended_at: Option<i64>,
     pub waiting_since: Option<i64>,
@@ -234,6 +240,8 @@ impl TurnActivity {
         Self {
             provider,
             model,
+            effort: None,
+            fast: None,
             started_at: now(),
             ended_at: None,
             waiting_since: None,

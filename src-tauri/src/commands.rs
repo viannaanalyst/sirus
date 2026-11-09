@@ -2139,6 +2139,8 @@ pub async fn send_prompt(
         if let Some(message) = session.messages.last_mut() {
             let mut activity =
                 crate::activity::TurnActivity::new(session.agent.clone(), session.model.clone());
+            activity.effort = session.execution.effort.clone();
+            activity.fast = Some(session.execution.fast);
             // Invoked skills open the turn's timeline, ahead of any tool work.
             for name in skill_input.iter().flat_map(|(_, _, names)| names) {
                 activity.observe(crate::activity::skill(name));

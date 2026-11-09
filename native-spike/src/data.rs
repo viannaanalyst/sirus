@@ -70,6 +70,10 @@ pub struct Turn {
     pub started_ms: Option<u64>,
     pub paused_ms: u64,
     pub model: Option<String>,
+    /// The effort and Fast mode the turn was sent with; `fast` is `None` for turns saved
+    /// before they were recorded, which never get a model-change divider (ADR-198).
+    pub effort: Option<String>,
+    pub fast: Option<bool>,
 }
 
 /// One moment of a turn, in the order it happened.
@@ -396,7 +400,7 @@ pub fn folds_work(beats: &[Beat]) -> bool {
     })
 }
 
-fn blank(user: &str) -> Turn {
+pub(crate) fn blank(user: &str) -> Turn {
     Turn {
         beats: Vec::new(),
         steers: Vec::new(),
@@ -416,6 +420,8 @@ fn blank(user: &str) -> Turn {
         started_ms: None,
         paused_ms: 0,
         model: None,
+        effort: None,
+        fast: None,
     }
 }
 
@@ -497,6 +503,10 @@ fn turns_of(messages: &[Value]) -> Vec<Turn> {
                 .as_str()
                 .map(str::to_owned)
                 .or(turn.model.take());
+            if let Some(fast) = activity["fast"].as_bool() {
+                turn.fast = Some(fast);
+                turn.effort = activity["effort"].as_str().map(str::to_owned);
+            }
             if let Some(provider) = activity["provider"].as_str() {
                 turn.provider = Some(provider_id(provider));
             }

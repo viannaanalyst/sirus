@@ -1598,6 +1598,38 @@ pub async fn dismiss_handoff(
     .await
 }
 
+/// `/clear`: starts a fresh provider session in this conversation. The transcript, title and
+/// worktree stay; the next turn opens a new CLI session with no prior context.
+pub async fn clear_session_context(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> Result<serde_json::Value> {
+    let state = state.inner().clone();
+    native_task(move || clear_session_context_native(&state, &session_id)).await
+}
+
+fn clear_session_context_native(state: &AppState, session_id: &str) -> Result<serde_json::Value> {
+    let mut data = state.data.lock();
+    state.ensure_running()?;
+    if state.agents.lock().contains_key(session_id) {
+        return Err(Error::agent("Wait for the current turn to finish"));
+    }
+    let session = find_session_mut(&mut data, session_id)?;
+    if let Some(reason) = crate::transcript::clear_refusal(session) {
+        return Err(Error::agent(reason));
+    }
+    let before = session.clone();
+    crate::transcript::clear_context(session, &now_rfc3339());
+    // The reply carries the marker pair, so a window that shows the transcript adds it in place.
+    let mut cleared = crate::transcript_view::session_meta(session)?;
+    cleared["messages"] = serde_json::to_value(&session.messages[session.messages.len() - 2..])?;
+    if let Err(error) = persist::save(&state.data_path, &data) {
+        *find_session_mut(&mut data, session_id)? = before;
+        return Err(error);
+    }
+    Ok(cleared)
+}
+
 pub async fn set_message_pinned(
     state: State<'_, Arc<AppState>>,
     session_id: String,
@@ -1875,6 +1907,13 @@ pub async fn send_prompt(
     }
     if prompt.len() > 64 * 1024 {
         return Err(Error::new("invalid", "prompt exceeds the 64 KiB limit"));
+    }
+    // `/clear` is its own command (`clear_session_context`), never text for the model.
+    if crate::transcript::is_clear_command(&prompt) {
+        return Err(Error::new(
+            "invalid",
+            "Use the clear command to start a fresh session.",
+        ));
     }
     let client_request_id =
         crate::execution::client_request_id(request.client_request_id.as_deref())?;

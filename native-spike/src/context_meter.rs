@@ -17,6 +17,8 @@ use std::rc::Rc;
 
 /// The standalone command that compacts the native conversation; never text for the model.
 pub(crate) const COMPACT_COMMAND: &str = "/compact";
+/// The standalone command that starts a fresh provider session in the same conversation.
+pub(crate) const CLEAR_COMMAND: &str = "/clear";
 /// A heavy context. Below this a cold re-read is cheap, so compacting mostly loses context.
 const COMPACT_TOKENS: u64 = 200_000;
 /// Without a known expiry: long enough that the provider's prompt cache has expired.
@@ -133,6 +135,29 @@ fn busy(status: &str) -> bool {
 
 pub(crate) fn is_compact_command(text: &str) -> bool {
     text.trim() == COMPACT_COMMAND
+}
+
+/// A typed `/clear`: the word alone, any case.
+pub(crate) fn is_clear_command(text: &str) -> bool {
+    text.trim().eq_ignore_ascii_case(CLEAR_COMMAND)
+}
+
+/// Whether the provider keeps a session of its own to drop: Codex, Claude Code and OpenCode
+/// resume one; the others replay the visible history each turn, so `/clear` would change nothing.
+pub(crate) fn clears(provider: &str) -> bool {
+    matches!(provider, "claude" | "codex" | "opencode")
+}
+
+/// Why `/clear` cannot run on this conversation now (its Portuguese is the key), or None. The
+/// host refuses the same cases.
+pub(crate) fn clear_refusal(provider: &str, status: &str) -> Option<&'static str> {
+    if !clears(provider) {
+        return Some("Só conversas do Codex, do Claude Code e do OpenCode podem ser limpas.");
+    }
+    if busy(status) {
+        return Some("Espere o turno atual terminar");
+    }
+    None
 }
 
 /// Why Compact cannot run on this conversation now, as the message (its Portuguese is the key),
@@ -551,6 +576,44 @@ impl Shell {
         true
     }
 
+    /// A typed `/clear` is the command, never text for the model: the host drops the provider's
+    /// session and the transcript gets its divider. True when the draft was that command.
+    pub(super) fn typed_clear(
+        &mut self,
+        ix: usize,
+        text: &str,
+        has_attachments: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !is_clear_command(text) {
+            return false;
+        }
+        let conversation = &self.conversations[ix];
+        let reason = if has_attachments {
+            Some("Envie /clear sozinho, sem anexos.")
+        } else if conversation.session_id.is_empty() || !conversation.native {
+            Some("Ainda não há o que limpar: esta conversa não começou.")
+        } else {
+            clear_refusal(conversation.provider, &conversation.status)
+        };
+        if let Some(reason) = reason {
+            self.problem = Some(t(reason).to_owned());
+            cx.notify();
+            return true;
+        }
+        let session_id = conversation.session_id.clone();
+        let call = self
+            .backend
+            .invoke("clear_session_context", json!({ "sessionId": session_id }));
+        self.waiting.insert(call, Waiting::Session);
+        self.problem = None;
+        self.drafts.remove(&ix);
+        self.touch_drafts();
+        self.marked = None;
+        cx.notify();
+        true
+    }
+
     /// Whether this message should compact the conversation first: idle, heavy, past its
     /// prompt cache, with no queue ahead of it and no team request.
     pub(super) fn compacts_first(&self, ix: usize) -> bool {
@@ -654,6 +717,30 @@ impl Shell {
             .into_any_element()
     }
 
+    /// A `/clear` in the transcript: the same quiet line as a compaction, saying a new provider
+    /// session starts here.
+    pub(super) fn clear_row(&self) -> AnyElement {
+        let line = || div().h(px(1.)).flex_1().bg(content(0.08));
+        div()
+            .flex()
+            .items_center()
+            .gap(px(12.))
+            .py(px(4.))
+            .text_size(px(12.))
+            .text_color(content(0.5))
+            .child(line())
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(5.))
+                    .child(icon("check", 12.).text_color(content(0.5)))
+                    .child(t("Contexto limpo · nova sessão")),
+            )
+            .child(line())
+            .into_any_element()
+    }
+
     /// The send button's state for the composer: whether a send now would compact first.
     pub(super) fn compact_send_pending(&self) -> bool {
         self.compacts_first(self.active_conversation())
@@ -680,6 +767,16 @@ mod tests {
             cache_expires_at: expires,
         });
         conversation
+    }
+
+    #[test]
+    fn clear_is_typed_alone_and_for_providers_with_a_session_of_their_own() {
+        assert!(is_clear_command(" /Clear ") && !is_clear_command("/clear now"));
+        for provider in ["claude", "codex", "opencode"] {
+            assert_eq!(clear_refusal(provider, "idle"), None);
+            assert!(clear_refusal(provider, "running").is_some());
+        }
+        assert!(clear_refusal("cursor", "idle").is_some());
     }
 
     #[test]

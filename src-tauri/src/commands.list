@@ -100,6 +100,7 @@ commands::create_session
 commands::fork_session
 commands::handoff_session
 commands::dismiss_handoff
+commands::clear_session_context
 commands::set_message_pinned
 commands::set_session_agent
 commands::rename_session

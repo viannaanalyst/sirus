@@ -14641,6 +14641,9 @@ impl Shell {
         if context_meter::is_compact_command(&turn.user) {
             return self.compaction_row(conversation, index, turn, now, moving);
         }
+        if context_meter::is_clear_command(&turn.user) {
+            return self.clear_row();
+        }
         let provider = turn
             .provider
             .unwrap_or(self.conversations[conversation].provider);

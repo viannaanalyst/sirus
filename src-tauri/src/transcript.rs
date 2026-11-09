@@ -85,6 +85,79 @@ pub fn compaction_refusal(
     None
 }
 
+/// The typed command that starts a fresh provider session in the same conversation.
+pub const CLEAR_COMMAND: &str = "/clear";
+
+/// Whether a user message is the `/clear` command (and so the marker it leaves).
+pub fn is_clear_command(text: &str) -> bool {
+    text.trim().eq_ignore_ascii_case(CLEAR_COMMAND)
+}
+
+/// The messages after the last `/clear`: what a recap may carry, since the person asked the
+/// context to start over.
+pub fn since_clear(messages: &[Message]) -> &[Message] {
+    let start = messages
+        .iter()
+        .rposition(|message| {
+            message.role == MessageRole::User && is_clear_command(&message.content)
+        })
+        .map_or(0, |at| at + 1);
+    &messages[start..]
+}
+
+/// Why `/clear` cannot run on this session now, if it cannot. Only providers that resume a
+/// native thread of their own (Codex, Claude Code, OpenCode) have a session to drop; the others
+/// replay the visible history on every turn, so clearing would change nothing.
+pub fn clear_refusal(session: &Session) -> Option<&'static str> {
+    if !matches!(
+        session.agent,
+        AgentProviderId::Codex | AgentProviderId::Claude | AgentProviderId::OpenCode
+    ) {
+        return Some("Only Codex, Claude Code and OpenCode conversations can be cleared.");
+    }
+    if session.status.is_active() || session.messages.iter().any(|message| message.streaming) {
+        return Some("Wait for the current turn to finish");
+    }
+    if session.native_thread.is_none() && session.handoff.is_none() && session.fork_origin.is_none()
+    {
+        return Some("There is nothing to clear yet: this conversation has not started.");
+    }
+    None
+}
+
+/// Starts a fresh provider session inside this conversation: the native thread, the context
+/// reading and any pending recap go, and a `/clear` marker joins the transcript. The title, the
+/// worktree and the visible history stay; the next turn opens a new CLI session with no context.
+pub fn clear_context(session: &mut Session, now: &str) {
+    session.native_thread = None;
+    session.context_usage = None;
+    session.handoff = None;
+    // A fork rebuilds its history on its first native turn; after a clear it must not.
+    session.fork_origin = None;
+    session.last_error = None;
+    let message = |role: MessageRole, content: &str| Message {
+        id: uuid::Uuid::new_v4().to_string(),
+        session_id: session.id.clone(),
+        role,
+        content: content.to_string(),
+        created_at: now.to_string(),
+        streaming: false,
+        activity: None,
+        steers: Vec::new(),
+        attachments: Vec::new(),
+        launched: Vec::new(),
+        visuals: Vec::new(),
+        client_request_id: None,
+        rotation: None,
+    };
+    let marker = [
+        message(MessageRole::User, CLEAR_COMMAND),
+        message(MessageRole::Agent, ""),
+    ];
+    session.messages.extend(marker);
+    session.last_activity_at = now.to_string();
+}
+
 #[cfg(test)]
 pub fn process_prompt(session: &Session, prompt: &str) -> Result<String> {
     process_prompt_with(session, prompt, 0)
@@ -221,6 +294,7 @@ fn limit_section(text: &str, limit: usize) -> String {
 
 /// Bounded deterministic recap of the conversation through a settled response.
 fn handoff_brief(messages: &[Message]) -> String {
+    let messages = since_clear(messages);
     let mut prior_users: Vec<String> = Vec::new();
     let mut last_assistant = String::new();
     for message in messages {
@@ -614,6 +688,46 @@ mod tests {
         assert!(compaction_refusal(&fork, false, false).is_some());
         crate::agent::finalize_session(&mut fork, Some(0), false, false, false, None);
         assert_eq!(compaction_refusal(&fork, false, false), None);
+    }
+
+    #[test]
+    fn clear_drops_the_native_session_and_keeps_the_conversation() {
+        let mut session = source();
+        session.context_usage = Some(crate::models::ContextUsage {
+            used: 10,
+            window: Some(100),
+            cache_expires_at: None,
+            floor: None,
+        });
+        let before = session.messages.len();
+        assert_eq!(clear_refusal(&session), None);
+        clear_context(&mut session, "now");
+        assert!(session.native_thread.is_none() && session.context_usage.is_none());
+        assert_eq!(session.messages.len(), before + 2);
+        assert!(is_clear_command(&session.messages[before].content));
+        // The next turn starts blind: the prompt goes alone, with no replayed history.
+        assert_eq!(process_prompt(&session, "hello").unwrap(), "hello");
+        // A recap after the clear carries nothing from before it.
+        assert!(handoff_brief(&session.messages).is_empty());
+        for agent in [AgentProviderId::Cursor, AgentProviderId::Grok] {
+            session.agent = agent;
+            assert!(clear_refusal(&session).is_some());
+        }
+        session.agent = AgentProviderId::Claude;
+        assert!(clear_refusal(&session).is_some(), "nothing left to clear");
+        session.status = SessionStatus::Running;
+        assert!(clear_refusal(&session).is_some());
+    }
+
+    #[test]
+    fn clear_leaves_a_fork_blank_instead_of_rebuilding_its_history() {
+        let source = source();
+        let mut fork =
+            fork_snapshot(&source, "answer", "new", "now", source.worktree.clone()).unwrap();
+        assert_eq!(clear_refusal(&fork), None);
+        clear_context(&mut fork, "now");
+        assert!(fork.fork_origin.is_none());
+        assert_eq!(process_prompt(&fork, "fresh").unwrap(), "fresh");
     }
 
     #[test]

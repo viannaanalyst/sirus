@@ -735,26 +735,24 @@ fn palette_match(title: &str, needle: &str) -> Option<std::ops::Range<usize>> {
     Some(start..start + needle.len())
 }
 
-/// The usage popup keeps this height for every provider; room for three limit rows.
-const USAGE_POPUP_HEIGHT: f32 = 350.;
+/// Room the usage popup needs besides its limit rows: card padding, the header, the gap above the
+/// limits block and the footer with its buttons.
+const USAGE_POPUP_CHROME: f32 = 124.;
+/// The provider tabs above the header, drawn only when there is more than one tab.
+const USAGE_TABS_ROW: f32 = 38.;
+/// The account row above the limits block, drawn only when the provider reports an account.
+const USAGE_ACCOUNT_ROW: f32 = 44.;
+/// One limit row: its padding, the name and percentage, the bar and the dim line.
+const USAGE_LIMIT_ROW: f32 = 62.;
 
-/// How one limit row of the usage popup is drawn: the size of its percentage and of its bar.
-#[derive(Debug, PartialEq)]
-struct UsageRowStyle {
-    percent_size: f32,
-    bar_height: f32,
-}
-
-/// The rows of the limits block, one per limit the provider has and no more; a lone limit gets
-/// the large percentage and the thicker bar.
-fn usage_row_styles(count: usize) -> Vec<UsageRowStyle> {
-    let lone = count == 1;
-    (0..count)
-        .map(|_| UsageRowStyle {
-            percent_size: if lone { 22. } else { 12.5 },
-            bar_height: if lone { 7. } else { 5. },
-        })
-        .collect()
+/// The card's height for `rows` limit rows. Each row keeps its own height instead of sharing the
+/// block, so three limits never overlap and two leave no empty stretch (ADR-198).
+fn usage_popup_height(rows: usize, tabs: bool, account: bool) -> f32 {
+    let rows = rows.max(1) as f32;
+    USAGE_POPUP_CHROME
+        + rows * USAGE_LIMIT_ROW
+        + if tabs { USAGE_TABS_ROW } else { 0. }
+        + if account { USAGE_ACCOUNT_ROW } else { 0. }
 }
 
 /// A provider's name in the usage tabs: the short one once there are three or more.
@@ -1148,6 +1146,8 @@ enum Waiting {
     Dictated(bool),
     /// A provider_usage reply for one of the bottom bar's chosen providers.
     BarUsage(&'static str),
+    /// A provider_usage reply for the account the usage popup just switched to.
+    UsageFor(&'static str),
     SettingsData(&'static str),
     /// An `infisical_action` reply for the settings page or the secret card's link.
     Infisical,
@@ -1595,6 +1595,10 @@ pub struct Shell {
     jump: Tween,
     trail_hover: Option<(usize, f32)>,
     usage_accounts: Option<AccountsPage>,
+    /// The usage popup's inline account list: the provider whose list is open.
+    usage_picker: Option<&'static str>,
+    /// Each account's usage, by provider and account id, for the picker's e-mail and plan.
+    usage_account_views: HashMap<(&'static str, String), Value>,
     project_menu: Option<ProjectMenu>,
     project_button: std::rc::Rc<std::cell::Cell<Option<gpui::Bounds<Pixels>>>>,
     checkout_filter: HashMap<usize, String>,
@@ -2039,6 +2043,8 @@ impl Shell {
             jump: Tween::still(0., now),
             trail_hover: None,
             usage_accounts: None,
+            usage_picker: None,
+            usage_account_views: HashMap::new(),
             project_menu: None,
             project_button: Default::default(),
             checkout_filter: HashMap::new(),
@@ -2515,6 +2521,15 @@ impl Shell {
                         self.bar_values.remove(provider);
                     }
                 },
+                Some(Waiting::UsageFor(provider)) if ok => {
+                    if provider == self.conversations[self.active_conversation()].provider {
+                        self.usage_value = value.clone();
+                        self.usage = usage_summary(&value);
+                    } else if let Some(summary) = usage_summary(&value) {
+                        self.bar_usage.insert(provider, summary);
+                        self.bar_values.insert(provider, value.clone());
+                    }
+                }
                 Some(Waiting::Transcript(ix)) if ok => {
                     let conversation = &mut self.conversations[ix];
                     conversation.messages =
@@ -3786,6 +3801,215 @@ impl Shell {
         self.selected_accounts[provider] = json!(id);
     }
 
+    /// Opens or closes the usage popup's inline account list, reading each account's usage once
+    /// for the e-mail and plan its row shows.
+    fn toggle_usage_picker(&mut self, provider: &'static str, cx: &mut Context<Self>) {
+        if self.usage_picker == Some(provider) {
+            self.usage_picker = None;
+            cx.notify();
+            return;
+        }
+        self.usage_picker = Some(provider);
+        for (id, _) in self.accounts_of(provider) {
+            if self
+                .usage_account_views
+                .contains_key(&(provider, id.clone()))
+            {
+                continue;
+            }
+            let rx = self.backend.request(
+                "provider_usage",
+                json!({ "provider": provider, "refresh": false, "accountId": id }),
+            );
+            cx.spawn(async move |this, cx| {
+                let Ok(value) = message_actions::settle(rx).await else {
+                    return;
+                };
+                let _ = this.update(cx, |this, cx| {
+                    this.usage_account_views.insert((provider, id), value);
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
+        cx.notify();
+    }
+
+    /// After the popup switches accounts: the chosen one's limits take the place of the shown ones.
+    fn refresh_usage_for_account(
+        &mut self,
+        provider: &'static str,
+        account: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.composer_menu_at = Instant::now();
+        let call = self.backend.invoke(
+            "provider_usage",
+            json!({ "provider": provider, "refresh": false, "accountId": account }),
+        );
+        self.waiting.insert(call, Waiting::UsageFor(provider));
+        cx.notify();
+    }
+
+    /// The usage popup's inline list of connected accounts, hanging under the account row.
+    fn usage_account_picker(
+        &self,
+        provider: &'static str,
+        accounts: &[(String, String)],
+        chosen: &str,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let avatars = [
+            (0x5b8cff, 0xa371f7),
+            (0xe08a5b, 0xd86f9c),
+            (0x4fae8a, 0x4a90d9),
+        ];
+        let rows: Vec<AnyElement> = accounts
+            .iter()
+            .enumerate()
+            .map(|(index, (id, label))| {
+                let current = id == chosen;
+                let info = self.usage_account_views.get(&(provider, id.clone()));
+                let email = info
+                    .and_then(|v| v["account"]["email"].as_str())
+                    .filter(|email| !email.is_empty())
+                    .map(str::to_owned);
+                let plan = info
+                    .and_then(|v| v["account"]["plan"].as_str())
+                    .filter(|plan| !plan.is_empty())
+                    .map(|plan| {
+                        let mut letters = plan.chars();
+                        letters.next().map_or(String::new(), |first| {
+                            first.to_uppercase().chain(letters).collect()
+                        })
+                    });
+                let main = email.clone().unwrap_or_else(|| label.clone());
+                let sub = if email.is_some() && !label.is_empty() {
+                    plan.as_ref()
+                        .map_or(label.clone(), |plan| format!("{label} · {plan}"))
+                } else {
+                    plan.clone().unwrap_or_default()
+                };
+                let initial = main
+                    .chars()
+                    .next()
+                    .map_or(String::new(), |c| c.to_uppercase().collect());
+                let (from, to) = avatars[index % avatars.len()];
+                let target = id.clone();
+                div()
+                    .id(("usage-picker-row", index))
+                    .px(px(7.))
+                    .py(px(6.))
+                    .rounded(px(crate::theme::RADIUS_SM))
+                    .when(current, |d| d.bg(accent_wash(0.1)))
+                    .when(!current, |d| d.hover(|s| s.bg(content(0.055))))
+                    .flex()
+                    .items_center()
+                    .gap(px(9.))
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if !current {
+                            this.select_account(provider, target.clone());
+                            this.refresh_usage_for_account(provider, target.clone(), cx);
+                        }
+                        this.usage_picker = None;
+                        cx.notify();
+                    }))
+                    .child(
+                        div()
+                            .size(px(24.))
+                            .flex_shrink_0()
+                            .rounded_full()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_size(px(11.5))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(gpui::white())
+                            .bg(linear_gradient(
+                                135.,
+                                linear_color_stop(gpui::rgb(from), 0.),
+                                linear_color_stop(gpui::rgb(to), 1.),
+                            ))
+                            .child(initial),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap(px(1.))
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_size(px(12.5))
+                                    .text_color(content(0.9))
+                                    .child(main),
+                            )
+                            .when(!sub.is_empty(), |d| {
+                                d.child(
+                                    div()
+                                        .truncate()
+                                        .text_size(px(11.))
+                                        .text_color(content(0.45))
+                                        .child(sub),
+                                )
+                            }),
+                    )
+                    .when(current, |d| {
+                        d.child(icon("check", 13.).flex_shrink_0().text_color(accent()))
+                    })
+                    .into_any_element()
+            })
+            .collect();
+        div()
+            .id("usage-account-list")
+            .occlude()
+            .absolute()
+            .top(px(40.))
+            .left_0()
+            .right_0()
+            .p(px(5.))
+            .flex()
+            .flex_col()
+            .rounded(px(crate::theme::RADIUS_MD))
+            .border_1()
+            .border_color(crate::theme::border())
+            .child(crate::theme::floating_surface(crate::theme::RADIUS_MD))
+            .shadow_lg()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .children(rows)
+            .child(div().h(px(1.)).mx(px(4.)).my(px(5.)).bg(content(0.06)))
+            .child(
+                div()
+                    .id("usage-account-add")
+                    .h(px(30.))
+                    .px(px(8.))
+                    .rounded(px(crate::theme::RADIUS_SM))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .text_size(px(12.))
+                    .text_color(content(0.6))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(content(0.05)).text_color(content(0.95)))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.usage_picker = None;
+                        this.usage_accounts = Some(AccountsPage {
+                            provider,
+                            adding: Some(String::new()),
+                            ..Default::default()
+                        });
+                        this.load_account_usage(provider);
+                        cx.notify();
+                    }))
+                    .child(icon("plus", 13.).text_color(content(0.45)))
+                    .child(t("Adicionar conta")),
+            )
+            .into_any_element()
+    }
+
     fn accounts_page_view(&self, provider: &'static str, cx: &mut Context<Self>) -> AnyElement {
         let page = self.usage_accounts.as_ref();
         let chosen = self.selected_accounts[provider]
@@ -4155,6 +4379,7 @@ impl Shell {
         }
         if self.usage_popup.is_some() {
             self.usage_accounts = None;
+            self.usage_picker = None;
             self.usage_tab = Some(provider);
             cx.notify();
             return;
@@ -4174,6 +4399,7 @@ impl Shell {
     fn toggle_usage_popup(&mut self, cx: &mut Context<Self>) {
         crate::segment_pill::forget("usage-tabs");
         self.usage_accounts = None;
+        self.usage_picker = None;
         self.usage_tab = None;
         self.context_menu = None;
         self.usage_popup = match self.usage_popup {
@@ -4281,6 +4507,7 @@ impl Shell {
 
     fn open_settings_page(&mut self, name: &'static str, cx: &mut Context<Self>) {
         self.usage_popup = None;
+        self.usage_picker = None;
         // The settings have their own column, which the peeking sidebar would lie over.
         self.peek = None;
         self.settings_page = name;
@@ -4329,6 +4556,11 @@ impl Shell {
                 tf("Atualizado há {} h", &[&(minutes / 60)])
             }
         });
+        let accounts = self.accounts_of(provider);
+        let chosen = self.selected_accounts[provider]
+            .as_str()
+            .unwrap_or("default")
+            .to_owned();
         let account = value["account"]["email"]
             .as_str()
             .or(value["account"]["name"].as_str())
@@ -4337,7 +4569,15 @@ impl Shell {
                 value["account"]["keyFingerprint"]
                     .as_str()
                     .map(|key| tf("Chave conectada · {}", &[&key]))
+            })
+            .or_else(|| {
+                accounts
+                    .iter()
+                    .find(|(id, _)| *id == chosen)
+                    .map(|(_, label)| label.clone())
+                    .filter(|label| !label.is_empty())
             });
+        let several = accounts.len() > 1;
         let plan = value["account"]["plan"]
             .as_str()
             .filter(|p| !p.is_empty())
@@ -4353,12 +4593,11 @@ impl Shell {
                 .as_str()
                 .is_some_and(|id| id.starts_with("base_model_inference/"))
         });
-        let styles = usage_row_styles(windows.len());
+        let height = usage_popup_height(windows.len(), tabs.len() > 1, account.is_some());
         let cards: Vec<AnyElement> = windows
             .iter()
-            .zip(styles)
             .enumerate()
-            .map(|(ix, (window, style))| {
+            .map(|(ix, window)| {
                 let used = window["usedPercent"].as_f64();
                 let label = usage_window_label(
                     window["id"].as_str().unwrap_or(""),
@@ -4371,14 +4610,26 @@ impl Shell {
                         crate::i18n::t("Hora de renovar já passou").to_owned()
                     }
                 });
+                let mut foot = Vec::new();
+                if let Some(used) = used {
+                    foot.push(tf(
+                        "{}% restante",
+                        &[&format!("{:.0}%", (100. - used).max(0.))],
+                    ));
+                }
+                if let Some(reset) = reset {
+                    foot.push(reset);
+                }
+                let foot = foot.join(" · ");
                 div()
-                    .flex_1()
-                    .min_h_0()
-                    .px(px(12.))
-                    .py(px(8.))
+                    .h(px(USAGE_LIMIT_ROW))
+                    .flex_shrink_0()
+                    .px(px(14.))
+                    .py(px(6.))
                     .flex()
                     .flex_col()
                     .justify_center()
+                    .gap(px(6.))
                     .when(ix > 0, |d| {
                         d.border_t_1().border_color(crate::theme::border())
                     })
@@ -4387,22 +4638,22 @@ impl Shell {
                             .flex()
                             .justify_between()
                             .items_baseline()
-                            .gap(px(8.))
+                            .gap(px(10.))
                             .text_size(px(12.5))
                             .child(
                                 div()
                                     .min_w_0()
                                     .truncate()
-                                    .text_color(content(0.72))
+                                    .text_color(content(0.78))
                                     .child(label),
                             )
                             .child(
                                 div()
                                     .flex_shrink_0()
-                                    .text_size(px(style.percent_size))
+                                    .text_size(px(13.5))
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .font_features(crate::theme::tabular())
-                                    .text_color(content(0.95))
+                                    .text_color(content(0.97))
                                     .child(
                                         used.map_or_else(|| "—".to_owned(), |u| format!("{u:.0}%")),
                                     ),
@@ -4411,11 +4662,9 @@ impl Shell {
                     .when_some(used, |d, used| {
                         d.child(
                             div()
-                                .mt(px(if style.bar_height > 5. { 10. } else { 7. }))
-                                .mb(px(if style.bar_height > 5. { 8. } else { 5. }))
-                                .h(px(style.bar_height))
+                                .h(px(4.))
                                 .rounded_full()
-                                .bg(content(0.08))
+                                .bg(content(0.1))
                                 .overflow_hidden()
                                 .child(
                                     div()
@@ -4428,22 +4677,16 @@ impl Shell {
                                 ),
                         )
                     })
-                    .child(
-                        div()
-                            .flex()
-                            .justify_between()
-                            .gap(px(8.))
-                            .text_size(px(11.))
-                            .text_color(content(0.5))
-                            .font_features(crate::theme::tabular())
-                            .children(used.map(|u| {
-                                div().child(tf(
-                                    "{} restante",
-                                    &[&format!("{:.0}%", (100. - u).max(0.))],
-                                ))
-                            }))
-                            .children(reset.map(|r| div().child(r))),
-                    )
+                    .when(!foot.is_empty(), |d| {
+                        d.child(
+                            div()
+                                .truncate()
+                                .text_size(px(11.))
+                                .text_color(content(0.47))
+                                .font_features(crate::theme::tabular())
+                                .child(foot),
+                        )
+                    })
                     .into_any_element()
             })
             .collect();
@@ -4501,9 +4744,7 @@ impl Shell {
                 .left(px(left.min(self.viewport_width - 320.).max(8.)))
                 .w(px(310.))
                 .p(px(14.))
-                .when(self.usage_accounts.is_none(), |d| {
-                    d.h(px(USAGE_POPUP_HEIGHT))
-                })
+                .when(self.usage_accounts.is_none(), |d| d.h(px(height)))
                 .flex()
                 .flex_col()
                 .opacity(t)
@@ -4553,6 +4794,7 @@ impl Shell {
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.usage_tab = Some(tab);
                                         this.usage_accounts = None;
+                                        this.usage_picker = None;
                                         cx.notify();
                                     }))
                                     .child(mark_tile(
@@ -4632,62 +4874,92 @@ impl Shell {
                             .chars()
                             .next()
                             .map_or(String::new(), |c| c.to_uppercase().collect());
-                        d.child(
-                            div()
-                                .mt(px(10.))
-                                .px(px(8.))
-                                .py(px(6.))
-                                .rounded(px(crate::theme::RADIUS_LG))
-                                .bg(content(0.04))
-                                .flex()
-                                .items_center()
-                                .gap(px(8.))
-                                .child(
-                                    div()
-                                        .size(px(22.))
-                                        .flex_shrink_0()
-                                        .rounded_full()
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .text_size(px(11.))
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .text_color(gpui::white())
-                                        .bg(linear_gradient(
-                                            135.,
-                                            linear_color_stop(gpui::rgb(0x5b8cff), 0.),
-                                            linear_color_stop(gpui::rgb(0xa371f7), 1.),
-                                        ))
-                                        .child(initial),
+                        let open = self.usage_picker == Some(provider);
+                        let row = div()
+                            .id("usage-account-row")
+                            .relative()
+                            .px(px(8.))
+                            .py(px(5.))
+                            .rounded(px(crate::theme::RADIUS_LG))
+                            .border_1()
+                            .border_color(if open {
+                                crate::theme::border()
+                            } else {
+                                transparent()
+                            })
+                            .bg(content(if open { 0.06 } else { 0.04 }))
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .when(several, |d| {
+                                d.cursor_pointer().hover(|s| s.bg(content(0.065))).on_click(
+                                    cx.listener(move |this, _, _, cx| {
+                                        this.toggle_usage_picker(provider, cx);
+                                    }),
                                 )
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .truncate()
-                                        .text_size(px(12.5))
-                                        .text_color(content(0.72))
-                                        .child(account),
-                                )
-                                .children(plan.map(|p| {
-                                    div()
+                            })
+                            .child(
+                                div()
+                                    .size(px(22.))
+                                    .flex_shrink_0()
+                                    .rounded_full()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .text_size(px(11.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(gpui::white())
+                                    .bg(linear_gradient(
+                                        135.,
+                                        linear_color_stop(gpui::rgb(0x5b8cff), 0.),
+                                        linear_color_stop(gpui::rgb(0xa371f7), 1.),
+                                    ))
+                                    .child(initial),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_size(px(12.5))
+                                    .text_color(content(0.72))
+                                    .child(account),
+                            )
+                            .children(plan.map(|p| {
+                                div()
+                                    .flex_shrink_0()
+                                    .px(px(8.))
+                                    .py(px(1.))
+                                    .rounded_full()
+                                    .bg(content(0.08))
+                                    .text_size(px(11.))
+                                    .text_color(content(0.78))
+                                    .child(p)
+                            }))
+                            .when(several, |d| {
+                                d.child(
+                                    icon("chevron-right", 11.)
                                         .flex_shrink_0()
-                                        .px(px(8.))
-                                        .py(px(1.))
-                                        .rounded_full()
-                                        .bg(content(0.08))
-                                        .text_size(px(11.))
-                                        .text_color(content(0.78))
-                                        .child(p)
-                                })),
-                        )
+                                        .text_color(content(if open { 0.75 } else { 0.45 }))
+                                        .with_transformation(Transformation::rotate(percentage(
+                                            if open { -0.25 } else { 0.25 },
+                                        ))),
+                                )
+                            });
+                        d.child(div().relative().mt(px(10.)).child(row).when(open, |d| {
+                            d.child(
+                                gpui::deferred(
+                                    self.usage_account_picker(provider, &accounts, &chosen, cx),
+                                )
+                                .with_priority(2),
+                            )
+                        }))
                     },
                 )
                 .when(self.usage_accounts.is_none(), |d| {
                     d.child(
                         div()
-                            .flex_1()
-                            .min_h_0()
+                            .flex_shrink_0()
                             .mt(px(10.))
                             .flex()
                             .flex_col()
@@ -4695,6 +4967,7 @@ impl Shell {
                             .border_1()
                             .border_color(crate::theme::border())
                             .overflow_hidden()
+                            .when(empty, |d| d.flex_1().min_h_0())
                             .children(cards)
                             .when(empty, |d| {
                                 d.child(
@@ -4716,7 +4989,7 @@ impl Shell {
                 .when(self.usage_accounts.is_none(), |d| {
                     d.child(
                         div()
-                            .mt(px(10.))
+                            .mt_auto()
                             .pt(px(10.))
                             .border_t_1()
                             .border_color(content(0.07))
@@ -6501,6 +6774,10 @@ impl Shell {
         }
         if key == "escape" && self.select.active() {
             self.select.clear();
+            cx.notify();
+            return;
+        }
+        if key == "escape" && self.usage_picker.take().is_some() {
             cx.notify();
             return;
         }
@@ -9652,6 +9929,7 @@ impl Shell {
             let now = Instant::now();
             self.composer_menu = None;
             self.usage_popup = None;
+            self.usage_picker = None;
             self.sidebar_options = None;
             self.context_menu = None;
             self.project_menu = Some(ProjectMenu {
@@ -19978,7 +20256,7 @@ impl Render for Shell {
                     cx.notify();
                 }
                 let fade = if cx.reduce_motion() { 0. } else { MENU };
-                let closed = [this.incoming.close_at(Instant::now(), fade), this.menu.take().is_some(), this.environment.take().is_some(),this.composer_menu.take().is_some(), this.add_menu.take().is_some(), this.usage_popup.take().is_some(), this.resources.close(), this.context.close(), this.close_project_menu(), this.session_filter.open.take().is_some(), this.context_menu.take().is_some(), this.term.close_menu(), this.close_sidebar_options(cx)];
+                let closed = [this.incoming.close_at(Instant::now(), fade), this.menu.take().is_some(), this.environment.take().is_some(),this.composer_menu.take().is_some(), this.add_menu.take().is_some(), this.usage_popup.take().is_some(), this.usage_picker.take().is_some(), this.resources.close(), this.context.close(), this.close_project_menu(), this.session_filter.open.take().is_some(), this.context_menu.take().is_some(), this.term.close_menu(), this.close_sidebar_options(cx)];
                 this.goal_input = None;
                 if closed.contains(&true) {
                     cx.notify();
@@ -20192,18 +20470,48 @@ mod tests {
     }
 
     #[test]
-    fn usage_rows_follow_the_limits_the_provider_has() {
-        assert!(usage_row_styles(0).is_empty());
-        assert_eq!(usage_row_styles(2).len(), 2);
-        assert_eq!(usage_row_styles(3).len(), 3);
-        let one = usage_row_styles(1);
-        assert_eq!(one.len(), 1);
-        assert_eq!((one[0].percent_size, one[0].bar_height), (22., 7.));
-        for style in usage_row_styles(3) {
-            assert_eq!((style.percent_size, style.bar_height), (12.5, 5.));
-        }
+    fn usage_popup_fits_its_limit_rows_without_stretching() {
+        // Three limits are the tallest case and the design's 392 px card.
+        assert_eq!(usage_popup_height(3, true, true), 392.);
+        // Each row keeps its own height, so two limits free exactly two rows and no stretch is
+        // left over for them to share.
+        let two = usage_popup_height(2, true, true);
+        let three = usage_popup_height(3, true, true);
+        assert_eq!(three - two, USAGE_LIMIT_ROW);
+        assert_eq!(
+            two,
+            USAGE_POPUP_CHROME + 2. * USAGE_LIMIT_ROW + USAGE_TABS_ROW + USAGE_ACCOUNT_ROW
+        );
+        // No limits still leaves one row for the note.
+        assert_eq!(
+            usage_popup_height(0, true, true),
+            usage_popup_height(1, true, true)
+        );
+        // The tabs and the account row are room the card only has when they are drawn.
+        assert_eq!(
+            usage_popup_height(2, false, true),
+            usage_popup_height(2, true, true) - USAGE_TABS_ROW
+        );
+        assert_eq!(
+            usage_popup_height(2, true, false),
+            usage_popup_height(2, true, true) - USAGE_ACCOUNT_ROW
+        );
         assert_eq!(usage_tab_name("claude", 2), "Claude Code");
         assert_eq!(usage_tab_name("claude", 3), "Claude");
+    }
+
+    #[test]
+    fn usage_bar_is_neutral_until_sixty_then_amber_then_red() {
+        let same = |a: gpui::Hsla, b: gpui::Hsla| (a.h, a.s, a.l, a.a) == (b.h, b.s, b.l, b.a);
+        let neutral = content(0.62);
+        let amber = gpui::rgb(0xe9b44c).into();
+        let red = gpui::rgb(0xe5675f).into();
+        assert!(same(usage_bar_color(0.), neutral));
+        assert!(same(usage_bar_color(59.9), neutral));
+        assert!(same(usage_bar_color(60.), amber));
+        assert!(same(usage_bar_color(89.9), amber));
+        assert!(same(usage_bar_color(90.), red));
+        assert!(same(usage_bar_color(100.), red));
     }
 
     #[test]

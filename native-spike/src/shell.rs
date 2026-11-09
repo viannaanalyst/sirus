@@ -18249,6 +18249,8 @@ impl Render for Shell {
         let dock = (dock_share > 0.001).then(|| self.dock_view(dock_full, now, &mut moving, cx));
         let stats = self.stats(now);
         moving |= self.send_moving.take();
+        // ⌥Tab is held for a moment only; its working marks keep turning meanwhile.
+        moving |= self.project_switch.is_some();
         if moving {
             window.request_animation_frame();
         }

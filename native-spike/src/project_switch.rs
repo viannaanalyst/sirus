@@ -171,9 +171,11 @@ impl Shell {
                     .items_center()
                     .gap(px(6.))
                     .when(working, |d| {
-                        d.child(div().flex().gap(px(2.)).children(
-                            (0..3).map(|_| div().size(px(4.)).rounded_full().bg(rgb(0xe7a35a))),
-                        ))
+                        // The sidebar's working mark, so ⌥Tab and the list read the same.
+                        let fraction = (self.epoch.elapsed().as_secs_f32()
+                            / crate::marks::SPINNER_PERIOD)
+                            .fract();
+                        d.child(crate::marks::spinner_at(fraction))
                     })
                     .child(
                         div()

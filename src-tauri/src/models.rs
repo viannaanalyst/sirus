@@ -1809,6 +1809,9 @@ pub struct AppData {
     /// Guided reviews of pull requests and session changes (ADR-125); one row each in `state.db`.
     #[serde(default)]
     pub review_guides: Vec<crate::review_guides::ReviewGuide>,
+    /// The provider CLI version each update notice was dismissed for (ADR-198).
+    #[serde(default)]
+    pub provider_update_dismissals: std::collections::HashMap<AgentProviderId, String>,
 }
 
 impl AppData {
@@ -2080,14 +2083,23 @@ pub struct ProviderUpdate {
     pub update_available: bool,
     /// False when this installation has no fixed one-click update command.
     pub update_supported: bool,
+    /// How the binary was installed: `npm`, `bun`, `homebrew`, `native` or `unknown` (ADR-198).
+    pub method: String,
+    /// The fixed command an update runs, for display; None when there is none.
+    pub update_command: Option<String>,
+    /// Shown instead of an update Sirus cannot run itself.
+    pub notice: Option<String>,
 }
 
+/// One update run: `updated`, `unchanged` (the command succeeded but `--version` did not move)
+/// or `failed`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderUpdateResult {
     pub provider: AgentProviderId,
-    pub ok: bool,
+    pub status: String,
     pub message: String,
+    pub installed_version: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

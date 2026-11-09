@@ -59,6 +59,7 @@ usage_summary::phone_look_get
 usage_summary::phone_look_set
 provider_updates::provider_updates
 provider_updates::update_providers
+provider_updates::dismiss_provider_update
 dictation::transcription_status
 dictation::transcribe_audio
 commands::save_settings

@@ -992,6 +992,10 @@ fn encode_checkpoint_index(data: &AppData) -> Result<serde_json::Value> {
     );
     index.insert("ciAutoFix".into(), serde_json::to_value(&data.ci_auto_fix)?);
     index.insert("prWatches".into(), serde_json::to_value(&data.pr_watches)?);
+    index.insert(
+        "providerUpdateDismissals".into(),
+        serde_json::to_value(&data.provider_update_dismissals)?,
+    );
     Ok(serde_json::Value::Object(index))
 }
 

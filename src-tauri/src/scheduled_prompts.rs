@@ -45,6 +45,15 @@ pub enum RepeatKind {
     Weekly,
     /// On one day of the month; a shorter month uses its last day.
     Monthly,
+    /// Every `every` days or weeks, counted from `start`.
+    Custom,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RepeatUnit {
+    Days,
+    Weeks,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -59,6 +68,14 @@ pub struct Repeat {
     /// For `monthly`: the day of the month, 1 to 31.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub day: Option<u8>,
+    /// For `custom`: the step, 1 to 30 of `unit`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub every: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<RepeatUnit>,
+    /// `YYYY-MM-DD`: the first day a repeat may run, and the anchor of `custom`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -96,6 +113,12 @@ pub struct Task {
     /// How the run's actions are approved; a missing value is `ask`, since nobody is there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval: Option<ApprovalMode>,
+    /// Fast mode, for the models that have one.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub fast: bool,
+    /// Each run works in a new worktree instead of the project checkout.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub worktree: bool,
     pub schedule: Schedule,
     #[serde(default = "yes")]
     pub enabled: bool,
@@ -110,6 +133,10 @@ pub struct Task {
 
 fn yes() -> bool {
     true
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -154,8 +181,8 @@ fn matches_day(repeat: &Repeat, date: NaiveDate) -> bool {
         RepeatKind::Daily => true,
         RepeatKind::Weekdays => day < 5,
         RepeatKind::Weekly => repeat.weekdays.contains(&day),
-        // Handled by `monthly_next`: a month's day is not a weekday pattern.
-        RepeatKind::Monthly => false,
+        // Handled by `monthly_next` and `custom_next`: not weekday patterns.
+        RepeatKind::Monthly | RepeatKind::Custom => false,
     }
 }
 
@@ -195,14 +222,43 @@ fn monthly_next(day: u8, time: NaiveTime, after: NaiveDateTime) -> Option<NaiveD
     None
 }
 
+pub fn parse_day(text: &str) -> Option<NaiveDate> {
+    NaiveDate::parse_from_str(text, "%Y-%m-%d").ok()
+}
+
+/// The first run of an "every N days or weeks" rule strictly after `after`: the days are those
+/// that are a whole number of steps from `start`.
+fn custom_next(repeat: &Repeat, time: NaiveTime, after: NaiveDateTime) -> Option<NaiveDateTime> {
+    let start = parse_day(repeat.start.as_deref()?)?;
+    let every = i64::from(repeat.every.filter(|every| (1..=30).contains(every))?);
+    let step = match repeat.unit? {
+        RepeatUnit::Days => every,
+        RepeatUnit::Weeks => 7 * every,
+    };
+    (0..=step).find_map(|offset| {
+        let date = after.date().checked_add_signed(Span::days(offset))?;
+        let at = date.and_time(time);
+        let since = (date - start).num_days();
+        (since >= 0 && since % step == 0 && at > after).then_some(at)
+    })
+}
+
 /// The first run strictly after `after`; `None` when a one-time task is past or a rule is broken.
 pub fn next_run(schedule: &Schedule, after: NaiveDateTime) -> Option<NaiveDateTime> {
     match schedule {
         Schedule::Once(at) => parse_stamp(at).filter(|at| *at > after),
         Schedule::Repeat(repeat) => {
             let time = parse_time(&repeat.time)?;
+            // A repeat may not start before its first day.
+            let after = match repeat.start.as_deref().and_then(parse_day) {
+                Some(start) => after.max(start.and_time(NaiveTime::MIN) - Span::seconds(1)),
+                None => after,
+            };
             if repeat.kind == RepeatKind::Monthly {
                 return monthly_next(repeat.day?, time, after);
+            }
+            if repeat.kind == RepeatKind::Custom {
+                return custom_next(repeat, time, after);
             }
             // A week and a day cover every weekday pattern, month ends included.
             (0..=7).find_map(|offset| {
@@ -295,6 +351,20 @@ fn check(task: &Task, now: NaiveDateTime) -> Result<()> {
                 && !repeat.day.is_some_and(|d| (1..=31).contains(&d))
             {
                 return Err(invalid("pick a day of the month"));
+            }
+            if repeat
+                .start
+                .as_deref()
+                .is_some_and(|day| parse_day(day).is_none())
+            {
+                return Err(invalid("the start date is not valid"));
+            }
+            if repeat.kind == RepeatKind::Custom
+                && !(repeat.start.is_some()
+                    && repeat.unit.is_some()
+                    && repeat.every.is_some_and(|every| (1..=30).contains(&every)))
+            {
+                return Err(invalid("pick how often it repeats"));
             }
         }
     }
@@ -505,7 +575,8 @@ async fn run(
             agent: task.provider.clone(),
             model: task.model.clone(),
             effort: task.effort.clone(),
-            isolated_worktree: false,
+            isolated_worktree: task.worktree,
+            fast: task.fast,
             prompt: task.prompt.clone(),
             // Nobody is there to answer: unless the owner chose otherwise, anything that needs
             // approval waits in the conversation.
@@ -597,6 +668,9 @@ mod tests {
             time: time.into(),
             weekdays: weekdays.to_vec(),
             day: None,
+            every: None,
+            unit: None,
+            start: None,
         })
     }
 
@@ -636,6 +710,9 @@ mod tests {
                 time: "09:00".into(),
                 weekdays: vec![],
                 day: Some(day),
+                every: None,
+                unit: None,
+                start: None,
             })
         };
         assert_eq!(
@@ -660,6 +737,9 @@ mod tests {
             time: "09:00".into(),
             weekdays: vec![],
             day: None,
+            every: None,
+            unit: None,
+            start: None,
         });
         assert_eq!(next(&broken, "2026-11-09T10:00:00"), None);
     }
@@ -684,6 +764,115 @@ mod tests {
             next(&rule, "2026-11-12T10:00:00").unwrap(),
             "2026-11-13T09:00:00"
         );
+    }
+
+    fn custom(time: &str, every: u32, unit: RepeatUnit, start: &str) -> Schedule {
+        Schedule::Repeat(Repeat {
+            kind: RepeatKind::Custom,
+            time: time.into(),
+            weekdays: vec![],
+            day: None,
+            every: Some(every),
+            unit: Some(unit),
+            start: Some(start.into()),
+        })
+    }
+
+    #[test]
+    fn custom_repeats_count_whole_steps_from_the_start() {
+        // 2026-11-02 is a Monday; every 2 weeks: the 2nd, the 16th, the 30th.
+        let biweekly = custom("14:00", 2, RepeatUnit::Weeks, "2026-11-02");
+        assert_eq!(
+            next(&biweekly, "2026-11-02T10:00:00").as_deref(),
+            Some("2026-11-02T14:00:00")
+        );
+        assert_eq!(
+            next(&biweekly, "2026-11-02T14:00:00").as_deref(),
+            Some("2026-11-16T14:00:00")
+        );
+        assert_eq!(
+            next(&biweekly, "2026-11-17T00:00:00").as_deref(),
+            Some("2026-11-30T14:00:00")
+        );
+        // Before the start, the first run is the start day itself.
+        assert_eq!(
+            next(&biweekly, "2026-10-01T00:00:00").as_deref(),
+            Some("2026-11-02T14:00:00")
+        );
+        // Every 3 days.
+        let days = custom("08:30", 3, RepeatUnit::Days, "2026-11-09");
+        assert_eq!(
+            next(&days, "2026-11-09T09:00:00").as_deref(),
+            Some("2026-11-12T08:30:00")
+        );
+        // The widest step still finds its day.
+        let wide = custom("08:30", 30, RepeatUnit::Weeks, "2026-11-09");
+        assert_eq!(
+            next(&wide, "2026-11-09T09:00:00").as_deref(),
+            Some("2027-06-07T08:30:00")
+        );
+    }
+
+    #[test]
+    fn a_repeat_waits_for_its_first_day() {
+        let mut daily = Repeat {
+            kind: RepeatKind::Daily,
+            time: "09:00".into(),
+            weekdays: vec![],
+            day: None,
+            every: None,
+            unit: None,
+            start: Some("2026-11-20".into()),
+        };
+        assert_eq!(
+            next(&Schedule::Repeat(daily.clone()), "2026-11-09T12:00:00").as_deref(),
+            Some("2026-11-20T09:00:00")
+        );
+        daily.start = Some("2026-11-01".into());
+        assert_eq!(
+            next(&Schedule::Repeat(daily), "2026-11-09T12:00:00").as_deref(),
+            Some("2026-11-10T09:00:00")
+        );
+    }
+
+    #[test]
+    fn a_custom_repeat_needs_its_step_unit_and_start() {
+        let now = at("2026-11-09T12:00:00");
+        let good = task(
+            "a",
+            custom("09:00", 2, RepeatUnit::Weeks, "2026-11-10"),
+            None,
+            true,
+        );
+        assert!(check(&good, now).is_ok());
+        for broken in [
+            custom("09:00", 0, RepeatUnit::Days, "2026-11-10"),
+            custom("09:00", 31, RepeatUnit::Days, "2026-11-10"),
+            custom("09:00", 2, RepeatUnit::Days, "nope"),
+        ] {
+            assert!(check(&task("a", broken, None, true), now).is_err());
+        }
+        let value = serde_json::to_value(&good).unwrap();
+        assert_eq!(value["schedule"]["repeat"]["kind"], "custom");
+        assert_eq!(value["schedule"]["repeat"]["unit"], "weeks");
+        assert_eq!(value["schedule"]["repeat"]["start"], "2026-11-10");
+        assert!(value.get("worktree").is_none() && value.get("fast").is_none());
+        let back: Task = serde_json::from_value(value).unwrap();
+        assert_eq!(back, good);
+    }
+
+    #[test]
+    fn worktree_and_fast_default_to_off_and_round_trip() {
+        let on: Task = serde_json::from_value(json!({
+            "prompt": "x", "projectId": "p", "provider": "claude",
+            "worktree": true, "fast": true,
+            "schedule": { "once": "2026-11-10T09:00" }
+        }))
+        .unwrap();
+        assert!(on.worktree && on.fast);
+        let value = serde_json::to_value(&on).unwrap();
+        assert_eq!(value["worktree"], true);
+        assert_eq!(value["fast"], true);
     }
 
     #[test]
@@ -797,6 +986,8 @@ mod tests {
             model: None,
             effort: None,
             approval: None,
+            fast: false,
+            worktree: false,
             schedule,
             enabled,
             last_run: None,

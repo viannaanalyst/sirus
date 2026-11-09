@@ -42,6 +42,8 @@ pub struct Launch {
     pub model: Option<String>,
     pub effort: Option<String>,
     pub isolated_worktree: bool,
+    /// Fast mode, for the models that have one.
+    pub fast: bool,
     pub prompt: String,
     pub approval: ApprovalMode,
     pub planning: bool,
@@ -114,7 +116,7 @@ pub async fn launch(
                     approval,
                     planning: request.planning,
                     effort: request.effort,
-                    ..Default::default()
+                    fast: request.fast,
                 },
                 team: false,
                 client_request_id: None,
@@ -178,6 +180,7 @@ pub(crate) fn start_from(
         model,
         effort: None,
         isolated_worktree: request.new_worktree && request.share_worktree.is_none(),
+        fast: false,
         prompt: request.prompt,
         approval: inherited_approval(caller),
         planning: false,

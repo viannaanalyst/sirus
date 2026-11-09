@@ -1,7 +1,7 @@
 //! Inline badges in the composer and in sent messages (ADR-198): a link becomes the site's
 //! favicon and domain, an `@file` the file's icon and name, and a `/command` a badge in the accent
-//! color. The text is never changed: what is sent, copied and stored is the plain string. Only the
-//! drawing differs.
+//! color, a skill's with its icon before the name. The text is never changed: what is sent, copied
+//! and stored is the plain string. Only the drawing differs.
 //!
 //! GPUI's `StyledText` has no inline boxes, so each badge is drawn in two parts. The text is laid
 //! out with a run of non-breaking spaces where the badge goes (`Shown`): they are word characters
@@ -27,6 +27,8 @@ const NBSP: char = '\u{a0}';
 const HEIGHT: f32 = 22.;
 const PAD: f32 = 7.;
 const ICON: f32 = 14.;
+/// A skill's icon in a `/command` badge, in the tint of its label.
+const SKILL_ICON: f32 = 12.;
 const GAP: f32 = 5.;
 const FONT: f32 = 13.;
 /// Longest label before it is cut with an ellipsis; the tooltip has the whole address.
@@ -36,9 +38,19 @@ const LONGEST: usize = 32;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Kind {
-    Url { domain: String, full: String },
-    File { name: String, path: String },
-    Command { name: String },
+    Url {
+        domain: String,
+        full: String,
+    },
+    File {
+        name: String,
+        path: String,
+    },
+    /// `icon` is the skill's icon, `None` for a built-in command.
+    Command {
+        name: String,
+        icon: Option<&'static str>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -53,7 +65,7 @@ impl Badge {
         let label = match &self.kind {
             Kind::Url { domain, .. } => domain.clone(),
             Kind::File { name, .. } => name.clone(),
-            Kind::Command { name } => format!("/{name}"),
+            Kind::Command { name, .. } => format!("/{name}"),
         };
         cut(&label)
     }
@@ -72,6 +84,8 @@ fn cut(label: &str) -> String {
 pub struct Known {
     commands: HashSet<String>,
     files: HashSet<String>,
+    /// Each skill's icon by its lowercased name, as the `/` list shows it.
+    icons: HashMap<String, &'static str>,
     signature: (usize, String, usize),
 }
 
@@ -86,6 +100,7 @@ impl Known {
         let mut known = Self {
             commands: commands.into_iter().map(|c| c.to_lowercase()).collect(),
             files: files.into_iter().collect(),
+            icons: HashMap::new(),
             signature: Default::default(),
         };
         known.commands.extend(BUILT_IN.map(str::to_owned));
@@ -116,6 +131,10 @@ pub fn sync(skills: &[(String, String)], files: &(String, Vec<(String, String)>)
         }),
     );
     known.signature = signature;
+    known.icons = skills
+        .iter()
+        .map(|(name, about)| (name.to_lowercase(), crate::shell::skill_icon(name, about)))
+        .collect();
     if let Ok(mut slot) = KNOWN.write() {
         *slot = Some(known);
     }
@@ -181,11 +200,13 @@ pub fn scan_with(text: &str, known: &Known, sent: bool) -> Vec<Badge> {
                 && name
                     .chars()
                     .all(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | ':' | '.'));
-            if simple && known.commands.contains(&name.to_lowercase()) {
+            let key = name.to_lowercase();
+            if simple && known.commands.contains(&key) {
                 badges.push(Badge {
                     range,
                     kind: Kind::Command {
                         name: name.to_owned(),
+                        icon: known.icons.get(&key).copied(),
                     },
                 });
             }
@@ -423,6 +444,15 @@ enum Round {
     Up,
 }
 
+/// What a badge takes before its label, its icon and the gap after it; a built-in command has none.
+fn lead_width(kind: &Kind) -> f32 {
+    match kind {
+        Kind::Command { icon: None, .. } => 0.,
+        Kind::Command { icon: Some(_), .. } => SKILL_ICON + GAP,
+        Kind::Url { .. } | Kind::File { .. } => ICON + GAP,
+    }
+}
+
 impl Shown {
     /// `nbsp` is the width of a non-breaking space and `label` the width of a word at the badge's
     /// size, both in px.
@@ -435,12 +465,7 @@ impl Shown {
                 continue;
             }
             text.push_str(&plain[at..badge.range.start]);
-            let lead = if matches!(badge.kind, Kind::Command { .. }) {
-                0.
-            } else {
-                ICON + GAP
-            };
-            let width = 2. + 2. * PAD + lead + label(&badge.label()) + 1.;
+            let width = 2. + 2. * PAD + lead_width(&badge.kind) + label(&badge.label()) + 1.;
             let count = (width / nbsp.max(1.)).ceil().max(1.) as usize;
             let begin = text.len();
             text.extend(std::iter::repeat_n(NBSP, count));
@@ -698,7 +723,11 @@ fn badge_element(
                 .into_any_element(),
         }),
         Kind::File { name, .. } => Some(crate::file_icons::file_icon(name, false, ICON)),
-        Kind::Command { .. } => None,
+        Kind::Command { icon, .. } => icon.map(|glyph| {
+            crate::theme::icon(glyph, SKILL_ICON)
+                .text_color(ink)
+                .into_any_element()
+        }),
     };
     let tip = match &span.badge.kind {
         Kind::Url { full, .. } => Some(full.clone()),
@@ -1091,5 +1120,34 @@ mod tests {
         // Copying part of the gap copies the whole token.
         assert_eq!(shown.plain_of(gap.start + 2..gap.start + 4), "/commit");
         assert_eq!(shown.plain_of(0..gap.end + 2), "ab /commit c");
+    }
+
+    #[test]
+    fn a_skill_badge_reserves_its_icon_before_the_name() {
+        let text = "a /frontend-design b";
+        let bare = known();
+        let mut skilled = known();
+        skilled
+            .icons
+            .insert("frontend-design".to_owned(), "palette");
+        let found = scan_with(text, &skilled, false);
+        assert_eq!(
+            found[0].kind,
+            Kind::Command {
+                name: "frontend-design".into(),
+                icon: Some("palette")
+            }
+        );
+        assert_eq!(lead_width(&found[0].kind), SKILL_ICON + GAP);
+        assert_eq!(lead_width(&scan_with("/commit", &bare, false)[0].kind), 0.);
+        // Each nbsp is 4 px in this test. The gap must cover the icon, its gap and the label, and
+        // the bare badge's gap is too short for that.
+        let nbsps = |known: &Known| {
+            let shown = Shown::build(text, scan_with(text, known, false), 4., &|_| 40.);
+            shown.spans[0].shown.len() / NBSP.len_utf8()
+        };
+        let content = 2. + 2. * PAD + SKILL_ICON + GAP + 40. + 1.;
+        assert!(nbsps(&skilled) as f32 * 4. >= content);
+        assert!((nbsps(&bare) as f32) * 4. < content);
     }
 }

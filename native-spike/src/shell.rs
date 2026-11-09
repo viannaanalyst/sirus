@@ -919,7 +919,7 @@ struct MentionHit {
 /// The icon a skill gets in the composer's lists, from its name first and then its description;
 /// the first keyword rule that matches wins, and a skill with none gets the puzzle piece
 /// (ADR-198).
-fn skill_icon(name: &str, about: &str) -> &'static str {
+pub(crate) fn skill_icon(name: &str, about: &str) -> &'static str {
     const RULES: [(&str, &[&str]); 17] = [
         ("file-text", &["pdf", "docx", "xlsx", "pptx", "doc"]),
         ("test-tube", &["test", "tdd"]),

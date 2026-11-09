@@ -192,6 +192,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Provider CLI is not installed.",
     ),
     ("A URL não é permitida", "URL is not allowed"),
+    ("A atualização não terminou.", "The update did not finish."),
     (
         "A barra inferior mostra o consumo de até dois provedores escolhidos aqui. Sem nenhum, ela mostra o provedor da conversa aberta.",
         "The bottom bar shows the usage of up to two providers chosen here. With none, it shows the open conversation's provider.",
@@ -2857,6 +2858,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Cannot reach the provider registry.",
     ),
     ("Não foi possível anexar.", "Couldn't attach."),
+    ("Não foi possível atualizar {}", "Could not update {}"),
     ("Não foi possível atualizar: {}", "Could not update: {}"),
     (
         "Não foi possível capturar a página.",
@@ -4999,6 +5001,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "You are on the latest version ({}).",
     ),
     (
+        "Você está na {}. Atualizar não interrompe o que está rodando.",
+        "You are on {}. Updating does not interrupt what is running.",
+    ),
+    (
         "Você pode recuperar pela Lixeira no Finder. Tudo que estiver dentro da pasta vai junto.",
         "You can restore it from the Trash in Finder. Anything inside a folder goes with it.",
     ),
@@ -5440,6 +5446,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("{} assumiu", "{} took over"),
     ("{} atualizada a partir de {}", "{} updated from {}"),
+    ("{} atualizado para {}", "{} updated to {}"),
     ("{} caracteres", "{} characters"),
     ("{} commit novo em {}", "{} new commit on {}"),
     ("{} commits novos em {}", "{} new commits on {}"),
@@ -5474,6 +5481,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("{} fps · pior quadro {} ms", "{} fps · worst frame {} ms"),
     ("{} já está igual a {}", "{} already matches {}"),
+    ("{} já está na versão {}", "{} is already on version {}"),
     ("{} mais", "{} more"),
     ("{} mantidas", "{} kept"),
     (
@@ -5505,6 +5513,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("{} trabalhou por {}m {}s", "{} worked for {}m {}s"),
     ("{} trabalhou por {}s", "{} worked for {}s"),
     ("{} usado", "{} used"),
+    ("{} {} disponível", "{} {} available"),
     ("{} · Encontrada em: {}", "{} · Found in: {}"),
     ("{}% restante", "{}% left"),
     ("{}% usado", "{}% used"),

@@ -454,6 +454,10 @@ async fn list_claude(binary: &str) -> ProviderModelList {
         &[
             "-p",
             "--safe-mode",
+            // Claude Code reports fast mode as `sdk_opt_in_required` to SDK-style hosts unless
+            // the session opts in, as real turns do through the same flag (claude.rs).
+            "--settings",
+            r#"{"fastMode":true}"#,
             "--input-format",
             "stream-json",
             "--output-format",
@@ -471,7 +475,7 @@ async fn list_claude(binary: &str) -> ProviderModelList {
                 return None;
             }
             let response = value.pointer("/response/response")?;
-            Some(serde_json::json!({"models":response.get("models")?, "fastRestriction": match response.get("fast_mode_disabled_reason").and_then(|v| v.as_str()) { Some("extra_usage_disabled") => "usage-credits", Some("org_disabled" | "disabled_by_org" | "disabled_by_settings") => "organization", Some(_) => "unavailable", None => "model" }, "fastAvailable":response.get("fast_mode_disabled_reason").is_some_and(|reason| reason.is_null()) && response.get("fast_mode_state").and_then(|state| state.as_str()).is_some_and(|state| ["on","off"].contains(&state))}))
+            Some(serde_json::json!({"models":response.get("models")?, "fastRestriction": match response.get("fast_mode_disabled_reason").and_then(|v| v.as_str()) { Some("extra_usage_disabled") => "usage-credits", Some("org_disabled" | "disabled_by_org" | "disabled_by_settings") => "organization", Some(_) => "unavailable", None => "model" }, "fastAvailable":response.get("fast_mode_disabled_reason").is_none_or(|reason| reason.is_null()) && response.get("fast_mode_state").and_then(|state| state.as_str()).is_some_and(|state| ["on","off"].contains(&state))}))
         },
     )
     .await;

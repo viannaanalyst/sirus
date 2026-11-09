@@ -15,7 +15,7 @@ use crate::motion::{Curve, DISCLOSE, MENU, REORDER, SIDEBAR, SWITCH, TAB_OPEN, T
 use crate::tab_label::tab_label;
 use crate::tab_tile::{
     ACTIVITY_TILE, Face, FanCard, TAB_TILE, activity_face, fan_card, fan_tile, fan_width,
-    mark_tile, push_tile, tab_tile_inset,
+    mark_tile, push_tile, tab_tile_inset, terminal_tile,
 };
 use crate::theme::Sinks as _;
 use crate::theme::{
@@ -32,7 +32,7 @@ use gpui::{
 };
 use gpui::{Bounds, ElementInputHandler, EntityInputHandler, TextLayout, UTF16Selection};
 use serde_json::{Value, json};
-use shell_terminal::{PULLS_CARD, TERM_CARD, pulls_tile, terminal_tile};
+use shell_terminal::{PULLS_CARD, TERM_CARD, pulls_tile};
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ops::Range;
@@ -5260,7 +5260,7 @@ impl Shell {
             let (face, mark) = match conversation {
                 Some(conversation) => self.tile_parts(&self.conversations[conversation], now),
                 None if is_pulls => pulls_tile(),
-                None => terminal_tile(),
+                None => terminal_tile(terminal.and_then(|id| self.term_agent(id, cx))),
             };
             cards.push(
                 div()
@@ -14911,13 +14911,6 @@ impl Shell {
                 backend: self.backend.clone(),
                 session_id: conversation.session_id.clone(),
                 worktree: conversation.worktree.clone(),
-                provider: conversation.provider,
-                model: model_label(conversation.model.as_deref(), conversation.provider),
-                version: self
-                    .agent_versions
-                    .get(conversation.provider)
-                    .cloned()
-                    .unwrap_or_default(),
             };
             if let Some(view) = crate::panels::open(kind, context, cx) {
                 self.pane_views.insert(key, view);

@@ -177,18 +177,6 @@ pub(super) fn pulls_tile() -> (Face, AnyElement) {
     )
 }
 
-/// A pinned terminal's card in the deck, the same tile the panel's tabs carry.
-pub(super) fn terminal_tile() -> (Face, AnyElement) {
-    (
-        Face::Fill(rgb(0x3A3A3C).into(), rgb(0x1C1C1E).into()),
-        gpui::svg()
-            .path("terminal-square")
-            .size(px(12.))
-            .text_color(gpui::white())
-            .into_any_element(),
-    )
-}
-
 impl Shell {
     pub(super) fn conversation_view(&self, kind: usize) -> Option<AnyView> {
         let session = self.conversations[self.active_conversation()]
@@ -369,6 +357,11 @@ impl Shell {
     pub(super) fn term_title(&self, id: u64, cx: &App) -> String {
         self.term_view(id)
             .map_or_else(String::new, |view| view.read(cx).title())
+    }
+
+    /// The agent CLI holding terminal tab `id`, if any: its tab shows that provider's mark.
+    pub(super) fn term_agent(&self, id: u64, cx: &App) -> Option<&'static str> {
+        self.term_view(id).and_then(|view| view.read(cx).agent(cx))
     }
 
     /// What a terminal tab carries when it is dragged: the same drag as a conversation's pane.
@@ -956,7 +949,7 @@ impl Shell {
                 let active =
                     self.term.active == Some(id) && !self.term.pulls_active && !tab.place.closing;
                 let group: SharedString = format!("term-tab-{id}").into();
-                let (face, glyph) = terminal_tile();
+                let (face, glyph) = terminal_tile(tab.view.read(cx).agent(cx));
                 let close = Self::page_close(
                     ("term-tab-close", id).into(),
                     group.clone(),

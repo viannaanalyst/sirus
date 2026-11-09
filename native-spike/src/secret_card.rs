@@ -369,19 +369,9 @@ impl Shell {
             return true;
         }
         if !card.focused {
-            // Enter and Esc still answer the card, so the mouse is never needed.
-            return match key {
-                "escape" => {
-                    let id = card.request.clone();
-                    self.respond_secret(&id, None, cx);
-                    true
-                }
-                "enter" if card.value().is_some() => {
-                    self.card_save(&request, cx);
-                    true
-                }
-                _ => false,
-            };
+            // Unfocused, the keys belong to whatever has the typing (the composer): Enter there
+            // sends the message and Esc does its own thing, never the card's.
+            return false;
         }
         self.caret_moved.set(Instant::now());
         match (cmd, key) {

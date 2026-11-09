@@ -18877,6 +18877,11 @@ impl Render for Shell {
                     this.find.focused = false;
                     cx.notify();
                 }
+                // Same for the secret card's field: its own click gives the typing back.
+                if let Some(card) = this.secret_card.as_mut().filter(|c| c.focused) {
+                    card.focused = false;
+                    cx.notify();
+                }
             }))
             .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
                 if this.select.clear_unless_claimed() {

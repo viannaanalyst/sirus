@@ -110,16 +110,16 @@ impl Shell {
                     .flex_shrink_0()
                     .rounded(px(4.))
                     .border_1()
-                    .border_color(content(0.12)),
+                    .border_color(crate::theme::border()),
             );
         let mini = div()
             .w_full()
             .h(px(MINI_H))
-            .rounded(px(8.))
+            .rounded(px(crate::theme::RADIUS_MD))
             .overflow_hidden()
             .bg(gpui::black().opacity(0.35))
             .border_1()
-            .border_color(content(0.08))
+            .border_color(crate::theme::border())
             .flex()
             .child(sidebar)
             .child(body);
@@ -137,7 +137,7 @@ impl Shell {
             .relative()
             .w(px(CARD_W))
             .p(px(10.))
-            .rounded(px(16.))
+            .rounded(px(crate::theme::RADIUS_LG))
             .cursor_pointer()
             .when(chosen, |d| {
                 d.bg(content(0.08)).border_1().border_color(content(0.18))

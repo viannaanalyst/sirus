@@ -145,7 +145,7 @@ impl Shell {
                     .px(px(10.))
                     .rounded(px(crate::theme::RADIUS_LG))
                     .border_1()
-                    .border_color(content(0.07))
+                    .border_color(crate::theme::border())
                     .bg(content(0.03))
                     .flex()
                     .items_center()

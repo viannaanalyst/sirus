@@ -240,7 +240,7 @@ impl Shell {
                 .p(px(4.))
                 .rounded(px(crate::theme::RADIUS_LG))
                 .border_1()
-                .border_color(content(0.12))
+                .border_color(crate::theme::border())
                 .bg(field_fill())
                 .child(
                     div()

@@ -371,7 +371,7 @@ impl Render for QuickComposer {
                     .px(px(12.))
                     .rounded(px(crate::theme::RADIUS_LG))
                     .border_1()
-                    .border_color(content(0.14))
+                    .border_color(crate::theme::border())
                     .bg(content(0.05))
                     .flex()
                     .items_center()

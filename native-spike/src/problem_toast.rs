@@ -44,7 +44,7 @@ impl Shell {
                         .max_w(px(520.))
                         .rounded(px(crate::theme::RADIUS_LG))
                         .border_1()
-                        .border_color(content(0.1))
+                        .border_color(crate::theme::border())
                         .shadow_lg()
                         .pl(px(12.))
                         .pr(px(6.))

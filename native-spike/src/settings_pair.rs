@@ -470,7 +470,7 @@ fn qr(pairing: &Pairing, side: f32) -> AnyElement {
         .size(px(side))
         .flex_shrink_0()
         .p(px(tile))
-        .rounded(px(22.))
+        .rounded(px(crate::theme::RADIUS_LG))
         .bg(rgb(0xffffff))
         .border_1()
         .border_color(Hsla {
@@ -610,7 +610,7 @@ pub fn overlay<V: 'static>(
                         None => div()
                             .size(px(side))
                             .flex_shrink_0()
-                            .rounded(px(22.))
+                            .rounded(px(crate::theme::RADIUS_LG))
                             .bg(content(0.06))
                             .into_any_element(),
                     })
@@ -782,7 +782,7 @@ pub fn overlay<V: 'static>(
         .overflow_y_scroll()
         .rounded(px(crate::theme::RADIUS_LG))
         .border_1()
-        .border_color(content(0.12))
+        .border_color(crate::theme::border())
         .bg(floating_fill())
         .shadow_lg()
         .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())

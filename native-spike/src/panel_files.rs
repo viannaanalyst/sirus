@@ -1611,7 +1611,7 @@ impl FilesPanel {
                         .p(px(2.))
                         .rounded(px(crate::theme::RADIUS_MD))
                         .border_1()
-                        .border_color(content(0.07))
+                        .border_color(crate::theme::border())
                         .child(crate::segment_pill::pill(
                             "files-view",
                             usize::from(opened.mode == Mode::Source),
@@ -2021,7 +2021,7 @@ impl FilesPanel {
             .cursor_pointer()
             .bg(theme::floating_fill())
             .border_1()
-            .border_color(content(0.12))
+            .border_color(crate::theme::border())
             .hover(|style| style.bg(content(0.12)))
             .on_click(cx.listener(move |_, _, _, cx| {
                 state.scroll_to_end();

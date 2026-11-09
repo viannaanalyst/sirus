@@ -939,7 +939,11 @@ pub fn view<V: 'static>(
             .px(px(11.))
             .rounded(px(crate::theme::RADIUS_MD))
             .border_1()
-            .border_color(content(if typing.is_some() { 0.18 } else { 0.09 }))
+            .border_color(if typing.is_some() {
+                content(0.18)
+            } else {
+                crate::theme::border()
+            })
             .bg(content(0.03))
             .flex()
             .items_center()
@@ -1010,9 +1014,13 @@ pub fn view<V: 'static>(
                 .id(id)
                 .h(px(26.))
                 .px(px(10.))
-                .rounded_full()
+                .rounded(px(crate::theme::RADIUS_SM))
                 .border_1()
-                .border_color(content(if on { 0.14 } else { 0.09 }))
+                .border_color(if on {
+                    content(0.14)
+                } else {
+                    crate::theme::border()
+                })
                 .when(on, |d| d.bg(content(0.08)))
                 .flex()
                 .items_center()
@@ -1477,7 +1485,7 @@ fn connected_item<V: 'static>(
             .flex_shrink_0()
             .rounded(px(crate::theme::RADIUS_MD))
             .border_1()
-            .border_color(content(0.14))
+            .border_color(crate::theme::border())
             .flex()
             .items_center()
             .text_size(px(12.5))
@@ -1872,7 +1880,7 @@ fn accounts_popup<V: 'static>(
         .flex_col()
         .rounded(px(crate::theme::RADIUS_LG))
         .border_1()
-        .border_color(content(0.12))
+        .border_color(crate::theme::border())
         .child(crate::theme::floating_surface(crate::theme::RADIUS_LG))
         .shadow_md()
         .occlude()
@@ -2135,7 +2143,7 @@ fn more_menu<V: 'static>(
         .p(px(4.))
         .rounded(px(crate::theme::RADIUS_LG))
         .border_1()
-        .border_color(content(0.12))
+        .border_color(crate::theme::border())
         .child(crate::theme::floating_surface(crate::theme::RADIUS_LG))
         .shadow_md()
         .occlude()
@@ -2631,7 +2639,7 @@ pub fn overlay<V: 'static>(
         .p(px(20.))
         .rounded(px(crate::theme::RADIUS_LG))
         .border_1()
-        .border_color(content(0.12))
+        .border_color(crate::theme::border())
         .bg(floating_fill())
         .shadow_lg()
         .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -2851,7 +2859,7 @@ fn segmented<V: 'static>(
         .p(px(2.))
         .rounded(px(crate::theme::RADIUS_MD))
         .border_1()
-        .border_color(content(0.1))
+        .border_color(crate::theme::border())
         .child(crate::segment_pill::pill(
             id,
             selected,

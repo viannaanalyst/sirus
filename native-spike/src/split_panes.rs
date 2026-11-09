@@ -786,7 +786,7 @@ impl Render for DragChip {
             .items_center()
             .bg(floating_fill())
             .border_1()
-            .border_color(content(0.14))
+            .border_color(crate::theme::border())
             .text_size(px(13.))
             .text_color(content(0.9))
             .child(self.0.clone())

@@ -365,7 +365,7 @@ impl Shell {
                 ..amber
             }
         } else {
-            content(0.1)
+            crate::theme::border()
         };
 
         let pill = (p < 0.5).then(|| {
@@ -427,9 +427,9 @@ impl Shell {
                     div()
                         .px(px(6.))
                         .py(px(1.))
-                        .rounded(px(6.))
+                        .rounded(px(crate::theme::RADIUS_SM))
                         .border_1()
-                        .border_color(content(0.1))
+                        .border_color(crate::theme::border())
                         .text_size(px(11.))
                         .text_color(content(0.45))
                         .child("⌘L"),

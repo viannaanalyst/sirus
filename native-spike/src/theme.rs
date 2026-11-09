@@ -4,16 +4,21 @@ use std::cell::Cell;
 pub const TITLE_BAR: f32 = 40.;
 pub const FOOTER: f32 = 30.;
 pub const PLATE: f32 = 27.;
-/// The app's corners: small controls, buttons and rows, cards and popups, dialogs.
-pub const RADIUS_SM: f32 = 4.;
-pub const RADIUS_MD: f32 = 6.;
+/// The app's three corners: buttons, chips and rows; fields, menus and inline cards; the
+/// composer, popups, floating panels and drawers. A full pill is only for tiny badges and dots.
+pub const RADIUS_SM: f32 = 7.;
+pub const RADIUS_MD: f32 = 10.;
 pub const RADIUS_LG: f32 = 14.;
-pub const RADIUS_XL: f32 = 18.;
 pub const TAB_PLATE_HEIGHT: f32 = PLATE;
 pub fn content(alpha: f32) -> Hsla {
     let mut color = current().ink;
     color.a = alpha;
     color
+}
+/// The one edge every surface wears: 1 px at 10% ink. Accent, amber, red and selected
+/// borders keep their own colors.
+pub fn border() -> Hsla {
+    content(0.1)
 }
 pub fn white(alpha: f32) -> Hsla {
     gpui::hsla(0., 0., 1., alpha)

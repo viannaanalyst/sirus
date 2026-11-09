@@ -186,7 +186,7 @@ impl Shell {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .rounded(px(8.))
+                    .rounded(px(crate::theme::RADIUS_SM))
                     .bg(content(0.08))
                     .child(icon("git-compare", 16.).text_color(content(0.55))),
             )
@@ -223,7 +223,7 @@ impl Shell {
             .flex_col()
             .rounded(px(crate::theme::RADIUS_LG))
             .border_1()
-            .border_color(content(0.07))
+            .border_color(crate::theme::border())
             .bg(content(0.03))
             .overflow_hidden()
             .child(head);
@@ -508,7 +508,7 @@ fn review_button(id: &'static str, label: &str, enabled: bool) -> Stateful<Div> 
         .px(px(10.))
         .flex()
         .items_center()
-        .rounded(px(6.))
+        .rounded(px(crate::theme::RADIUS_SM))
         .text_size(px(11.))
         .font_weight(gpui::FontWeight::MEDIUM)
         .text_color(content(if enabled { 0.75 } else { 0.3 }))

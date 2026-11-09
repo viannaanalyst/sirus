@@ -276,7 +276,7 @@ impl Shell {
                         .py(px(10.))
                         .rounded(px(crate::theme::RADIUS_LG))
                         .border_1()
-                        .border_color(content(0.14))
+                        .border_color(crate::theme::border())
                         .child(crate::theme::floating_surface(crate::theme::RADIUS_LG))
                         .shadow_lg()
                         .child(

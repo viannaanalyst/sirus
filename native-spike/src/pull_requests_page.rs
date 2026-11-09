@@ -1116,7 +1116,7 @@ fn card() -> Div {
     div()
         .rounded(px(RADIUS_MD))
         .border_1()
-        .border_color(content(0.08))
+        .border_color(crate::theme::border())
         .px(px(12.))
         .py(px(8.))
 }
@@ -1198,7 +1198,7 @@ impl PullRequestsPage {
             .gap(px(2.))
             .rounded(px(crate::theme::RADIUS_LG))
             .border_1()
-            .border_color(content(0.08))
+            .border_color(crate::theme::border())
             .bg(content(0.03))
             .child(
                 div()
@@ -1745,7 +1745,7 @@ impl PullRequestsPage {
                                 .py(px(1.))
                                 .rounded_full()
                                 .border_1()
-                                .border_color(content(0.15))
+                                .border_color(crate::theme::border())
                                 .text_size(px(11.))
                                 .text_color(content(0.7))
                                 .child(label.clone())

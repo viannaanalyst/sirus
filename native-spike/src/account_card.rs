@@ -161,7 +161,7 @@ impl Shell {
                 .flex()
                 .items_center()
                 .gap(px(8.))
-                .rounded_t(px(10.))
+                .rounded_t(px(crate::theme::RADIUS_MD))
                 .border_1()
                 .border_b_0()
                 .border_color(gpui::Hsla { a: 0.22, ..warm })

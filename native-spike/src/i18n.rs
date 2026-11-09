@@ -4493,6 +4493,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Shell padrão", "Default shell"),
     ("Silenciar até reativar", "Mute until turned back on"),
+    ("Silenciar avisos", "Mute alerts"),
     ("Silenciar por 1 hora", "Mute for 1 hour"),
     ("Silenciar por 4 horas", "Mute for 4 hours"),
     ("Silenciar por 8 horas", "Mute for 8 hours"),

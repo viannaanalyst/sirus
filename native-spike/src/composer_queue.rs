@@ -1254,11 +1254,16 @@ impl Shell {
                 let layout = styled.layout().clone();
                 let (paint, press, drag) = (layout.clone(), layout.clone(), layout);
                 let (selection, caret) = (draft.selection(), draft.cursor);
+                // The composer's caret and blink, as every field's (`field_caret`).
+                let lit = selection.is_empty() && self.field_caret_lit();
                 let overlay = gpui::canvas(
                     |_, _, _| {},
                     move |bounds, _, window, _| {
                         if !selection.is_empty() {
                             super::paint_selection(&paint, selection.clone(), window);
+                            return;
+                        }
+                        if !lit {
                             return;
                         }
                         let at = paint.position_for_index(caret).unwrap_or(bounds.origin);

@@ -180,6 +180,7 @@ pub fn start(
     cwd: String,
     cols: u16,
     rows: u16,
+    secrets: Vec<(String, String)>,
 ) -> Result<PtySession> {
     let system = native_pty_system();
     let pair = system
@@ -204,6 +205,11 @@ pub fn start(
         cmd.env("LANG", lang);
     }
     cmd.env("COLORTERM", "truecolor");
+    // The project's Infisical keys; the terminal's own variables are never replaced. The values
+    // only move into the environment.
+    for (key, value) in project_keys(secrets) {
+        cmd.env(key, value);
+    }
 
     let mut child = pair
         .slave
@@ -319,6 +325,17 @@ pub fn start(
     })
 }
 
+/// Variables the terminal sets itself; a project's key never replaces them.
+const OWN_ENV: [&str; 4] = ["TERM", "COLORTERM", "TERM_PROGRAM", "PWD"];
+
+/// The keys that may go into the shell's environment.
+fn project_keys(secrets: Vec<(String, String)>) -> Vec<(String, String)> {
+    secrets
+        .into_iter()
+        .filter(|(key, _)| !OWN_ENV.contains(&key.as_str()))
+        .collect()
+}
+
 /// Largest single `pty-output` payload assembled from queued reads.
 const MAX_BATCH: usize = 64 * 1024;
 
@@ -357,6 +374,18 @@ pub fn utf8_lang(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn project_keys_never_replace_the_terminals_own_variables() {
+        let kept = project_keys(vec![
+            ("TERM".into(), "dumb".into()),
+            ("COLORTERM".into(), "x".into()),
+            ("TERM_PROGRAM".into(), "x".into()),
+            ("PWD".into(), "/tmp".into()),
+            ("API_KEY".into(), "abc".into()),
+        ]);
+        assert_eq!(kept, vec![("API_KEY".to_owned(), "abc".to_owned())]);
+    }
 
     #[test]
     fn shells_get_a_utf8_locale_only_when_missing() {

@@ -25,6 +25,7 @@ mod cli_diagnostics;
 mod computer_move;
 mod computers;
 mod connector_marks;
+mod conversation_settle;
 mod data;
 mod disclosure;
 mod edit_menu;

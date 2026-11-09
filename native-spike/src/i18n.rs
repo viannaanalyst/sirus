@@ -156,6 +156,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("1 arquivo", "1 file"),
     ("1 arquivo alterado", "1 changed file"),
     ("1 caractere", "1 character"),
+    ("1 conversa parada", "1 settled conversation"),
     ("1 falhou", "1 failed"),
     ("1 passo", "1 step"),
     ("1 pasta sem projeto", "1 folder without a project"),
@@ -4286,6 +4287,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Recarregar sem cache", "Reload without cache"),
     ("Recarregou", "Reloaded"),
     ("Recentes", "Recent"),
+    (
+        "Recolher conversas paradas há",
+        "Settle idle conversations after",
+    ),
     ("Recolher tudo", "Collapse all"),
     ("Recolher turnos terminados", "Fold finished turns"),
     ("Recusar", "Decline"),
@@ -4839,6 +4844,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "Uma conversa parada pelo limite da IA envia \"Continue from where you left off.\" quando o limite libera. Dá para cancelar em cada aviso.",
         "A conversation stopped by the provider's limit sends \"Continue from where you left off.\" at the reset. Each notice can cancel it.",
     ),
+    (
+        "Uma conversa sem atividade há esse tanto de dias sai da lista e fica no grupo de conversas paradas, no fim da barra lateral. Terminais e servidores que ela deixou rodando são parados; abri-la ou enviar nela a traz de volta.",
+        "A conversation idle for this many days leaves the list for the settled group at the foot of the sidebar. Terminals and servers it left running stop; opening it or sending to it brings it back.",
+    ),
     ("Uma conversa à parte.", "A separate conversation."),
     (
         "Uma cópia isolada, numa branch nova",
@@ -5147,6 +5156,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "team worker session not found",
     ),
     ("conversa não encontrada", "session not found"),
+    ("dias", "days"),
     (
         "digite o caminho completo da pasta",
         "type the folder's full path",
@@ -5451,6 +5461,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("{} commit novo em {}", "{} new commit on {}"),
     ("{} commits novos em {}", "{} new commits on {}"),
     ("{} contas", "{} accounts"),
+    ("{} conversas paradas", "{} settled conversations"),
     ("{} de {}", "{} of {}"),
     ("{} de {} checks falharam", "{} of {} checks failed"),
     ("{} de {} checks passaram", "{} of {} checks passed"),

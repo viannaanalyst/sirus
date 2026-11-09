@@ -3,6 +3,8 @@
 mod shell_actions;
 #[path = "shell_agents.rs"]
 mod shell_agents;
+#[path = "shell_settle.rs"]
+mod shell_settle;
 #[path = "shell_terminal.rs"]
 mod shell_terminal;
 use crate::backend::{self, Backend, Incoming};
@@ -23,6 +25,7 @@ use crate::theme::{
     content, diff_colors, field_fill, floating_fill, icon as theme_icon, mix, on_accent, palette,
     pane_fill, pane_opaque, provider_glyph, shell_fill,
 };
+use chrono::Utc;
 use gpui::transparent_black as transparent;
 use gpui::{
     AnyElement, Context, Div, FocusHandle, FontWeight, KeyDownEvent, MouseButton, MouseDownEvent,
@@ -1270,6 +1273,8 @@ struct Menu {
 enum Row {
     Heading(u8),
     Conversation(usize),
+    /// The docked "N conversas paradas" row under the list (ADR-198).
+    Settled,
 }
 
 struct RowMotion {
@@ -1323,6 +1328,12 @@ pub struct Shell {
     setting_edit: Option<(&'static str, String)>,
     /// Each side panel, per conversation; they keep their state while hidden.
     pane_views: HashMap<(usize, String), gpui::AnyView>,
+    /// Settled conversations (shell_settle.rs): the group's open state, how many it lists, the
+    /// sessions settled at the last check, and those whose leftovers have stopped.
+    settled_open: bool,
+    settled_listed: usize,
+    settled_known: HashSet<String>,
+    settled_stopped: HashSet<String>,
     settings_data: HashMap<&'static str, Value>,
     /// The project's scripts while its settings popup edits them (project_scripts.rs).
     /// Whether the notice above the composer shows the latest run's output.
@@ -1748,6 +1759,18 @@ impl Shell {
             }
         })
         .detach();
+        // Idle conversations settle (shell_settle.rs): checked once a minute.
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(shell_settle::SETTLE_CHECK)
+                    .await;
+                if this.update(cx, |this, cx| this.settle_check(cx)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
         // Sirus's incoming check: every 5 minutes while the window is visible. Answers only
         // redraw when they change (git_sync.rs), so an idle window stays still.
         cx.spawn(async move |this, cx| {
@@ -1804,6 +1827,10 @@ impl Shell {
             env_icons: HashMap::new(),
             setting_edit: None,
             pane_views: HashMap::new(),
+            settled_open: false,
+            settled_listed: 0,
+            settled_known: HashSet::new(),
+            settled_stopped: HashSet::new(),
             settings_data: HashMap::new(),
             scripts_output: false,
             waiting: HashMap::new(),
@@ -5181,6 +5208,10 @@ impl Shell {
     }
 
     fn open(&mut self, conversation: usize, cx: &mut Context<Self>) {
+        // A settled conversation comes back fresh when the owner opens it (ADR-198).
+        if self.settled_now(conversation, Utc::now()) {
+            self.revive(conversation, cx);
+        }
         let project = self.project_of(conversation);
         self.enter_project(project, cx);
         if let Some(id) = self
@@ -6623,12 +6654,18 @@ impl Shell {
         let duration = if reduced { 0. } else { DISCLOSE };
         let mut wanted: Vec<(Row, f32, f32)> = Vec::new();
         let mut y = 4.;
+        // Settled conversations leave the list for the docked group under it (ADR-198).
+        let settled = match self.current_project {
+            Some(project) => self.settled_in_list(project, Utc::now()),
+            None => Vec::new(),
+        };
+        self.settled_listed = settled.len();
         if let Some(project) = self.current_project {
             let mut listed: Vec<(usize, i64)> = self.projects[project]
                 .conversations
                 .iter()
                 .copied()
-                .filter(|c| self.in_sidebar_list(project, *c))
+                .filter(|c| self.in_sidebar_list(project, *c) && !settled.contains(c))
                 .map(|c| (c, days_ago(&self.conversations[c])))
                 .collect();
             // Settings → Geral → Trabalhando e esperando primeiro: those go above the dates.
@@ -6652,6 +6689,16 @@ impl Shell {
                 }
                 wanted.push((Row::Conversation(conversation), y, y));
                 y += CONV_ROW;
+            }
+            if !settled.is_empty() {
+                wanted.push((Row::Settled, y, y));
+                y += HEADING;
+                if self.settled_open {
+                    for conversation in settled {
+                        wanted.push((Row::Conversation(conversation), y, y));
+                        y += CONV_ROW;
+                    }
+                }
             }
         }
         let mut moving = false;
@@ -7801,6 +7848,7 @@ impl Shell {
                 Row::Conversation(index) => {
                     self.conversation_row(index, y, alpha, index == active, now, cx)
                 }
+                Row::Settled => self.settled_row(y, alpha, cx),
             });
         }
         let contents = |id: &'static str,
@@ -11351,6 +11399,8 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let conversation = &self.conversations[index];
+        // Settling fades a row toward its limit and fills the bar under it (ADR-198).
+        let (fade, fill) = self.fade_of(index, Utc::now());
         // The draft title while this row is being renamed in place.
         let draft: Option<String> = if self.inline_rename_row() == Some(index) {
             self.context_menu.as_ref().and_then(|m| m.renaming.clone())
@@ -11367,7 +11417,7 @@ impl Shell {
             .right(px(6.))
             .top(px(y))
             .h(px(CONV_ROW - 2.))
-            .opacity(alpha)
+            .opacity(alpha * fade)
             .rounded(px(crate::theme::RADIUS_MD))
             .pl(px(10.))
             .pr(px(8.))
@@ -11423,7 +11473,18 @@ impl Shell {
                     .left_0()
                     .right_0()
                     .top(px(CONV_ROW - 2.))
-                    .h(px(2.)),
+                    .h(px(2.))
+                    .when(fill > 0., |d| {
+                        d.child(
+                            div()
+                                .absolute()
+                                .left_0()
+                                .top_0()
+                                .h(px(2.))
+                                .w(gpui::relative(fill))
+                                .bg(accent()),
+                        )
+                    }),
             )
             .child(self.conversation_mark(conversation, now, active))
             .child(match &draft {

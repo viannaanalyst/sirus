@@ -1536,7 +1536,24 @@ fn general(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
             )],
         ),
     ];
-    let sidebar = switches(s, sidebar_rows);
+    let mut sidebar = switches(s, sidebar_rows);
+    // Conversations that sit idle past the limit settle (ADR-198); on by default, 7 days.
+    sidebar.push(row(
+        t("Recolher conversas paradas há"),
+        t(
+            "Uma conversa sem atividade há esse tanto de dias sai da lista e fica no grupo de conversas paradas, no fim da barra lateral. Terminais e servidores que ela deixou rodando são parados; abri-la ou enviar nela a traz de volta.",
+        ),
+        vec![
+            Ctl::Field {
+                key: "settleIdleDays",
+                text: current(s, top("settleIdleDays")),
+                width: 56.,
+                button: None,
+            },
+            Ctl::Read(t("dias").to_owned()),
+            switch_of(s, top("settleIdleEnabled")),
+        ],
+    ));
     vec![
         group(t("Preferências padrão"), core),
         group(t("Organização da sidebar"), sidebar),
@@ -3695,6 +3712,7 @@ pub fn commit(settings: &Value, key: &str, text: &str) -> Option<Commit> {
             const NUMBERS: &[(&str, i64, i64)] = &[
                 ("chatBackgroundEmptyVisibility", 0, 100),
                 ("chatBackgroundSessionVisibility", 0, 100),
+                ("settleIdleDays", 1, 365),
             ];
             let &(name, low, high) = NUMBERS.iter().find(|(name, _, _)| *name == key)?;
             let number: i64 = text.parse().ok()?;

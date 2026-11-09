@@ -458,6 +458,8 @@ export interface AppSettings {
   terminalUseSystemShell: boolean;
   terminalFontSize: number;
   terminalCursorStyle: string;
+  /** "alacritty" or "ghostty": the engine new terminals on the Mac open on (ADR-199). */
+  terminalEngine?: string;
   terminalScrollback: number;
   developerLogs: boolean;
   /** Offers the app-owned computer-use tools to Codex/Claude/OpenCode turns (ADR-038). */

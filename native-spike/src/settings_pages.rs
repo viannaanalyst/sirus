@@ -2539,9 +2539,28 @@ fn terminal(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
                         &[("2000", "2000"), ("5000", "5000"), ("10000", "10000")],
                     )],
                 ),
+                engine_row(s),
             ],
         ),
     ]
+}
+
+/// Settings → Terminal → Motor do terminal (ADR-199): Ghostty is offered only when this build
+/// carries libghostty-vt; the choice applies to the terminals opened after it.
+fn engine_row(s: &Value) -> Row {
+    let mut options = vec![("alacritty", "Alacritty")];
+    if crate::terminal_engine::ghostty_built_in() {
+        options.push(("ghostty", "Ghostty"));
+    }
+    row(
+        t("Motor do terminal"),
+        if crate::terminal_engine::ghostty_built_in() {
+            t("Vale para terminais novos.")
+        } else {
+            t("Esta versão do Sirus só traz o Alacritty.")
+        },
+        vec![pick(s, top("terminalEngine"), &options)],
+    )
 }
 
 /// A folder button: `Abrir` runs `native_open_path`; dimmed when there is no folder to open.

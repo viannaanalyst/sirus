@@ -839,6 +839,9 @@ pub struct AppSettings {
     pub terminal_use_system_shell: bool,
     pub terminal_font_size: u32,
     pub terminal_cursor_style: String,
+    /// The terminal engine new terminals open on: "alacritty" or "ghostty" (ADR-199). A build
+    /// without libghostty-vt treats "ghostty" as alacritty.
+    pub terminal_engine: String,
     pub terminal_scrollback: u32,
     pub developer_logs: bool,
     /// Offers the app-owned computer-use MCP server to Codex/Claude/OpenCode turns (ADR-038).
@@ -1046,6 +1049,7 @@ impl Default for AppSettings {
             terminal_use_system_shell: true,
             terminal_font_size: 13,
             terminal_cursor_style: "block".into(),
+            terminal_engine: "alacritty".into(),
             terminal_scrollback: 2000,
             developer_logs: false,
             computer_use_enabled: false,

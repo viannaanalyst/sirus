@@ -1,2 +1,4 @@
 target/
 *.app
+# Built by scripts/build-libghostty-vt.sh (ADR-199); the headers, VERSION and LICENSE are committed.
+vendor/libghostty-vt/lib/

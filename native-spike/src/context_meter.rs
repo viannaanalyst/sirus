@@ -322,7 +322,8 @@ impl Shell {
         cx.notify();
     }
 
-    /// The popup: "65% usado", "647K / 1M tokens" and the Compact button, above the ring.
+    /// The popup above the ring: a line with the ring, "65%" and "647K / 1M", and a full-width
+    /// Compact button, dimmed with the reason in a tooltip when compacting cannot run.
     pub(super) fn context_popup_view(
         &self,
         now: Instant,
@@ -340,11 +341,65 @@ impl Shell {
         }
         let phase = open.at(now).clamp(0., 1.);
         let reading = ring(usage.used, window);
-        let can_compact = compacts(conversation.provider) && conversation.native;
-        let wait = busy(&conversation.status);
+        let refused = refusal(
+            conversation.provider,
+            &conversation.status,
+            conversation.native,
+        );
         let strong = reading.level != Level::Normal;
         let right = self.viewport_width - f32::from(anchor.right());
         let bottom = self.viewport_height - f32::from(anchor.top()) + 8. + (1. - phase) * -6.;
+        let percent = reading.percent;
+        let ring_color = level_color(reading.level).unwrap_or_else(|| content(0.7));
+        let mut button = div()
+            .id("context-compact")
+            .h(px(28.))
+            .w_full()
+            .rounded(px(9.))
+            .border_1()
+            .flex()
+            .items_center()
+            .justify_center()
+            .gap(px(6.))
+            .text_size(px(12.))
+            .font_weight(FontWeight::MEDIUM)
+            .when(strong, |d| {
+                d.border_color(transparent())
+                    .bg(accent())
+                    .text_color(on_accent())
+            })
+            .when(!strong, |d| {
+                d.border_color(content(0.115))
+                    .bg(content(0.03))
+                    .text_color(content(0.95))
+            })
+            .child(icon("chevrons-down-up", 12.).text_color(if strong {
+                on_accent()
+            } else {
+                content(0.6)
+            }))
+            .child(t("Compactar"));
+        button = match refused {
+            Some(reason) => button
+                .opacity(0.5)
+                .tooltip(message_actions::name_tip(t(reason))),
+            None => button
+                .cursor_pointer()
+                .hover(move |s| {
+                    if strong {
+                        s.opacity(0.88)
+                    } else {
+                        s.bg(content(0.07))
+                    }
+                })
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if this.conversations[ix].working() {
+                        return;
+                    }
+                    this.context.popup = None;
+                    this.compact_conversation(ix, None, cx);
+                })),
+        };
         Some(
             div()
                 .id("context-popup")
@@ -352,13 +407,12 @@ impl Shell {
                 .absolute()
                 .bottom(px(bottom))
                 .right(px(right))
+                .w(px(208.))
                 .opacity(phase)
                 .flex()
-                .items_center()
-                .gap(px(14.))
-                .py(px(8.))
-                .pr(px(8.))
-                .pl(px(12.))
+                .flex_col()
+                .gap(px(6.))
+                .p(px(7.))
                 .rounded(px(crate::theme::RADIUS_LG))
                 .border_1()
                 .border_color(content(0.12))
@@ -367,72 +421,40 @@ impl Shell {
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(
                     div()
-                        .min_w_0()
+                        .h(px(22.))
+                        .px(px(4.))
                         .flex()
-                        .flex_col()
+                        .items_center()
+                        .gap(px(7.))
+                        .child(
+                            canvas(
+                                |_, _, _| {},
+                                move |bounds, _, window, _| {
+                                    paint_ring(bounds, &reading, ring_color, window);
+                                },
+                            )
+                            .size(px(14.))
+                            .flex_shrink_0(),
+                        )
                         .child(
                             div()
                                 .text_size(px(13.))
-                                .font_weight(FontWeight::MEDIUM)
+                                .font_weight(FontWeight::BOLD)
                                 .text_color(content(0.95))
-                                .child(tf("{}% usado", &[&reading.percent])),
+                                .child(format!("{percent}%")),
                         )
-                        .child(div().text_size(px(12.)).text_color(content(0.5)).child(tf(
-                            "{} / {} tokens",
-                            &[&format_tokens(usage.used), &format_tokens(window)],
-                        )))
-                        .when(can_compact && wait, |d| {
-                            d.child(
-                                div().text_size(px(12.)).text_color(content(0.5)).child(t(
-                                    refusal(
-                                        conversation.provider,
-                                        &conversation.status,
-                                        conversation.native,
-                                    )
-                                    .unwrap_or_default(),
+                        .child(
+                            div()
+                                .text_size(px(12.))
+                                .text_color(content(0.5))
+                                .child(format!(
+                                    "{} / {}",
+                                    format_tokens(usage.used),
+                                    format_tokens(window)
                                 )),
-                            )
-                        }),
+                        ),
                 )
-                .when(can_compact, |d| {
-                    d.child(
-                        div()
-                            .id("context-compact")
-                            .flex_shrink_0()
-                            .px(px(10.))
-                            .py(px(5.))
-                            .rounded(px(crate::theme::RADIUS_MD))
-                            .border_1()
-                            .text_size(px(12.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .when(strong, |d| {
-                                d.border_color(transparent())
-                                    .bg(accent())
-                                    .text_color(on_accent())
-                            })
-                            .when(!strong, |d| {
-                                d.border_color(content(0.115)).text_color(content(0.95))
-                            })
-                            .when(wait, |d| d.opacity(0.5))
-                            .when(!wait, |d| {
-                                d.cursor_pointer().hover(move |s| {
-                                    if strong {
-                                        s.opacity(0.88)
-                                    } else {
-                                        s.bg(content(0.05))
-                                    }
-                                })
-                            })
-                            .child(t("Compactar"))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if this.conversations[ix].working() {
-                                    return;
-                                }
-                                this.context.popup = None;
-                                this.compact_conversation(ix, None, cx);
-                            })),
-                    )
-                })
+                .child(button)
                 .into_any_element(),
         )
     }

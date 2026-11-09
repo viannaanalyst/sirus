@@ -1282,6 +1282,10 @@ pub struct Shell {
     /// The usage of each provider chosen for the bottom bar, by provider.
     bar_usage: HashMap<&'static str, (String, f32)>,
     usage_value: Value,
+    /// The full usage reply of each provider chosen for the bottom bar, for the popup's tabs.
+    bar_values: HashMap<&'static str, Value>,
+    /// The provider whose tab the usage popup shows.
+    usage_tab: Option<&'static str>,
     session_filter: SessionFilter,
     filter_button_at: std::rc::Rc<std::cell::Cell<Option<gpui::Bounds<Pixels>>>>,
     /// The sidebar entries turned off (sidebar_items.rs), and the three-dots menu that turns
@@ -1687,6 +1691,8 @@ impl Shell {
             usage: None,
             bar_usage: HashMap::new(),
             usage_value: Value::Null,
+            bar_values: HashMap::new(),
+            usage_tab: None,
             session_filter: SessionFilter::default(),
             filter_button_at: Default::default(),
             sidebar_items: crate::sidebar_items::load(),
@@ -2139,9 +2145,11 @@ impl Shell {
                 Some(Waiting::BarUsage(provider)) => match usage_summary(&value).filter(|_| ok) {
                     Some(summary) => {
                         self.bar_usage.insert(provider, summary);
+                        self.bar_values.insert(provider, value.clone());
                     }
                     None => {
                         self.bar_usage.remove(provider);
+                        self.bar_values.remove(provider);
                     }
                 },
                 Some(Waiting::Transcript(ix)) if ok => {
@@ -3585,7 +3593,7 @@ impl Shell {
 
     /// What the bottom bar's usage chip holds: the open conversation's provider with its
     /// windows (or its model while they load), or each chosen provider with its own.
-    fn usage_chip_parts(&self, provider: &'static str) -> Vec<AnyElement> {
+    fn usage_chip_parts(&self, provider: &'static str, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let tile = |provider: &'static str| {
             mark_tile(
                 &crate::tab_tile::TileSize {
@@ -3614,28 +3622,40 @@ impl Shell {
                 )
                 .into_any_element()
         };
+        // Each provider's numbers are a button of their own: a click opens its tab.
+        let segment = |provider: &'static str, cx: &mut Context<Self>| {
+            div()
+                .id(SharedString::from(format!("usage-{provider}")))
+                .h(px(20.))
+                .px(px(6.))
+                .rounded(px(7.))
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .cursor_pointer()
+                .hover(|s| s.bg(content(0.1)).text_color(content(1.)))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(move |this, _, _, cx| this.open_usage(provider, cx)))
+        };
         let chosen = self.bar_providers();
         let mut parts = Vec::new();
         if chosen.is_empty() {
-            parts.push(tile(provider));
+            let mut one = segment(provider, cx).child(tile(provider));
             if let Some((_, tightest)) = &self.usage {
-                parts.push(bar(*tightest));
+                one = one.child(bar(*tightest));
             }
-            parts.push(
-                div()
-                    .child(self.usage.as_ref().map_or_else(
-                        || {
-                            model_label(
-                                self.conversations[self.active_conversation()]
-                                    .model
-                                    .as_deref(),
-                                provider,
-                            )
-                        },
-                        |(text, _)| text.clone(),
-                    ))
-                    .into_any_element(),
-            );
+            one = one.child(div().child(self.usage.as_ref().map_or_else(
+                || {
+                    model_label(
+                        self.conversations[self.active_conversation()]
+                            .model
+                            .as_deref(),
+                        provider,
+                    )
+                },
+                |(text, _)| text.clone(),
+            )));
+            parts.push(one.into_any_element());
             return parts;
         }
         for (at, provider) in chosen.into_iter().enumerate() {
@@ -3649,20 +3669,46 @@ impl Shell {
                         .into_any_element(),
                 );
             }
-            parts.push(tile(provider));
+            let mut one = segment(provider, cx).child(tile(provider));
             match self.bar_usage.get(provider) {
                 Some((text, tightest)) => {
-                    parts.push(bar(*tightest));
-                    parts.push(div().child(text.clone()).into_any_element());
+                    one = one.child(bar(*tightest)).child(div().child(text.clone()));
                 }
-                None => parts.push(div().text_color(content(0.4)).child("—").into_any_element()),
+                None => one = one.child(div().text_color(content(0.4)).child("—")),
             }
+            parts.push(one.into_any_element());
         }
         parts
     }
 
+    /// A click on a provider's numbers in the bar: its tab opens, or the popup closes when that
+    /// tab is the one showing.
+    fn open_usage(&mut self, provider: &'static str, cx: &mut Context<Self>) {
+        if self.usage_popup.is_some() && self.usage_tab == Some(provider) {
+            self.toggle_usage_popup(cx);
+            return;
+        }
+        if self.usage_popup.is_some() {
+            self.usage_accounts = None;
+            self.usage_tab = Some(provider);
+            cx.notify();
+            return;
+        }
+        self.toggle_usage_popup(cx);
+        self.usage_tab = Some(provider);
+    }
+
+    /// The providers the usage popup has tabs for: those the bar shows that have usage.
+    fn usage_tabs(&self, selected: &'static str) -> Vec<&'static str> {
+        self.bar_providers()
+            .into_iter()
+            .filter(|p| *p == selected || self.bar_usage.contains_key(p))
+            .collect()
+    }
+
     fn toggle_usage_popup(&mut self, cx: &mut Context<Self>) {
         self.usage_accounts = None;
+        self.usage_tab = None;
         self.usage_popup = match self.usage_popup {
             Some(_) => None,
             None => {
@@ -3792,8 +3838,20 @@ impl Shell {
             *moving = true;
         }
         let t = open.at(now).clamp(0., 1.);
-        let provider = self.conversations[self.active_conversation()].provider;
-        let value = &self.usage_value;
+        let active = self.conversations[self.active_conversation()].provider;
+        let bar = self.bar_providers();
+        let provider = self
+            .usage_tab
+            .filter(|tab| bar.contains(tab))
+            .or_else(|| bar.contains(&active).then_some(active))
+            .or_else(|| bar.first().copied())
+            .unwrap_or(active);
+        let tabs = self.usage_tabs(provider);
+        let value = if provider == active {
+            &self.usage_value
+        } else {
+            self.bar_values.get(provider).unwrap_or(&Value::Null)
+        };
         let updated = value["updatedAt"].as_i64().map(|at| {
             let minutes = (chrono::Utc::now().timestamp_millis() - at) / 60_000;
             if minutes < 1 {
@@ -3951,8 +4009,7 @@ impl Shell {
             .text_color(content(0.72))
             .cursor_pointer()
             .hover(|s| s.bg(content(0.09)).text_color(content(0.95)))
-            .on_click(cx.listener(|this, _, _, cx| {
-                let provider = this.conversations[this.active_conversation()].provider;
+            .on_click(cx.listener(move |this, _, _, cx| {
                 this.usage_accounts = Some(AccountsPage {
                     provider,
                     ..Default::default()
@@ -3997,6 +4054,52 @@ impl Shell {
                 .child(crate::theme::floating_surface(crate::theme::RADIUS_LG))
                 .shadow_lg()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .when(tabs.len() > 1, |d| {
+                    d.child(
+                        div()
+                            .mb(px(10.))
+                            .p(px(3.))
+                            .rounded(px(10.))
+                            .bg(content(0.05))
+                            .flex()
+                            .gap(px(2.))
+                            .children(tabs.iter().map(|&tab| {
+                                let on = tab == provider;
+                                div()
+                                    .id(SharedString::from(format!("usage-tab-{tab}")))
+                                    .flex_1()
+                                    .h(px(26.))
+                                    .rounded(px(7.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .gap(px(6.))
+                                    .text_size(px(12.))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .cursor_pointer()
+                                    .when(on, |d| d.bg(content(0.1)).text_color(content(0.97)))
+                                    .when(!on, |d| {
+                                        d.text_color(content(0.55))
+                                            .hover(|s| s.bg(content(0.05)).text_color(content(0.8)))
+                                    })
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.usage_tab = Some(tab);
+                                        this.usage_accounts = None;
+                                        cx.notify();
+                                    }))
+                                    .child(mark_tile(
+                                        &crate::tab_tile::TileSize {
+                                            w: 14.,
+                                            h: 12.,
+                                            radius: 3.,
+                                        },
+                                        Face::provider(tab),
+                                        provider_glyph(tab, 9.),
+                                    ))
+                                    .child(provider_title(tab))
+                            })),
+                    )
+                })
                 .when(self.usage_accounts.is_some(), |d| {
                     d.child(self.accounts_page_view(provider, cx))
                 })
@@ -13235,7 +13338,6 @@ impl Shell {
                     .overflow_hidden()
                     .whitespace_nowrap()
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_usage_popup(cx)))
                     .child(
                         gpui::canvas(
                             {
@@ -13248,14 +13350,10 @@ impl Shell {
                         .size_full(),
                     )
                     .h(px(20.))
-                    .px(px(6.))
-                    .rounded_full()
                     .flex()
                     .items_center()
-                    .gap(px(6.))
-                    .cursor_pointer()
-                    .hover(|s| s.bg(content(0.1)).text_color(content(1.)))
-                    .children(self.usage_chip_parts(provider)),
+                    .gap(px(2.))
+                    .children(self.usage_chip_parts(provider, cx)),
             )
             // Refresh sits right beside the numbers.
             .child(

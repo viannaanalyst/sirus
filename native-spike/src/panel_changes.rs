@@ -91,6 +91,29 @@ fn build(context: PanelContext, mode: Mode, cx: &mut App) -> AnyView {
     .into()
 }
 
+/// Reads the workspace again, for the top bar's Git button after a pull, commit or push. A view
+/// that is not a changes view is left alone.
+pub(crate) fn refresh_view(view: &gpui::AnyView, cx: &mut App) {
+    if let Ok(panel) = view.clone().downcast::<ChangesPanel>() {
+        panel.update(cx, |panel, cx| panel.refresh(cx));
+    }
+}
+
+/// Opens the Criar PR form of a review view, the same as its branch menu's item does.
+pub(crate) fn open_pull_request_view(view: &gpui::AnyView, cx: &mut App) {
+    if let Ok(panel) = view.clone().downcast::<ChangesPanel>() {
+        panel.update(cx, |panel, cx| {
+            if panel.mode != Mode::Review || panel.pr.open {
+                return;
+            }
+            panel.pr.open = true;
+            panel.pr.result = None;
+            panel.pr.title.update(cx, |field, cx| field.focus(cx));
+            cx.notify();
+        });
+    }
+}
+
 /// One commit of the Histórico.
 #[derive(Clone)]
 struct Commit {
@@ -2659,7 +2682,7 @@ fn discard_action(session_id: &str, paths: &[String], token: &str) -> Value {
     })
 }
 
-fn title_action(session_id: &str, token: &str, request_id: &str) -> Value {
+pub(crate) fn title_action(session_id: &str, token: &str, request_id: &str) -> Value {
     json!({ "action": {
         "type": "generate", "sessionId": session_id, "expectedIndex": token, "requestId": request_id
     } })
@@ -2671,7 +2694,7 @@ fn cancel_title_action(session_id: &str, request_id: &str) -> Value {
 
 /// What `commit_title_action` answered.
 #[derive(Debug, PartialEq)]
-enum TitleReply {
+pub(crate) enum TitleReply {
     Title {
         title: String,
         provider: String,
@@ -2683,7 +2706,7 @@ enum TitleReply {
 
 /// Reads the reply with the checks of the React client: a trimmed one-line title of at most 72
 /// characters from codex or claude.
-fn title_reply(value: &Value) -> TitleReply {
+pub(crate) fn title_reply(value: &Value) -> TitleReply {
     match value["type"].as_str() {
         Some("cancelled") => TitleReply::Cancelled,
         Some("title") => {

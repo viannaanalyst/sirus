@@ -83,6 +83,7 @@ commands::git_commit
 commands::git_workspace_action
 git_incoming::git_incoming
 git_incoming::git_pull_ff
+git_incoming::git_sync_pull
 commands::transcript_action
 commit_title::commit_title_action
 commands::git_push

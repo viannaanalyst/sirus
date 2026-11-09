@@ -421,6 +421,10 @@ export interface AppSettings {
   restorePreviousSessions: boolean;
   checkForUpdates: boolean;
   disabledProviders: AgentProviderId[];
+  /** A turn stopped by the provider's usage limit continues on the next provider of the order by itself (ADR-198). */
+  limitFallbackAuto?: boolean;
+  /** Where a conversation goes when its provider's limit runs out, first to last (ADR-198). */
+  limitFallbackOrder?: AgentProviderId[];
   providerPaths: Partial<Record<AgentProviderId, string>>;
   theme: "dark" | "light" | "system";
   darkWindowTranslucent: boolean;

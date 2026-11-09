@@ -4,7 +4,10 @@
 //! ("OAuth session expired") is the common case: Retry sends "continue" again (the other session
 //! that refreshed the token may have finished), and each other account of the provider
 //! continues the conversation there through `move_session_account`, which carries the native
-//! transcript along (account_move.rs). This module is a child of `shell` (`#[path]`).
+//! transcript along (account_move.rs). A usage limit also offers the next provider of the
+//! fallback order (Settings → Provedores, ADR-198): `set_session_model` switches the conversation
+//! in place, which arms the handoff recap, and "continue" goes out there; with the automatic
+//! switch on, that happens as soon as the turn stops. This module is a child of `shell` (`#[path]`).
 
 use super::*;
 
@@ -62,6 +65,45 @@ pub(crate) fn reset_time(text: &str) -> Option<String> {
         (_, _, h) => h,
     };
     Some(format!("{hour}:{minute:02}"))
+}
+
+/// A provider's name in a sentence: "Claude", not "Claude Code".
+fn short_name(provider: &str) -> &'static str {
+    match provider {
+        "claude" => "Claude",
+        other => provider_title(other),
+    }
+}
+
+/// A usage reply with a window spent until a reset still ahead (T3 Code's `exhaustedUsageWindow`).
+pub(crate) fn exhausted(usage: &Value, now: i64) -> bool {
+    usage["windows"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|window| {
+            window["usedPercent"]
+                .as_f64()
+                .is_some_and(|used| used >= 100.)
+                && window["resetsAt"].as_i64().is_none_or(|at| {
+                    let at = if at > 100_000_000_000 { at / 1000 } else { at };
+                    at > now
+                })
+        })
+}
+
+/// Where a conversation stopped by a limit goes: the first provider of the order that is not its
+/// own, not one it already left on a limit, and not known to be spent too.
+pub(crate) fn fallback_provider(
+    order: &[&'static str],
+    current: &str,
+    left: &[&'static str],
+    spent: impl Fn(&str) -> bool,
+) -> Option<&'static str> {
+    order
+        .iter()
+        .copied()
+        .find(|id| *id != current && !left.contains(id) && !spent(id))
 }
 
 /// The error in one short line for the card, or None when the session did not fail.
@@ -145,11 +187,39 @@ impl Shell {
             .turns
             .last()
             .map_or("", |turn| turn.answer.as_str());
-        let headline = match reset_time(answer).filter(|_| is_limit_error(&conversation.last_error))
-        {
-            Some(at) => tf("Esta conta atingiu o limite de uso. Volta às {}.", &[&at]),
-            None => headline,
+        let fallback = is_limit_error(&conversation.last_error)
+            .then(|| self.limit_fallback(ix))
+            .flatten();
+        let headline = match (&fallback, reset_time(answer)) {
+            (Some((provider, model)), _) => {
+                let target = match model {
+                    Some(model) => format!(
+                        "{} ({})",
+                        short_name(provider),
+                        self.model_display(provider, Some(model))
+                    ),
+                    None => short_name(provider).to_owned(),
+                };
+                tf(
+                    "Limite do {} atingido — continuar com {}?",
+                    &[&short_name(conversation.provider), &target],
+                )
+            }
+            (None, Some(at)) if is_limit_error(&conversation.last_error) => {
+                tf("Esta conta atingiu o limite de uso. Volta às {}.", &[&at])
+            }
+            _ => headline,
         };
+        let fallback = fallback.map(|(provider, model)| {
+            button(
+                "failure-fallback".into(),
+                tf("Continuar com {}", &[&short_name(provider)]),
+            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.switch_after_limit(ix, provider, model.clone());
+                cx.notify();
+            }))
+        });
         let warm: gpui::Hsla = rgb(0xee8a96).into();
         Some(
             div()
@@ -176,6 +246,7 @@ impl Shell {
                         .text_color(content(0.75))
                         .child(headline),
                 )
+                .children(fallback)
                 .children(moves)
                 .child(retry)
                 .into_any_element(),
@@ -204,6 +275,84 @@ impl Shell {
             call,
             Waiting::AccountMoved(session.to_owned(), approval.to_owned()),
         );
+    }
+
+    /// The provider and model a conversation stopped by its usage limit would carry on with.
+    pub(super) fn limit_fallback(&self, ix: usize) -> Option<(&'static str, Option<String>)> {
+        let conversation = self.conversations.get(ix)?;
+        let order =
+            crate::settings_pages::limit_fallback_order(&self.settings, &self.enabled_providers());
+        let left = self
+            .limit_left
+            .get(&conversation.session_id)
+            .map_or(&[][..], Vec::as_slice);
+        let now = chrono::Utc::now().timestamp();
+        let provider = fallback_provider(&order, conversation.provider, left, |id| {
+            self.bar_values
+                .get(id)
+                .is_some_and(|usage| exhausted(usage, now))
+        })?;
+        Some((provider, self.fallback_model(provider)))
+    }
+
+    /// The model a fallback uses: the provider's first favorite, else the first model of its
+    /// catalog, leaving out the ones turned off; none leaves the provider's own default.
+    fn fallback_model(&self, provider: &str) -> Option<String> {
+        let list = self.models.get(provider)?;
+        let off = self.settings["disabledModels"].as_array();
+        let usable = |id: &str| {
+            let key = format!("{provider}::{id}");
+            list.iter().any(|m| m.id == id && m.available)
+                && !off.is_some_and(|off| off.iter().any(|item| item.as_str() == Some(&key)))
+        };
+        let favorite = self
+            .favorite_models()
+            .into_iter()
+            .filter_map(|key| Some(key.strip_prefix(provider)?.strip_prefix("::")?.to_owned()))
+            .find(|id| usable(id));
+        favorite.or_else(|| list.iter().find(|m| usable(&m.id)).map(|m| m.id.clone()))
+    }
+
+    /// Moves a conversation stopped by its usage limit to `provider` and carries on there: the
+    /// switch arms the handoff recap, so the new provider gets the conversation's context.
+    fn switch_after_limit(&mut self, ix: usize, provider: &'static str, model: Option<String>) {
+        let Some(conversation) = self.conversations.get_mut(ix) else {
+            return;
+        };
+        let (session, approval) = (
+            conversation.session_id.clone(),
+            conversation.approval.clone(),
+        );
+        self.limit_left
+            .entry(session.clone())
+            .or_default()
+            .push(conversation.provider);
+        conversation.provider = provider;
+        conversation.model = model.clone();
+        let call = self.backend.invoke(
+            "set_session_model",
+            json!({ "sessionId": session, "agent": provider, "model": model }),
+        );
+        self.waiting
+            .insert(call, Waiting::LimitFallback(session, approval));
+    }
+
+    /// A turn of conversation `ix` just ended: when it stopped on the usage limit and the
+    /// automatic switch is on, it carries on with the next provider of the order.
+    pub(super) fn limit_fallback_auto(&mut self, ix: usize, cx: &mut Context<Self>) {
+        let Some(conversation) = self.conversations.get(ix) else {
+            return;
+        };
+        if conversation.status != "failed"
+            || !is_limit_error(&conversation.last_error)
+            || self.settings["limitFallbackAuto"].as_bool() != Some(true)
+        {
+            return;
+        }
+        if let Some((provider, model)) = self.limit_fallback(ix) {
+            self.switch_after_limit(ix, provider, model);
+            cx.notify();
+        }
     }
 
     /// The move finished: the conversation is on the other account, so carry on there.
@@ -246,6 +395,40 @@ mod tests {
             headline("failed", "Usage limit reached.").as_deref(),
             Some("Esta conta atingiu o limite de uso.")
         );
+    }
+
+    #[test]
+    fn a_fallback_skips_the_own_provider_the_ones_left_and_the_spent_ones() {
+        let order = ["claude", "codex", "cursor", "opencode"];
+        assert_eq!(
+            fallback_provider(&order, "claude", &[], |_| false),
+            Some("codex")
+        );
+        assert_eq!(
+            fallback_provider(&order, "codex", &["claude"], |id| id == "cursor"),
+            Some("opencode")
+        );
+        assert_eq!(
+            fallback_provider(&order, "codex", &["claude", "cursor", "opencode"], |_| {
+                false
+            }),
+            None
+        );
+    }
+
+    #[test]
+    fn a_window_counts_as_spent_only_until_it_resets() {
+        let now = 1_790_000_000;
+        assert!(exhausted(
+            &json!({"windows":[{"usedPercent":100.0,"resetsAt":now + 60}]}),
+            now
+        ));
+        assert!(exhausted(&json!({"windows":[{"usedPercent":100.0}]}), now));
+        assert!(!exhausted(
+            &json!({"windows":[{"usedPercent":100.0,"resetsAt":(now - 60) * 1000}]}),
+            now
+        ));
+        assert!(!exhausted(&json!({"windows":[{"usedPercent":99.0}]}), now));
     }
 
     #[test]

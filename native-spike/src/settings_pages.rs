@@ -2764,6 +2764,7 @@ fn providers(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
     };
     let disabled = strings(&s["disabledProviders"]);
     let (mut active, mut off, mut missing) = (Vec::new(), Vec::new(), Vec::new());
+    let mut active_ids: Vec<&'static str> = Vec::new();
     for &(id, name) in PROVIDER_LIST {
         let found = install(id);
         let installed = found.and_then(|item| item["installed"].as_bool()) == Some(true);
@@ -2825,9 +2826,11 @@ fn providers(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
         } else if has(&disabled, id) {
             off.push(item);
         } else {
+            active_ids.push(id);
             active.push(item);
         }
     }
+    let fallback = limit_fallback_group(s, &active_ids);
     let (active_title, off_title, missing_title) = (
         tf("Ativos {}", &[&active.len()]),
         tf("Instalados, desligados {}", &[&off.len()]),
@@ -2890,6 +2893,7 @@ fn providers(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
     ));
 
     clis.extend([
+        fallback,
         group(t("Diagnóstico das CLIs"), diagnostics_rows(d)),
         group(t("Consumo na barra inferior"), usage),
         group(
@@ -2926,6 +2930,59 @@ fn providers(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
         ),
     ]);
     clis
+}
+
+/// Where a conversation goes when its provider's limit runs out (ADR-198): the saved
+/// `limitFallbackOrder` among the `active` providers, then the active ones it leaves out, in
+/// Sirus's order.
+pub(crate) fn limit_fallback_order(settings: &Value, active: &[&'static str]) -> Vec<&'static str> {
+    let saved = strings(&settings["limitFallbackOrder"]);
+    let mut order: Vec<&'static str> = saved
+        .iter()
+        .filter_map(|id| active.iter().copied().find(|known| known == id))
+        .collect();
+    for id in active {
+        if !order.contains(id) {
+            order.push(id);
+        }
+    }
+    order
+}
+
+/// The switch that changes provider by itself when a limit runs out, and the order it follows;
+/// each provider but the first moves one place up.
+fn limit_fallback_group(s: &Value, active: &[&'static str]) -> Group {
+    let order = limit_fallback_order(s, active);
+    let mut rows = vec![switch_row(
+        s,
+        t("Trocar de provedor automaticamente quando o limite acabar"),
+        t(
+            "Quando um turno para no limite de uso, a conversa continua com o contexto no primeiro provedor da ordem abaixo que não esteja no limite. Desligado, a conversa mostra um aviso com o botão para trocar.",
+        ),
+        top("limitFallbackAuto"),
+    )];
+    for (at, &id) in order.iter().enumerate() {
+        let mut moved = order.clone();
+        if at > 0 {
+            moved.swap(at - 1, at);
+        }
+        let mut item = row(
+            format!("{}. {}", at + 1, provider_name(id)),
+            "",
+            vec![Ctl::Button {
+                label: t("Subir"),
+                act: Act::Save {
+                    key: "limitFallbackOrder",
+                    value: json!(moved),
+                },
+                enabled: at > 0,
+                danger: false,
+            }],
+        );
+        item.provider = Some(id);
+        rows.push(item);
+    }
+    group(t("Quando o limite acabar"), rows)
 }
 
 /// The catalog's name for a skill's origin, as `skillSections` groups it.

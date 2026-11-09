@@ -794,6 +794,13 @@ pub struct AppSettings {
     pub restore_previous_sessions: bool,
     pub check_for_updates: bool,
     pub disabled_providers: Vec<AgentProviderId>,
+    /// A turn that stops on the provider's usage limit continues on the next provider of
+    /// `limit_fallback_order` by itself (ADR-198); off by default, when the conversation only
+    /// offers the switch.
+    pub limit_fallback_auto: bool,
+    /// Where a conversation goes when its provider's limit runs out, first to last; providers
+    /// left out follow in Sirus's order.
+    pub limit_fallback_order: Vec<AgentProviderId>,
     /// Projects silenced, by id, until this moment in milliseconds (ADR-198).
     pub muted_projects: std::collections::BTreeMap<String, i64>,
     /// The Mac does not idle-sleep while an agent works (ADR-100); on unless turned off.
@@ -1010,6 +1017,8 @@ impl Default for AppSettings {
             restore_previous_sessions: true,
             check_for_updates: false,
             disabled_providers: Vec::new(),
+            limit_fallback_auto: false,
+            limit_fallback_order: Vec::new(),
             muted_projects: std::collections::BTreeMap::new(),
             keep_awake_while_working: true,
             quick_composer: true,
@@ -1164,6 +1173,16 @@ impl AppSettings {
         crate::connectors::validate(&self.connectors)?;
         crate::browser_profiles::validate(&self.browser_profiles, &self.default_browser_profile)?;
         use crate::error::Error;
+        let unique = |list: &[AgentProviderId]| {
+            list.len() <= 10
+                && list.iter().collect::<std::collections::HashSet<_>>().len() == list.len()
+        };
+        if !unique(&self.limit_fallback_order) {
+            return Err(Error::new(
+                "invalid_settings",
+                "Invalid provider order for usage limits.",
+            ));
+        }
         // One entry per provider at most (ten since Hermes).
         if self.usage_providers.len() > 10
             || self

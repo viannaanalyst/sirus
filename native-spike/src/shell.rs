@@ -959,6 +959,9 @@ enum Waiting {
     AccountMoved(String, String),
     /// `send_prompt` that carries on after a failure.
     FailureContinue,
+    /// `set_session_model` of a conversation that hit its usage limit: its session and
+    /// approval, to carry on with the fallback provider after (ADR-198).
+    LimitFallback(String, String),
     Skills,
     Secrets,
     Agents,
@@ -1401,6 +1404,9 @@ pub struct Shell {
     worktrees: HashMap<String, Vec<Value>>,
     usage_popup: Option<Tween>,
     handoffs: handoff::State,
+    /// The providers each conversation already left on a usage limit (ADR-198), so a fallback
+    /// never goes back to one of them while the app runs.
+    limit_left: HashMap<String, Vec<&'static str>>,
     usage_refreshing: bool,
     usage_chip: std::rc::Rc<std::cell::Cell<Option<gpui::Bounds<Pixels>>>>,
     /// Each project keeps its own tabs; `tabs` are the current project's.
@@ -1813,6 +1819,7 @@ impl Shell {
             worktrees: HashMap::new(),
             usage_popup: None,
             handoffs: handoff::State::default(),
+            limit_left: HashMap::new(),
             split: Default::default(),
             usage_refreshing: false,
             usage_chip: Default::default(),
@@ -2144,9 +2151,14 @@ impl Shell {
                 Some(Waiting::AccountMoved(session, approval)) if ok => {
                     self.account_moved(&session, &approval)
                 }
-                Some(Waiting::AccountMoved(..) | Waiting::FailureContinue) if !ok => {
-                    self.problem = Some(error_text(&value))
+                Some(Waiting::LimitFallback(session, approval)) if ok => {
+                    self.account_moved(&session, &approval)
                 }
+                Some(
+                    Waiting::AccountMoved(..)
+                    | Waiting::FailureContinue
+                    | Waiting::LimitFallback(..),
+                ) if !ok => self.problem = Some(error_text(&value)),
                 Some(Waiting::FailureContinue) => {}
                 Some(Waiting::Dictated(send)) if ok => {
                     if let Some(text) = value.as_str().filter(|t| !t.is_empty()) {
@@ -4501,8 +4513,13 @@ impl Shell {
             Some(ix) => ix,
             None => self.add_session(session),
         };
+        let was_working = self.conversations[ix].working();
+        self.conversations[ix].apply_meta(session);
+        // A turn that just stopped on the usage limit may carry on elsewhere by itself.
+        if was_working {
+            self.limit_fallback_auto(ix, cx);
+        }
         let conversation = &mut self.conversations[ix];
-        conversation.apply_meta(session);
         if conversation.loaded {
             if let Some(messages) = session["messages"].as_array().filter(|m| !m.is_empty()) {
                 // A reply to a send carries the newest messages and no window: merge them by id.

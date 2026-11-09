@@ -1217,6 +1217,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Contexto não compactado", "Context not compacted"),
     ("Conteúdo não exibido", "Content not shown"),
     ("Continuar", "Continue"),
+    ("Continuar com {}", "Continue with {}"),
     (
         "Continuar conversas interrompidas após uma falha",
         "Continue interrupted conversations after a crash",
@@ -2373,6 +2374,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Limite de painéis atingido", "Pane limit reached"),
     ("Limite do histórico", "Scrollback limit"),
+    (
+        "Limite do {} atingido — continuar com {}?",
+        "{} limit reached — continue with {}?",
+    ),
     ("Limite individual", "Individual limit"),
     ("Limite mensal", "Monthly limit"),
     ("Limite semanal", "Weekly limit"),
@@ -4188,6 +4193,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Quando o agente da conversa aberta abre ou navega uma página, o painel do navegador abre para mostrá-la. Desligado, o painel fica como está.",
         "When the open conversation's agent opens or navigates a page, the browser pane opens to show it. Off, the pane stays as it is.",
     ),
+    ("Quando o limite acabar", "When the limit runs out"),
     (
         "Quando os checks do PR aberto de uma sessão falham, o agente dela recebe os erros e corrige; depois o Sirus faz commit e push do branch da sessão (nunca forçado). Até 3 tentativas por falha; senão pausa e avisa.",
         "When the checks of a session's open pull request fail, its agent gets the errors and fixes them, then Sirus commits and pushes the session branch (never forced). Up to 3 attempts per failure; it pauses and notifies you otherwise.",
@@ -4207,6 +4213,10 @@ const ENTRIES: &[(&str, &str)] = &[
     (
         "Quando um script inicia e o endereço responde, ele abre no navegador da sessão.",
         "When a script starts and the address answers, it opens in the session's browser.",
+    ),
+    (
+        "Quando um turno para no limite de uso, a conversa continua com o contexto no primeiro provedor da ordem abaixo que não esteja no limite. Desligado, a conversa mostra um aviso com o botão para trocar.",
+        "When a turn stops on the usage limit, the conversation carries on with its context in the first provider of the order below that is not at its limit. Off, the conversation shows a notice with a button to switch.",
     ),
     (
         "Quando uma conversa do Claude ou do Codex chega a 80% da janela de contexto, a próxima mensagem inicia uma sessão nova do provedor com um resumo curto montado pelo próprio app: as duas últimas trocas palavra por palavra e uma linha para cada anterior. Nenhuma chamada ao modelo é gasta com isso, e a conversa completa continua aqui.",
@@ -4572,6 +4582,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Suavização de fontes", "Font smoothing"),
     ("Subagente desconhecido.", "Unknown subagent."),
     ("Subagente {}", "Subagent {}"),
+    ("Subir", "Move up"),
     ("Sublinhado", "Underline"),
     (
         "Sublinhado de ortografia e correções automáticas do macOS enquanto você escreve uma mensagem, em todas as conversas.",
@@ -4689,6 +4700,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "Switching branches requires confirmation.",
     ),
     ("Trocar de projeto", "Switch project"),
+    (
+        "Trocar de provedor automaticamente quando o limite acabar",
+        "Switch provider automatically when the limit runs out",
+    ),
     ("Trocar filtro", "Switch filter"),
     ("Trocar modelo e esforço", "Change model and effort"),
     ("Trocar método", "Change method"),

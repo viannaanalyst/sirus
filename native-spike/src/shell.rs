@@ -353,6 +353,8 @@ enum ComposerMenu {
     Effort,
     /// Every provider's models.
     Catalog,
+    /// Where a new conversation works, from the chip under the composer.
+    Workspace,
 }
 
 #[derive(Clone)]
@@ -922,6 +924,9 @@ fn styled_tokens(text: String) -> StyledText {
 /// What a reply from the back end is for.
 enum Waiting {
     ProjectRemoved(usize),
+    /// A session made for another workspace, to take the place of this empty conversation;
+    /// true when it shares a worktree that must stay.
+    Replaced(usize, bool),
     /// An account being removed: its id and provider.
     AccountRemoved(String, &'static str),
     /// A drawn-on picture coming back from the host, and the draft it replaces.
@@ -1277,6 +1282,9 @@ pub struct Shell {
     composer_bounds: std::rc::Rc<std::cell::Cell<Option<gpui::Bounds<Pixels>>>>,
     /// Where the model menu opened: it stays there while its label changes width.
     model_menu_anchor: Option<(f32, f32)>,
+    /// Where the workspace chip sits, and whether its "Worktrees existentes" submenu is open.
+    workspace_chip: std::rc::Rc<std::cell::Cell<Option<gpui::Bounds<Pixels>>>>,
+    workspace_sub: bool,
     viewport_height: f32,
     usage: Option<(String, f32)>,
     /// The usage of each provider chosen for the bottom bar, by provider.
@@ -1683,6 +1691,8 @@ impl Shell {
             model_trigger: Default::default(),
             composer_bounds: Default::default(),
             model_menu_anchor: None,
+            workspace_chip: Default::default(),
+            workspace_sub: false,
             viewport_height: 0.,
             usage: None,
             bar_usage: HashMap::new(),
@@ -2173,6 +2183,9 @@ impl Shell {
                         self.conversations[ix].approval = mode.to_owned();
                     }
                     self.open(ix, cx);
+                }
+                Some(Waiting::Replaced(old, shared)) if ok => {
+                    self.workspace_replaced(old, shared, &value, cx)
                 }
                 Some(Waiting::PromptLink) => self.prompt_link_resolved(ok, &value, cx),
                 Some(Waiting::PromptLinkCopy) => self.prompt_link_copied(ok, &value, cx),
@@ -5836,7 +5849,7 @@ impl Shell {
                     cx.notify();
                     return;
                 }
-                ComposerMenu::Access if key == "escape" => {
+                ComposerMenu::Access | ComposerMenu::Workspace if key == "escape" => {
                     self.composer_menu = None;
                     cx.notify();
                     return;
@@ -11568,11 +11581,13 @@ impl Shell {
     }
 
     fn toggle_composer_menu(&mut self, which: ComposerMenu, cx: &mut Context<Self>) {
-        let model_menu = |menu: ComposerMenu| menu != ComposerMenu::Access;
+        let model_menu =
+            |menu: ComposerMenu| matches!(menu, ComposerMenu::Effort | ComposerMenu::Catalog);
         let same = self
             .composer_menu
             .as_ref()
             .is_some_and(|(m, _)| *m == which || (model_menu(*m) && model_menu(which)));
+        self.workspace_sub = false;
         self.composer_menu = if same {
             None
         } else {
@@ -12186,7 +12201,11 @@ impl Shell {
             ComposerMenu::Access => (self.access_rows(cx), 320.),
             ComposerMenu::Effort => (vec![self.effort_page(now, moving, reduce, cx)], 280.),
             ComposerMenu::Catalog => (vec![self.catalog_page(now, moving, cx)], 288.),
+            ComposerMenu::Workspace => (self.workspace_rows(cx), 240.),
         };
+        if which == ComposerMenu::Workspace {
+            return Some(self.workspace_menu_view(t, body, cx));
+        }
         let (bottom, left, width) = match (which, self.model_menu_anchor) {
             (ComposerMenu::Access, _) | (_, None) => {
                 let (left, full, bottom) = self.above_composer();
@@ -12229,6 +12248,445 @@ impl Shell {
                 .children(body)
                 .into_any_element(),
         )
+    }
+
+    /// Where the empty conversation `ix` may work, if it may choose at all: the project's index
+    /// and whether the chip opens a menu. A conversation that already ran shows where it works
+    /// only when that is a worktree. Nothing for a folder without Git or a project on another Mac.
+    fn workspace_chip_mode(&self, ix: usize) -> Option<(usize, bool)> {
+        let project = self.project_of(ix)?;
+        let conversation = &self.conversations[ix];
+        if conversation.session_id.is_empty() || self.on_remote() {
+            return None;
+        }
+        let git = std::path::Path::new(&self.projects[project].path)
+            .join(".git")
+            .exists();
+        let open = git && conversation.is_blank() && !conversation.working();
+        (open || conversation.isolated).then_some((project, open))
+    }
+
+    /// "▭ Pasta do projeto  ⑂ main" or "⑂ Worktree · name  ⑂ branch", under the composer.
+    fn workspace_chip(&self, ix: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (_, interactive) = self.workspace_chip_mode(ix)?;
+        let conversation = &self.conversations[ix];
+        let label = crate::workspace_choice::label(conversation.isolated, &conversation.worktree);
+        let branch = crate::workspace_choice::branch_label(&conversation.branch);
+        let store = self.workspace_chip.clone();
+        let open = matches!(self.composer_menu, Some((ComposerMenu::Workspace, _)));
+        let chip = div()
+            .id("workspace-chip")
+            .relative()
+            .h(px(26.))
+            .px(px(8.))
+            .rounded(px(8.))
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .text_size(px(12.5))
+            .text_color(content(0.6))
+            .when(interactive, |d| {
+                d.cursor_pointer()
+                    .when(open, |d| d.bg(content(0.07)))
+                    .hover(|s| s.bg(content(0.07)).text_color(content(0.9)))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.toggle_composer_menu(ComposerMenu::Workspace, cx)
+                    }))
+            })
+            .child(
+                gpui::canvas(move |bounds, _, _| store.set(Some(bounds)), |_, _, _, _| {})
+                    .absolute()
+                    .size_full(),
+            )
+            .child(icon(
+                if conversation.isolated {
+                    "branch"
+                } else {
+                    "folder"
+                },
+                14.,
+            ))
+            .child(label)
+            .when(!branch.is_empty(), |d| {
+                d.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(4.))
+                        .text_color(content(0.4))
+                        .child(icon("branch", 12.))
+                        .child(branch),
+                )
+            });
+        Some(
+            div()
+                .w_full()
+                .px(px(2.))
+                .pt(px(6.))
+                .flex()
+                .child(chip)
+                .into_any_element(),
+        )
+    }
+
+    /// The project's other worktrees for the chip's submenu: path, folder, branch, a session
+    /// working there (the host shares a worktree through one) and whether this conversation is in it.
+    fn workspace_options(&self, ix: usize) -> Vec<(String, String, String, Option<String>, bool)> {
+        let Some(project) = self.project_of(ix) else {
+            return Vec::new();
+        };
+        let project_path = self.projects[project].path.clone();
+        let current = &self.conversations[ix];
+        self.checkout_rows(project, "")
+            .into_iter()
+            .filter(|row| row.0 != project_path)
+            .map(|(path, branch, _, _)| {
+                let session = self.projects[project]
+                    .conversations
+                    .iter()
+                    .map(|c| &self.conversations[*c])
+                    .find(|c| !c.session_id.is_empty() && checkout_of(c, &project_path) == path)
+                    .map(|c| c.session_id.clone());
+                let chosen = current.isolated && current.worktree == path;
+                let folder = crate::workspace_choice::folder_name(&path).to_owned();
+                (path, folder, branch, session, chosen)
+            })
+            .collect()
+    }
+
+    fn workspace_rows(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let ix = self.active_conversation();
+        let track = crate::hover_track::list("workspace-menu");
+        let isolated = self.conversations[ix].isolated;
+        let row = |id: &'static str| {
+            div()
+                .id(id)
+                .h(px(30.))
+                .px(px(8.))
+                .rounded(px(crate::theme::RADIUS_MD))
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .text_size(px(13.))
+                .text_color(content(0.92))
+                .cursor_pointer()
+        };
+        let check = |on: bool| {
+            div()
+                .w(px(14.))
+                .flex_shrink_0()
+                .children(on.then(|| icon("check", 13.).text_color(content(0.8))))
+        };
+        vec![
+            div()
+                .px(px(8.))
+                .pt(px(4.))
+                .pb(px(4.))
+                .text_size(px(11.))
+                .text_color(content(0.45))
+                .child(t("ONDE TRABALHAR"))
+                .into_any_element(),
+            track
+                .row_named(
+                    row("workspace-folder")
+                        .on_mouse_move(cx.listener(|this, _, _, cx| {
+                            if std::mem::take(&mut this.workspace_sub) {
+                                cx.notify();
+                            }
+                        }))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.choose_workspace(crate::workspace_choice::Choice::Folder, cx)
+                        }))
+                        .child(icon("folder", 14.).text_color(content(0.6)))
+                        .child(div().flex_1().child(t("Pasta do projeto")))
+                        .child(check(!isolated)),
+                    "folder",
+                    false,
+                )
+                .into_any_element(),
+            track
+                .row_named(
+                    row("workspace-new")
+                        .on_mouse_move(cx.listener(|this, _, _, cx| {
+                            if std::mem::take(&mut this.workspace_sub) {
+                                cx.notify();
+                            }
+                        }))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.choose_workspace(crate::workspace_choice::Choice::NewWorktree, cx)
+                        }))
+                        .child(icon("branch", 14.).text_color(content(0.6)))
+                        .child(div().flex_1().child(t("Novo worktree")))
+                        .child(check(false)),
+                    "new",
+                    false,
+                )
+                .into_any_element(),
+            div()
+                .mx(px(8.))
+                .my(px(4.))
+                .h(px(1.))
+                .bg(content(0.08))
+                .into_any_element(),
+            track
+                .row_named(
+                    row("workspace-existing")
+                        .when(self.workspace_sub, |d| d.bg(content(0.07)))
+                        .on_mouse_move(cx.listener(|this, _, _, cx| {
+                            if !this.workspace_sub {
+                                this.workspace_sub = true;
+                                cx.notify();
+                            }
+                        }))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.workspace_sub = !this.workspace_sub;
+                            cx.notify();
+                        }))
+                        .child(icon("branch", 14.).text_color(content(0.6)))
+                        .child(div().flex_1().child(t("Worktrees existentes")))
+                        .child(icon("chevron-right", 13.).text_color(content(0.5))),
+                    "existing",
+                    false,
+                )
+                .into_any_element(),
+        ]
+    }
+
+    /// The workspace menu above its chip, with the existing worktrees beside it.
+    fn workspace_menu_view(
+        &self,
+        open: f32,
+        body: Vec<AnyElement>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let (left, bottom) = match self.workspace_chip.get() {
+            Some(bounds) => (
+                f32::from(bounds.left()),
+                self.viewport_height - f32::from(bounds.top()) + 6.,
+            ),
+            None => {
+                let (left, _, bottom) = self.above_composer();
+                (left, bottom)
+            }
+        };
+        let width = 240.;
+        let left = left.clamp(10., (self.viewport_width - width * 2. - 14.).max(10.));
+        let surface = |id: &'static str| {
+            div()
+                .id(id)
+                .occlude()
+                .absolute()
+                .bottom(px(bottom + (1. - open) * -6.))
+                .w(px(width))
+                .p(px(4.))
+                .opacity(open)
+                .rounded(px(crate::theme::RADIUS_LG))
+                .border_1()
+                .border_color(content(0.12))
+                .child(crate::theme::floating_surface(crate::theme::RADIUS_LG))
+                .shadow_lg()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        };
+        let ix = self.active_conversation();
+        let sub = self.workspace_sub.then(|| {
+            let track = crate::hover_track::list("workspace-sub");
+            let options = self.workspace_options(ix);
+            let empty = options.is_empty();
+            surface("workspace-sub")
+                .left(px(left + width + 4.))
+                .child(track.clone().pill())
+                .children(options.into_iter().enumerate().map(
+                    |(i, (_, folder, branch, session, chosen))| {
+                        let usable = session.is_some();
+                        track.row(
+                            div()
+                                .id(("workspace-existing", i))
+                                .h(px(34.))
+                                .px(px(8.))
+                                .rounded(px(crate::theme::RADIUS_MD))
+                                .flex()
+                                .items_center()
+                                .gap(px(8.))
+                                .when(usable, |d| d.cursor_pointer())
+                                .when(!usable, |d| d.opacity(0.45))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    if let Some(session) = session.clone() {
+                                        this.choose_workspace(
+                                            crate::workspace_choice::Choice::Existing { session },
+                                            cx,
+                                        );
+                                    }
+                                }))
+                                .child(icon("branch", 14.).text_color(content(0.6)))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .flex()
+                                        .flex_col()
+                                        .child(
+                                            div()
+                                                .truncate()
+                                                .text_size(px(13.))
+                                                .text_color(content(0.92))
+                                                .child(folder),
+                                        )
+                                        .child(
+                                            div()
+                                                .truncate()
+                                                .text_size(px(11.5))
+                                                .text_color(content(0.45))
+                                                .child(branch),
+                                        ),
+                                )
+                                .when(chosen, |d| {
+                                    d.child(icon("check", 13.).text_color(content(0.8)))
+                                }),
+                            i,
+                            false,
+                        )
+                    },
+                ))
+                .when(empty, |d| {
+                    d.child(
+                        div()
+                            .h(px(30.))
+                            .px(px(8.))
+                            .flex()
+                            .items_center()
+                            .text_size(px(12.5))
+                            .text_color(content(0.45))
+                            .child(crate::i18n::t("Nenhum worktree")),
+                    )
+                })
+        });
+        div()
+            .absolute()
+            .inset_0()
+            .child(
+                surface("workspace-menu")
+                    .left(px(left))
+                    .child(crate::hover_track::list("workspace-menu").pill())
+                    .children(body),
+            )
+            .children(sub)
+            .into_any_element()
+    }
+
+    /// The conversation is still empty: the choice makes a session for that workspace, and it
+    /// takes the place of this one (the host has no command that moves a session).
+    fn choose_workspace(
+        &mut self,
+        choice: crate::workspace_choice::Choice,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::workspace_choice::Choice;
+        self.composer_menu = None;
+        self.workspace_sub = false;
+        let ix = self.active_conversation();
+        let conversation = &self.conversations[ix];
+        let Some(project) = self.project_of(ix) else {
+            return;
+        };
+        if !conversation.is_blank() || conversation.working() {
+            return;
+        }
+        let same = match &choice {
+            Choice::Folder => !conversation.isolated,
+            Choice::NewWorktree => false,
+            Choice::Existing { session } => {
+                conversation.isolated
+                    && self
+                        .conversations
+                        .iter()
+                        .find(|c| &c.session_id == session)
+                        .is_some_and(|c| c.worktree == conversation.worktree)
+            }
+        };
+        if same {
+            cx.notify();
+            return;
+        }
+        let agent = self.new_session_agent(ix);
+        let model = (agent == conversation.provider)
+            .then(|| conversation.model.clone())
+            .flatten();
+        let request = crate::workspace_choice::request(
+            &choice,
+            &self.projects[project].id,
+            agent,
+            model.as_deref(),
+        );
+        let call = self
+            .backend
+            .invoke("create_session", json!({ "request": request }));
+        self.waiting.insert(
+            call,
+            Waiting::Replaced(ix, matches!(choice, Choice::Existing { .. })),
+        );
+        cx.notify();
+    }
+
+    /// The new session arrived: it opens in place of the empty one, which goes away with its
+    /// worktree when it made one that nothing else uses. What was typed moves over.
+    fn workspace_replaced(
+        &mut self,
+        old: usize,
+        shared: bool,
+        value: &Value,
+        cx: &mut Context<Self>,
+    ) {
+        let stale = !self.conversations[old].is_blank() || self.conversations[old].working();
+        if stale {
+            // The first message went out meanwhile: keep that conversation, drop the new session.
+            let remove = !shared && value["worktree"]["isolated"].as_bool() == Some(true);
+            self.backend.invoke(
+                "delete_session",
+                json!({ "sessionId": value["id"], "removeWorktree": remove, "confirm": true }),
+            );
+            return;
+        }
+        let ix = self.add_session(value);
+        self.conversations[ix].loaded = true;
+        let from = &self.conversations[old];
+        let (approval, planning, debugging, team) = (
+            from.approval.clone(),
+            from.planning,
+            from.debugging,
+            from.team,
+        );
+        let (isolated, path) = (from.isolated, from.worktree.clone());
+        let others = self
+            .conversations
+            .iter()
+            .enumerate()
+            .filter(|(i, c)| {
+                *i != old && *i != ix && c.worktree == path && !c.session_id.is_empty()
+            })
+            .count();
+        let target = &mut self.conversations[ix];
+        target.approval = approval;
+        target.planning = planning;
+        target.debugging = debugging;
+        target.team = team;
+        if let Some(draft) = self.drafts.remove(&old) {
+            self.drafts.insert(ix, draft);
+        }
+        if let Some(files) = self.attachments.remove(&old) {
+            self.attachments.insert(ix, files);
+        }
+        self.open(ix, cx);
+        let id = self.conversations[old].session_id.clone();
+        self.leave_conversation(old, cx);
+        if let Some(project) = self.project_of(old) {
+            self.projects[project].conversations.retain(|c| *c != old);
+        }
+        let remove = crate::workspace_choice::removable(isolated, others);
+        self.backend.invoke(
+            "delete_session",
+            json!({ "sessionId": id, "removeWorktree": remove, "confirm": true }),
+        );
     }
 
     /// Where the composer's column starts and ends, for its menus.
@@ -13208,6 +13666,7 @@ impl Shell {
                             ),
                     ),
             )
+            .children(self.workspace_chip(ix, cx))
             .into_any_element()
     }
 

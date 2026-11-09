@@ -89,6 +89,7 @@ mod theme;
 mod tool_images;
 mod visuals;
 mod window_place;
+mod workspace_choice;
 mod workspace_follow;
 
 use gpui::{

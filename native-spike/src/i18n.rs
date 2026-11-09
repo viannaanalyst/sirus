@@ -2560,6 +2560,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "No iOS simulator found.",
     ),
     ("Nenhum uso nesse período.", "No usage in this period."),
+    ("Nenhum worktree", "No worktrees"),
     ("Nenhuma", "None"),
     ("Nenhuma CLI detectada ainda.", "No CLI detected yet."),
     ("Nenhuma aba aberta", "No tabs open"),
@@ -3610,6 +3611,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "O último commit já está em um remoto, então não pode ser corrigido.",
         "The last commit is already on a remote, so it can't be amended.",
     ),
+    ("ONDE TRABALHAR", "WORKSPACE"),
     ("Objetivo inválido.", "Invalid goal."),
     ("Observou", "Read"),
     ("Oceano", "Ocean"),
@@ -4744,6 +4746,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Workers, KV, R2 e D1", "Workers, KV, R2 and D1"),
     ("Workspace da sessão", "Session workspace"),
     ("Workspace padrão da sessão", "Default session workspace"),
+    ("Worktrees existentes", "Existing worktrees"),
     (
         "a conversa atingiu o limite de terminais",
         "session reached the terminal limit",

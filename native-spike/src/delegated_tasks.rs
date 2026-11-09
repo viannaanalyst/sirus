@@ -92,12 +92,30 @@ pub(crate) fn group_summary(total: usize, done: usize) -> String {
     format!("{} · {finished}", tf("{} tarefas delegadas", &[&total]))
 }
 
-/// "1 tarefa" or "N tarefas", the disclosure under a conversation in the sidebar.
-pub(crate) fn tasks_label(count: usize) -> String {
-    if count == 1 {
-        tf("{} tarefa", &[&count])
-    } else {
-        tf("{} tarefas", &[&count])
+/// The provider stack a parent conversation shows for its delegated tasks: each provider once, the
+/// most recent task first, three tiles at most, with the total and whether any waits on the person.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TaskStack {
+    pub providers: Vec<String>,
+    pub count: usize,
+    pub waiting: bool,
+}
+
+/// Composes a parent row's stack from its children, given oldest first as `nest` returns them.
+pub(crate) fn task_stack(children: &[(String, bool)]) -> TaskStack {
+    let mut providers = Vec::new();
+    for (provider, _) in children.iter().rev() {
+        if providers.len() >= 3 {
+            break;
+        }
+        if !providers.iter().any(|seen| seen == provider) {
+            providers.push(provider.clone());
+        }
+    }
+    TaskStack {
+        providers,
+        count: children.len(),
+        waiting: children.iter().any(|(_, waiting)| *waiting),
     }
 }
 
@@ -175,7 +193,16 @@ impl Shell {
         nest(&list)
     }
 
-    /// The disclosure row under a conversation that delegated, and its tasks while it is open.
+    /// The tasks nested under a conversation, oldest first.
+    pub(super) fn tasks_of(&self, parent: usize) -> Vec<usize> {
+        self.project_of(parent)
+            .map(|project| self.project_tree(project).1)
+            .and_then(|mut kids| kids.remove(&parent))
+            .unwrap_or_default()
+    }
+
+    /// The tasks under a parent that the person opened: they follow its row while open, and slide
+    /// away when the stack closes.
     pub(super) fn push_tasks(
         &self,
         conversation: usize,
@@ -183,74 +210,197 @@ impl Shell {
         wanted: &mut Vec<(Row, f32, f32)>,
         y: &mut f32,
     ) {
+        if !self.tasks_open.contains(&conversation) {
+            return;
+        }
         let Some(tasks) = kids.get(&conversation) else {
             return;
         };
-        wanted.push((Row::Tasks(conversation), *y, *y));
-        *y += TASKS_ROW;
-        if self.tasks_open.contains(&conversation) {
-            for task in tasks {
-                wanted.push((Row::Conversation(*task), *y, *y));
-                *y += CONV_ROW;
-            }
+        for task in tasks {
+            wanted.push((Row::Conversation(*task), *y, *y));
+            *y += CONV_ROW;
         }
     }
 
-    /// "N tarefas" with a chevron under a conversation: a click opens or closes its tasks. A dot
-    /// shows while one of them waits on the person, so a closed list never hides a request.
-    pub(super) fn tasks_row(
+    /// The stack of provider tiles on a parent row: a click opens or closes its tasks, and an amber
+    /// dot shows while one of them waits on the person, so a closed list never hides a request.
+    pub(super) fn task_stack_view(
         &self,
         parent: usize,
-        y: f32,
-        alpha: f32,
+        tasks: &[usize],
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let tasks = self
-            .project_of(parent)
-            .map(|project| self.project_tree(project).1)
-            .and_then(|mut kids| kids.remove(&parent))
-            .unwrap_or_default();
-        let waiting = tasks
+        let children: Vec<(String, bool)> = tasks
             .iter()
-            .any(|task| !self.conversations[*task].pending.is_empty());
+            .map(|ix| {
+                let conversation = &self.conversations[*ix];
+                (
+                    conversation.provider.to_owned(),
+                    !conversation.pending.is_empty(),
+                )
+            })
+            .collect();
+        let stack = task_stack(&children);
         let open = self.tasks_open.contains(&parent);
         div()
-            .id(("tasks-disclosure", parent))
-            .absolute()
-            .left(px(6.))
-            .right(px(6.))
-            .top(px(y))
-            .h(px(TASKS_ROW))
-            .opacity(alpha)
-            .pl(px(22.))
-            .pr(px(8.))
+            .id(("tasks-stack", parent))
+            .h(px(20.))
+            .flex_shrink_0()
             .flex()
             .items_center()
-            .gap(px(5.))
-            .text_size(px(11.5))
-            .text_color(content(0.42))
+            .pl(px(2.))
+            .pr(px(3.))
+            .rounded(px(crate::theme::RADIUS_SM))
             .cursor_pointer()
+            .when(open, |d| d.bg(content(0.08)))
+            .hover(|s| s.bg(content(0.1)))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(move |this, _, _, cx| {
                 if !this.tasks_open.remove(&parent) {
                     this.tasks_open.insert(parent);
                 }
                 cx.notify();
             }))
+            .children(stack.providers.iter().enumerate().map(|(at, provider)| {
+                div()
+                    .when(at > 0, |d| d.ml(px(-5.)))
+                    .size(px(16.))
+                    .rounded(px(5.))
+                    .bg(crate::theme::black(0.65))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(mark_tile(
+                        &crate::tab_tile::TileSize {
+                            w: 14.,
+                            h: 14.,
+                            radius: 4.,
+                        },
+                        Face::provider(provider),
+                        provider_glyph(provider, 9.),
+                    ))
+            }))
             .child(
-                icon(
-                    if open {
-                        "chevron-down"
-                    } else {
-                        "chevron-right"
-                    },
-                    11.,
-                )
-                .text_color(content(0.45)),
+                div()
+                    .ml(px(5.))
+                    .text_size(px(11.))
+                    .text_color(content(0.55))
+                    .child(stack.count.to_string()),
             )
-            .child(tasks_label(tasks.len()))
-            .when(waiting, |d| {
-                d.child(div().size(px(6.)).rounded_full().bg(state_color("waiting")))
+            .when(stack.waiting, |d| {
+                d.child(
+                    div()
+                        .ml(px(5.))
+                        .size(px(6.))
+                        .rounded_full()
+                        .bg(state_color("waiting")),
+                )
             })
+            .into_any_element()
+    }
+
+    /// A delegated task under its parent, drawn like the transcript's activity tree: the same rail
+    /// and elbow, then its state, its provider, its title and its age.
+    pub(super) fn task_row(
+        &self,
+        index: usize,
+        y: f32,
+        alpha: f32,
+        selected: bool,
+        now: Instant,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let conversation = &self.conversations[index];
+        let last = self
+            .project_of(index)
+            .and_then(|project| self.nested_parent(project, index))
+            .is_none_or(|parent| self.tasks_of(parent).last() == Some(&index));
+        let waiting = !conversation.pending.is_empty();
+        let status = conversation.status.as_str();
+        let mark: AnyElement = if waiting {
+            div()
+                .size(px(7.))
+                .rounded_full()
+                .bg(state_color("waiting"))
+                .into_any_element()
+        } else if status == "failed" {
+            icon("close", 10.)
+                .text_color(gpui::rgb(0xff7a7a))
+                .into_any_element()
+        } else if active(status) {
+            div()
+                .size(px(12.))
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(spinner_at(
+                    (now.duration_since(self.epoch).as_secs_f32() / SPINNER_PERIOD).fract(),
+                ))
+                .into_any_element()
+        } else {
+            icon("check", 10.)
+                .text_color(gpui::rgb(0x6fcf8a))
+                .into_any_element()
+        };
+        let row = div()
+            .id(("task", index))
+            .absolute()
+            .left(px(22.))
+            .right(px(6.))
+            .top(px(y))
+            .h(px(CONV_ROW - 2.))
+            .opacity(alpha)
+            .rounded(px(crate::theme::RADIUS_MD))
+            .relative()
+            .pl(px(TILE_RAIL_INDENT))
+            .pr(px(8.))
+            .flex()
+            .items_center()
+            .gap(px(7.))
+            .when(selected, |d| {
+                d.bg(content(crate::segment_pill::ROW_FILL)).child(
+                    div()
+                        .absolute()
+                        .left(px(0.))
+                        .top(px(4.5))
+                        .h(px(18.))
+                        .w(px(2.5))
+                        .rounded(px(1.25))
+                        .bg(accent()),
+                )
+            })
+            .cursor_pointer()
+            .on_click(cx.listener(move |this, _, _, cx| this.open(index, cx)))
+            .child(rail(last))
+            .child(
+                div()
+                    .size(px(14.))
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(mark),
+            )
+            .child(crate::tab_tile::provider_mark(conversation.provider, 11.))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(12.5))
+                    .text_color(content(if selected { 1. } else { 0.68 }))
+                    .child(conversation.title.clone()),
+            )
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .text_size(px(11.))
+                    .text_color(content(0.35))
+                    .child(conversation.age()),
+            );
+        crate::hover_track::list("sidebar")
+            .row(row, index, selected)
             .into_any_element()
     }
 
@@ -539,8 +689,35 @@ mod tests {
         );
         assert!(group_summary(2, 1).ends_with(&tf("{} concluída", &[&1])));
         assert!(group_summary(2, 0).ends_with(&tf("{} concluídas", &[&0])));
-        assert_eq!(tasks_label(1), tf("{} tarefa", &[&1]));
-        assert_eq!(tasks_label(4), tf("{} tarefas", &[&4]));
+    }
+
+    #[test]
+    fn the_stack_keeps_unique_providers_newest_first_and_counts_every_task() {
+        let children = vec![
+            ("claude".to_owned(), false),
+            ("codex".to_owned(), true),
+            ("codex".to_owned(), false),
+            ("deepseek".to_owned(), false),
+            ("claude".to_owned(), false),
+        ];
+        let stack = task_stack(&children);
+        assert_eq!(stack.providers, ["claude", "deepseek", "codex"]);
+        assert_eq!(stack.count, 5);
+        assert!(stack.waiting);
+    }
+
+    #[test]
+    fn the_stack_caps_at_three_tiles_and_reports_no_waiting() {
+        let children: Vec<(String, bool)> = ["a", "b", "c", "d"]
+            .iter()
+            .map(|provider| ((*provider).to_owned(), false))
+            .collect();
+        let stack = task_stack(&children);
+        assert_eq!(stack.providers, ["d", "c", "b"]);
+        assert_eq!(stack.count, 4);
+        assert!(!stack.waiting);
+        assert!(task_stack(&[]).providers.is_empty());
+        assert_eq!(task_stack(&[]).count, 0);
     }
 
     #[test]

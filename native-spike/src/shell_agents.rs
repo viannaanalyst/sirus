@@ -142,6 +142,15 @@ impl Shell {
             .border_1()
             .border_color(crate::theme::border())
             .child(crate::theme::floating_surface(radius))
+            // The frosted surface paints over the pill's own border, so the edge rides on top.
+            .child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .rounded(px(radius))
+                    .border_1()
+                    .border_color(crate::theme::border()),
+            )
             .when(!in_footer, |d| d.shadow_lg())
             .flex()
             .items_center()

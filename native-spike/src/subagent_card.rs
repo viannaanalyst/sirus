@@ -298,7 +298,7 @@ impl Shell {
         });
 
         // The body is laid out only while it shows; its height is exact (every row is the same).
-        let rows = crate::hover_track::list(&format!("sub-rows-{conversation}-{index}"));
+        let rows = crate::hover_track::list_barred(&format!("sub-rows-{conversation}-{index}"));
         let buttons = crate::hover_track::list(&format!("sub-actions-{conversation}-{index}"));
         let mut body: Vec<AnyElement> = vec![rows.pill().into_any_element()];
         let mut natural = 0.;

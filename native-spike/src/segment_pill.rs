@@ -15,6 +15,8 @@ const BAR_WIDTH: f32 = 2.5;
 const BAR_HEIGHT: f32 = 18.;
 /// A list's selection, as quick as its hover (hover_track.rs).
 const ROW_SLIDE: f32 = 0.13;
+/// A list's selected row fill, the same wherever a row shows it (the ⌘K palette, the subagents).
+pub const ROW_FILL: f32 = 0.09;
 
 #[derive(Clone, Copy)]
 struct Thumb {
@@ -79,6 +81,23 @@ pub fn forget(key: &'static str) {
     THUMBS.with(|thumbs| thumbs.borrow_mut().remove(key));
 }
 
+/// A selected row's paint: its fill, rounded by `radius`, and the short accent bar at its left
+/// edge, centred vertically. Both are painted over the row's own bounds, so nothing moves.
+pub fn paint_row(window: &mut Window, bounds: Bounds<Pixels>, color: Hsla, bar: Hsla, radius: f32) {
+    window.paint_quad(fill(bounds, color).corner_radii(px(radius)));
+    let h = f32::from(bounds.size.height);
+    window.paint_quad(
+        fill(
+            Bounds::new(
+                bounds.origin + point(px(0.), px((h - BAR_HEIGHT) / 2.)),
+                size(px(BAR_WIDTH), px(BAR_HEIGHT)),
+            ),
+            bar,
+        )
+        .corner_radii(px(BAR_WIDTH / 2.)),
+    );
+}
+
 /// A list's selection: a fill across the row and a short bar at its edge, gliding together
 /// between rows. The same `probe`, on each `.relative()` row.
 pub fn row_thumb(key: &'static str, chosen: usize, color: Hsla, bar: Hsla) -> impl IntoElement {
@@ -108,19 +127,12 @@ pub fn row_thumb(key: &'static str, chosen: usize, color: Hsla, bar: Hsla) -> im
             }
             let (y, h) = (thumb.y.at(now), thumb.h.at(now));
             let origin = bounds.origin + point(px(thumb.x.at(now)), px(y));
-            window.paint_quad(fill(
+            paint_row(
+                window,
                 Bounds::new(origin, size(px(thumb.w.at(now)), px(h))),
                 color,
-            ));
-            window.paint_quad(
-                fill(
-                    Bounds::new(
-                        origin + point(px(0.), px((h - BAR_HEIGHT) / 2.)),
-                        size(px(BAR_WIDTH), px(BAR_HEIGHT)),
-                    ),
-                    bar,
-                )
-                .corner_radii(px(BAR_WIDTH / 2.)),
+                bar,
+                0.,
             );
         },
     )

@@ -55,15 +55,33 @@ impl Shell {
                         .child(crate::theme::floating_surface(crate::theme::RADIUS_LG))
                         .occlude()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .child(
-                            div()
+                        .child(match problem.split_once('\n') {
+                            // A title with a line under it (the Git button's results).
+                            Some((title, detail)) => div()
+                                .min_w_0()
+                                .line_height(px(18.))
+                                .text_color(color)
+                                .child(
+                                    div()
+                                        .text_size(px(13.))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child(title.to_owned()),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(12.))
+                                        .line_clamp(2)
+                                        .text_color(content(0.55))
+                                        .child(detail.to_owned()),
+                                ),
+                            None => div()
                                 .min_w_0()
                                 .text_size(px(13.))
                                 .line_height(px(18.))
                                 .line_clamp(3)
                                 .text_color(color)
-                                .child(problem),
-                        )
+                                .child(problem.clone()),
+                        })
                         .child(
                             div()
                                 .id("problem-toast-close")

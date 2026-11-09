@@ -576,6 +576,26 @@ pub(crate) fn fetch_branch(
     }
 }
 
+/// `git pull <remote> <branch>` for the top bar's Git button (ADR-198): fast-forward only, or a
+/// rebase of the branch's own commits onto the upstream. Never a merge commit. Bounded to 30 s
+/// under the same hook and network-helper refusals as push. The raw output is returned so the
+/// caller can tell conflicts and divergence apart.
+pub(crate) fn pull_sync(cwd: &Path, remote: &str, branch: &str, rebase: bool) -> Result<Output> {
+    if !valid_remote_name(remote) || !valid_branch_chars(branch) {
+        return Err(Error::git("invalid branch name"));
+    }
+    refuse_configured_hooks(cwd)?;
+    refuse_project_network_helpers(cwd)?;
+    let mode = if rebase { "--rebase=true" } else { "--ff-only" };
+    let mut args = vec!["pull", mode];
+    if !rebase {
+        args.push("--no-rebase");
+    }
+    args.extend(["--no-edit", "--no-stat", remote, branch]);
+    capture_git(cwd, &args, std::time::Duration::from_secs(30))
+        .map_err(|_| Error::git("git pull did not finish in 30 seconds."))
+}
+
 /// `git pull --ff-only <remote> <branch>` for the header's Pull (ADR-148): never a merge or
 /// rebase, bounded to 30 s, under the same hook and network-helper refusals as push. The raw
 /// output is returned so the caller can tell blocking files and divergence apart.

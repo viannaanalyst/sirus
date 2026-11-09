@@ -599,6 +599,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "There is nothing to compact yet: this conversation has not started.",
     ),
     (
+        "Ainda não verificado no GitHub",
+        "Not checked on GitHub yet",
+    ),
+    (
         "Ajusta o espaçamento sem mudar o tamanho do texto.",
         "Adjusts spacing without changing the text size.",
     ),
@@ -847,6 +851,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Avisos no app", "Activity toasts"),
     ("Azul", "Blue"),
     ("Ações", "Actions"),
+    ("Ações do Git", "Git actions"),
     ("Ações recentes", "Recent actions"),
     ("Baixando a versão {}…", "Downloading version {}…"),
     ("Baixando o Sirus {}…", "Downloading Sirus {}…"),
@@ -1039,6 +1044,8 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Começar", "Get started"),
     ("Commit do Git inválido", "Invalid Git commit"),
     ("Commit e Push", "Commit and Push"),
+    ("Commit e enviar", "Commit and push"),
+    ("Commit feito", "Committed"),
     ("Commit feito: {title}", "Committed: {title}"),
     ("Commit inválido.", "Invalid commit."),
     ("Commit não encontrado.", "Commit not found."),
@@ -1142,6 +1149,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Confirme primeiro esta alteração no GitHub.",
         "Confirm this GitHub change first.",
     ),
+    ("Conflito em: {}", "Conflict in: {}"),
     ("Confortável", "Comfortable"),
     ("Conjunto da equipe", "Team pool"),
     (
@@ -2205,6 +2213,8 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Janela flutuante", "Floating window"),
     ("Janelas do app", "App windows"),
+    ("Já está em dia", "Already up to date"),
+    ("Já está em dia.", "Already up to date."),
     (
         "Já existe um branch com esse nome.",
         "A branch with this name already exists.",
@@ -2486,6 +2496,8 @@ const ENTRIES: &[(&str, &str)] = &[
         "Nothing was recorded for this subagent.",
     ),
     ("Nada novo para preparar.", "Nothing new to stage."),
+    ("Nada para commitar.", "Nothing to commit."),
+    ("Nada para enviar.", "Nothing to push."),
     (
         "Nada para o commit: não há alterações.",
         "Nothing to commit: there are no changes.",
@@ -2664,6 +2676,11 @@ const ENTRIES: &[(&str, &str)] = &[
         "Não deu para falar com o 1Password.",
         "1Password could not be reached.",
     ),
+    (
+        "Não deu para gerar a mensagem do commit.",
+        "Could not write the commit message.",
+    ),
+    ("Não deu para puxar", "Could not pull"),
     ("Não encontrado", "Not found"),
     ("Não encontrado no GitHub.", "Not found on GitHub."),
     ("Não encontrados {}", "Not found {}"),
@@ -2977,6 +2994,10 @@ const ENTRIES: &[(&str, &str)] = &[
     (
         "O Claude resume a conversa ao chegar perto deste total de tokens, de 100000 a 1000000. Vazio segue o padrão do Claude Code. Muda quando compacta, não o tamanho da janela do modelo.",
         "Claude summarizes the conversation near this many tokens, from 100000 to 1000000. Empty follows Claude Code's default. This changes when it compacts, not the model's window.",
+    ),
+    (
+        "O Git não conseguiu juntar as alterações.",
+        "Git could not join the changes.",
     ),
     ("O Git não respondeu.", "Git did not answer."),
     (
@@ -4009,6 +4030,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Puxar", "Pull"),
     ("Puxar agora", "Pull now"),
     ("Puxar da origem", "Pull from origin"),
+    ("Puxe antes de enviar.", "Pull before pushing."),
     ("Páginas claras", "Light pages"),
     ("Páginas escuras", "Dark pages"),
     ("Quadros por segundo", "Frame rate"),
@@ -4206,6 +4228,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Salva contagens limitadas do ciclo de execução localmente. Prompts, output, paths e credenciais são excluídos.",
         "Stores bounded lifecycle counts locally. Prompts, output, paths and credentials are excluded.",
     ),
+    ("Salvando…", "Saving…"),
     ("Salvar", "Save"),
     ("Salvar automaticamente", "Save automatically"),
     ("Salvar login", "Save login"),
@@ -4302,6 +4325,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "Sessões trabalhando, esperando você ou concluídas sem serem vistas ficam acima da ordem das sessões. As listas não se mexem enquanto o ponteiro está sobre elas.",
         "Sessions that are working, waiting for you or finished unseen go above the thread order. Lists hold still while your pointer is over them.",
     ),
+    (
+        "Seu branch divergiu do GitHub. Use Sincronizar.",
+        "Your branch diverged from GitHub. Use Sync.",
+    ),
     ("Seu texto foi mantido.", "Your text was kept."),
     ("Seus agentes", "Your agents"),
     (
@@ -4315,6 +4342,9 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Silenciar por 8 horas", "Mute for 8 hours"),
     ("Sim", "Yes"),
     ("Simulador", "Simulator"),
+    ("Sincronizado", "Synced"),
+    ("Sincronizando…", "Syncing…"),
+    ("Sincronizar", "Sync"),
     (
         "Sirus {} disponível · Instalar",
         "Sirus {} available · Install",
@@ -4370,6 +4400,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Spotlight", "Spotlight (macOS)"),
     ("Squash e mesclar", "Squash and merge"),
     ("Status do Git inválido", "Invalid Git status"),
+    (
+        "Sua branch está atrás do GitHub. Puxe antes de enviar.",
+        "Your branch is behind GitHub. Pull before pushing.",
+    ),
     (
         "Sua conta do GitHub não pode alterar este repositório.",
         "Your GitHub account cannot change this repository.",
@@ -4712,6 +4746,19 @@ const ENTRIES: &[(&str, &str)] = &[
     (
         "Verifica em segundo plano se Codex, Claude e outras CLIs têm versões mais novas.",
         "Check Codex, Claude and other provider CLIs for newer versions in the background.",
+    ),
+    (
+        "Verificado no GitHub há menos de 1 min",
+        "Checked on GitHub under 1 min ago",
+    ),
+    (
+        "Verificado no GitHub há {} dias",
+        "Checked on GitHub {} days ago",
+    ),
+    ("Verificado no GitHub há {} h", "Checked on GitHub {} h ago"),
+    (
+        "Verificado no GitHub há {} min",
+        "Checked on GitHub {} min ago",
     ),
     ("Verificando o Simulador…", "Checking the Simulator…"),
     ("Verificando…", "Checking…"),
@@ -5170,6 +5217,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "{} files can be undone.",
     ),
     ("{} assumiu", "{} took over"),
+    ("{} atualizada a partir de {}", "{} updated from {}"),
     ("{} commit novo em {}", "{} new commit on {}"),
     ("{} commits novos em {}", "{} new commits on {}"),
     ("{} contas", "{} accounts"),
@@ -5194,6 +5242,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "{} está instalado e costuma usar {}",
         "{} is installed and usually uses {}",
     ),
+    ("{} está no GitHub", "{} is on GitHub"),
     ("{} falharam", "{} failed"),
     ("{} ferramentas", "{} tools"),
     (
@@ -5201,6 +5250,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "{} was edited after this reply, in the same lines. Nothing is undone: revert by hand from the diff.",
     ),
     ("{} fps · pior quadro {} ms", "{} fps · worst frame {} ms"),
+    ("{} já está igual a {}", "{} already matches {}"),
     ("{} mais", "{} more"),
     ("{} mantidas", "{} kept"),
     (

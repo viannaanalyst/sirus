@@ -78,6 +78,9 @@ pub(crate) mod activity_cards;
 /// The first run: a full-window welcome over the letters robot (first_run.rs).
 #[path = "first_run.rs"]
 pub(crate) mod first_run;
+/// The top bar's Git split button and its menu (git_button.rs).
+#[path = "git_button.rs"]
+mod git_button;
 /// `/stage` and `/commit` typed in the composer (git_slash.rs).
 #[path = "git_slash.rs"]
 mod git_slash;
@@ -920,8 +923,8 @@ enum Waiting {
     BranchCreate,
     /// `git_incoming` for a conversation generation (git_sync.rs).
     Incoming(u64),
-    /// `git_pull_ff` for a conversation generation (git_sync.rs).
-    IncomingPull(u64),
+    /// `git_sync_pull` for a conversation generation; true when a push follows (git_button.rs).
+    IncomingPull(u64, bool),
     Servers,
     Editors,
     Icons,
@@ -1161,6 +1164,8 @@ pub struct Shell {
     branch_busy: bool,
     /// The header's Puxar button and its popover (git_sync.rs).
     incoming: IncomingState,
+    /// Where the Git split button was last painted, for its menu to sit under (git_button.rs).
+    git_bounds: Rc<Cell<Option<gpui::Bounds<gpui::Pixels>>>>,
     env_servers: Vec<String>,
     env_editors: Vec<(String, String)>,
     env_icons: HashMap<String, std::path::PathBuf>,
@@ -1619,6 +1624,7 @@ impl Shell {
             branch_error: None,
             branch_busy: false,
             incoming: IncomingState::default(),
+            git_bounds: Rc::new(Cell::new(None)),
             env_servers: Vec::new(),
             env_editors: Vec::new(),
             env_icons: HashMap::new(),
@@ -2214,11 +2220,13 @@ impl Shell {
                 Some(Waiting::BranchCreate) => self.branch_created(ok, &value, cx),
                 Some(Waiting::Incoming(generation)) => {
                     if self.incoming.answer(generation, ok, &value) {
+                        // The branch row's ↑↓ read the same upstream.
+                        self.git_refresh_views(cx);
                         cx.notify();
                     }
                 }
-                Some(Waiting::IncomingPull(generation)) => {
-                    self.incoming_pulled(generation, ok, &value, cx)
+                Some(Waiting::IncomingPull(generation, then_push)) => {
+                    self.git_pulled(generation, then_push, ok, &value, cx)
                 }
                 Some(Waiting::Session(usize::MAX)) => {}
                 Some(Waiting::Session(_)) if ok => self.session_updated(&value, cx),
@@ -6052,6 +6060,12 @@ impl Shell {
             cx.notify();
             return;
         }
+        if key == "escape" && self.incoming.open {
+            let fade = if cx.reduce_motion() { 0. } else { MENU };
+            self.incoming.close_at(Instant::now(), fade);
+            cx.notify();
+            return;
+        }
         if key == "escape"
             && (self.environment.is_some()
                 || self.appearance.is_some()
@@ -7193,8 +7207,14 @@ impl Shell {
         let dock_width = self.dock_full(room, now) * open_dock;
         // Exactly over the card's hairline: gutter, card border, then the panel.
         let dock_edge = (width - 6. - 1. - dock_width - 1.).max(nav_end + 6.);
-        let controls = (80. + 28. * open_dock + 72.).max(width - dock_edge - 16. + 6.);
+        let git_room = self.git_button_width(open_dock < 0.01 || dock_width >= PANEL_WITH_DIFF);
+        let controls = (80. + 28. * open_dock + 72. + git_room).max(width - dock_edge - 16. + 6.);
         let (added, removed) = self.diff_stat();
+        let git_button = if open_dock < 0.01 || dock_width >= PANEL_WITH_DIFF {
+            self.git_button(now, moving, cx)
+        } else {
+            None
+        };
         let tint: gpui::Hsla = gpui::rgb(crate::theme::DIFF_ADD).into();
         let changes_open = self.dock_open && self.dock_active == Some(CHANGES_PANE);
         let strip = width - strip_left - 12. - PLATE - 6. - controls - 10.;
@@ -7254,15 +7274,13 @@ impl Shell {
                 div()
                     .absolute()
                     .right(px(10.))
-                    .top(px(8.))
+                    .top(px(5.))
+                    .h(px(30.))
                     .flex()
+                    .items_center()
                     .gap(px(4.))
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .children(git_sync::pill(
-                        git_sync::shown(self.incoming.value.as_ref()),
-                        self.incoming.pulling,
-                        cx.listener(|this, _, _, cx| this.incoming_toggle(cx)),
-                    ))
+                    .children(git_button)
                     .when(open_dock < 0.01 || dock_width >= PANEL_WITH_DIFF, |d| {
                         d.child(
                             div()
@@ -16098,55 +16116,6 @@ impl Shell {
         self.waiting.insert(id, Waiting::Incoming(generation));
     }
 
-    /// The header's Puxar: `git pull --ff-only` from the branch's upstream.
-    fn incoming_pull(&mut self, cx: &mut Context<Self>) {
-        if !self.incoming.begin_pull() {
-            return;
-        }
-        let session = self.incoming.session().to_owned();
-        let generation = self.incoming.generation();
-        let id = self
-            .backend
-            .invoke("git_pull_ff", json!({ "sessionId": session }));
-        self.waiting.insert(id, Waiting::IncomingPull(generation));
-        cx.notify();
-    }
-
-    fn incoming_pulled(
-        &mut self,
-        generation: u64,
-        ok: bool,
-        value: &Value,
-        cx: &mut Context<Self>,
-    ) {
-        let answer = git_sync::pull_answer(ok, value);
-        let done = matches!(answer, git_sync::Pulled::Done(_));
-        if !self.incoming.pulled(generation, answer) {
-            return;
-        }
-        if done {
-            self.refresh_diff();
-            // The green check stays a moment, then the popover closes.
-            cx.spawn(async move |this, cx| {
-                cx.background_executor().timer(git_sync::PULLED_FOR).await;
-                let _ = this.update(cx, |this, cx| {
-                    if this.incoming.faded(generation) {
-                        cx.notify();
-                    }
-                });
-            })
-            .detach();
-        }
-        cx.notify();
-    }
-
-    fn incoming_toggle(&mut self, cx: &mut Context<Self>) {
-        self.environment = None;
-        let duration = if cx.reduce_motion() { 0. } else { MENU };
-        self.incoming.toggle(Instant::now(), duration);
-        cx.notify();
-    }
-
     /// "Criar branch…" in the Ambiente card: checks the name, then the host creates and switches.
     fn submit_branch(&mut self, cx: &mut Context<Self>) {
         let Some(draft) = self.branch_draft.clone() else {
@@ -18817,21 +18786,7 @@ impl Render for Shell {
         });
         let add_menu = self.add_menu_view(now, &mut moving, cx);
         let environment = self.environment_view(now, &mut moving, cx);
-        let incoming_card = {
-            let p = match &self.incoming.tween {
-                Some(tween) => {
-                    moving |= !tween.done(now);
-                    tween.at(now).clamp(0., 1.)
-                }
-                None => 1.,
-            };
-            git_sync::popover(
-                &self.incoming,
-                TITLE_BAR,
-                p,
-                cx.listener(|this, _, _, cx| this.incoming_pull(cx)),
-            )
-        };
+        let git_menu = self.git_menu(now, &mut moving, size, cx);
         // Watches the pointer over the whole window, even above opaque panels.
         let view = cx.entity();
         let height = f32::from(size.height);
@@ -18959,7 +18914,8 @@ impl Render for Shell {
                 if this.select.clear_unless_claimed() {
                     cx.notify();
                 }
-                let closed = [this.incoming.close(), this.menu.take().is_some(), this.environment.take().is_some(),this.composer_menu.take().is_some(), this.add_menu.take().is_some(), this.usage_popup.take().is_some(), this.resources.close(), this.context.close(), this.close_project_menu(), this.session_filter.open.take().is_some(), this.context_menu.take().is_some(), this.term.close_menu(), this.close_sidebar_options(cx)];
+                let fade = if cx.reduce_motion() { 0. } else { MENU };
+                let closed = [this.incoming.close_at(Instant::now(), fade), this.menu.take().is_some(), this.environment.take().is_some(),this.composer_menu.take().is_some(), this.add_menu.take().is_some(), this.usage_popup.take().is_some(), this.resources.close(), this.context.close(), this.close_project_menu(), this.session_filter.open.take().is_some(), this.context_menu.take().is_some(), this.term.close_menu(), this.close_sidebar_options(cx)];
                 this.goal_input = None;
                 if closed.contains(&true) {
                     cx.notify();
@@ -19069,7 +19025,7 @@ impl Render for Shell {
             .children(sidebar_card)
             .children(add_menu)
             .children(environment)
-            .children(incoming_card)
+            .children(git_menu)
             .children(panel)
             .children(usage_page)
             // Over Settings and Usage too, whose pages would cover them.

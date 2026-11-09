@@ -35,6 +35,7 @@ mod folder_icon_data;
 mod fonts;
 mod freeze_watch;
 mod git_graph;
+mod git_split;
 mod git_sync;
 mod hotkey_conflicts;
 mod hover_track;
@@ -129,6 +130,11 @@ impl AssetSource for Assets {
             "pencil-line" => include_bytes!("../assets/pencil-line.svg"),
             "bot" => include_bytes!("../assets/bot.svg"),
             "refresh" => include_bytes!("../assets/refresh.svg"),
+            "cloud" => include_bytes!("../assets/cloud.svg"),
+            "cloud-download" => include_bytes!("../assets/cloud-download.svg"),
+            "cloud-upload" => include_bytes!("../assets/cloud-upload.svg"),
+            "cloud-sync" => include_bytes!("../assets/cloud-sync.svg"),
+            "commit" => include_bytes!("../assets/commit.svg"),
             "chart-column" => include_bytes!("../assets/chart-column.svg"),
             "mic" => include_bytes!("../assets/mic.svg"),
             "arrow-up" => include_bytes!("../assets/arrow-up.svg"),

@@ -1,8 +1,8 @@
-//! The window header's Pull button (ADR-148). For the selected conversation's workspace (its
+//! The top bar's Git button (ADR-148, ADR-198). For the selected conversation's workspace (its
 //! worktree or the project checkout) the renderer asks what its branch's upstream has that the
 //! branch does not: the counts both ways and the newest incoming commits. Asking may first
 //! fetch that one upstream branch in the background (low priority, 15 s bound), at most once
-//! per 15 s per repository and upstream, backing off from 30 s to 5 min after failures. No
+//! per 30 s per repository and upstream, backing off from 30 s to 5 min after failures. No
 //! fetch on a detached HEAD, without an upstream or when the upstream is not on a remote.
 //! Pulling is the person's own fast-forward-only `git pull` (30 s bound), refused while a
 //! conversation works in that workspace; blocking local files and divergence come back as
@@ -28,7 +28,7 @@ const MAX_SUBJECT: usize = 200;
 const MAX_AUTHOR: usize = 80;
 const MAX_BLOCKING_FILES: usize = 50;
 /// A successful fetch is reused this long (and nothing fetches a repository more often).
-const FRESH: Duration = Duration::from_secs(15);
+const FRESH: Duration = Duration::from_secs(30);
 /// Backoff after a failed fetch: 30 s, doubling, at most 5 min.
 const BACKOFF_FIRST: Duration = Duration::from_secs(30);
 const BACKOFF_MAX: Duration = Duration::from_secs(300);
@@ -76,6 +76,33 @@ pub enum PullOutcome {
     /// Both sides have commits; no fast-forward is possible.
     Diverged {
         incoming: Option<Incoming>,
+    },
+}
+
+/// The top bar button's Pull and Sync (ADR-198): the branch is brought up to its upstream with
+/// local changes kept. A conflict leaves the repository as it was.
+#[derive(Debug, Serialize)]
+#[serde(
+    tag = "status",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum SyncOutcome {
+    Pulled {
+        incoming: Option<Incoming>,
+    },
+    /// Nothing new upstream; nothing was changed.
+    UpToDate {
+        incoming: Option<Incoming>,
+    },
+    /// Both sides have commits and a fast-forward was asked for; nothing was changed.
+    Diverged {
+        incoming: Option<Incoming>,
+    },
+    /// The pull or the return of the local changes conflicted; the rebase or merge was aborted
+    /// and the local changes are back.
+    Conflict {
+        files: Vec<String>,
     },
 }
 
@@ -357,6 +384,158 @@ pub(crate) fn pull(cwd: &Path) -> Result<PullOutcome> {
     }
 }
 
+/// Paths Git lists as unmerged right now.
+fn unmerged_files(cwd: &Path) -> Vec<String> {
+    text(cwd, &["diff", "--name-only", "--diff-filter=U"])
+        .map(|raw| {
+            raw.lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .take(MAX_BLOCKING_FILES)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// `CONFLICT (content): Merge conflict in <path>` lines of a failed pull.
+fn conflict_files_in(output: &str) -> Vec<String> {
+    let mut files: Vec<String> = Vec::new();
+    for line in output.lines() {
+        let Some(rest) = line.strip_prefix("CONFLICT") else {
+            continue;
+        };
+        let path = rest
+            .rsplit_once(" in ")
+            .map(|(_, path)| path)
+            .map(str::trim);
+        match path.filter(|path| !path.is_empty()) {
+            Some(path) if files.len() < MAX_BLOCKING_FILES && !files.iter().any(|f| f == path) => {
+                files.push(path.to_string())
+            }
+            _ => {}
+        }
+    }
+    files
+}
+
+/// Ends a half-done rebase or merge, which also hands an autostash back.
+fn abort_in_progress(cwd: &Path) {
+    let exists = |name: &str| {
+        text(cwd, &["rev-parse", "--git-path", name])
+            .map(|path| {
+                let path = std::path::PathBuf::from(path);
+                if path.is_absolute() {
+                    path
+                } else {
+                    cwd.join(path)
+                }
+            })
+            .is_some_and(|path| path.exists())
+    };
+    if exists("rebase-merge") || exists("rebase-apply") {
+        let _ = git::run(cwd, &["rebase", "--abort"]);
+    } else if exists("MERGE_HEAD") {
+        let _ = git::run(cwd, &["merge", "--abort"]);
+    }
+}
+
+/// Puts the local changes kept by `stash` back and drops that entry. The stack is shared with
+/// other worktrees, so the entry is found by its hash. False when applying conflicted.
+fn restore_stash(cwd: &Path, sha: &str) -> bool {
+    let first = git::run(cwd, &["stash", "apply", "--index", sha]).unwrap();
+    eprintln!(
+        "DBG {:?} {} {}",
+        first.status,
+        String::from_utf8_lossy(&first.stdout),
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let applied = first.status.success()
+        || git::run(cwd, &["stash", "apply", sha]).is_ok_and(|output| output.status.success());
+    if !applied {
+        return false;
+    }
+    let index = text(cwd, &["stash", "list", "--format=%H"])
+        .and_then(|list| list.lines().position(|line| line.trim() == sha));
+    if let Some(index) = index {
+        let _ = git::run(cwd, &["stash", "drop", &format!("stash@{{{index}}}")]);
+    }
+    true
+}
+
+/// Pulls with the local changes kept: a fast-forward, or with `rebase` a rebase of the branch's
+/// own commits. Tracked changes are stashed first and put back after. On a
+/// conflict, of the pull or of putting the changes back, everything returns to how it was.
+pub(crate) fn sync_pull(cwd: &Path, rebase: bool) -> Result<SyncOutcome> {
+    let upstream = upstream(cwd)
+        .ok_or_else(|| Error::git("This branch has no upstream on a remote to pull from."))?;
+    let before = git::run_ok(cwd, &["rev-parse", "HEAD"])?;
+    // Tracked changes only: with `--literal-pathspecs` (every native Git call) `stash -u` leaves
+    // the untracked files in place. They stay put; a pull that would overwrite one is refused.
+    let dirty = git::run_ok(cwd, &["status", "--porcelain", "--untracked-files=no"])
+        .map(|out| !out.is_empty())?;
+    let mut stash: Option<String> = None;
+    if dirty {
+        let pushed = git::run(cwd, &["stash", "push", "--message", "sirus-sync"])?;
+        if !pushed.status.success() {
+            return Err(Error::git(
+                String::from_utf8_lossy(&pushed.stderr).trim().to_string(),
+            ));
+        }
+        stash = text(cwd, &["rev-parse", "--verify", "--quiet", "refs/stash"]);
+    }
+    let give_back =
+        |stash: &Option<String>| stash.as_ref().is_none_or(|sha| restore_stash(cwd, sha));
+    let output = match git::pull_sync(cwd, &upstream.remote, &upstream.remote_branch, rebase) {
+        Ok(output) => output,
+        Err(error) => {
+            give_back(&stash);
+            return Err(error);
+        }
+    };
+    if !output.status.success() {
+        let said = format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let mut files = unmerged_files(cwd);
+        for file in conflict_files_in(&said) {
+            if !files.contains(&file) {
+                files.push(file);
+            }
+        }
+        abort_in_progress(cwd);
+        give_back(&stash);
+        if !files.is_empty() {
+            return Ok(SyncOutcome::Conflict { files });
+        }
+        return match classify_failure(&String::from_utf8_lossy(&output.stderr)) {
+            PullFailure::Diverged => Ok(SyncOutcome::Diverged {
+                incoming: incoming(cwd, false),
+            }),
+            PullFailure::Blocked(files) => Ok(SyncOutcome::Conflict { files }),
+            PullFailure::Other(message) => Err(Error::git(message)),
+        };
+    }
+    if !give_back(&stash) {
+        let files = unmerged_files(cwd);
+        // Back to the commit the person was on, then the changes on top of it.
+        let _ = git::run(cwd, &["reset", "--hard", &before]);
+        if let Some(sha) = &stash {
+            restore_stash(cwd, sha);
+        }
+        return Ok(SyncOutcome::Conflict { files });
+    }
+    let after = git::run_ok(cwd, &["rev-parse", "HEAD"])?;
+    let incoming = incoming(cwd, false);
+    Ok(if after == before {
+        SyncOutcome::UpToDate { incoming }
+    } else {
+        SyncOutcome::Pulled { incoming }
+    })
+}
+
 /// Whether a conversation works in this session's workspace: itself, or, for the project
 /// checkout, any conversation of that project outside its own worktree (true). Otherwise the
 /// folders of the other working conversations, for the caller to compare outside the lock.
@@ -427,14 +606,40 @@ pub async fn git_pull_ff(
     .await
 }
 
+/// The top bar's Pull (`rebase` false: fast-forward) and Sync (`rebase` true), with the local
+/// changes kept and a conflict undone. Refused while a conversation works in that workspace.
+pub async fn git_sync_pull(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    rebase: bool,
+) -> Result<SyncOutcome> {
+    let state = state.inner().clone();
+    native_task(move || {
+        state.ensure_running()?;
+        let cwd = session_path(&state, &session_id)?;
+        let (busy, folders) = busy_or_folders(&state.data.lock(), &session_id);
+        if busy
+            || folders
+                .iter()
+                .any(|folder| std::fs::canonicalize(folder).is_ok_and(|folder| folder == cwd))
+        {
+            return Err(Error::git(
+                "A conversation is working in this folder. Pull when it finishes.",
+            ));
+        }
+        sync_pull(&cwd, rebase)
+    })
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::git::tests::Repo;
 
     #[test]
-    fn fetches_wait_fifteen_seconds_and_back_off_after_failures() {
-        assert_eq!(wait_after(0), Duration::from_secs(15));
+    fn fetches_wait_thirty_seconds_and_back_off_after_failures() {
+        assert_eq!(wait_after(0), Duration::from_secs(30));
         assert_eq!(wait_after(1), Duration::from_secs(30));
         assert_eq!(wait_after(2), Duration::from_secs(60));
         assert_eq!(wait_after(4), Duration::from_secs(240));
@@ -446,8 +651,8 @@ mod tests {
             tried: Some(now),
             ..Mark::default()
         };
-        assert!(!fetch_due(&recent, now + Duration::from_secs(14)));
-        assert!(fetch_due(&recent, now + Duration::from_secs(15)));
+        assert!(!fetch_due(&recent, now + Duration::from_secs(29)));
+        assert!(fetch_due(&recent, now + Duration::from_secs(30)));
         let failing = Mark {
             tried: Some(now),
             failures: 2,
@@ -525,7 +730,7 @@ mod tests {
 
         upstream_commit(&origin, "file.txt", "after\n");
         upstream_commit(&origin, "two.txt", "two\n");
-        // Fetched 15 s ago at most: the cached remote ref still says nothing is new.
+        // Fetched 30 s ago at most: the cached remote ref still says nothing is new.
         assert_eq!(incoming(&clone, true).unwrap().behind, 0);
         git::fetch_origin_branch(&clone, &current.branch).unwrap();
         let behind = incoming(&clone, false).unwrap();
@@ -570,5 +775,86 @@ mod tests {
         let incoming = incoming.unwrap();
         assert_eq!((incoming.ahead, incoming.behind), (1, 1));
         assert_eq!(git::run_ok(&clone, &["rev-parse", "HEAD"]).unwrap(), head);
+    }
+    #[test]
+    fn conflict_lines_name_their_files() {
+        let said = "Auto-merging a.txt\nCONFLICT (content): Merge conflict in a.txt\nCONFLICT (add/add): Merge conflict in src/b c.rs\nCONFLICT (content): Merge conflict in a.txt\n";
+        assert_eq!(conflict_files_in(said), ["a.txt", "src/b c.rs"]);
+        assert!(conflict_files_in("Already up to date.").is_empty());
+    }
+
+    #[test]
+    fn syncing_keeps_local_changes_and_reports_up_to_date() {
+        let origin = Repo::new();
+        let clone = crate::worktree::tests::clone_of(&origin);
+        assert!(matches!(
+            sync_pull(&clone, false).unwrap(),
+            SyncOutcome::UpToDate { .. }
+        ));
+        upstream_commit(&origin, "two.txt", "two\n");
+        git::fetch_origin_branch(&clone, &incoming(&clone, false).unwrap().branch).unwrap();
+        std::fs::write(clone.join("file.txt"), "mine\n").unwrap();
+        std::fs::write(clone.join("new.txt"), "new\n").unwrap();
+        assert!(matches!(
+            sync_pull(&clone, false).unwrap(),
+            SyncOutcome::Pulled { .. }
+        ));
+        assert_eq!(
+            std::fs::read_to_string(clone.join("file.txt")).unwrap(),
+            "mine\n"
+        );
+        assert!(clone.join("new.txt").exists());
+        assert!(clone.join("two.txt").exists());
+        assert!(git::run_ok(&clone, &["stash", "list"]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_conflicting_rebase_is_aborted_and_the_changes_come_back() {
+        let origin = Repo::new();
+        upstream_commit(&origin, "side.txt", "side\n");
+        let clone = crate::worktree::tests::clone_of(&origin);
+        upstream_commit(&origin, "file.txt", "theirs\n");
+        std::fs::write(clone.join("file.txt"), "ours\n").unwrap();
+        git::run_ok(&clone, &["commit", "-qam", "ours"]).unwrap();
+        std::fs::write(clone.join("side.txt"), "edited\n").unwrap();
+        std::fs::write(clone.join("loose.txt"), "loose\n").unwrap();
+        let head = git::run_ok(&clone, &["rev-parse", "HEAD"]).unwrap();
+        git::fetch_origin_branch(&clone, &incoming(&clone, false).unwrap().branch).unwrap();
+
+        let SyncOutcome::Conflict { files } = sync_pull(&clone, true).unwrap() else {
+            panic!("expected a conflict");
+        };
+        assert_eq!(files, ["file.txt"]);
+        assert_eq!(git::run_ok(&clone, &["rev-parse", "HEAD"]).unwrap(), head);
+        assert_eq!(
+            std::fs::read_to_string(clone.join("file.txt")).unwrap(),
+            "ours\n"
+        );
+        assert!(clone.join("loose.txt").exists());
+        assert_eq!(
+            std::fs::read_to_string(clone.join("side.txt")).unwrap(),
+            "edited\n"
+        );
+        assert!(!clone.join(".git/rebase-merge").exists());
+        assert!(git::run_ok(&clone, &["stash", "list"]).unwrap().is_empty());
+        assert!(unmerged_files(&clone).is_empty());
+    }
+
+    #[test]
+    fn a_fast_forward_refused_by_divergence_changes_nothing() {
+        let origin = Repo::new();
+        let clone = crate::worktree::tests::clone_of(&origin);
+        upstream_commit(&origin, "two.txt", "two\n");
+        std::fs::write(clone.join("file.txt"), "ours\n").unwrap();
+        git::run_ok(&clone, &["commit", "-qam", "ours"]).unwrap();
+        git::fetch_origin_branch(&clone, &incoming(&clone, false).unwrap().branch).unwrap();
+        assert!(matches!(
+            sync_pull(&clone, false).unwrap(),
+            SyncOutcome::Diverged { .. }
+        ));
+        assert!(matches!(
+            sync_pull(&clone, true).unwrap(),
+            SyncOutcome::Pulled { .. }
+        ));
     }
 }

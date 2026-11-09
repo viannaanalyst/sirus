@@ -42,6 +42,61 @@ pub const ITEMS: [Item; 5] = [
     },
 ];
 
+/// The navigation rows under the project's name, in their default order. The owner drags them to
+/// reorder; the saved order (`sidebarNavOrder` in the settings) is merged with this list.
+pub const NAV: [&str; 3] = ["new", "pulls", "tasks"];
+
+/// The height of one navigation slot, in px, and the distance a press travels before it drags.
+pub const NAV_SLOT: f32 = 32.;
+pub const NAV_DRAG_AFTER: f32 = 4.;
+
+/// The saved order merged with `known`: saved entries that still exist, once each, in their saved
+/// order, then the entries the saved order does not mention (new in this version) at the end.
+pub fn merge_order(saved: &[String], known: &[&'static str]) -> Vec<&'static str> {
+    let mut order: Vec<&'static str> = Vec::new();
+    for id in saved {
+        if let Some(found) = known.iter().find(|k| **k == id.as_str())
+            && !order.contains(found)
+        {
+            order.push(found);
+        }
+    }
+    for id in known {
+        if !order.contains(id) {
+            order.push(id);
+        }
+    }
+    order
+}
+
+/// The slot the dragged row's top edge is nearest, among `count` slots.
+pub fn slot_at(top: f32, count: usize) -> usize {
+    if count == 0 {
+        return 0;
+    }
+    ((top / NAV_SLOT + 0.5).floor().max(0.) as usize).min(count - 1)
+}
+
+/// `full` with `id` moved to the `to`-th place among the shown entries. Hidden entries keep
+/// their places relative to the others.
+pub fn place(
+    full: &[&'static str],
+    id: &str,
+    to: usize,
+    shown: impl Fn(&str) -> bool,
+) -> Vec<&'static str> {
+    let mut visible: Vec<&'static str> = full.iter().copied().filter(|i| shown(i)).collect();
+    let Some(from) = visible.iter().position(|i| *i == id) else {
+        return full.to_vec();
+    };
+    let moved = visible.remove(from);
+    visible.insert(to.min(visible.len()), moved);
+    let mut next = visible.into_iter();
+    full.iter()
+        .map(|i| if shown(i) { next.next().unwrap_or(*i) } else { *i })
+        .collect()
+}
+
 /// The entries the user turned off.
 #[derive(Clone, Default, PartialEq, Eq, Debug)]
 pub struct Hidden(Vec<&'static str>);
@@ -129,6 +184,51 @@ mod tests {
         assert!(hidden.shown("search") && !hidden.shown("pulls"));
         hidden.toggle("pulls");
         assert_eq!(Hidden::from_json(&hidden.to_json()), Hidden::default());
+    }
+
+    fn owned(ids: &[&str]) -> Vec<String> {
+        ids.iter().map(|i| (*i).to_owned()).collect()
+    }
+
+    #[test]
+    fn the_saved_order_wins_and_new_entries_go_last() {
+        let known = ["new", "pulls", "tasks"];
+        assert_eq!(merge_order(&[], &known), known);
+        assert_eq!(
+            merge_order(&owned(&["tasks", "new"]), &known),
+            ["tasks", "new", "pulls"]
+        );
+    }
+
+    #[test]
+    fn removed_and_repeated_entries_leave_the_order() {
+        let known = ["new", "tasks"];
+        assert_eq!(
+            merge_order(&owned(&["usage", "tasks", "tasks", "new", "pulls"]), &known),
+            ["tasks", "new"]
+        );
+    }
+
+    #[test]
+    fn the_nearest_slot_is_clamped() {
+        assert_eq!(slot_at(-20., 3), 0);
+        assert_eq!(slot_at(15., 3), 0);
+        assert_eq!(slot_at(17., 3), 1);
+        assert_eq!(slot_at(500., 3), 2);
+        assert_eq!(slot_at(10., 0), 0);
+    }
+
+    #[test]
+    fn moving_a_row_keeps_hidden_entries_in_place() {
+        let full = ["new", "pulls", "tasks"];
+        assert_eq!(place(&full, "tasks", 0, |_| true), ["tasks", "new", "pulls"]);
+        assert_eq!(place(&full, "new", 2, |_| true), ["pulls", "tasks", "new"]);
+        // "pulls" is hidden: tasks moves before new, and pulls stays in the middle.
+        assert_eq!(
+            place(&full, "tasks", 0, |i| i != "pulls"),
+            ["tasks", "pulls", "new"]
+        );
+        assert_eq!(place(&full, "search", 0, |_| true), full);
     }
 
     #[test]

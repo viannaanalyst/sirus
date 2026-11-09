@@ -895,6 +895,11 @@ pub struct AppSettings {
     /// stays in the list until it is idle for the limit again (ADR-198).
     #[serde(default)]
     pub settle_revived: std::collections::BTreeMap<String, String>,
+    /// The order of the sidebar's navigation rows (Novo, Pull requests, Tarefas), by id, as the
+    /// owner dragged them. An id the window does not know is dropped; a missing one goes last
+    /// (ADR-198).
+    #[serde(default)]
+    pub sidebar_nav_order: Vec<String>,
     pub pinned_project_ids: Vec<String>,
     pub project_folders: Vec<ProjectFolder>,
     pub pinned_session_ids: Vec<String>,
@@ -1100,6 +1105,7 @@ impl Default for AppSettings {
             settle_idle_days: default_settle_idle_days(),
             settle_idle_enabled: true,
             settle_revived: std::collections::BTreeMap::new(),
+            sidebar_nav_order: Vec::new(),
             pinned_project_ids: Vec::new(),
             project_folders: Vec::new(),
             pinned_session_ids: Vec::new(),
@@ -1282,6 +1288,17 @@ impl AppSettings {
             return Err(Error::new(
                 "invalid_settings",
                 "Invalid opened conversations.",
+            ));
+        }
+        if self.sidebar_nav_order.len() > 32
+            || self
+                .sidebar_nav_order
+                .iter()
+                .any(|id| id.is_empty() || id.len() > 32)
+        {
+            return Err(Error::new(
+                "invalid_settings",
+                "Invalid sidebar navigation order.",
             ));
         }
         if self.github_seen.len() > GITHUB_SEEN_LIMIT
@@ -1589,7 +1606,13 @@ mod settings_tests {
         assert_eq!(legacy.settle_idle_days, 7);
         assert!(legacy.settle_idle_enabled);
         assert!(legacy.settle_revived.is_empty());
+        assert!(legacy.sidebar_nav_order.is_empty());
         assert!(legacy.validate_controls().is_ok());
+        let mut nav = legacy.clone();
+        nav.sidebar_nav_order = vec!["tasks".into(), "new".into()];
+        assert!(nav.validate_controls().is_ok());
+        nav.sidebar_nav_order = vec!["x".repeat(33)];
+        assert!(nav.validate_controls().is_err());
         let mut zero = legacy.clone();
         zero.settle_idle_days = 0;
         assert!(zero.validate_controls().is_err());

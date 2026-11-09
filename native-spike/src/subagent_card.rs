@@ -632,7 +632,7 @@ impl Shell {
             let open = compose.open.at(now).clamp(0., 1.);
             if open > 0.001 {
                 total += COMPOSE * open;
-                parts.push(self.compose_view(compose, open));
+                parts.push(self.compose_view(compose, open, cx));
             }
         } else if sent {
             total += 22.;
@@ -670,7 +670,7 @@ impl Shell {
         })
     }
 
-    fn compose_view(&self, compose: &Compose, open: f32) -> AnyElement {
+    fn compose_view(&self, compose: &Compose, open: f32, cx: &mut Context<Self>) -> AnyElement {
         let (_, remove) = diff_colors(self.look.diff);
         div()
             .w_full()
@@ -692,6 +692,17 @@ impl Shell {
                     .gap(px(8.))
                     .text_size(px(13.))
                     .opacity(if compose.busy { 0.6 } else { 1. })
+                    // A click anywhere else, such as the composer, closes it and gives the keys back.
+                    .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                        if this
+                            .subagents
+                            .compose
+                            .as_ref()
+                            .is_some_and(|c| !c.busy && !c.shut)
+                        {
+                            this.close_compose(cx);
+                        }
+                    }))
                     .child(typed_text(
                         &compose.text,
                         t("Mensagem para este subagente"),
@@ -705,7 +716,24 @@ impl Shell {
                             .text_size(px(12.))
                             .text_color(remove)
                             .child(error)
-                    })),
+                    }))
+                    .child(
+                        div()
+                            .id("sub-compose-close")
+                            .ml_auto()
+                            .flex_shrink_0()
+                            .size(px(18.))
+                            .rounded(px(crate::theme::RADIUS_SM))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .hover(|s| s.bg(content(0.08)))
+                            .tooltip(crate::shell::message_actions::name_tip(t("Fechar")))
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .on_click(cx.listener(|this, _, _, cx| this.close_compose(cx)))
+                            .child(theme_icon("close", 11.).text_color(content(0.5))),
+                    ),
             )
             .into_any_element()
     }

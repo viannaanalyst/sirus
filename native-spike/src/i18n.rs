@@ -5248,10 +5248,6 @@ const ENTRIES: &[(&str, &str)] = &[
         "⌥Espaço, de qualquer app, ou o ícone do Sirus na barra de menus abre um campo para começar uma conversa sem abrir a janela.",
         "⌥Space from any app, or the Sirus icon in the menu bar, opens a field to start a conversation without opening the window.",
     ),
-    (
-        "⌥Tab próximo · ⌥⇧Tab anterior · solte ⌥ para abrir",
-        "⌥Tab next · ⌥⇧Tab previous · release ⌥ to open",
-    ),
 ];
 
 #[cfg(test)]

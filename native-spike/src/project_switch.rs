@@ -4,7 +4,6 @@
 //! The provider's tile sits on the corner, with the title, and the robot and name under it.
 
 use super::*;
-use gpui::AnimationExt as _;
 
 const CARD_W: f32 = 236.;
 const MINI_H: f32 = 140.;
@@ -36,6 +35,7 @@ impl Shell {
             .map(|c| c.title.clone())
             .filter(|t| !t.trim().is_empty())
             .unwrap_or_else(|| t("Nova conversa").to_owned());
+        let working = conversation.is_some_and(|c| c.working());
         let last = conversation.and_then(|c| c.turns.last());
         let user = last.map_or(String::new(), |turn| turn.user.clone());
         let reply = last.map_or(String::new(), |turn| {
@@ -123,8 +123,6 @@ impl Shell {
             .flex()
             .child(sidebar)
             .child(body);
-        let state = self.project_avatar_state_of(project);
-        let reduce = cx.reduce_motion();
         let tile = mark_tile(
             &crate::tab_tile::TileSize {
                 w: 30.,
@@ -134,38 +132,18 @@ impl Shell {
             Face::provider(provider),
             provider_glyph(provider, 16.),
         );
-        let white = |alpha: f32| gpui::hsla(0., 0., 1., alpha);
-        let accent = crate::theme::accent();
-        let card = div()
+        div()
             .id(("project-switch", at))
             .relative()
             .w(px(CARD_W))
             .p(px(10.))
             .rounded(px(16.))
             .cursor_pointer()
-            .opacity(if chosen { 1. } else { 0.62 })
             .when(chosen, |d| {
-                d.bg(gpui::linear_gradient(
-                    180.,
-                    gpui::linear_color_stop(white(0.07), 0.),
-                    gpui::linear_color_stop(white(0.02), 1.),
-                ))
-                .shadow(vec![
-                    gpui::BoxShadow {
-                        color: accent,
-                        offset: gpui::point(px(0.), px(0.)),
-                        blur_radius: px(0.),
-                        spread_radius: px(1.5),
-                        inset: true,
-                    },
-                    gpui::BoxShadow {
-                        color: accent.opacity(0.14),
-                        offset: gpui::point(px(0.), px(0.)),
-                        blur_radius: px(0.),
-                        spread_radius: px(4.),
-                        inset: false,
-                    },
-                ])
+                d.bg(content(0.08)).border_1().border_color(content(0.18))
+            })
+            .when(!chosen, |d| {
+                d.border_1().border_color(gpui::transparent_black())
             })
             .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                 if *hovered && let Some(switch) = this.project_switch.as_mut() {
@@ -192,8 +170,10 @@ impl Shell {
                     .flex()
                     .items_center()
                     .gap(px(6.))
-                    .when(state != crate::project_avatar::AvatarState::Idle, |d| {
-                        d.child(self.project_avatar_in(project, 16., state))
+                    .when(working, |d| {
+                        d.child(div().flex().gap(px(2.)).children(
+                            (0..3).map(|_| div().size(px(4.)).rounded_full().bg(rgb(0xe7a35a))),
+                        ))
                     })
                     .child(
                         div()
@@ -220,20 +200,7 @@ impl Shell {
                             .truncate()
                             .child(self.projects[project].name.clone()),
                     ),
-            );
-        // Opacity and ring ease between chosen and not, quickly; reduced motion jumps.
-        if reduce {
-            return card.into_any_element();
-        }
-        card.with_animation(
-            ("project-switch-fade", at * 2 + usize::from(chosen)),
-            gpui::Animation::new(Duration::from_millis(130)),
-            move |el, t| {
-                let from = if chosen { 0.62 } else { 1. };
-                let to = if chosen { 1. } else { 0.62 };
-                el.opacity(from + (to - from) * t)
-            },
-        )
-        .into_any_element()
+            )
+            .into_any_element()
     }
 }

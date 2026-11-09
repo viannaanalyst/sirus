@@ -14,6 +14,8 @@ pub(super) const TERM_CARD: u64 = 1 << 62;
 pub(super) const PULLS_CARD: u64 = 1 << 61;
 /// What the tab menu calls the Pull requests tab; terminal tabs count from 1.
 const PULLS_TAB: u64 = 0;
+/// The Tarefas tab's name in the same menus, clear of the terminals' counting.
+const TASKS_TAB: u64 = u64::MAX - 1;
 
 struct TermTab {
     id: u64,
@@ -45,6 +47,9 @@ pub(super) struct TermState {
     /// Its tab in the strip of session tabs, drawn and laid out with them (see `layout_tabs`).
     pub(super) pulls_tab: Option<PageTab>,
     _pulls_events: Option<Subscription>,
+    /// The Tarefas page (tasks_page.rs): a title tab like Pull requests, after it in the strip.
+    pub(super) tasks_active: bool,
+    pub(super) tasks_tab: Option<PageTab>,
 }
 
 /// A page's tab among the session tabs: it is not a conversation, so it has no `Tab`.
@@ -70,7 +75,12 @@ impl TermState {
             pulls_pinned: false,
             pulls_tab: None,
             _pulls_events: None,
+            tasks_active: false,
+            tasks_tab: None,
         }
+    }
+    pub fn tasks_in_strip(&self) -> bool {
+        self.tasks_tab.as_ref().is_some_and(|tab| !tab.closing)
     }
     /// Terminal tabs in the strip: one pulled from the panel stays a tab, in any placement.
     pub fn strip_count(&self) -> usize {
@@ -172,6 +182,16 @@ pub(super) fn pulls_tile() -> (Face, AnyElement) {
     (
         Face::Neutral,
         crate::theme::icon("git-pull-request", 14.)
+            .text_color(content(0.9))
+            .into_any_element(),
+    )
+}
+
+/// The Tarefas tab's tile, in the strip.
+pub(super) fn tasks_tile() -> (Face, AnyElement) {
+    (
+        Face::Neutral,
+        crate::theme::icon("task-clock", 14.)
             .text_color(content(0.9))
             .into_any_element(),
     )
@@ -301,6 +321,7 @@ impl Shell {
         });
         self.term.active = Some(id);
         self.term.pulls_active = false;
+        self.term.tasks_active = false;
         self.term.plus_menu = None;
         cx.notify();
     }
@@ -325,6 +346,7 @@ impl Shell {
         });
         self.term.active = Some(id);
         self.term.pulls_active = false;
+        self.term.tasks_active = false;
         cx.notify();
         Some(id)
     }
@@ -436,6 +458,7 @@ impl Shell {
         // Already beside a conversation: it stays there and takes the keys.
         self.term.active = (!self.split_shows_term(id)).then_some(id);
         self.term.pulls_active = false;
+        self.term.tasks_active = false;
         self.term.plus_menu = None;
         if let Some(tab) = self.term.tabs.iter().find(|t| t.id == id) {
             tab.view.update(cx, |group, cx| group.focus(window, cx));
@@ -642,6 +665,8 @@ impl Shell {
     fn close_page(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
         if id == PULLS_TAB {
             self.close_pull_requests(cx);
+        } else if id == TASKS_TAB {
+            self.close_tasks_tab(cx);
         } else {
             self.close_title_tab(id, window, cx);
         }
@@ -658,6 +683,9 @@ impl Shell {
             .collect();
         if self.term.pulls_in_strip() {
             strip.push(Beside::Page(PULLS_TAB));
+        }
+        if self.term.tasks_in_strip() {
+            strip.push(Beside::Page(TASKS_TAB));
         }
         strip.extend(
             self.term
@@ -694,6 +722,7 @@ impl Shell {
             match tab {
                 Beside::Session(session) => self.close(session, cx),
                 Beside::Page(PULLS_TAB) => self.close_pull_requests(cx),
+                Beside::Page(TASKS_TAB) => self.close_tasks_tab(cx),
                 Beside::Page(terminal) => terminals.push(terminal),
             }
         }
@@ -765,6 +794,10 @@ impl Shell {
     pub(super) fn leave_title_tab(&mut self) {
         self.term.active = None;
         self.term.pulls_active = false;
+        self.term.tasks_active = false;
+        // The modal and the popover belong to the page while it shows.
+        self.tasks_page.sheet = None;
+        self.tasks_page.popover = None;
     }
 
     /// Opens the Pull requests page as a title tab, or goes back to it when it is already one.
@@ -796,6 +829,7 @@ impl Shell {
         }
         self.term.active = None;
         self.term.pulls_active = true;
+        self.term.tasks_active = false;
         self.term.plus_menu = None;
         self.palette_ui = None;
         cx.notify();
@@ -813,6 +847,50 @@ impl Shell {
         self.term._pulls_events = None;
         self.term.pulls_active = false;
         self.term.pulls_pinned = false;
+        if was_active {
+            let strip: Vec<u64> = self
+                .tabs
+                .iter()
+                .filter(|t| !t.pinned && !t.closing)
+                .map(|t| t.id)
+                .collect();
+            let next = neighbour_on_close(strip.len() + 1, strip.len())
+                .and_then(|at| strip.get(at).copied())
+                .unwrap_or(self.active);
+            self.select(next, cx);
+        }
+        cx.notify();
+    }
+
+    /// Opens the Tarefas page as a title tab, or goes back to it when it is already one.
+    pub(super) fn open_tasks_page(&mut self, cx: &mut Context<Self>) {
+        match self.term.tasks_tab.as_mut() {
+            Some(tab) => tab.closing = false,
+            None => {
+                self.tasks_page = tasks_page::State::default();
+                self.term.tasks_tab = Some(self.fresh_page_tab());
+                crate::segment_pill::forget("tasks-view");
+            }
+        }
+        self.tasks_load(cx);
+        self.term.active = None;
+        self.term.pulls_active = false;
+        self.term.tasks_active = true;
+        self.term.plus_menu = None;
+        self.palette_ui = None;
+        cx.notify();
+    }
+
+    /// Closes the Tarefas tab; if it was showing, its left neighbour takes over, as for Pull requests.
+    pub(super) fn close_tasks_tab(&mut self, cx: &mut Context<Self>) {
+        let was_active = self.term.tasks_active;
+        match self.term.tasks_tab.as_mut() {
+            Some(tab) if !tab.closing => tab.closing = true,
+            _ => return,
+        }
+        self.term.tasks_active = false;
+        self.tasks_page.sheet = None;
+        self.tasks_page.popover = None;
         if was_active {
             let strip: Vec<u64> = self
                 .tabs
@@ -953,6 +1031,44 @@ impl Shell {
         )
     }
 
+    /// The Tarefas tab, after Pull requests in the strip.
+    pub(super) fn tasks_tab_view(
+        &self,
+        now: Instant,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let tab = self.term.tasks_tab.as_ref()?;
+        let active = self.term.tasks_active && !tab.closing;
+        let group: SharedString = "tasks-tab".into();
+        let (face, glyph) = tasks_tile();
+        let close = Self::page_close(
+            "tasks-tab-close".into(),
+            group.clone(),
+            tab.w.at(now),
+            active,
+        )
+        .map(|close| {
+            close.on_click(cx.listener(|this, _, _, cx| {
+                cx.stop_propagation();
+                this.close_tasks_tab(cx);
+            }))
+        });
+        Some(
+            self.page_plate(
+                "tasks-tab".into(),
+                group,
+                tab,
+                active,
+                mark_tile(&TAB_TILE, face, glyph).into_any_element(),
+                t("Tarefas").into(),
+                now,
+            )
+            .on_click(cx.listener(|this, _, _, cx| this.open_tasks_page(cx)))
+            .children(close)
+            .into_any_element(),
+        )
+    }
+
     /// The terminal tabs in the strip, drawn as the session tabs are.
     pub(super) fn term_tabs_view(&self, now: Instant, cx: &mut Context<Self>) -> Vec<AnyElement> {
         self.term
@@ -1014,6 +1130,16 @@ impl Shell {
 
     /// The tab shown in place of the conversation.
     pub(super) fn title_tab_view(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.term.tasks_active {
+            return Some(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .child(self.tasks_page_body(cx))
+                    .into_any_element(),
+            );
+        }
         if let Some(pulls) = self.term.pulls.as_ref().filter(|_| self.term.pulls_active) {
             return Some(
                 div()
@@ -1132,6 +1258,7 @@ impl Shell {
                             this.term.plus_menu = None;
                             this.term.active = None;
                             this.term.pulls_active = false;
+                            this.term.tasks_active = false;
                             this.new_conversation(None, cx);
                             cx.notify();
                         },

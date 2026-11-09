@@ -4,7 +4,7 @@
 //! Ported in part from an MIT-licensed terminal (MIT).
 use crate::i18n::{t, tf};
 use crate::panels::PanelContext;
-use crate::tab_tile::{Face, TAB_TILE, TAB_TILE_GAP, mark_tile, tab_tile_inset};
+use crate::tab_tile::{TAB_TILE, TAB_TILE_GAP, mark_tile, tab_tile_inset, terminal_tile};
 use crate::terminal_engine::{
     AlacrittyTerm, CellColor, DirectPty, EngineKind, GridSize, Listener, ScrollTo, SelectKind,
     SharedEngine, Side, ViewPoint, lock, new_engine,
@@ -40,35 +40,11 @@ const PAD_Y: f32 = 4.;
 
 pub fn new(context: PanelContext, cx: &mut App) -> AnyView {
     bind_keys(cx);
-    let name = match context.provider {
-        "claude" => "Claude Code",
-        "codex" => "Codex",
-        "cursor" => "Cursor",
-        "opencode" => "OpenCode",
-        "grok" => "Grok",
-        "antigravity" => "Antigravity",
-        "droid" => "Droid",
-        "pi" => "Pi",
-        "devin" => "Devin",
-        _ => "Hermes",
-    };
-    let home = std::env::var("HOME").unwrap_or_default();
-    let folder = context
-        .worktree
-        .strip_prefix(&home)
-        .map_or(context.worktree.clone(), |rest| format!("~{rest}"));
-    let banner = crate::mascots::banner(
-        context.provider,
-        name,
-        &context.version,
-        &context.model,
-        &folder,
-    );
     let keys = KeySource {
         backend: context.backend,
         session_id: context.session_id,
     };
-    cx.new(|cx| TerminalPanel::new(context.worktree, banner, keys, cx))
+    cx.new(|cx| TerminalPanel::new(context.worktree, keys, cx))
         .into()
 }
 
@@ -98,8 +74,8 @@ fn folder_name(cwd: &str) -> String {
 }
 
 impl TerminalPanel {
-    fn new(cwd: String, banner: String, keys: KeySource, cx: &mut Context<Self>) -> Self {
-        let first = cx.new(|cx| Terminal::new(cwd.clone(), banner, Some(keys.clone()), cx));
+    fn new(cwd: String, keys: KeySource, cx: &mut Context<Self>) -> Self {
+        let first = cx.new(|cx| Terminal::new(cwd.clone(), Some(keys.clone()), cx));
         Self {
             cwd,
             keys,
@@ -126,11 +102,11 @@ impl TerminalPanel {
         cx.notify();
         Some((self.cwd.clone(), self.keys.clone(), terminal))
     }
-    /// A shell in the panel's folder. Only the first terminal prints the banner.
+    /// A shell in the panel's folder.
     fn spawn(&self, cx: &mut Context<Self>) -> Entity<Terminal> {
         let cwd = self.cwd.clone();
         let keys = self.keys.clone();
-        cx.new(|cx| Terminal::new(cwd, String::new(), Some(keys), cx))
+        cx.new(|cx| Terminal::new(cwd, Some(keys), cx))
     }
     fn select(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         if ix < self.terminals.len() {
@@ -229,7 +205,7 @@ impl Render for TerminalPanel {
                         cx.stop_propagation();
                         this.close(ix, window, cx);
                     }));
-                let face = Face::Fill(rgb(0x3A3A3C).into(), rgb(0x1C1C1E).into());
+                let (face, glyph) = terminal_tile(self.terminals[ix].read(cx).agent());
                 let plate = div()
                     .id(("terminal-tab-button", ix))
                     .relative()
@@ -250,14 +226,7 @@ impl Render for TerminalPanel {
                     .when(!active, |d| {
                         d.bg(theme::content(0.04)).text_color(theme::content(0.5))
                     })
-                    .child(mark_tile(
-                        &TAB_TILE,
-                        face,
-                        gpui::svg()
-                            .path("terminal-square")
-                            .size(px(12.))
-                            .text_color(gpui::white()),
-                    ))
+                    .child(mark_tile(&TAB_TILE, face, glyph))
                     .child(div().flex_1().min_w_0().truncate().child(label.clone()))
                     .child(close)
                     .on_click(cx.listener(move |this, _, window, cx| this.select(ix, window, cx)));
@@ -403,6 +372,10 @@ struct Terminal {
     scroll_remainder: f32,
     marked: Option<String>,
     _events: gpui::Task<()>,
+    /// The agent CLI holding the terminal, if one does (see `agent_cli`).
+    agent: Option<&'static str>,
+    /// Asks once a second which command holds the terminal.
+    _poll: gpui::Task<()>,
 }
 impl Focusable for Terminal {
     fn focus_handle(&self, _: &App) -> FocusHandle {
@@ -473,7 +446,7 @@ fn keys_warning() -> String {
 }
 
 impl Terminal {
-    fn new(cwd: String, banner: String, keys: Option<KeySource>, cx: &mut Context<Self>) -> Self {
+    fn new(cwd: String, keys: Option<KeySource>, cx: &mut Context<Self>) -> Self {
         let size = GridSize {
             columns: 80,
             lines: 24,
@@ -496,7 +469,6 @@ impl Terminal {
             .ok()
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "/bin/zsh".into());
-        write_note(&engine, &banner);
         let events = cx.spawn(async move |this, cx| {
             while let Ok(event) = rx.recv().await {
                 let mut batch = vec![event];
@@ -509,6 +481,30 @@ impl Terminal {
                             this.on_event(event, cx);
                         }
                     })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+        // The foreground poll: which agent CLI, if any, holds the terminal, a second at a time.
+        let poll = cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(1))
+                    .await;
+                let Ok(Some((fd, pid))) = this.update(cx, |this, _| {
+                    (!this.exited).then_some((this.master_fd, this.shell_pid as i32))
+                }) else {
+                    break;
+                };
+                let label = cx
+                    .background_executor()
+                    .spawn(async move { foreground_label(fd, pid) })
+                    .await;
+                let agent = label.as_deref().and_then(agent_cli);
+                if this
+                    .update(cx, |this, cx| this.set_agent(agent, cx))
                     .is_err()
                 {
                     break;
@@ -536,6 +532,8 @@ impl Terminal {
             scroll_remainder: 0.,
             marked: None,
             _events: events,
+            agent: None,
+            _poll: poll,
         };
         match keys {
             None => this.launch(Vec::new(), cx),
@@ -694,7 +692,20 @@ impl Terminal {
     fn finish(&mut self, cx: &mut Context<Self>) {
         self.exited = true;
         self.pty = Pty::None;
+        self.set_agent(None, cx);
         cx.notify();
+    }
+    /// Records the agent CLI now holding the terminal. A change redraws every window, since the tabs
+    /// that show it are drawn by views that do not watch the terminal.
+    fn set_agent(&mut self, agent: Option<&'static str>, cx: &mut Context<Self>) {
+        if agent != self.agent {
+            self.agent = agent;
+            cx.refresh_windows();
+        }
+    }
+    /// The agent CLI holding this terminal, if any: its tab shows that provider's mark.
+    pub(crate) fn agent(&self) -> Option<&'static str> {
+        self.agent
     }
     fn write(&mut self, bytes: impl Into<Cow<'static, [u8]>>) {
         match &self.pty {
@@ -1030,7 +1041,7 @@ pub fn adopt_group(
 
 impl TerminalGroup {
     pub fn new(cwd: String, keys: KeySource, cx: &mut Context<Self>) -> Self {
-        let first = cx.new(|cx| Terminal::new(cwd.clone(), String::new(), Some(keys.clone()), cx));
+        let first = cx.new(|cx| Terminal::new(cwd.clone(), Some(keys.clone()), cx));
         Self {
             cwd,
             keys,
@@ -1041,7 +1052,7 @@ impl TerminalGroup {
     pub fn split(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let cwd = self.cwd.clone();
         let keys = self.keys.clone();
-        let pane = cx.new(|cx| Terminal::new(cwd, String::new(), Some(keys), cx));
+        let pane = cx.new(|cx| Terminal::new(cwd, Some(keys), cx));
         self.panes.push(pane);
         self.focus(window, cx);
         cx.notify();
@@ -1067,6 +1078,10 @@ impl TerminalGroup {
     /// The folder's name, the label of the tab.
     pub fn title(&self) -> String {
         folder_name(&self.cwd)
+    }
+    /// The agent CLI in the group's last shell, the one it takes commands in, if any.
+    pub fn agent(&self, cx: &App) -> Option<&'static str> {
+        self.panes.last()?.read(cx).agent()
     }
     /// Every pane with a name and whether a command runs in it.
     pub fn panes_state(&self, cx: &App) -> Vec<(String, bool)> {
@@ -1114,6 +1129,73 @@ impl Terminal {
 /// other group in front is a running command. An unreadable group (<= 0) counts as idle.
 pub fn foreground_busy(front: i32, shell: i32) -> bool {
     front > 0 && shell > 0 && front != shell
+}
+
+/// The command holding the terminal, unless it is the shell itself. Asking `ps` is the slow part,
+/// so it is only asked when a command other than the shell holds the terminal.
+fn foreground_label(master_fd: i32, shell_pid: i32) -> Option<String> {
+    if master_fd < 0 {
+        return None;
+    }
+    let front = unsafe { libc::tcgetpgrp(master_fd) };
+    if !foreground_busy(front, shell_pid) {
+        return None;
+    }
+    let output = std::process::Command::new("ps")
+        .args(["-p", &front.to_string(), "-o", "args="])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    command_name(String::from_utf8_lossy(&output.stdout).trim())
+}
+
+/// The name of the command in `args`. Interpreters name the script they run: `node vite.js` is
+/// `vite.js`.
+fn command_name(args: &str) -> Option<String> {
+    let mut parts = args.split_whitespace();
+    let exe = parts.next()?;
+    let base = std::path::Path::new(exe)
+        .file_name()?
+        .to_str()?
+        .trim_start_matches('-')
+        .to_owned();
+    if matches!(
+        base.as_str(),
+        "node" | "nodejs" | "python" | "python3" | "ruby" | "deno" | "bun"
+    ) {
+        for part in parts {
+            if part.starts_with('-') {
+                continue;
+            }
+            let name = std::path::Path::new(part).file_name()?.to_str()?;
+            if !name.starts_with('-') {
+                return Some(name.to_owned());
+            }
+        }
+    }
+    Some(base)
+}
+
+/// The agent CLI a foreground command names, as the provider id whose mark its tab shows. Only the
+/// providers Sirus draws a mark for; any other command (a shell, an editor) names none.
+fn agent_cli(label: &str) -> Option<&'static str> {
+    // Script launchers report the script: `codex.js` is Codex.
+    let name = label.split('.').next()?;
+    Some(match name {
+        "claude" => "claude",
+        "codex" => "codex",
+        "cursor" | "cursor-agent" | "agent" => "cursor",
+        "opencode" => "opencode",
+        "grok" => "grok",
+        "antigravity" => "antigravity",
+        "droid" => "droid",
+        "pi" | "pi-coding-agent" => "pi",
+        "devin" => "devin",
+        "hermes" => "hermes",
+        _ => return None,
+    })
 }
 
 /// The names of the terminals that have a command running, for the confirmation's message.
@@ -1924,6 +2006,51 @@ fn key_bytes(keystroke: &gpui::Keystroke, app_cursor: bool) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod close_tests {
     use super::*;
+
+    #[test]
+    fn agent_clis_map_to_the_provider_whose_mark_their_tab_shows() {
+        assert_eq!(agent_cli("claude"), Some("claude"));
+        assert_eq!(agent_cli("codex.js"), Some("codex"));
+        assert_eq!(agent_cli("cursor-agent"), Some("cursor"));
+        assert_eq!(agent_cli("agent"), Some("cursor"));
+        assert_eq!(agent_cli("opencode"), Some("opencode"));
+        assert_eq!(agent_cli("grok"), Some("grok"));
+        assert_eq!(agent_cli("antigravity"), Some("antigravity"));
+        assert_eq!(agent_cli("droid"), Some("droid"));
+        assert_eq!(agent_cli("pi"), Some("pi"));
+        assert_eq!(agent_cli("pi-coding-agent"), Some("pi"));
+        assert_eq!(agent_cli("devin"), Some("devin"));
+        assert_eq!(agent_cli("hermes"), Some("hermes"));
+    }
+
+    #[test]
+    fn commands_that_are_not_an_agent_cli_have_no_provider() {
+        assert_eq!(agent_cli("vim"), None);
+        assert_eq!(agent_cli("zsh"), None);
+        assert_eq!(agent_cli("npm"), None);
+        assert_eq!(agent_cli("gemini"), None, "Sirus draws no Gemini mark");
+        assert_eq!(agent_cli(""), None);
+    }
+
+    #[test]
+    fn interpreters_name_the_script_they_run_so_the_script_names_the_agent() {
+        assert_eq!(
+            command_name("node /x/node_modules/.bin/codex --yolo").as_deref(),
+            Some("codex")
+        );
+        assert_eq!(
+            command_name("/usr/bin/node --no-warnings /x/bin/codex.js").as_deref(),
+            Some("codex.js")
+        );
+        assert_eq!(
+            command_name("/opt/homebrew/bin/claude --resume").as_deref(),
+            Some("claude")
+        );
+        assert_eq!(command_name("-zsh").as_deref(), Some("zsh"));
+        assert_eq!(command_name("").as_deref(), None);
+        let script = command_name("node /x/lib/codex.js exec").unwrap();
+        assert_eq!(agent_cli(&script), Some("codex"));
+    }
 
     #[test]
     fn a_shell_in_front_is_idle_and_another_group_is_a_running_command() {

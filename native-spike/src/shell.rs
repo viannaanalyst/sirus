@@ -15,7 +15,7 @@ use crate::motion::{Curve, DISCLOSE, MENU, REORDER, SIDEBAR, SWITCH, TAB_OPEN, T
 use crate::tab_label::tab_label;
 use crate::tab_tile::{
     ACTIVITY_TILE, Face, FanCard, TAB_TILE, activity_face, fan_card, fan_tile, fan_width,
-    mark_tile, push_tile, tab_tile_inset,
+    mark_tile, push_tile, tab_tile_inset, terminal_tile,
 };
 use crate::theme::Sinks as _;
 use crate::theme::{
@@ -32,7 +32,7 @@ use gpui::{
 };
 use gpui::{Bounds, ElementInputHandler, EntityInputHandler, TextLayout, UTF16Selection};
 use serde_json::{Value, json};
-use shell_terminal::{PULLS_CARD, TERM_CARD, pulls_tile, terminal_tile};
+use shell_terminal::{PULLS_CARD, TERM_CARD, pulls_tile};
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ops::Range;
@@ -966,7 +966,7 @@ enum Waiting {
     LinkCreated(String),
     /// The quick composer's conversation exists: its text goes out (quick_composer.rs).
     QuickCreated(String),
-    Session(usize),
+    Session,
     /// A queued request sent to the host: its session and queue item.
     Queued(String, String),
     Steered(composer_queue::SteerWait),
@@ -1183,7 +1183,6 @@ pub struct Shell {
     env_servers: Vec<String>,
     env_editors: Vec<(String, String)>,
     env_icons: HashMap<String, std::path::PathBuf>,
-    commit_message: Option<String>,
     /// The Settings text field being typed in: its key and text.
     setting_edit: Option<(&'static str, String)>,
     /// Each side panel, per conversation; they keep their state while hidden.
@@ -1646,7 +1645,6 @@ impl Shell {
             env_servers: Vec::new(),
             env_editors: Vec::new(),
             env_icons: HashMap::new(),
-            commit_message: None,
             setting_edit: None,
             pane_views: HashMap::new(),
             settings_data: HashMap::new(),
@@ -2263,8 +2261,7 @@ impl Shell {
                 Some(Waiting::IncomingPull(generation, then_push)) => {
                     self.git_pulled(generation, then_push, ok, &value, cx)
                 }
-                Some(Waiting::Session(usize::MAX)) => {}
-                Some(Waiting::Session(_)) if ok => self.session_updated(&value, cx),
+                Some(Waiting::Session) if ok => self.session_updated(&value, cx),
                 Some(_) | None if !ok => {
                     let message = error_text(&value);
                     if !is_not_a_repository(&message) {
@@ -4650,9 +4647,6 @@ impl Shell {
         if let Some((_, value)) = self.setting_edit.as_mut() {
             return Some(value);
         }
-        if let Some(message) = self.commit_message.as_mut() {
-            return Some(message);
-        }
         if self.env_open == Some("branch") {
             if let Some(draft) = self.branch_draft.as_mut() {
                 return Some(draft);
@@ -5266,7 +5260,7 @@ impl Shell {
             let (face, mark) = match conversation {
                 Some(conversation) => self.tile_parts(&self.conversations[conversation], now),
                 None if is_pulls => pulls_tile(),
-                None => terminal_tile(),
+                None => terminal_tile(terminal.and_then(|id| self.term_agent(id, cx))),
             };
             cards.push(
                 div()
@@ -5724,20 +5718,6 @@ impl Shell {
                 _ => {
                     if let Some(draft) = self.branch_draft.as_mut() {
                         draft.pop();
-                    }
-                }
-            }
-            cx.stop_propagation();
-            cx.notify();
-            return;
-        }
-        if self.commit_message.is_some() && matches!(key, "enter" | "escape" | "backspace") {
-            match key {
-                "enter" => self.commit_now(cx),
-                "escape" => self.commit_message = None,
-                _ => {
-                    if let Some(message) = self.commit_message.as_mut() {
-                        message.pop();
                     }
                 }
             }
@@ -11527,7 +11507,7 @@ impl Shell {
                     "set_session_model",
                     json!({ "sessionId": session, "agent": "cursor", "model": next }),
                 );
-                self.waiting.insert(call, Waiting::Session(ix));
+                self.waiting.insert(call, Waiting::Session);
             }
             return;
         }
@@ -11728,7 +11708,7 @@ impl Shell {
             "set_session_model",
             json!({ "sessionId": session, "agent": provider, "model": id }),
         );
-        self.waiting.insert(call, Waiting::Session(ix));
+        self.waiting.insert(call, Waiting::Session);
         self.model_query.clear();
         self.snap_effort_bar();
         if let Some((which, _)) = self.composer_menu.as_mut() {
@@ -14931,13 +14911,6 @@ impl Shell {
                 backend: self.backend.clone(),
                 session_id: conversation.session_id.clone(),
                 worktree: conversation.worktree.clone(),
-                provider: conversation.provider,
-                model: model_label(conversation.model.as_deref(), conversation.provider),
-                version: self
-                    .agent_versions
-                    .get(conversation.provider)
-                    .cloned()
-                    .unwrap_or_default(),
             };
             if let Some(view) = crate::panels::open(kind, context, cx) {
                 self.pane_views.insert(key, view);
@@ -15671,33 +15644,8 @@ impl Shell {
                     .invoke("local_servers_list", json!({ "sessionId": session }));
                 self.waiting.insert(id, Waiting::Servers);
             }
-            "commit" => {
-                self.commit_message = if self.env_open.is_some() {
-                    Some(String::new())
-                } else {
-                    None
-                };
-            }
             _ => {}
         }
-        if row != "commit" {
-            self.commit_message = None;
-        }
-    }
-
-    fn commit_now(&mut self, cx: &mut Context<Self>) {
-        let Some(message) = self.commit_message.clone().filter(|m| !m.trim().is_empty()) else {
-            return;
-        };
-        let ix = self.active_conversation();
-        let id = self.backend.invoke(
-            "git_commit",
-            json!({ "sessionId": self.conversations[ix].session_id, "message": message }),
-        );
-        self.waiting.insert(id, Waiting::Session(usize::MAX));
-        self.commit_message = Some(String::new());
-        self.refresh_diff();
-        cx.notify();
     }
 
     /// The Ambiente card, compact: one 26 px row per function, each opening in place. Same
@@ -15716,8 +15664,6 @@ impl Shell {
         let ix = self.active_conversation();
         let conversation = &self.conversations[ix];
         let session = conversation.session_id.clone();
-        let (added, removed) = self.diff_stat();
-        let (add_color, remove_color) = diff_colors(self.look.diff);
         let row = |id: &'static str, glyph: &'static str, label: String| {
             crate::hover_track::list("environment").row_named(
                 div()
@@ -15800,22 +15746,6 @@ impl Shell {
             let shown = fold.at(now).clamp(0., 1.);
             (shown > 0.001).then_some(shown)
         };
-        let small = |id: &'static str, label: &'static str, main: bool| {
-            div()
-                .id(id)
-                .flex_1()
-                .h(px(22.))
-                .rounded(px(crate::theme::RADIUS_SM))
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_size(px(11.5))
-                .cursor_pointer()
-                .text_color(if main { on_accent() } else { content(0.85) })
-                .bg(if main { accent() } else { content(0.08) })
-                .hover(|s| s.opacity(0.88))
-                .child(label)
-        };
         let mut rows: Vec<AnyElement> = vec![
             div()
                 .h(px(22.))
@@ -15826,24 +15756,6 @@ impl Shell {
                 .text_size(px(12.))
                 .text_color(content(0.45))
                 .child(t("Ambiente"))
-                .into_any_element(),
-            row("env-changes", "git-compare", t("Alterações").into())
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.environment = None;
-                    this.open_pane(CHANGES_PANE, cx);
-                }))
-                .child(
-                    div()
-                        .text_size(px(11.5))
-                        .text_color(add_color)
-                        .child(format!("+{added}")),
-                )
-                .child(
-                    div()
-                        .text_size(px(11.5))
-                        .text_color(remove_color)
-                        .child(format!("-{removed}")),
-                )
                 .into_any_element(),
             expand(
                 "branch",
@@ -15947,72 +15859,6 @@ impl Shell {
                 ));
             }
             rows.push(sub(fold, list).into_any_element());
-        }
-        rows.push(
-            expand(
-                "commit",
-                "upload",
-                t("Commit, push e PR"),
-                String::new(),
-                cx,
-            )
-            .into_any_element(),
-        );
-        if let Some(fold) = fold_of("commit", moving) {
-            let session_push = session.clone();
-            let message = self.commit_message.clone().unwrap_or_default();
-            rows.push(
-                sub(
-                    fold,
-                    vec![
-                        div()
-                            .h(px(24.))
-                            .mb(px(3.))
-                            .px(px(6.))
-                            .rounded(px(crate::theme::RADIUS_SM))
-                            .border_1()
-                            .border_color(crate::theme::border())
-                            .flex()
-                            .items_center()
-                            .gap(px(1.))
-                            .text_size(px(12.))
-                            .when(message.is_empty(), |d| {
-                                d.child(div().w(px(1.5)).h(px(13.)).bg(accent())).child(
-                                    div()
-                                        .text_color(content(0.4))
-                                        .child(t("Mensagem do commit")),
-                                )
-                            })
-                            .when(!message.is_empty(), |d| {
-                                d.child(
-                                    div()
-                                        .min_w_0()
-                                        .truncate()
-                                        .text_color(content(0.95))
-                                        .child(message.clone()),
-                                )
-                                .child(div().w(px(1.5)).h(px(13.)).bg(accent()))
-                            })
-                            .into_any_element(),
-                        div()
-                            .flex()
-                            .gap(px(3.))
-                            .child(
-                                small("env-commit", "Commit", true)
-                                    .on_click(cx.listener(|this, _, _, cx| this.commit_now(cx))),
-                            )
-                            .child(small("env-push", "Push", false).on_click(cx.listener(
-                                move |this, _, _, cx| {
-                                    this.backend
-                                        .invoke("git_push", json!({ "sessionId": session_push }));
-                                    cx.notify();
-                                },
-                            )))
-                            .into_any_element(),
-                    ],
-                )
-                .into_any_element(),
-            );
         }
         rows.push(
             expand(
@@ -16783,7 +16629,6 @@ impl Shell {
 
     /// Settings → Aparência, drawn for `look` (what the rows show).
     fn appearance_page_for(&self, look: Look, cx: &mut Context<Self>) -> AnyElement {
-        crate::settings_search::note_group(t("Tema"));
         note_appearance_choices();
         let row = |title: &'static str, about: &'static str, control: AnyElement| {
             crate::settings_search::note_row(title, about);
@@ -17155,6 +17000,8 @@ impl Shell {
                 .child(div().size(px(12.)).rounded_full().bg(fill))
         }));
         let mut colors = vec![
+            // The mode picker answers to "Tema" for the search's jump.
+            row(t("Tema"), t("Sistema segue o macOS."), modes),
             row(
                 t("Tema do workspace"),
                 t("Uma predefinição de cores."),
@@ -17209,28 +17056,7 @@ impl Shell {
             .child(crate::settings_pages::about_line(t(
                 "Personalize materiais e movimento.",
             )))
-            .child(
-                div()
-                    .mb(px(32.))
-                    .child(
-                        div()
-                            .mb(px(8.))
-                            .text_size(px(12.5))
-                            .text_color(content(0.5))
-                            .child(t("Tema")),
-                    )
-                    // The picker answers to the group's name for the search's jump.
-                    .child(
-                        div().flex().child(
-                            crate::settings_search::decorate(
-                                div().rounded(px(crate::theme::RADIUS_MD)),
-                                t("Tema"),
-                            )
-                            .child(modes),
-                        ),
-                    ),
-            )
-            .child(group(t("Cores"), colors))
+            .child(group(t("Tema e cores"), colors))
             .child(group(
                 t("Materiais"),
                 vec![row(
@@ -18686,9 +18512,6 @@ impl Render for Shell {
         if self.appearance.is_none() {
             self.setting_edit = None;
         }
-        if self.environment.is_none() {
-            self.commit_message = None;
-        }
         if let Some(kind) = self
             .dock_active
             .filter(|_| self.dock_open && !self.conversations.is_empty())
@@ -18778,7 +18601,7 @@ impl Render for Shell {
                 || self.first_run.active()
                 || self.viewer.visible()
                 || self.cards_visible()
-                || self.balloon_covers_page(),
+                || self.balloon_covers_page(now),
         );
         if std::mem::take(&mut self.refocus) {
             window.focus(&self.focus, cx);
@@ -19226,57 +19049,51 @@ mod tests {
     }
 }
 
-/// Tema's control: a segmented row like the page's others, each option with its icon.
+/// Tema's control: the same small segmented control as the page's others, each option with its icon.
 fn segmented_icons(
     id: &'static str,
     options: &[(&'static str, &'static str)],
     chosen: usize,
     cx: &mut Context<Shell>,
     apply: fn(&mut Look, usize),
-) -> Div {
-    // Its own row, so the control takes the width of its options, not of the page.
-    div().flex().child(
-        div()
-            .relative()
-            .flex()
-            .flex_none()
-            .gap(px(2.))
-            .p(px(3.))
-            .rounded(px(crate::theme::RADIUS_MD))
-            .bg(content(0.06))
-            .child(crate::segment_pill::pill(
-                id,
-                chosen,
-                accent_wash(0.18),
-                crate::theme::RADIUS_SM,
-            ))
-            .children(options.iter().enumerate().map(|(ix, (glyph, label))| {
-                let on = ix == chosen;
-                div()
-                    .id((id, ix))
-                    .relative()
-                    .child(crate::segment_pill::probe(id, ix))
-                    .sinks()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .gap(px(7.))
-                    .h(px(28.))
-                    .w(px(108.))
-                    .rounded(px(crate::theme::RADIUS_SM))
-                    .text_size(px(13.))
-                    .text_color(if on { accent() } else { content(0.65) })
-                    .when(!on, |d| d.hover(|s| s.bg(content(0.06))))
-                    .cursor_pointer()
-                    .on_click(
-                        cx.listener(move |this, _, _, cx| {
-                            this.set_look(|look| apply(look, ix), cx)
-                        }),
-                    )
-                    .child(icon(glyph, 16.).text_color(if on { accent() } else { content(0.6) }))
-                    .child(*label)
-            })),
-    )
+) -> AnyElement {
+    div()
+        .relative()
+        .flex()
+        .p(px(2.))
+        .rounded(px(crate::theme::RADIUS_SM))
+        .border_1()
+        .border_color(crate::theme::border())
+        .child(crate::segment_pill::pill(
+            id,
+            chosen,
+            accent_wash(0.18),
+            crate::theme::RADIUS_SM,
+        ))
+        .children(options.iter().enumerate().map(|(ix, (glyph, label))| {
+            let on = ix == chosen;
+            div()
+                .id((id, ix))
+                .relative()
+                .child(crate::segment_pill::probe(id, ix))
+                .sinks()
+                .h(px(24.))
+                .px(px(10.))
+                .gap(px(6.))
+                .rounded(px(crate::theme::RADIUS_SM))
+                .flex()
+                .items_center()
+                .text_size(px(12.5))
+                .text_color(if on { accent() } else { content(0.55) })
+                .when(!on, |d| d.hover(|s| s.text_color(content(0.9))))
+                .cursor_pointer()
+                .on_click(
+                    cx.listener(move |this, _, _, cx| this.set_look(|look| apply(look, ix), cx)),
+                )
+                .child(icon(glyph, 14.).text_color(if on { accent() } else { content(0.55) }))
+                .child(*label)
+        }))
+        .into_any_element()
 }
 
 /// The options of the hand-drawn controls on Aparência, shared by what is drawn and what the
@@ -19312,19 +19129,19 @@ fn icon_note() -> &'static str {
 pub fn note_appearance_choices() {
     use crate::settings_search::note_choice;
     for label in mode_labels() {
-        note_choice(t("Tema"), label, t("Tema"));
+        note_choice(t("Tema e cores"), label, t("Tema"));
     }
     for preset in PRESETS {
-        note_choice(t("Cores"), t(preset.name), t("Tema do workspace"));
+        note_choice(t("Tema e cores"), t(preset.name), t("Tema do workspace"));
     }
     for (name, _) in ACCENTS {
-        note_choice(t("Cores"), t(name), t("Cor de destaque"));
+        note_choice(t("Tema e cores"), t(name), t("Cor de destaque"));
     }
     for label in diff_labels() {
-        note_choice(t("Cores"), label, t("Cores do diff"));
+        note_choice(t("Tema e cores"), label, t("Cores do diff"));
     }
     for label in saturation_labels() {
-        note_choice(t("Cores"), label, t("Saturação do fundo"));
+        note_choice(t("Tema e cores"), label, t("Saturação do fundo"));
     }
     for label in glass_labels() {
         note_choice(t("Materiais"), label, t("Translucidez"));

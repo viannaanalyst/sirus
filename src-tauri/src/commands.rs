@@ -2781,23 +2781,75 @@ pub fn start_terminal(
     if !is_valid_terminal_id(&terminal_id) {
         return Err(Error::new("invalid", "invalid terminal id"));
     }
-    let data = state.data.lock();
-    state.ensure_running()?;
-    let session = data
-        .sessions
-        .iter()
-        .find(|session| session.id == session_id)
-        .ok_or_else(|| Error::not_found("session not found"))?;
-    let cwd = session_cwd(&data, session)?;
-    let mut ptys = state.ptys.lock();
-    if let Some(existing) = ptys.get(&terminal_id) {
-        if existing.session_id != session_id {
-            return Err(Error::not_found("terminal is not running"));
+    let (cwd, source) = {
+        let data = state.data.lock();
+        state.ensure_running()?;
+        let session = data
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .ok_or_else(|| Error::not_found("session not found"))?;
+        let cwd = session_cwd(&data, session)?;
+        let ptys = state.ptys.lock();
+        if let Some(existing) = ptys.get(&terminal_id) {
+            if existing.session_id != session_id {
+                return Err(Error::not_found("terminal is not running"));
+            }
+            existing.resize(cols, rows)?;
+            return Ok(());
         }
-        existing.resize(cols, rows)?;
+        check_terminal_limit(&ptys, &session_id)?;
+        (
+            cwd,
+            crate::infisical::terminal_source_in(&data, &session_id)
+                .ok()
+                .flatten(),
+        )
+    };
+    // The project's Infisical keys come over the network, so no lock is held meanwhile.
+    let secrets = if source.is_some() {
+        let fetched = crate::runtime::async_runtime::block_on(async {
+            tokio::time::timeout(
+                TERMINAL_KEYS_TIMEOUT,
+                crate::infisical::terminal_env_pairs(source),
+            )
+            .await
+        });
+        match fetched {
+            Ok(Ok(pairs)) => pairs,
+            Ok(Err(error)) => {
+                tracing::warn!(%error, "the Infisical keys could not be loaded for a terminal");
+                Vec::new()
+            }
+            Err(_) => {
+                tracing::warn!("the Infisical keys timed out for a terminal");
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
+    let mut ptys = state.ptys.lock();
+    // Another call may have opened the same terminal while the keys loaded.
+    if ptys.contains_key(&terminal_id) {
         return Ok(());
     }
-    // Bounded per session: a renderer bug cannot spawn unbounded shells.
+    check_terminal_limit(&ptys, &session_id)?;
+    let pty = pty_term::start(
+        app,
+        session_id,
+        terminal_id.clone(),
+        display_path(&cwd),
+        cols,
+        rows,
+        secrets,
+    )?;
+    ptys.insert(terminal_id, pty);
+    Ok(())
+}
+
+/// Bounded per session: a renderer bug cannot spawn unbounded shells.
+fn check_terminal_limit(ptys: &pty_term::PtyMap, session_id: &str) -> Result<()> {
     if ptys
         .values()
         .filter(|pty| pty.session_id == session_id)
@@ -2806,17 +2858,11 @@ pub fn start_terminal(
     {
         return Err(Error::new("invalid", "session reached the terminal limit"));
     }
-    let pty = pty_term::start(
-        app,
-        session_id,
-        terminal_id.clone(),
-        display_path(&cwd),
-        cols,
-        rows,
-    )?;
-    ptys.insert(terminal_id, pty);
     Ok(())
 }
+
+/// How long a new terminal waits for the project's Infisical keys.
+const TERMINAL_KEYS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 pub fn write_terminal(
     state: State<Arc<AppState>>,

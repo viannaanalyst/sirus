@@ -1367,21 +1367,22 @@ impl Shell {
                     .child(
                         div()
                             .flex()
+                            .justify_end()
                             .gap(px(4.))
-                            .child(
-                                button(("queue-save", i).into(), true)
-                                    .child(t("Salvar"))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.save_edit(&save_session);
-                                        cx.notify();
-                                    })),
-                            )
                             .child(
                                 button(("queue-discard", i).into(), true)
                                     .child(t("Fechar edição"))
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         let _ = &close_session;
                                         this.queues.editing = None;
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                button(("queue-save", i).into(), true)
+                                    .child(t("Salvar"))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.save_edit(&save_session);
                                         cx.notify();
                                     })),
                             ),

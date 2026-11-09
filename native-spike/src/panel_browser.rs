@@ -2522,6 +2522,13 @@ impl Browser {
                 .py(px(8.))
                 .flex()
                 .gap(px(6.))
+                .justify_end()
+                .child(
+                    self.text_button("login-cancel", "Cancelar", false, cx, |this, _, cx| {
+                        this.login_form = None;
+                        this.open_menu_fresh(Menu::Logins, cx);
+                    }),
+                )
                 .child(self.text_button(
                     "login-save",
                     "Salvar login",
@@ -2533,12 +2540,6 @@ impl Browser {
                         }
                     },
                 ))
-                .child(
-                    self.text_button("login-cancel", "Cancelar", false, cx, |this, _, cx| {
-                        this.login_form = None;
-                        this.open_menu_fresh(Menu::Logins, cx);
-                    }),
-                )
                 .into_any_element(),
         );
         rows
@@ -2632,13 +2633,14 @@ impl Browser {
                                 .mt(px(6.))
                                 .flex()
                                 .flex_wrap()
+                                .justify_end()
                                 .gap(px(6.))
                                 .child(button(
-                                    "offer-save",
-                                    if update { "Atualizar" } else { "Salvar" },
-                                    true,
+                                    "offer-no",
+                                    "Agora não",
+                                    false,
                                     id.clone(),
-                                    true,
+                                    false,
                                     false,
                                 ))
                                 .when(!update, |d| {
@@ -2651,7 +2653,14 @@ impl Browser {
                                         true,
                                     ))
                                 })
-                                .child(button("offer-no", "Agora não", false, id, false, false)),
+                                .child(button(
+                                    "offer-save",
+                                    if update { "Atualizar" } else { "Salvar" },
+                                    true,
+                                    id,
+                                    true,
+                                    false,
+                                )),
                         ),
                 )
                 .into_any_element(),

@@ -764,6 +764,7 @@ impl Shell {
             .mt(px(16.))
             .flex()
             .items_center()
+            .justify_end()
             .gap(px(8.))
             .children(children)
             .into_any_element()
@@ -937,6 +938,7 @@ impl Shell {
             Self::first_run_card(rows),
             Self::first_run_nav(vec![
                 Self::first_run_ghost("first-run-back", t("Voltar").to_owned())
+                    .mr_auto()
                     .on_click(cx.listener(|this, _, _, cx| this.first_run_back(cx)))
                     .into_any_element(),
                 Self::first_run_button(
@@ -1045,7 +1047,13 @@ impl Shell {
         }
         children.push(Self::first_run_nav(vec![
             Self::first_run_ghost("first-run-back", t("Voltar").to_owned())
+                .mr_auto()
                 .on_click(cx.listener(|this, _, _, cx| this.first_run_back(cx)))
+                .into_any_element(),
+            Self::first_run_ghost("first-run-later", t("Depois").to_owned())
+                .on_click(
+                    cx.listener(|this, _, _, cx| this.first_run_go(Goal::Step(Step::Look), cx)),
+                )
                 .into_any_element(),
             Self::first_run_button(
                 "first-run-pick",
@@ -1060,11 +1068,6 @@ impl Shell {
             )
             .on_click(cx.listener(|this, _, _, cx| this.first_run_pick(cx)))
             .into_any_element(),
-            Self::first_run_ghost("first-run-later", t("Depois").to_owned())
-                .on_click(
-                    cx.listener(|this, _, _, cx| this.first_run_go(Goal::Step(Step::Look), cx)),
-                )
-                .into_any_element(),
         ]));
         children
     }
@@ -1147,6 +1150,7 @@ impl Shell {
             div().mt(px(14.)).flex().gap(px(6.)).children(swatches).into_any_element(),
             Self::first_run_nav(vec![
                 Self::first_run_ghost("first-run-back", t("Voltar").to_owned())
+                    .mr_auto()
                     .on_click(cx.listener(|this, _, _, cx| this.first_run_back(cx)))
                     .into_any_element(),
                 Self::first_run_button("first-run-done", t("Tudo pronto").to_owned(), true, true)

@@ -11999,7 +11999,7 @@ impl Shell {
                 }
             })
             .child(place.probe())
-            .children(shell_settle::settle_texture(texture))
+            .children(shell_settle::settle_texture(texture, fade))
             // The 2 px gap under the row belongs to it, so the pointer crosses rows unbroken.
             .child(
                 div()

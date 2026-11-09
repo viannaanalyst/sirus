@@ -1,8 +1,8 @@
 //! Idle conversations settle (ADR-198). A conversation's age is the time since its last activity,
 //! or since the owner last opened it when that is later. Its sidebar row fades as the age nears the
-//! limit, a thin bar under it fills (once it is a day old), past half the limit a faint dotted
-//! texture appears behind it, and at the limit it leaves the list for the docked group. These
-//! functions are the whole decision; `shell_settle.rs` draws and stops what they say.
+//! limit, a thin bar under it fills (once it is a day old), a faint dotted texture covers it from
+//! a day old too, and at the limit it leaves the list for the docked group. These functions are
+//! the whole decision; `shell_settle.rs` draws and stops what they say.
 
 use chrono::{DateTime, Duration, Utc};
 
@@ -14,13 +14,13 @@ pub const BAR_FROM: Duration = Duration::days(1);
 
 /// The bar's opacity, and that of the faint track behind it.
 pub const BAR_ALPHA: f32 = 0.55;
-pub const TRACK_ALPHA: f32 = 0.06;
+pub const TRACK_ALPHA: f32 = 0.08;
 
-/// The texture shows past this share of the limit; its dots go from the first to the second
-/// opacity at the limit, `TEXTURE_GAP` px apart.
-pub const TEXTURE_FROM: f64 = 0.5;
-pub const TEXTURE_ALPHA: (f32, f32) = (0.05, 0.08);
-pub const TEXTURE_GAP: f32 = 6.;
+/// The texture shows from this age; its dots go from the first to the second opacity at the
+/// limit, `TEXTURE_GAP` px apart.
+pub const TEXTURE_FROM: Duration = Duration::days(1);
+pub const TEXTURE_ALPHA: (f32, f32) = (0.05, 0.10);
+pub const TEXTURE_GAP: f32 = 5.;
 
 /// The longest limit the Settings field takes; the host refuses more.
 pub const MAX_DAYS: u32 = 365;
@@ -60,15 +60,26 @@ pub fn fill(age: Duration, limit: Duration) -> f32 {
     progress(age, limit) as f32
 }
 
-/// The opacity of the dotted texture behind a row: 0 up to half the limit, then rising to
-/// `TEXTURE_ALPHA.1` at the limit.
+/// The opacity of the dotted texture behind a row: 0 under a day old, then rising linearly from
+/// `TEXTURE_ALPHA.0` at a day to `TEXTURE_ALPHA.1` at the limit (and past it).
 pub fn texture(age: Duration, limit: Duration) -> f32 {
-    let progress = progress(age, limit);
-    if progress <= TEXTURE_FROM {
+    if age < TEXTURE_FROM || limit <= Duration::zero() {
         return 0.;
     }
+    let span = (limit - TEXTURE_FROM).num_milliseconds();
+    let share = if span <= 0 {
+        1.
+    } else {
+        ((age - TEXTURE_FROM).num_milliseconds() as f64 / span as f64).clamp(0., 1.)
+    };
     let (low, high) = TEXTURE_ALPHA;
-    low + (high - low) * ((progress - TEXTURE_FROM) / (1. - TEXTURE_FROM)) as f32
+    low + (high - low) * share as f32
+}
+
+/// The alpha to paint so that, under a row drawn at `row_fade`, it shows as `alpha`. The bar and
+/// the texture both sit inside the row, so the row's fade would otherwise dim them.
+pub fn lifted(alpha: f32, row_fade: f32) -> f32 {
+    (alpha / row_fade.max(0.1)).min(1.)
 }
 
 /// The later of the last activity and the time the owner last opened the conversation.
@@ -141,13 +152,32 @@ mod tests {
     }
 
     #[test]
-    fn the_texture_starts_past_half_the_limit() {
-        assert!(close(texture(Duration::days(1), week()), 0.));
-        assert!(close(texture(Duration::hours(84), week()), 0.));
-        assert!(texture(Duration::days(4), week()) > 0.05);
-        assert!(close(texture(week(), week()), 0.08));
-        assert!(close(texture(Duration::days(30), week()), 0.08));
+    fn the_texture_starts_at_a_day_old() {
+        assert!(close(texture(Duration::zero(), week()), 0.));
+        assert!(close(texture(Duration::hours(23), week()), 0.));
+        assert!(close(texture(Duration::days(1), week()), 0.05));
+        assert!(close(texture(Duration::hours(12), week()), 0.));
+    }
+
+    #[test]
+    fn the_texture_ramps_from_a_day_to_the_limit() {
+        // Halfway between a day and the week: 0.05 + 0.05 / 2.
+        assert!(close(texture(Duration::days(4), week()), 0.075));
+        assert!(close(texture(week(), week()), 0.10));
+        assert!(close(texture(Duration::days(30), week()), 0.10));
+        // A limit of a day or less: the texture is at its top from the day on.
+        assert!(close(texture(Duration::days(1), Duration::days(1)), 0.10));
         assert!(close(texture(Duration::days(9), Duration::zero()), 0.));
+    }
+
+    #[test]
+    fn the_row_fade_is_compensated_so_the_overlays_keep_their_alpha() {
+        let fade = FADED as f32;
+        assert!(close(lifted(TEXTURE_ALPHA.1, fade) * fade, 0.10));
+        assert!(close(lifted(TRACK_ALPHA, fade) * fade, TRACK_ALPHA));
+        assert!(close(lifted(BAR_ALPHA, 1.), BAR_ALPHA));
+        // A colour cannot go past full opacity, so at the limit the bar shows at the row's fade.
+        assert!(close(lifted(BAR_ALPHA, fade), 1.));
     }
 
     #[test]

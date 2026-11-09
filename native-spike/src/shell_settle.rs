@@ -28,7 +28,6 @@ pub(super) fn settle_bar(fill: f32, row_fade: f32) -> Option<Div> {
         return None;
     }
     // The row's own fade also covers the bar, so it is lifted back to the wanted opacity.
-    let lift = |alpha: f32| (alpha / row_fade.max(0.1)).min(1.);
     Some(
         div()
             .absolute()
@@ -37,29 +36,26 @@ pub(super) fn settle_bar(fill: f32, row_fade: f32) -> Option<Div> {
             .top(px(super::CONV_ROW - 2.))
             .h(px(2.))
             .rounded_full()
-            .bg(content(lift(settle::TRACK_ALPHA)))
-            .child(
-                div()
-                    .h(px(2.))
-                    .w(gpui::relative(fill))
-                    .rounded_full()
-                    .bg(crate::theme::accent_wash(lift(settle::BAR_ALPHA))),
-            ),
+            .bg(content(settle::lifted(settle::TRACK_ALPHA, row_fade)))
+            .child(div().h(px(2.)).w(gpui::relative(fill)).rounded_full().bg(
+                crate::theme::accent_wash(settle::lifted(settle::BAR_ALPHA, row_fade)),
+            )),
     )
 }
 
-/// The faint grid of dots behind an old row, painted as small quads only for those rows.
-pub(super) fn settle_texture(alpha: f32) -> Option<impl IntoElement> {
+/// The faint grid of dots behind an old row, painted as small quads only for those rows. It sits
+/// under the row's content, and is lifted past the row's fade like the bar.
+pub(super) fn settle_texture(alpha: f32, row_fade: f32) -> Option<impl IntoElement> {
     if alpha <= 0. {
         return None;
     }
+    let color = content(settle::lifted(alpha, row_fade));
     Some(
         gpui::canvas(
             |_, _, _| {},
             move |bounds, _, window, _| {
                 let gap = settle::TEXTURE_GAP;
-                let dot = px(1.4);
-                let color = content(alpha);
+                let dot = px(1.2);
                 let (width, height) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
                 let mut y = gap / 2.;
                 while y < height {

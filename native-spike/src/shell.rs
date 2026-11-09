@@ -250,6 +250,17 @@ impl Draft {
 }
 
 /// The host's key for a conversation's composer draft, as Sirus's `session:<id>`.
+/// The turn the trail lights. `tops` are the starts of the turns from `first` on, relative to the
+/// top of the view (a turn above it is negative). It is the last turn that has begun within a
+/// sliver of the top, or the first one when none has; at the bottom of the conversation, the last.
+fn current_turn(first: usize, tops: &[f32], count: usize, at_bottom: bool) -> usize {
+    if at_bottom || count == 0 {
+        return count.saturating_sub(1);
+    }
+    let began = tops.iter().take_while(|top| **top <= 24.).count();
+    (first + began.saturating_sub(1)).min(count - 1)
+}
+
 fn draft_key(session_id: &str) -> String {
     format!("session:{session_id}")
 }
@@ -8561,11 +8572,30 @@ impl Shell {
         if count < 2 {
             return None;
         }
-        let current = state
-            .logical_scroll_top()
-            .item_ix
-            .saturating_sub(1)
-            .min(count - 1);
+        let top = state.logical_scroll_top();
+        let first = top.item_ix.saturating_sub(1).min(count - 1);
+        let viewport = state.viewport_bounds();
+        let view_height = f32::from(viewport.size.height);
+        // Where each turn from the first one in view starts, relative to the viewport's top.
+        let mut tops = vec![if top.item_ix == 0 {
+            0.
+        } else {
+            -f32::from(top.offset_in_item)
+        }];
+        for turn in first + 1..count {
+            let Some(bounds) = state.bounds_for_item(turn + 1) else {
+                break;
+            };
+            let at = f32::from(bounds.top() - viewport.top());
+            tops.push(at);
+            if at > view_height {
+                break;
+            }
+        }
+        let at_bottom = f32::from(state.max_offset_for_scrollbar().y)
+            + f32::from(state.scroll_px_offset_for_scrollbar().y)
+            <= 2.;
+        let current = current_turn(first, &tops, count, at_bottom);
         let mut last_visible = current;
         while last_visible + 1 < count
             && state.item_is_below_viewport(last_visible + 2) == Some(false)
@@ -8581,12 +8611,10 @@ impl Shell {
                 let on_current = at == current;
                 let emphasis =
                     hovered.map_or(0., |h| (-((at as f32 - h as f32).powi(2)) / 4.5).exp());
-                let base = if on_current { 12. } else { 6. };
+                let base = if on_current { 16. } else { 6. };
                 let width = base + emphasis * (30. - base);
-                let alpha = if hovered == Some(at) {
+                let alpha = if hovered == Some(at) || on_current {
                     1.
-                } else if on_current {
-                    0.9
                 } else if at >= current && at <= last_visible {
                     0.5
                 } else {
@@ -8627,7 +8655,11 @@ impl Shell {
                             .w(px(width))
                             .h(px(2.))
                             .rounded_full()
-                            .bg(content(alpha)),
+                            .bg(if on_current {
+                                crate::theme::accent()
+                            } else {
+                                content(alpha)
+                            }),
                     )
                     .into_any_element()
             })
@@ -11064,7 +11096,7 @@ impl Shell {
                                         .cursor_pointer()
                                         .hover(|s| s.bg(content(0.1)))
                                         .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.glides.entry(index).or_default().follow(false);
+                                            this.glides.entry(index).or_default().follow_fast();
                                             cx.notify();
                                         }))
                                         .child(icon("chevron-down", 15.).text_color(content(0.8))),
@@ -18982,5 +19014,26 @@ mod rail_tests {
         assert_eq!(rail_window(5, 2, 5, 10), 2);
         assert_eq!(rail_window(8, 9, 5, 10), 5);
         assert_eq!(rail_window(3, 0, 5, 2), 0);
+    }
+}
+
+#[cfg(test)]
+mod trail_tests {
+    use super::current_turn;
+
+    #[test]
+    fn the_turn_at_the_top_of_the_view_is_current() {
+        // Turn 3 began above the view; turn 4 starts 300 px down.
+        assert_eq!(current_turn(3, &[-120., 300., 700.], 10, false), 3);
+        // Turn 4 has reached the top.
+        assert_eq!(current_turn(3, &[-500., 10., 400.], 10, false), 4);
+        // Nothing has begun yet: the first one.
+        assert_eq!(current_turn(0, &[40., 400.], 10, false), 0);
+    }
+
+    #[test]
+    fn at_the_bottom_the_last_turn_is_current() {
+        assert_eq!(current_turn(3, &[-120., 300.], 10, true), 9);
+        assert_eq!(current_turn(0, &[0.], 1, true), 0);
     }
 }

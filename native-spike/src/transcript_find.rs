@@ -368,6 +368,8 @@ impl Shell {
                         } else {
                             content(0.92)
                         })
+                        // Over an empty field the caret sits at the left, before the placeholder.
+                        .when(typing && placeholder, |d| d.child(caret()))
                         .child(div().min_w_0().overflow_hidden().whitespace_nowrap().child(
                             if placeholder {
                                 t("Buscar nesta conversa").to_owned()
@@ -375,9 +377,7 @@ impl Shell {
                                 query
                             },
                         ))
-                        .when(typing, |d| {
-                            d.child(div().flex_shrink_0().w(px(1.5)).h(px(15.)).bg(content(0.8)))
-                        }),
+                        .when(typing && !placeholder, |d| d.child(caret())),
                 )
                 .when(!placeholder, |d| {
                     d.child(
@@ -403,6 +403,10 @@ impl Shell {
                 .into_any_element(),
         )
     }
+}
+
+fn caret() -> Div {
+    div().flex_shrink_0().w(px(1.5)).h(px(15.)).bg(content(0.8))
 }
 
 #[cfg(test)]

@@ -156,14 +156,20 @@ pub fn scan_with(text: &str, known: &Known, sent: bool) -> Vec<Badge> {
     for word in words {
         let body = &text[word.clone()];
         if let Some(url) = link_in_word(body) {
-            let full = &body[url.clone()];
-            if let Some(domain) = domain_of(full) {
+            let matched = &body[url.clone()];
+            let lower = matched.to_ascii_lowercase();
+            let (full, domain) = if lower.starts_with("https://") || lower.starts_with("http://") {
+                (matched.to_owned(), domain_of(matched))
+            } else {
+                // A bare domain opens over https.
+                let full = format!("https://{matched}");
+                let domain = domain_of(&full);
+                (full, domain)
+            };
+            if let Some(domain) = domain {
                 badges.push(Badge {
                     range: word.start + url.start..word.start + url.end,
-                    kind: Kind::Url {
-                        domain,
-                        full: full.to_owned(),
-                    },
+                    kind: Kind::Url { domain, full },
                 });
             }
             continue;
@@ -200,11 +206,39 @@ pub fn scan_with(text: &str, known: &Known, sent: bool) -> Vec<Badge> {
     badges
 }
 
+/// The top-level domains a bare domain may end in. The list is an allowlist so that a word with
+/// a dot (`main.rs`, `2.1.3`) is not taken for a site.
+const TLDS: [&str; 22] = [
+    "com", "net", "org", "io", "dev", "app", "ai", "co", "br", "com.br", "me", "sh", "so", "xyz",
+    "tech", "cloud", "gg", "tv", "us", "uk", "de", "pt",
+];
+
+/// Extensions a word ending in them is a file, not a site (a few share a TLD's letters: `.sh`, `.so`).
+const FILE_EXTENSIONS: [&str; 47] = [
+    "rs", "js", "jsx", "ts", "tsx", "json", "md", "markdown", "txt", "toml", "yaml", "yml", "html",
+    "htm", "css", "scss", "sass", "less", "sh", "bash", "zsh", "fish", "py", "rb", "go", "java",
+    "kt", "kts", "c", "h", "cc", "cpp", "hpp", "cs", "swift", "m", "mm", "php", "sql", "xml",
+    "svg", "png", "jpg", "jpeg", "gif", "pt", "so",
+];
+
 /// Where a link sits in a word: after any opening bracket, quote or letter typed just before it,
 /// without the punctuation that ends a sentence. A `)` stays when the link opened its own `(`.
 /// A word is a run of non-whitespace, so a link is only ever a finished token: typed by hand it
-/// becomes a badge when a space or a newline ends it, as a pasted one already did.
+/// becomes a badge when a space or a newline ends it, as a pasted one already did. Besides a full
+/// `http(s)://` address, a word starting with `www.` or a bare domain with a known TLD is a link.
 fn link_in_word(word: &str) -> Option<Range<usize>> {
+    if let Some(link) = scheme_link(word) {
+        return Some(link);
+    }
+    // A scheme this app does not open (`ftp://`) is left alone whole.
+    if word.contains("://") {
+        return None;
+    }
+    bare_link(word)
+}
+
+/// A link that starts with `http://` or `https://`, found anywhere in the word.
+fn scheme_link(word: &str) -> Option<Range<usize>> {
     let lower = word.to_ascii_lowercase();
     let lead = ["https://", "http://"]
         .into_iter()
@@ -215,6 +249,36 @@ fn link_in_word(word: &str) -> Option<Range<usize>> {
         rest.get(..s.len())
             .is_some_and(|h| h.eq_ignore_ascii_case(s))
     })?;
+    let end = trim_link_end(rest);
+    (end > scheme.len()).then_some(lead..lead + end)
+}
+
+/// A bare domain (`www.google.com`, `siruscode.com`, `app.vercel.app/x`), at the word's start or
+/// just after an opening bracket, quote or colon. An email's `@`, a version's numbers and a file
+/// name's extension are not domains.
+fn bare_link(word: &str) -> Option<Range<usize>> {
+    let mut starts = vec![0usize];
+    for (i, c) in word.char_indices() {
+        if matches!(c, '(' | '[' | '{' | '<' | '"' | '\'' | ':') {
+            starts.push(i + c.len_utf8());
+        }
+    }
+    for start in starts {
+        let rest = &word[start..];
+        let end = trim_link_end(rest);
+        if end == 0 {
+            continue;
+        }
+        let candidate = &rest[..end];
+        if looks_like_domain(candidate) {
+            return Some(start..start + end);
+        }
+    }
+    None
+}
+
+/// The punctuation a finished link does not take: a sentence's end, a closing bracket or quote.
+fn trim_link_end(rest: &str) -> usize {
     let mut end = rest.len();
     while let Some(last) = rest[..end].chars().next_back() {
         let drop = match last {
@@ -230,7 +294,38 @@ fn link_in_word(word: &str) -> Option<Range<usize>> {
         }
         end -= last.len_utf8();
     }
-    (end > scheme.len()).then_some(lead..lead + end)
+    end
+}
+
+fn looks_like_domain(candidate: &str) -> bool {
+    let authority = candidate.split(['/', '?', '#']).next().unwrap_or("");
+    if authority.is_empty() || authority.contains('@') {
+        return false;
+    }
+    let host = match authority.rsplit_once(':') {
+        Some((host, port)) if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) => host,
+        Some(_) => return false,
+        None => authority,
+    };
+    let host = host.to_ascii_lowercase();
+    let labels: Vec<&str> = host.split('.').collect();
+    if labels.len() < 2 {
+        return false;
+    }
+    if !labels.iter().all(|label| {
+        !label.is_empty()
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+            && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+    }) {
+        return false;
+    }
+    let tld = *labels.last().unwrap();
+    if FILE_EXTENSIONS.contains(&tld) {
+        return false;
+    }
+    // `www.` is enough on its own; any other bare domain needs a known TLD.
+    labels[0] == "www" || TLDS.contains(&tld)
 }
 
 /// A link's site as the badge names it: the host without `www.` (with its port, if any).
@@ -857,11 +952,38 @@ mod tests {
     }
 
     #[test]
-    fn something_that_is_not_a_link_is_left_alone() {
+    fn a_bare_domain_and_a_www_word_are_badges() {
+        assert_eq!(urls("veja google.com agora"), ["google.com"]);
+        assert_eq!(urls("siruscode.com "), ["siruscode.com"]);
+        assert_eq!(urls("www.google.com "), ["www.google.com"]);
+        assert_eq!(urls("app.vercel.app/docs "), ["app.vercel.app/docs"]);
+        assert_eq!(urls("(google.com/x)"), ["google.com/x"]);
+        assert_eq!(urls("veja:google.com/path?q=1 "), ["google.com/path?q=1"]);
+        assert_eq!(urls("um site em siruscode.com.br."), ["siruscode.com.br"]);
+        // The badge opens over https.
+        let badge = &scan_with("veja google.com/x ", &known(), false)[0];
+        assert_eq!(
+            badge.kind,
+            Kind::Url {
+                domain: "google.com".into(),
+                full: "https://google.com/x".into()
+            }
+        );
+        assert_eq!(badge.label(), "google.com");
+    }
+
+    #[test]
+    fn a_word_that_only_looks_like_a_domain_is_left_alone() {
+        assert!(urls("main.rs e package.json").is_empty());
+        assert!(urls("a versão 2.1.3 saiu").is_empty());
+        assert!(urls("mande para eu@exemplo.com").is_empty());
+        assert!(urls("veja @src/main.rs").is_empty());
+        assert!(urls("google e siruscode").is_empty());
         assert!(urls("https://").is_empty());
         assert!(urls("https://exemplo").is_empty());
-        assert!(urls("ftp://a.com e www.a.com").is_empty());
+        assert!(urls("ftp://a.com").is_empty());
         assert!(urls("https://a.c").is_empty());
+        assert!(urls("script.sh e libfoo.so e model.pt").is_empty());
     }
 
     #[test]

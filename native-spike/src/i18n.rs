@@ -510,6 +510,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Open the preview when it answers",
     ),
     ("Abrir ao lado", "Open to the side"),
+    ("Abrir arquivo", "Open file"),
     ("Abrir como rascunho", "Open as draft"),
     (
         "Abrir diretório de dados do Sirus",
@@ -4373,6 +4374,11 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Renova em {}", "Renews in {}"),
     ("Repetir", "Repeat"),
     ("Repositório", "Repository"),
+    (
+        "Resolva o conflito de merge ou rebase nos arquivos abaixo, mantendo a intenção dos dois lados, e conclua o merge ou rebase:\n\n{}",
+        "Resolve the merge or rebase conflict in the files below, keeping both sides' intent, and finish the merge or rebase:\n\n{}",
+    ),
+    ("Resolver com o agente", "Resolve with the agent"),
     (
         "Responda a cada pergunta nativa exatamente uma vez",
         "Answer every native question exactly once",

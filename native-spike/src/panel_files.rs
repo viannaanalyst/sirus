@@ -1408,6 +1408,7 @@ impl FilesPanel {
                     .flex()
                     .items_center()
                     .justify_center()
+                    .cursor_pointer()
                     .opacity(if active { 1. } else { 0. })
                     .group_hover(group.clone(), |s| s.opacity(1.))
                     .hover(|s| s.bg(content(0.07)))

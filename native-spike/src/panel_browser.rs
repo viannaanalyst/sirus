@@ -1686,6 +1686,7 @@ impl Browser {
                             .justify_center()
                             .rounded(px(crate::theme::RADIUS_SM))
                             .flex_shrink_0()
+                            .cursor_pointer()
                             .hover(|s| s.bg(theme::content(0.14)))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 cx.stop_propagation();

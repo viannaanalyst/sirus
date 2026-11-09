@@ -196,6 +196,7 @@ impl Render for TerminalPanel {
                     .flex()
                     .items_center()
                     .justify_center()
+                    .cursor_pointer()
                     .opacity(if active { 1. } else { 0. })
                     .group_hover(group.clone(), |s| s.opacity(1.))
                     .hover(|s| s.bg(theme::content(0.1)))

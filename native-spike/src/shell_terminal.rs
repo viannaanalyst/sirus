@@ -975,6 +975,7 @@ impl Shell {
                 .flex()
                 .items_center()
                 .justify_center()
+                .cursor_pointer()
                 .opacity(0.)
                 .group_hover(group, |s| s.opacity(1.))
                 .hover(|s| s.bg(content(0.1)))

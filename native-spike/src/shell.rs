@@ -5266,6 +5266,7 @@ impl Shell {
         self.marked = None;
         // A failure in the footer belongs to what was on screen when it happened.
         self.problem = None;
+        self.toasts.conflict = None;
         self.split_sync();
         if let Some(ix) = self
             .tabs

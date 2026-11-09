@@ -1547,7 +1547,7 @@ fn general(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
                 s,
                 t("Composer rápido"),
                 &tf(
-                    "{}, de qualquer app, ou o ícone do Sirus na barra de menus abre um campo para começar uma conversa sem abrir a janela. O atalho muda em Atalhos.",
+                    "{}, de qualquer app, abre um campo para começar uma conversa sem abrir a janela. O atalho muda em Atalhos.",
                     &[&quick_composer_label(s)],
                 ),
                 top("quickComposer"),

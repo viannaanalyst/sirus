@@ -53,6 +53,23 @@ pub fn origin_commit(project_root: &Path) -> Option<String> {
     .filter(|commit| commit.len() >= 40 && commit.chars().all(|c| c.is_ascii_hexdigit()))
 }
 
+/// The commit a local branch points at, for a new worktree started from it; None when the name
+/// is not a valid branch or no such local branch exists.
+pub fn branch_commit(project_root: &Path, branch: &str) -> Option<String> {
+    git::run_ok(project_root, &["check-ref-format", "--branch", branch]).ok()?;
+    git::run_ok(
+        project_root,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}^{{commit}}"),
+        ],
+    )
+    .ok()
+    .filter(|commit| commit.len() >= 40 && commit.chars().all(|c| c.is_ascii_hexdigit()))
+}
+
 /// Same as `create_isolated`, starting the new branch at `start` (a verified commit or `HEAD`).
 pub fn create_isolated_at(
     project_root: &Path,
@@ -342,6 +359,14 @@ pub(crate) mod tests {
         assert_eq!(git::run_ok(&clone, &["rev-parse", "HEAD"]).unwrap(), local);
         // A repository without origin falls back to HEAD.
         assert_eq!(origin_commit(&origin.cwd()), None);
+        // A named local branch gives its own commit; an unknown or invalid one gives none.
+        assert_eq!(branch_commit(&clone, "nope"), None);
+        assert_eq!(branch_commit(&clone, "-x"), None);
+        let current = git::run_ok(&clone, &["branch", "--show-current"]).unwrap();
+        assert_eq!(
+            branch_commit(&clone, &current).as_deref(),
+            Some(local.as_str())
+        );
     }
 
     #[test]

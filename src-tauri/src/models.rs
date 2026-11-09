@@ -2096,6 +2096,10 @@ pub struct CreateSessionRequest {
     /// Work in this session's folder (same project) instead of the checkout or a new worktree.
     #[serde(default)]
     pub share_worktree_of: Option<String>,
+    /// A new isolated worktree starts from this local branch instead of `HEAD` or origin
+    /// (the quick composer's branch pill).
+    #[serde(default)]
+    pub base_branch: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

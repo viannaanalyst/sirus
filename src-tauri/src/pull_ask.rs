@@ -192,6 +192,7 @@ fn open(
         isolated_worktree: false,
         model,
         share_worktree_of: None,
+        base_branch: None,
     };
     let created = crate::commands::create_session_locked(state, &mut data, request, "HEAD")?;
     let session = data

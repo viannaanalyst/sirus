@@ -1048,6 +1048,7 @@ fn start(
             isolated_worktree: true,
             model: task.model.clone(),
             share_worktree_of: None,
+            base_branch: None,
         };
         let worker = match crate::commands::create_session_locked(state, &mut data, request, &base)
         {

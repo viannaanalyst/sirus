@@ -1154,7 +1154,10 @@ pub async fn create_session(
 }
 
 fn create_session_native(state: &AppState, request: CreateSessionRequest) -> Result<Session> {
-    let start = new_worktree_start(state, &request);
+    let start = match base_branch_start(state, &request)? {
+        Some(commit) => commit,
+        None => new_worktree_start(state, &request),
+    };
     let mut data = state.data.lock();
     let session = create_session_locked(state, &mut data, request, &start)?;
     drop(data);
@@ -1181,6 +1184,34 @@ pub(crate) fn new_worktree_start(state: &AppState, request: &CreateSessionReques
     };
     let commit = root.and_then(|root| worktree::origin_commit(&root));
     worktree::start_point(true, commit)
+}
+
+/// The commit a new isolated worktree starts from when the request names a local branch to start
+/// from; None when it names none. A branch that does not exist is refused rather than silently
+/// starting somewhere else.
+fn base_branch_start(state: &AppState, request: &CreateSessionRequest) -> Result<Option<String>> {
+    let Some(branch) = request
+        .base_branch
+        .as_deref()
+        .map(str::trim)
+        .filter(|branch| !branch.is_empty())
+    else {
+        return Ok(None);
+    };
+    if !request.isolated_worktree || request.share_worktree_of.is_some() {
+        return Ok(None);
+    }
+    let root = state
+        .data
+        .lock()
+        .projects
+        .iter()
+        .find(|project| project.id == request.project_id)
+        .map(|project| PathBuf::from(&project.path))
+        .ok_or_else(|| Error::not_found("project not found"))?;
+    worktree::branch_commit(&root, branch)
+        .map(Some)
+        .ok_or_else(|| Error::new("invalid", "Branch not found"))
 }
 
 /// Creates and inserts one session under an already-held data lock. Isolated worktrees start at

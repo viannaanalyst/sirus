@@ -13,7 +13,8 @@
 //! the container, and wrap each row with `track.row(row, ix, selected)`. The row then drops its
 //! own `.hover(|s| s.bg(content(..)))`.
 use crate::motion::{Curve, Tween};
-use crate::theme::content;
+use crate::segment_pill;
+use crate::theme::{accent_wash, content};
 use gpui::{
     Bounds, DispatchPhase, Hitbox, HitboxBehavior, MouseMoveEvent, ParentElement, Pixels,
     ScrollWheelEvent, Styled, Window, canvas, fill, point, px, size,
@@ -171,6 +172,8 @@ struct RowInfo {
 struct Inner {
     pill: Pill,
     rows: Vec<RowInfo>,
+    /// Paints the ⌘K palette's selection (`segment_pill::paint_row`) instead of a plain fill.
+    barred: bool,
 }
 
 impl Inner {
@@ -202,6 +205,16 @@ thread_local! {
 /// The track of the list named `key`, made on first use. The UI is single-threaded, so the
 /// registry is thread-local and rows need no field on the view.
 pub fn list(key: &str) -> HoverTrack {
+    track(key, false)
+}
+
+/// `list`, but the hovered row wears the palette's selection: its wash and the accent bar at its
+/// left edge, with the pill's own rounding.
+pub fn list_barred(key: &str) -> HoverTrack {
+    track(key, true)
+}
+
+fn track(key: &str, barred: bool) -> HoverTrack {
     TRACKS.with(|tracks| {
         tracks
             .borrow_mut()
@@ -210,6 +223,7 @@ pub fn list(key: &str) -> HoverTrack {
                 HoverTrack(Rc::new(RefCell::new(Inner {
                     pill: Pill::new(Instant::now()),
                     rows: Vec::new(),
+                    barred,
                 })))
             })
             .clone()
@@ -230,13 +244,20 @@ impl HoverTrack {
                     let hover = inner.hovered(window);
                     inner.pill.point(hover, now, cx.reduce_motion());
                     if let Some((r, alpha)) = inner.pill.current(now) {
-                        window.paint_quad(
-                            fill(
-                                Bounds::new(point(px(r.x), px(r.y)), size(px(r.w), px(r.h))),
-                                content(FILL * alpha),
-                            )
-                            .corner_radii(px(RADIUS)),
-                        );
+                        let bounds = Bounds::new(point(px(r.x), px(r.y)), size(px(r.w), px(r.h)));
+                        if inner.barred {
+                            segment_pill::paint_row(
+                                window,
+                                bounds,
+                                content(segment_pill::ROW_FILL * alpha),
+                                accent_wash(alpha),
+                                RADIUS,
+                            );
+                        } else {
+                            window.paint_quad(
+                                fill(bounds, content(FILL * alpha)).corner_radii(px(RADIUS)),
+                            );
+                        }
                     }
                     if inner.pill.animating(now) {
                         window.request_animation_frame();

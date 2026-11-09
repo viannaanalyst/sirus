@@ -15629,7 +15629,7 @@ impl Shell {
                                     d.child(crate::segment_pill::row_thumb(
                                         "palette",
                                         selected,
-                                        content(0.09),
+                                        content(crate::segment_pill::ROW_FILL),
                                         accent(),
                                     ))
                                 })

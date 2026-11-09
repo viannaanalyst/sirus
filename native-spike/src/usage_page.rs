@@ -63,7 +63,7 @@ impl Prov {
         }
     }
     /// Validated for dark; on a light theme the same hues a little deeper stay readable.
-    fn color(self) -> gpui::Hsla {
+    pub(super) fn color(self) -> gpui::Hsla {
         let base = match self {
             Prov::Claude => 0xc9774a,
             Prov::Codex => 0x1ea3b8,

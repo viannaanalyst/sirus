@@ -40,6 +40,7 @@ pub struct Launch {
     pub title: String,
     pub agent: AgentProviderId,
     pub model: Option<String>,
+    pub effort: Option<String>,
     pub isolated_worktree: bool,
     pub prompt: String,
     pub approval: ApprovalMode,
@@ -112,6 +113,7 @@ pub async fn launch(
                 execution: ExecutionOptions {
                     approval,
                     planning: request.planning,
+                    effort: request.effort,
                     ..Default::default()
                 },
                 team: false,
@@ -174,6 +176,7 @@ pub(crate) fn start_from(
         title: request.title,
         agent,
         model,
+        effort: None,
         isolated_worktree: request.new_worktree && request.share_worktree.is_none(),
         prompt: request.prompt,
         approval: inherited_approval(caller),

@@ -74,6 +74,8 @@ pub fn state_meta(data: &AppData) -> Result<Value> {
     // Review guides load one at a time through `review_guide_action` (ADR-125).
     if let Some(fields) = value.as_object_mut() {
         fields.remove("reviewGuides");
+        // Tasks load through `list_tasks`.
+        fields.remove("scheduledPrompts");
     }
     Ok(value)
 }

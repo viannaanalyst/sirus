@@ -96,6 +96,7 @@ mod remote;
 mod reply_image;
 mod reply_preview;
 mod review_guides;
+mod scheduled_prompts;
 mod rotation;
 mod secrets;
 mod session_export;

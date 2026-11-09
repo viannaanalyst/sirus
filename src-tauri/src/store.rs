@@ -2,7 +2,7 @@
 //! exactly as before; this module is only where it is saved and read. One database next to
 //! the old `state.json` (`state.db`), in WAL mode, with a numbered schema:
 //!
-//! - `projects`, `review_guides`: one row per item (id, position, JSON);
+//! - `projects`, `review_guides`, `scheduled_prompts`: one row per item (id, position, JSON);
 //! - `sessions`: one row per session without its messages, with the transcript counts;
 //! - `messages`: one row per message, so a save writes only the messages that changed;
 //! - `tool_outputs`: the full output of settled command rows over 1 KiB, written with their
@@ -32,8 +32,11 @@ use crate::error::{Error, Result};
 use crate::models::Message;
 
 /// Item collections stored one row per item.
-pub const ROW_TABLES: [(&str, &str); 2] =
-    [("projects", "projects"), ("reviewGuides", "review_guides")];
+pub const ROW_TABLES: [(&str, &str); 3] = [
+    ("projects", "projects"),
+    ("reviewGuides", "review_guides"),
+    ("scheduledPrompts", "scheduled_prompts"),
+];
 /// Index fields written into a session row's count columns (ADR-099).
 const MESSAGE_COUNT: &str = "messageCount";
 const TRANSCRIPT_LENGTH: &str = "transcriptLength";
@@ -82,6 +85,12 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (id TEXT PRIMARY KEY, position INTEGE
 const SCHEMA_V7: &str = r#"
 DROP TABLE IF EXISTS tasks;
 DROP TABLE IF EXISTS scheduled_tasks;
+"#;
+
+/// Scheduled prompts, "Tarefas" (ADR-200): one row per task. A new name, since the old
+/// `scheduled_tasks` of ADR-142 was dropped by version 7 and held another shape.
+const SCHEMA_V8: &str = r#"
+CREATE TABLE IF NOT EXISTS scheduled_prompts (id TEXT PRIMARY KEY, position INTEGER NOT NULL, json TEXT NOT NULL);
 "#;
 
 /// Large command output stored apart from its message (ADR-147). Rows written before it are
@@ -317,7 +326,7 @@ fn migrate(conn: &Connection, state_path: &Path) -> Result<()> {
             .map_err(sql)?;
         versions
     };
-    let steps: [(i64, Step); 7] = [
+    let steps: [(i64, Step); 8] = [
         (1, Step::Sql(SCHEMA_V1)),
         (2, Step::Sql(SCHEMA_V2)),
         (3, Step::Code(restore_project_astros)),
@@ -325,6 +334,7 @@ fn migrate(conn: &Connection, state_path: &Path) -> Result<()> {
         (5, Step::Sql(SCHEMA_V5)),
         (6, Step::Code(split_tool_outputs)),
         (7, Step::Sql(SCHEMA_V7)),
+        (8, Step::Sql(SCHEMA_V8)),
     ];
     for (version, step) in steps {
         if applied.contains(&version) {

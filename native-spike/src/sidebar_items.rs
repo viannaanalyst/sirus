@@ -14,7 +14,7 @@ pub struct Item {
 }
 
 /// The entries the menu lists, in order. The owner adds one line here per new entry.
-pub const ITEMS: [Item; 4] = [
+pub const ITEMS: [Item; 5] = [
     Item {
         id: "new",
         label: "Novo",
@@ -29,6 +29,11 @@ pub const ITEMS: [Item; 4] = [
         id: "pulls",
         label: "Pull requests",
         icon: "git-pull-request",
+    },
+    Item {
+        id: "tasks",
+        label: "Tarefas",
+        icon: "task-clock",
     },
     Item {
         id: "projects",

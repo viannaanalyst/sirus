@@ -94,11 +94,12 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> (Option<AnyElement>, Option<AnyElement>) {
         // The settings have their own column, where the rail isn't.
-        let places = if self.appearance.is_some() || self.usage_page_open() {
-            Vec::new()
-        } else {
-            self.working_elsewhere()
-        };
+        let places =
+            if self.appearance.is_some() || self.usage_page_open() || self.tasks_page_open() {
+                Vec::new()
+            } else {
+                self.working_elsewhere()
+            };
         if places.is_empty() {
             self.agents.open = None;
             self.agents.appear.set(None);

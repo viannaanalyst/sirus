@@ -486,6 +486,8 @@ const LISTEN: &[&str] = &[
     "notification-native",
     // This Mac's provider CLI updates, as offers (toast.rs).
     "provider-updates",
+    // Scheduled prompts saved, deleted, switched or run (tasks_page.rs).
+    "tasks-updated",
 ];
 
 pub fn start() -> (Backend, async_channel::Receiver<Incoming>) {

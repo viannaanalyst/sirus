@@ -393,6 +393,7 @@ fn start(dir: &Path) -> crate::error::Result<AppHandle> {
     crate::ci_autofix::start(app.clone());
     crate::pr_watch::start(app.clone());
     crate::provider_updates::start(app.clone());
+    crate::scheduled_prompts::start(app.clone());
     Ok(app)
 }
 

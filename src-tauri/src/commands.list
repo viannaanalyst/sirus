@@ -13,6 +13,11 @@ local_servers::local_servers_list
 agent_resources::agent_resources
 agent_resources::agent_resource_action
 review_guides::review_guide_action
+scheduled_prompts::list_tasks
+scheduled_prompts::save_task
+scheduled_prompts::delete_task
+scheduled_prompts::set_task_enabled
+scheduled_prompts::run_task_now
 commands::retry_last_turn
 attachments::attachment_image
 attachments::message_thumbnail

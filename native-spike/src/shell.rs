@@ -75,6 +75,9 @@ pub(crate) mod sidebar_card;
 /// The subagents of a turn as one card.
 #[path = "subagent_card.rs"]
 mod subagent_card;
+/// Tarefas: scheduled prompts as a calendar and the "Nova tarefa" sheet (tasks_page.rs, ADR-200).
+#[path = "tasks_page.rs"]
+mod tasks_page;
 /// The Usage page: Custo, Tokens and Limites over the window (usage_page.rs).
 #[path = "usage_page.rs"]
 mod usage_page;
@@ -1345,6 +1348,8 @@ pub struct Shell {
     resources: agent_resources::State,
     /// The Usage page, opened from the footer or the palette (usage_page.rs).
     usage_page: usage_page::State,
+    /// The Tarefas page: the host's scheduled prompts and the sheet that makes one (tasks_page.rs).
+    tasks_page: tasks_page::State,
     /// The context ring's popup and its compaction state (context_meter.rs).
     context: context_meter::State,
     /// The sidebar's hover card for a conversation row (sidebar_card.rs).
@@ -1816,6 +1821,7 @@ impl Shell {
             subagents: subagent_card::State::default(),
             resources: agent_resources::State::default(),
             usage_page: usage_page::State::default(),
+            tasks_page: tasks_page::State::default(),
             context: Default::default(),
             sidebar_card: Default::default(),
             cards: Default::default(),
@@ -2467,6 +2473,7 @@ impl Shell {
                 "agent-output" => self.agent_output(&payload),
                 "agent-exit" => self.refresh_diff(),
                 "provider-updates" => self.provider_event(&payload, cx),
+                "tasks-updated" => self.tasks_load(cx),
                 // The chime for activity on something linked to a session.
                 "pr-watch-activity" => {
                     if self.settings["notifications"]["sounds"].as_bool() != Some(false) {
@@ -2498,6 +2505,8 @@ impl Shell {
             .backend
             .invoke("provider_updates", json!({ "refresh": false }));
         self.waiting.insert(call, Waiting::ProviderOffers);
+        // The sidebar's Tarefas badge counts the tasks that will still run.
+        self.tasks_load(cx);
         self.settings = state["settings"].clone();
         self.note_settings(cx);
         self.push_phone_look(true);
@@ -3354,6 +3363,7 @@ impl Shell {
         if self.palette_ui.is_some()
             || self.appearance.is_some()
             || self.usage_page_open()
+            || self.tasks_page_open()
             || self.card_typing()
             || self.grabs_typing()
         {
@@ -4903,6 +4913,9 @@ impl Shell {
         if self.usage_page.open.is_some() {
             return Some(&mut self.ignored_text);
         }
+        if self.tasks_page.open.is_some() {
+            return Some(self.tasks_page.text_target(&mut self.ignored_text));
+        }
         if self.appearance.is_some() {
             return Some(
                 self.theme_menu
@@ -4942,6 +4955,7 @@ impl Shell {
         self.card_typing()
             || self.actions.dialog.is_some()
             || self.find.typing()
+            || self.tasks_page_open()
             || self.queues.is_editing()
             || self.subagents.composing(&self.active_session_id())
             || matches!(self.add_menu, Some((AddPage::Skills | AddPage::Goal, _)))
@@ -5920,6 +5934,12 @@ impl Shell {
         }
         // The find bar's keys come first: its Esc closes the bar, never stops the agent.
         if self.find_keys(keys, window, cx) {
+            return;
+        }
+        // The Tarefas page and its sheet take Esc, Enter, Tab and Backspace.
+        if self.tasks_keys(key, cx) {
+            cx.stop_propagation();
+            cx.notify();
             return;
         }
         // A queued message being edited takes its keys first.
@@ -7822,7 +7842,8 @@ impl Shell {
                         .flex_shrink_0()
                         .child(crate::hover_track::list("sidebar-nav").pill())
                         .children(this.sidebar_new(cx))
-                        .children(this.sidebar_pulls(cx)),
+                        .children(this.sidebar_pulls(cx))
+                        .children(this.sidebar_tasks(cx)),
                 )
                 .child(
                     div()
@@ -11081,7 +11102,11 @@ impl Shell {
             div()
                 .flex_shrink_0()
                 .px(px(6.))
-                .pb(px(6.))
+                .pb(px(if self.sidebar_items.shown("tasks") {
+                    0.
+                } else {
+                    6.
+                }))
                 .child(
                     crate::hover_track::list("sidebar-nav")
                         .row_named(
@@ -11102,6 +11127,56 @@ impl Shell {
                                 .truncate()
                                 .child(t("Pull requests")),
                         ),
+                )
+                .into_any_element(),
+        )
+    }
+
+    /// The Tarefas entry below Pull requests: opens the page of scheduled prompts, with how many
+    /// tasks will still run.
+    fn sidebar_tasks(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.sidebar_items.shown("tasks") {
+            return None;
+        }
+        let active = self.tasks_page_open();
+        let count = self.tasks_active();
+        Some(
+            div()
+                .flex_shrink_0()
+                .px(px(6.))
+                .pb(px(6.))
+                .child(
+                    crate::hover_track::list("sidebar-nav")
+                        .row_named(
+                            Self::sidebar_nav_row("sidebar-tasks", active),
+                            "tasks",
+                            active,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| this.toggle_tasks_page(cx)))
+                        .child(icon("task-clock", 16.).text_color(content(if active {
+                            0.7
+                        } else {
+                            0.35
+                        })))
+                        .child(div().flex_1().min_w_0().truncate().child(t("Tarefas")))
+                        .when(count > 0, |d| {
+                            d.child(
+                                div()
+                                    .flex_shrink_0()
+                                    .min_w(px(18.))
+                                    .h(px(18.))
+                                    .px(px(5.))
+                                    .rounded_full()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .bg(content(0.1))
+                                    .text_size(px(11.))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(content(0.7))
+                                    .child(count.to_string()),
+                            )
+                        }),
                 )
                 .into_any_element(),
         )
@@ -11276,7 +11351,7 @@ impl Shell {
             return;
         }
         // The settings have their own column: nothing peeks over it.
-        if open && (self.appearance.is_some() || self.usage_page_open()) {
+        if open && (self.appearance.is_some() || self.usage_page_open() || self.tasks_page_open()) {
             return;
         }
         let now = Instant::now();
@@ -13482,6 +13557,7 @@ impl Shell {
         let typing = self.palette_ui.is_none()
             && self.appearance.is_none()
             && !self.usage_page_open()
+            && !self.tasks_page_open()
             && !self.grabs_typing();
         crate::inline_badges::sync(&self.skills, &self.files);
         let shown = crate::inline_badges::shown_for(
@@ -19214,6 +19290,8 @@ impl Render for Shell {
         let panel = self.appearance_view(now, &mut moving, cx);
         self.usage_settle(now);
         let usage_page = self.usage_page_view(now, &mut moving, window, cx);
+        self.tasks_settle(now);
+        let tasks_page = self.tasks_page_view(now, &mut moving, window, cx);
         let settings_cover = self
             .appearance
             .as_ref()
@@ -19224,6 +19302,7 @@ impl Render for Shell {
         crate::panel_browser::set_covered(
             self.appearance.is_some()
                 || self.usage_page_open()
+                || self.tasks_page_open()
                 || self.palette_ui.is_some()
                 || self.environment.is_some()
                 || self.menu.is_some()
@@ -19544,6 +19623,7 @@ impl Render for Shell {
             .children(git_menu)
             .children(panel)
             .children(usage_page)
+            .children(tasks_page)
             // Over Settings and Usage too, whose pages would cover them.
             .children(confirm_dialog)
             .children(activity_cards)

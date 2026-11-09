@@ -484,7 +484,8 @@ fn valid_ref(reference: &str) -> bool {
 }
 
 #[cfg(target_os = "macos")]
-fn session_context(app: &AppHandle, session_id: &str) -> Option<(String, bool, String)> {
+/// The session's provider (title for the approval card, key for the pointer) and planning mode.
+fn session_context(app: &AppHandle, session_id: &str) -> Option<(String, &'static str, bool)> {
     let state = app.state::<Arc<AppState>>();
     let data = state.data.lock();
     let session = data
@@ -493,8 +494,8 @@ fn session_context(app: &AppHandle, session_id: &str) -> Option<(String, bool, S
         .find(|session| session.id == session_id)?;
     Some((
         session.agent.title().to_string(),
+        session.agent.key(),
         session.execution.planning,
-        data.settings.locale.clone(),
     ))
 }
 
@@ -583,13 +584,54 @@ fn authorize(
     }
 }
 
+/// The window app's event for the agent's pointer (ADR-198).
+pub const POINTER_EVENT: &str = "computer-pointer";
+
+// The pointer is drawn by the window app; the host has no AppKit main thread (ADR-189).
 fn hide_overlay() {
-    // The indicator is the window app's; the host has no AppKit main thread (ADR-189).
+    if let Some((app, _)) = APP.get() {
+        let _ = app.emit(POINTER_EVENT, json!({ "kind": "hide" }));
+    }
 }
 
-/// Shows the indicator over the controlled window and hides it after a quiet period.
-fn show_overlay(provider: &str, target: &AppInfo, locale: &str, frame: Option<computer::Frame>) {
-    let _ = (provider, target, locale, frame);
+/// What the window app needs to draw the pointer: the action, the global screen point it acts
+/// at (none for a key press or typing into the focused field: the arrow stays where it is), the
+/// provider for its colour and name, and the target window, whose screen it covers.
+fn pointer_event(
+    kind: &str,
+    provider: &str,
+    point: Option<(f64, f64)>,
+    dy: f64,
+    frame: Option<computer::Frame>,
+) -> Value {
+    let (x, y) = point.map_or((Value::Null, Value::Null), |(x, y)| (json!(x), json!(y)));
+    json!({ "kind": kind, "provider": provider, "x": x, "y": y, "dy": dy, "frame": frame })
+}
+
+/// Shows the agent's pointer over the controlled window; it hides itself after a quiet period.
+#[cfg(target_os = "macos")]
+fn show_overlay(
+    kind: &str,
+    provider: &str,
+    point: Option<(f64, f64)>,
+    dy: f64,
+    frame: Option<computer::Frame>,
+) {
+    if let Some((app, _)) = APP.get() {
+        let _ = app.emit(
+            POINTER_EVENT,
+            pointer_event(kind, provider, point, dy, frame),
+        );
+    }
+}
+
+/// The pointer for an action about to happen in `pid`'s window.
+#[cfg(target_os = "macos")]
+fn point_at(kind: &str, provider: &str, point: Option<(f64, f64)>, dy: f64, pid: i32) {
+    let frame = computer::with_driver(move |driver| driver.window_frame(pid))
+        .ok()
+        .flatten();
+    show_overlay(kind, provider, point, dy, frame);
 }
 
 #[cfg(target_os = "macos")]
@@ -623,7 +665,7 @@ fn execute(app: &AppHandle, session_id: &str, tool: &str, args: &Value) -> Resul
                 .into(),
         );
     }
-    let (provider, planning, locale) = session_context(app, session_id)
+    let (provider, provider_key, planning) = session_context(app, session_id)
         .ok_or_else(|| "this session no longer exists".to_string())?;
     if tool == "computer_apps" {
         let apps: Vec<Value> = computer::running_apps()
@@ -714,6 +756,12 @@ fn execute(app: &AppHandle, session_id: &str, tool: &str, args: &Value) -> Resul
                 if !valid_ref(&reference) {
                     return Err("invalid element ref".into());
                 }
+                let (from, at) = (session.clone(), reference.clone());
+                let center =
+                    computer::with_driver(move |driver| driver.element_center(&from, pid, &at))
+                        .ok()
+                        .and_then(Result::ok);
+                point_at("click", provider_key, center, 0.0, pid);
                 computer::with_driver(move |driver| {
                     driver.press(&session, pid, &reference, count, button)
                 })?
@@ -729,6 +777,7 @@ fn execute(app: &AppHandle, session_id: &str, tool: &str, args: &Value) -> Resul
                 };
                 let (gx, gy) =
                     computer::with_driver(move |driver| driver.global_point(&session, pid, x, y))??;
+                point_at("click", provider_key, Some((gx, gy)), 0.0, pid);
                 computer::click_at(pid, gx, gy, count, button);
                 Ok(json!({ "done": "clicked" }))
             }
@@ -747,6 +796,13 @@ fn execute(app: &AppHandle, session_id: &str, tool: &str, args: &Value) -> Resul
             {
                 return Err("invalid element ref".into());
             }
+            let center = reference.clone().and_then(|at| {
+                let from = session.clone();
+                computer::with_driver(move |driver| driver.element_center(&from, pid, &at))
+                    .ok()
+                    .and_then(Result::ok)
+            });
+            point_at("type", provider_key, center, 0.0, pid);
             let typed = text.clone();
             computer::with_driver(move |driver| -> Result<(), String> {
                 if let Some(reference) = reference {
@@ -782,6 +838,7 @@ fn execute(app: &AppHandle, session_id: &str, tool: &str, args: &Value) -> Resul
             if code == 53 {
                 with_bridge(|bridge| bridge.synthetic_escape = Some(Instant::now()));
             }
+            point_at("key", provider_key, None, 0.0, pid);
             computer::press_key(pid, code, flags);
             Ok(json!({ "done": "pressed", "key": key }))
         }
@@ -796,6 +853,7 @@ fn execute(app: &AppHandle, session_id: &str, tool: &str, args: &Value) -> Resul
                     .map(|frame| frame.center())
                     .ok_or_else(|| "the application has no open window".to_string()),
             })??;
+            point_at("scroll", provider_key, Some((x, y)), f64::from(dy), pid);
             computer::scroll(pid, x, y, dx, dy);
             Ok(json!({ "done": "scrolled" }))
         }
@@ -810,10 +868,6 @@ fn execute(app: &AppHandle, session_id: &str, tool: &str, args: &Value) -> Resul
     let mut value = result?;
     if mutating {
         with_bridge(|bridge| bridge.last_action = Some(Instant::now()));
-        let frame = computer::with_driver(move |driver| driver.window_frame(pid))
-            .ok()
-            .flatten();
-        show_overlay(&provider, &target, &locale, frame);
         // Act-then-see in one round trip: the fresh state after the UI settles.
         if observe_after
             && matches!(
@@ -996,6 +1050,27 @@ mod tests {
                 .is_some_and(|name| name.starts_with("computer_")));
             assert_eq!(tool["inputSchema"]["type"], "object");
         }
+    }
+
+    #[test]
+    fn pointer_events_carry_kind_point_provider_and_window() {
+        let frame = computer::Frame {
+            x: 10.0,
+            y: 20.0,
+            width: 300.0,
+            height: 200.0,
+        };
+        let event = pointer_event("click", "claude", Some((40.0, 50.0)), 0.0, Some(frame));
+        assert_eq!(event["kind"], "click");
+        assert_eq!(event["provider"], "claude");
+        assert_eq!(
+            (event["x"].as_f64(), event["y"].as_f64()),
+            (Some(40.0), Some(50.0))
+        );
+        assert_eq!(event["frame"]["width"], 300.0);
+        let key = pointer_event("key", "codex", None, 0.0, None);
+        assert!(key["x"].is_null() && key["frame"].is_null());
+        assert!(pointer_event("scroll", "codex", None, -120.0, None)["dy"].as_f64() < Some(0.0));
     }
 
     #[test]

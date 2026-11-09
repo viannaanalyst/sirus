@@ -19,7 +19,8 @@ pub enum Curve {
     Spring,
 }
 
-fn bezier(t: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
+/// The y of a CSS cubic-bezier(x1, y1, x2, y2) at time `t`.
+pub fn bezier(t: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
     let at = |a: f32, b: f32, s: f32| {
         3. * a * s * (1. - s).powi(2) + 3. * b * s * s * (1. - s) + s.powi(3)
     };

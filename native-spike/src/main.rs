@@ -1,6 +1,7 @@
 //! Part 1 of the native spike: tabs, pinning, sidebar and motion on GPUI with sample data,
 //! to compare by feel against the Tauri app. GPUI is vendored (Apache-2.0);
 //! a few presentation files are ported from an MIT-licensed project (MIT, LICENSE-THIRD-PARTY-MIT).
+mod agent_pointer;
 mod app_icon;
 mod app_update;
 mod attachment_doc;
@@ -58,6 +59,7 @@ mod panel_sidechat;
 mod panel_simulator;
 mod panel_terminal;
 mod panels;
+mod pointer_overlay;
 mod prefs;
 mod project_actions;
 mod project_avatar;

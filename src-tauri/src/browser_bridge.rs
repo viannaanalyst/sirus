@@ -29,7 +29,7 @@ pub const CLIENT_ENV: &str = "SIRUS_BROWSER_CLIENT";
 /// The event a registered client receives.
 pub const REQUEST_EVENT: &str = "browser_tool_request";
 /// Events only the local window may listen to.
-pub const LOCAL_EVENTS: &[&str] = &["computer-state"];
+pub const LOCAL_EVENTS: &[&str] = &["computer-state", crate::computer_mcp::POINTER_EVENT];
 /// The error without a window client, unchanged from the Mac-app-only host.
 pub const NO_WINDOW: &str = "the embedded browser is only available in the Mac app";
 

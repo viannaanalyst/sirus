@@ -479,6 +479,7 @@ const LISTEN: &[&str] = &[
     "browser_tool_request",
     "login-vault-state",
     "computer-state",
+    "computer-pointer",
     "remote-changed",
     // Cards for other conversations, and the sound and banner the host asks the window for.
     "notification-activity",

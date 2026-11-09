@@ -15,8 +15,8 @@ use crate::panels::PanelContext;
 use crate::project_files::run_blocking;
 use crate::theme::{accent, accent_wash, content, diff_colors, on_accent};
 use gpui::{
-    AnyElement, AnyView, App, Context, Div, Entity, Hsla, Render, Stateful, Subscription, Window,
-    div, prelude::*, px, rgb, svg, uniform_list,
+    AnyElement, AnyView, App, Context, Div, Entity, Hsla, Render, SharedString, Stateful,
+    Subscription, Window, div, prelude::*, px, rgb, svg, uniform_list,
 };
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -37,6 +37,7 @@ fn build(context: PanelContext, mode: Mode, cx: &mut App) -> AnyView {
         let commit = cx.new(|cx| {
             let mut field = TextField::new(t("Mensagem (⌘↩ para commit)"), cx);
             field.set_bare(true);
+            field.set_command_submit(true);
             field
         });
         let commit_events = cx.subscribe(
@@ -56,6 +57,7 @@ fn build(context: PanelContext, mode: Mode, cx: &mut App) -> AnyView {
         let mut panel = ChangesPanel {
             mode,
             menu: None,
+            discard: None,
             staged_open: true,
             changes_open: true,
             _follow: follow,
@@ -187,6 +189,8 @@ const COMMIT_BAR: f32 = 8. + 34. + 8. + 32. + 4.;
 struct ChangesPanel {
     mode: Mode,
     menu: Option<Menu>,
+    /// A discard waiting for the confirmation card.
+    discard: Option<DiscardAsk>,
     staged_open: bool,
     changes_open: bool,
     /// Reads the status again when files change on disk; stops with the panel.
@@ -220,6 +224,12 @@ struct ChangesPanel {
     _commit_events: Subscription,
     /// The Criar PR form of the footer, as the Environment panel's.
     pr: PullRequestForm,
+}
+
+/// What the discard confirmation will throw away: the card's title and the files.
+struct DiscardAsk {
+    title: String,
+    paths: Vec<String>,
 }
 
 /// A commit title being generated: its request id (the host takes one job at a time) and whether
@@ -1097,6 +1107,39 @@ impl ChangesPanel {
                     .text_color(content(0.6))
                     .flex_shrink_0(),
             );
+        let discard_path = entry.path.clone();
+        let discard_title = tf("Descartar alterações em {}?", &[&name]);
+        let discarder = (!staged).then(|| {
+            let button = div()
+                .id(format!("discard:{}", entry.path))
+                .size(px(20.))
+                .rounded(px(crate::theme::RADIUS_SM))
+                .flex()
+                .items_center()
+                .justify_center()
+                .flex_shrink_0()
+                .opacity(0.)
+                .group_hover(SharedString::from("change-row"), |style| style.opacity(1.))
+                .tooltip(crate::shell::message_actions::name_tip(t("Descartar")))
+                .child(
+                    svg()
+                        .path("undo")
+                        .size(px(12.))
+                        .text_color(content(0.6))
+                        .flex_shrink_0(),
+                );
+            if enabled {
+                button
+                    .cursor_pointer()
+                    .hover(|style| style.bg(content(0.1)))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.ask_discard(discard_title.clone(), vec![discard_path.clone()], cx)
+                    }))
+            } else {
+                button
+            }
+        });
         mover =
             if enabled {
                 mover
@@ -1110,6 +1153,7 @@ impl ChangesPanel {
             };
         div()
             .id(format!("open:{staged}:{}", entry.path))
+            .group("change-row")
             .flex()
             .items_center()
             .gap(px(8.))
@@ -1155,6 +1199,7 @@ impl ChangesPanel {
                     .text_color(letter_color)
                     .child(letter),
             )
+            .children(discarder)
             .child(mover)
             .into_any_element()
     }
@@ -1297,12 +1342,30 @@ impl ChangesPanel {
                         !self.busy && !actionable_paths(&snapshot.unstaged).is_empty(),
                         cx.listener(|this, _, _, cx| this.move_all(false, cx)),
                     );
+                    let discard_all = self.tool_button(
+                        "discard-all",
+                        "undo",
+                        t("Descartar tudo"),
+                        !self.busy && !actionable_paths(&snapshot.unstaged).is_empty(),
+                        cx.listener(|this, _, _, cx| {
+                            let paths = this
+                                .snapshot
+                                .as_ref()
+                                .map(|snapshot| actionable_paths(&snapshot.unstaged))
+                                .unwrap_or_default();
+                            this.ask_discard(
+                                t("Descartar todas as alterações?").to_owned(),
+                                paths,
+                                cx,
+                            );
+                        }),
+                    );
                     blocks.push(self.section_header(
                         "fold-changes",
                         t("ALTERAÇÕES"),
                         snapshot.unstaged.len(),
                         self.changes_open,
-                        vec![stage_all],
+                        vec![discard_all, stage_all],
                         cx,
                     ));
                     if self.changes_open {
@@ -1370,6 +1433,176 @@ impl ChangesPanel {
         } else {
             button.opacity(0.35).into_any_element()
         }
+    }
+
+    /// Opens the confirmation for discarding `paths`; nothing is lost until it is accepted.
+    fn ask_discard(&mut self, title: String, paths: Vec<String>, cx: &mut Context<Self>) {
+        if paths.is_empty() || self.busy {
+            return;
+        }
+        self.discard = Some(DiscardAsk { title, paths });
+        cx.notify();
+    }
+
+    /// Discards the confirmed files through the host's `discard` action (staged and unstaged
+    /// changes of those paths; files Git does not hold are deleted, which the card announced).
+    fn discard_confirmed(&mut self, cx: &mut Context<Self>) {
+        let Some(ask) = self.discard.take() else {
+            return;
+        };
+        let Some(token) = self
+            .snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.token.clone())
+        else {
+            cx.notify();
+            return;
+        };
+        if self.busy {
+            cx.notify();
+            return;
+        }
+        self.busy = true;
+        self.error = None;
+        let rx = self.backend.request(
+            "git_workspace_action",
+            json!({ "action": discard_action(&self.session_id, &ask.paths, &token) }),
+        );
+        cx.spawn(async move |this, cx| {
+            let reply = settle(rx).await;
+            let _ = this.update(cx, |this, cx| {
+                this.busy = false;
+                if let Err(error) = reply {
+                    this.error = Some(error);
+                }
+                this.refresh(cx);
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// The confirmation card, over the whole panel: Cancelar or the danger-colored Descartar.
+    fn discard_overlay(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let ask = self.discard.as_ref()?;
+        let danger: Hsla = rgb(0xec8a85).into();
+        Some(
+            div()
+                .id("discard-backdrop")
+                .occlude()
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(gpui::Hsla {
+                    a: 0.45,
+                    ..gpui::black()
+                })
+                .on_mouse_down(
+                    gpui::MouseButton::Left,
+                    cx.listener(|this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.discard = None;
+                        cx.notify();
+                    }),
+                )
+                .child(
+                    div()
+                        .id("discard-card")
+                        .relative()
+                        .w(px(280.))
+                        .p(px(18.))
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .rounded(px(crate::theme::RADIUS_LG))
+                        .border_1()
+                        .border_color(content(0.12))
+                        .child(crate::theme::floating_surface(crate::theme::RADIUS_LG))
+                        .shadow_lg()
+                        .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .child(
+                            div()
+                                .size(px(38.))
+                                .mb(px(10.))
+                                .rounded_full()
+                                .bg(gpui::Hsla { a: 0.12, ..danger })
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(crate::theme::icon("undo", 18.).text_color(danger)),
+                        )
+                        .child(
+                            div()
+                                .text_center()
+                                .text_size(px(15.))
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .text_color(content(0.97))
+                                .child(ask.title.clone()),
+                        )
+                        .child(
+                            div()
+                                .mt(px(6.))
+                                .text_center()
+                                .text_size(px(12.5))
+                                .line_height(px(18.))
+                                .text_color(content(0.6))
+                                .child(t(
+                                    "As alterações que ainda não viraram commit serão perdidas. Não dá para desfazer.",
+                                )),
+                        )
+                        .child(
+                            div()
+                                .mt(px(16.))
+                                .w_full()
+                                .flex()
+                                .gap(px(8.))
+                                .child(
+                                    div()
+                                        .id("discard-cancel")
+                                        .flex_1()
+                                        .h(px(30.))
+                                        .rounded(px(crate::theme::RADIUS_MD))
+                                        .bg(content(0.06))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .text_size(px(12.5))
+                                        .font_weight(gpui::FontWeight::MEDIUM)
+                                        .text_color(content(0.8))
+                                        .cursor_pointer()
+                                        .hover(|style| style.bg(content(0.1)))
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.discard = None;
+                                            cx.notify();
+                                        }))
+                                        .child(t("Cancelar")),
+                                )
+                                .child(
+                                    div()
+                                        .id("discard-yes")
+                                        .flex_1()
+                                        .h(px(30.))
+                                        .rounded(px(crate::theme::RADIUS_MD))
+                                        .bg(rgb(0xc9504a))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .text_size(px(12.5))
+                                        .font_weight(gpui::FontWeight::MEDIUM)
+                                        .text_color(gpui::white())
+                                        .cursor_pointer()
+                                        .hover(|style| style.bg(rgb(0xd5605a)))
+                                        .on_click(
+                                            cx.listener(|this, _, _, cx| this.discard_confirmed(cx)),
+                                        )
+                                        .child(t("Descartar")),
+                                ),
+                        ),
+                )
+                .into_any_element(),
+        )
     }
 
     /// Stages every actionable unstaged file, or unstages every staged one, in one request.
@@ -2271,6 +2504,11 @@ impl Render for ChangesPanel {
             (Some(snapshot), Mode::Review, Some(_)) => self.menu_overlay(snapshot, cx),
             _ => None,
         };
+        let confirm = if self.mode == Mode::Review {
+            self.discard_overlay(cx)
+        } else {
+            None
+        };
         div()
             .size_full()
             .relative()
@@ -2289,6 +2527,7 @@ impl Render for ChangesPanel {
             )
             .child(body)
             .children(overlay)
+            .children(confirm)
     }
 }
 
@@ -2337,6 +2576,18 @@ fn snapshot_of(value: &Value) -> Option<Snapshot> {
 }
 
 /// `commit_title_action` generate request for the staged index the pane read.
+/// The host's `discard` action: every change to `paths`, staged or not. The confirmation card
+/// came first, so deleting files Git does not hold is allowed.
+fn discard_action(session_id: &str, paths: &[String], token: &str) -> Value {
+    json!({
+        "type": "discard",
+        "sessionId": session_id,
+        "paths": paths,
+        "expectedIndex": token,
+        "confirmDelete": true,
+    })
+}
+
 fn title_action(session_id: &str, token: &str, request_id: &str) -> Value {
     json!({ "action": {
         "type": "generate", "sessionId": session_id, "expectedIndex": token, "requestId": request_id
@@ -2707,26 +2958,79 @@ pub(crate) fn age(when: &str) -> String {
 const COMMIT_ROW: f32 = 44.;
 /// The lanes drawn side by side; further ones share the last, so the subject keeps its room.
 const MAX_LANES: usize = 6;
-const LANE: f32 = 11.;
+/// The distance between two lanes.
+const LANE: f32 = 16.;
 const DOT_CENTER: f32 = 14.5;
+/// Room left of the first lane: the head's halo is the widest thing drawn.
+const LANE_PAD: f32 = 9.;
+/// How far a side branch takes to leave or rejoin a lane: a short, tight bend.
+const BEND: f32 = 14.;
+const SIDE_BLUE: u32 = 0x7aa2ff;
 
-/// One commit: a dot on a line that joins it to the next row, the title, the short hash, and the
-/// author with the age. The head's dot is filled in the accent color.
-/// A lane's colour. The first keeps the quiet rail; a side branch is told apart by its own.
+/// A lane's colour: the first, the main line, wears the accent; every side lane is one blue.
 fn lane_color(lane: usize) -> gpui::Hsla {
-    const SIDE: [u32; 5] = [0x5b8def, 0x4ade80, 0xfb923c, 0xc084fc, 0x2dd4bf];
     match lane {
-        0 => content(0.3),
-        _ => gpui::rgb(SIDE[(lane - 1) % SIDE.len()]).into(),
+        0 => accent(),
+        _ => rgb(SIDE_BLUE).into(),
     }
 }
 
-/// The graph beside a commit: its lanes' lines through the row, and its dot.
-fn graph_cell(row: crate::git_graph::Row, head: bool, lanes: usize) -> impl IntoElement {
-    let x = |lane: usize| 4.5 + lane.min(MAX_LANES - 1) as f32 * LANE;
-    let (dot_x, dot_lane) = (x(row.lane), row.lane);
-    let width = x(lanes - 1) + 5.;
-    let dot = if head { accent() } else { lane_color(dot_lane) };
+/// How one line of a row's half is drawn.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Stroke {
+    /// Straight down one lane.
+    Straight,
+    /// Leaves the commit's lane with a tight bend right below its dot, then runs straight.
+    Leave,
+    /// Runs straight, then bends tight into another lane at the end of the half: a side branch
+    /// arriving at its parent's dot (above) or folding into the main line (below).
+    Join,
+}
+
+/// The way the line (`from`, `to`) of a row's upper (`above`) or lower half is drawn.
+fn stroke_of(from: usize, to: usize, commit_lane: usize, above: bool) -> Stroke {
+    match (from == to, above, from == commit_lane) {
+        (true, _, _) => Stroke::Straight,
+        (false, true, _) => Stroke::Join,
+        (false, false, true) => Stroke::Leave,
+        (false, false, false) => Stroke::Join,
+    }
+}
+
+/// The graph beside a commit: its lanes' lines through the row, and its node. A commit is a ring
+/// in its lane's colour, a merge a small filled dot, and the head a filled accent dot in a halo.
+fn graph_cell(
+    row: crate::git_graph::Row,
+    head: bool,
+    merge: bool,
+    lanes: usize,
+) -> impl IntoElement {
+    let x = |lane: usize| LANE_PAD + lane.min(MAX_LANES - 1) as f32 * LANE;
+    let width = x(lanes - 1) + LANE_PAD;
+    let (node_x, color) = (x(row.lane), lane_color(row.lane));
+    let node = |size: f32| {
+        div()
+            .absolute()
+            .left(px(node_x - size / 2.))
+            .top(px(DOT_CENTER - size / 2.))
+            .size(px(size))
+            .rounded_full()
+    };
+    let commit_lane = row.lane;
+    let marker = if head {
+        div()
+            .child(node(18.).bg(Hsla { a: 0.2, ..accent() }))
+            .child(node(10.).bg(accent()))
+            .into_any_element()
+    } else if merge {
+        node(6.).bg(color).into_any_element()
+    } else {
+        node(11.)
+            .border_2()
+            .border_color(color)
+            .bg(crate::theme::pane_opaque())
+            .into_any_element()
+    };
     div()
         .relative()
         .w(px(width))
@@ -2737,47 +3041,49 @@ fn graph_cell(row: crate::git_graph::Row, head: bool, lanes: usize) -> impl Into
                 |_, _, _| {},
                 move |bounds, _, window, _| {
                     let at = |lane_x: f32, y: f32| bounds.origin + gpui::point(px(lane_x), px(y));
-                    let mut draw = |from: usize, to: usize, top: f32, bottom: f32, color| {
-                        let mut path = gpui::PathBuilder::stroke(px(1.25));
-                        path.move_to(at(x(from), top));
-                        if from == to {
-                            path.line_to(at(x(to), bottom));
-                        } else {
-                            // Bends in the middle, leaving and arriving straight.
-                            let middle = (top + bottom) / 2.;
-                            path.curve_to(at((x(from) + x(to)) / 2., middle), at(x(from), middle));
-                            path.curve_to(at(x(to), bottom), at(x(to), middle));
+                    let mut draw = |from: usize, to: usize, top: f32, bottom: f32, above: bool| {
+                        let color = lane_color(from.max(to));
+                        let (xa, xb) = (x(from), x(to));
+                        let mut path = gpui::PathBuilder::stroke(px(2.));
+                        // A bend between y0 and y1: out of the first lane and into the second
+                        // along two quadratic arcs, vertical at both ends.
+                        let bend = |path: &mut gpui::PathBuilder, y0: f32, y1: f32| {
+                            let middle = (y0 + y1) / 2.;
+                            path.curve_to(at((xa + xb) / 2., middle), at(xa, (y0 + middle) / 2.));
+                            path.curve_to(at(xb, y1), at(xb, (middle + y1) / 2.));
+                        };
+                        match stroke_of(from, to, commit_lane, above) {
+                            Stroke::Straight => {
+                                path.move_to(at(xa, top));
+                                path.line_to(at(xb, bottom));
+                            }
+                            Stroke::Leave => {
+                                path.move_to(at(xa, top));
+                                bend(&mut path, top, top + BEND);
+                                path.line_to(at(xb, bottom));
+                            }
+                            Stroke::Join => {
+                                path.move_to(at(xa, top));
+                                path.line_to(at(xa, bottom - BEND));
+                                bend(&mut path, bottom - BEND, bottom);
+                            }
                         }
                         if let Ok(path) = path.build() {
                             window.paint_path(path, color);
                         }
                     };
                     for (from, to) in &row.above {
-                        draw(*from, *to, 0., DOT_CENTER, lane_color(*from));
+                        draw(*from, *to, 0., DOT_CENTER, true);
                     }
                     for (from, to) in &row.below {
-                        draw(
-                            *from,
-                            *to,
-                            DOT_CENTER,
-                            COMMIT_ROW,
-                            lane_color((*from).max(*to)),
-                        );
+                        draw(*from, *to, DOT_CENTER, COMMIT_ROW, false);
                     }
                 },
             )
             .absolute()
             .size_full(),
         )
-        .child(
-            div()
-                .absolute()
-                .left(px(dot_x - 4.5))
-                .top(px(DOT_CENTER - 4.5))
-                .size(px(9.))
-                .rounded_full()
-                .bg(dot),
-        )
+        .child(marker)
 }
 
 fn commit_row(
@@ -2786,7 +3092,7 @@ fn commit_row(
     row: &crate::git_graph::Row,
     lanes: usize,
 ) -> AnyElement {
-    let graph = graph_cell(row.clone(), head, lanes);
+    let graph = graph_cell(row.clone(), head, commit.parents.len() > 1, lanes);
     let short: String = commit.hash.chars().take(7).collect();
     let by = match (commit.author.is_empty(), age(&commit.when)) {
         (true, age) => age,
@@ -2864,6 +3170,23 @@ fn commit_row(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn side_branches_bend_tight_and_straight_lines_stay_straight() {
+        assert_eq!(stroke_of(0, 0, 0, false), Stroke::Straight);
+        assert_eq!(stroke_of(0, 1, 0, false), Stroke::Leave);
+        assert_eq!(stroke_of(1, 0, 0, false), Stroke::Join);
+        assert_eq!(stroke_of(1, 0, 0, true), Stroke::Join);
+    }
+
+    #[test]
+    fn discard_names_the_paths_and_confirms_deletes() {
+        let action = discard_action("s1", &["a.rs".to_owned()], "tok");
+        assert_eq!(action["type"], "discard");
+        assert_eq!(action["paths"][0], "a.rs");
+        assert_eq!(action["expectedIndex"], "tok");
+        assert_eq!(action["confirmDelete"], true);
+    }
 
     #[test]
     fn create_action_trims_and_confirms() {

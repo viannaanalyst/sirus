@@ -2152,6 +2152,23 @@ pub(crate) fn group_color(group: Group) -> Hsla {
     rgb(if is_light() { light } else { dark }).into()
 }
 
+/// Whether an Enter press submits: always, or only with ⌘ for a field that asks for it.
+fn submits(command_submit: bool, command: bool) -> bool {
+    !command_submit || command
+}
+
+#[cfg(test)]
+mod submit_tests {
+    use super::submits;
+
+    #[test]
+    fn a_command_field_submits_only_with_command() {
+        assert!(!submits(true, false));
+        assert!(submits(true, true));
+        assert!(submits(false, false));
+    }
+}
+
 // ---- A one-line text field typed through GPUI's input handler ---------------------------------
 
 /// The events a text field sends its owner: Enter submits, Escape cancels, typing changes.
@@ -2176,6 +2193,8 @@ pub struct TextField {
     masked: bool,
     /// No fill and no side padding: the field sits inside a box the caller draws.
     bare: bool,
+    /// Only ⌘↩ submits; a plain Enter does nothing.
+    command_submit: bool,
 }
 
 impl EventEmitter<TextFieldEvent> for TextField {}
@@ -2192,7 +2211,13 @@ impl TextField {
             focus_pending: false,
             masked: false,
             bare: false,
+            command_submit: false,
         }
+    }
+
+    /// Makes only ⌘↩ submit; a plain Enter is ignored.
+    pub fn set_command_submit(&mut self, on: bool) {
+        self.command_submit = on;
     }
 
     /// Draws the field without its own fill, for a box the caller draws around it.
@@ -2276,7 +2301,9 @@ impl TextField {
         let before = self.text.clone();
         match keys.key.as_str() {
             "enter" => {
-                cx.emit(TextFieldEvent::Submit);
+                if submits(self.command_submit, command) {
+                    cx.emit(TextFieldEvent::Submit);
+                }
                 cx.stop_propagation();
                 return;
             }

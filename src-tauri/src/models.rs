@@ -884,6 +884,17 @@ pub struct AppSettings {
     /// Working, waiting and unread sessions float above the thread order (ADR-121).
     #[serde(default)]
     pub sidebar_attention_first: bool,
+    /// A conversation idle this many days (1 to 365) settles: it leaves the sidebar list for the
+    /// docked group and its leftover terminals and scripts stop (ADR-198).
+    #[serde(default = "default_settle_idle_days")]
+    pub settle_idle_days: u32,
+    /// Idle conversations settle at all; on by default.
+    #[serde(default = "default_true")]
+    pub settle_idle_enabled: bool,
+    /// When the owner last opened or sent to each settled conversation, by session id, so it
+    /// stays in the list until it is idle for the limit again (ADR-198).
+    #[serde(default)]
+    pub settle_revived: std::collections::BTreeMap<String, String>,
     pub pinned_project_ids: Vec<String>,
     pub project_folders: Vec<ProjectFolder>,
     pub pinned_session_ids: Vec<String>,
@@ -964,6 +975,14 @@ pub(crate) fn is_zero(value: &u32) -> bool {
 fn default_true() -> bool {
     true
 }
+
+/// The idle days after which a conversation settles (ADR-198).
+fn default_settle_idle_days() -> u32 {
+    7
+}
+
+/// How many settled conversations may keep an opening time (ADR-198).
+const SETTLE_REVIVED_LIMIT: usize = 1000;
 
 impl Default for AppSettings {
     fn default() -> Self {
@@ -1078,6 +1097,9 @@ impl Default for AppSettings {
             sidebar_project_sort_order: SidebarProjectSortOrder::Manual,
             sidebar_thread_sort_order: SidebarThreadSortOrder::CreatedAt,
             sidebar_attention_first: false,
+            settle_idle_days: default_settle_idle_days(),
+            settle_idle_enabled: true,
+            settle_revived: std::collections::BTreeMap::new(),
             pinned_project_ids: Vec::new(),
             project_folders: Vec::new(),
             pinned_session_ids: Vec::new(),
@@ -1243,6 +1265,23 @@ impl AppSettings {
             return Err(Error::new(
                 "invalid_settings",
                 "Invalid pinned pull requests.",
+            ));
+        }
+        if !(1..=365).contains(&self.settle_idle_days) {
+            return Err(Error::new(
+                "invalid_settings",
+                "Idle conversations settle after 1 to 365 days.",
+            ));
+        }
+        if self.settle_revived.len() > SETTLE_REVIVED_LIMIT
+            || self
+                .settle_revived
+                .iter()
+                .any(|(session, at)| session.len() > 128 || !valid_seen_time(at))
+        {
+            return Err(Error::new(
+                "invalid_settings",
+                "Invalid opened conversations.",
             ));
         }
         if self.github_seen.len() > GITHUB_SEEN_LIMIT
@@ -1542,6 +1581,35 @@ mod settings_tests {
         assert!(with(vec![AgentProviderId::Grok])
             .validate_controls()
             .is_err());
+    }
+
+    #[test]
+    fn idle_settling_defaults_on_for_seven_days_and_checks_its_limits() {
+        let legacy: AppSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(legacy.settle_idle_days, 7);
+        assert!(legacy.settle_idle_enabled);
+        assert!(legacy.settle_revived.is_empty());
+        assert!(legacy.validate_controls().is_ok());
+        let mut zero = legacy.clone();
+        zero.settle_idle_days = 0;
+        assert!(zero.validate_controls().is_err());
+        let mut long = legacy.clone();
+        long.settle_idle_days = 366;
+        assert!(long.validate_controls().is_err());
+        let mut opened = legacy.clone();
+        opened
+            .settle_revived
+            .insert("session".into(), "not a time".into());
+        assert!(opened.validate_controls().is_err());
+        opened.settle_revived.insert(
+            "session".into(),
+            "2026-11-09T12:00:00.123456789+00:00".into(),
+        );
+        assert!(opened.validate_controls().is_ok());
+        let saved: AppSettings =
+            serde_json::from_str(r#"{"settleIdleDays":3,"settleIdleEnabled":false}"#).unwrap();
+        assert_eq!(saved.settle_idle_days, 3);
+        assert!(!saved.settle_idle_enabled);
     }
 
     #[test]

@@ -747,6 +747,21 @@ impl Shell {
         cx.notify();
     }
 
+    /// Drops the title tabs whose shells belong to `session`, for a settled conversation (ADR-198).
+    /// The caller has checked that the conversation is idle and not on screen.
+    pub(super) fn drop_session_title_tabs(&mut self, session: &str, cx: &mut Context<Self>) {
+        let ids: Vec<u64> = self
+            .term
+            .tabs
+            .iter()
+            .filter(|tab| tab.view.read(cx).session() == session)
+            .map(|tab| tab.id)
+            .collect();
+        if !ids.is_empty() {
+            self.drop_title_tabs(&ids, cx);
+        }
+    }
+
     pub(super) fn leave_title_tab(&mut self) {
         self.term.active = None;
         self.term.pulls_active = false;

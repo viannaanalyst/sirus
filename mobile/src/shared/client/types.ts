@@ -488,6 +488,12 @@ export interface AppSettings {
   sidebarThreadSortOrder: "updated_at" | "created_at";
   /** Working, waiting and unread sessions float above the thread order (ADR-121). */
   sidebarAttentionFirst: boolean;
+  /** Idle conversations settle after this many days, 1 to 365 (ADR-198). */
+  settleIdleDays: number;
+  /** Idle conversations settle at all (ADR-198). */
+  settleIdleEnabled: boolean;
+  /** When each settled conversation was last opened or sent to, by session id (ADR-198). */
+  settleRevived: Record<string, string>;
   pinnedProjectIds: string[];
   /** Switcher folders that group projects (display only). */
   projectFolders: ProjectFolder[];

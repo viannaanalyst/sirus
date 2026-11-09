@@ -1079,6 +1079,10 @@ impl TerminalGroup {
     pub fn title(&self) -> String {
         folder_name(&self.cwd)
     }
+    /// The conversation the group's shells belong to (its session id).
+    pub fn session(&self) -> &str {
+        &self.keys.session_id
+    }
     /// The agent CLI in the group's last shell, the one it takes commands in, if any.
     pub fn agent(&self, cx: &App) -> Option<&'static str> {
         self.panes.last()?.read(cx).agent()

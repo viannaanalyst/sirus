@@ -497,7 +497,7 @@ impl Shell {
     /// The host's answer to `/compact`: the session as it stands, then the message that waited.
     pub(super) fn compacted_reply(
         &mut self,
-        _ix: usize,
+        ix: usize,
         then: Option<Box<composer_queue::Outgoing>>,
         ok: bool,
         value: &Value,
@@ -513,6 +513,8 @@ impl Shell {
             return;
         }
         self.session_updated(value, cx);
+        // The divider glides to the top of the view, as a sent message does.
+        self.pin_to_top(ix, cx);
         if let Some(out) = then {
             // The compaction is running (or done): the message queues behind it, or goes now.
             self.context.resending = true;

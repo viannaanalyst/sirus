@@ -16783,7 +16783,6 @@ impl Shell {
 
     /// Settings → Aparência, drawn for `look` (what the rows show).
     fn appearance_page_for(&self, look: Look, cx: &mut Context<Self>) -> AnyElement {
-        crate::settings_search::note_group(t("Tema"));
         note_appearance_choices();
         let row = |title: &'static str, about: &'static str, control: AnyElement| {
             crate::settings_search::note_row(title, about);
@@ -17155,6 +17154,8 @@ impl Shell {
                 .child(div().size(px(12.)).rounded_full().bg(fill))
         }));
         let mut colors = vec![
+            // The mode picker answers to "Tema" for the search's jump.
+            row(t("Tema"), t("Sistema segue o macOS."), modes),
             row(
                 t("Tema do workspace"),
                 t("Uma predefinição de cores."),
@@ -17209,28 +17210,7 @@ impl Shell {
             .child(crate::settings_pages::about_line(t(
                 "Personalize materiais e movimento.",
             )))
-            .child(
-                div()
-                    .mb(px(32.))
-                    .child(
-                        div()
-                            .mb(px(8.))
-                            .text_size(px(12.5))
-                            .text_color(content(0.5))
-                            .child(t("Tema")),
-                    )
-                    // The picker answers to the group's name for the search's jump.
-                    .child(
-                        div().flex().child(
-                            crate::settings_search::decorate(
-                                div().rounded(px(crate::theme::RADIUS_MD)),
-                                t("Tema"),
-                            )
-                            .child(modes),
-                        ),
-                    ),
-            )
-            .child(group(t("Cores"), colors))
+            .child(group(t("Tema e cores"), colors))
             .child(group(
                 t("Materiais"),
                 vec![row(
@@ -19226,57 +19206,51 @@ mod tests {
     }
 }
 
-/// Tema's control: a segmented row like the page's others, each option with its icon.
+/// Tema's control: the same small segmented control as the page's others, each option with its icon.
 fn segmented_icons(
     id: &'static str,
     options: &[(&'static str, &'static str)],
     chosen: usize,
     cx: &mut Context<Shell>,
     apply: fn(&mut Look, usize),
-) -> Div {
-    // Its own row, so the control takes the width of its options, not of the page.
-    div().flex().child(
-        div()
-            .relative()
-            .flex()
-            .flex_none()
-            .gap(px(2.))
-            .p(px(3.))
-            .rounded(px(crate::theme::RADIUS_MD))
-            .bg(content(0.06))
-            .child(crate::segment_pill::pill(
-                id,
-                chosen,
-                accent_wash(0.18),
-                crate::theme::RADIUS_SM,
-            ))
-            .children(options.iter().enumerate().map(|(ix, (glyph, label))| {
-                let on = ix == chosen;
-                div()
-                    .id((id, ix))
-                    .relative()
-                    .child(crate::segment_pill::probe(id, ix))
-                    .sinks()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .gap(px(7.))
-                    .h(px(28.))
-                    .w(px(108.))
-                    .rounded(px(crate::theme::RADIUS_SM))
-                    .text_size(px(13.))
-                    .text_color(if on { accent() } else { content(0.65) })
-                    .when(!on, |d| d.hover(|s| s.bg(content(0.06))))
-                    .cursor_pointer()
-                    .on_click(
-                        cx.listener(move |this, _, _, cx| {
-                            this.set_look(|look| apply(look, ix), cx)
-                        }),
-                    )
-                    .child(icon(glyph, 16.).text_color(if on { accent() } else { content(0.6) }))
-                    .child(*label)
-            })),
-    )
+) -> AnyElement {
+    div()
+        .relative()
+        .flex()
+        .p(px(2.))
+        .rounded(px(crate::theme::RADIUS_SM))
+        .border_1()
+        .border_color(crate::theme::border())
+        .child(crate::segment_pill::pill(
+            id,
+            chosen,
+            accent_wash(0.18),
+            crate::theme::RADIUS_SM,
+        ))
+        .children(options.iter().enumerate().map(|(ix, (glyph, label))| {
+            let on = ix == chosen;
+            div()
+                .id((id, ix))
+                .relative()
+                .child(crate::segment_pill::probe(id, ix))
+                .sinks()
+                .h(px(24.))
+                .px(px(10.))
+                .gap(px(6.))
+                .rounded(px(crate::theme::RADIUS_SM))
+                .flex()
+                .items_center()
+                .text_size(px(12.5))
+                .text_color(if on { accent() } else { content(0.55) })
+                .when(!on, |d| d.hover(|s| s.text_color(content(0.9))))
+                .cursor_pointer()
+                .on_click(
+                    cx.listener(move |this, _, _, cx| this.set_look(|look| apply(look, ix), cx)),
+                )
+                .child(icon(glyph, 14.).text_color(if on { accent() } else { content(0.55) }))
+                .child(*label)
+        }))
+        .into_any_element()
 }
 
 /// The options of the hand-drawn controls on Aparência, shared by what is drawn and what the
@@ -19312,19 +19286,19 @@ fn icon_note() -> &'static str {
 pub fn note_appearance_choices() {
     use crate::settings_search::note_choice;
     for label in mode_labels() {
-        note_choice(t("Tema"), label, t("Tema"));
+        note_choice(t("Tema e cores"), label, t("Tema"));
     }
     for preset in PRESETS {
-        note_choice(t("Cores"), t(preset.name), t("Tema do workspace"));
+        note_choice(t("Tema e cores"), t(preset.name), t("Tema do workspace"));
     }
     for (name, _) in ACCENTS {
-        note_choice(t("Cores"), t(name), t("Cor de destaque"));
+        note_choice(t("Tema e cores"), t(name), t("Cor de destaque"));
     }
     for label in diff_labels() {
-        note_choice(t("Cores"), label, t("Cores do diff"));
+        note_choice(t("Tema e cores"), label, t("Cores do diff"));
     }
     for label in saturation_labels() {
-        note_choice(t("Cores"), label, t("Saturação do fundo"));
+        note_choice(t("Tema e cores"), label, t("Saturação do fundo"));
     }
     for label in glass_labels() {
         note_choice(t("Materiais"), label, t("Translucidez"));

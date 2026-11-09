@@ -142,4 +142,60 @@ mod tests {
         assert_eq!(graph[1].below, vec![(0, 0), (1, 0)]);
         assert_eq!(graph[2].above, vec![(0, 0)]);
     }
+
+    /// Every line of a complete history ends where something is: the row's own dot, or a line
+    /// the next row picks up. Nothing starts or stops in mid-air.
+    fn assert_connected(list: &[(&str, &[&str])]) {
+        let graph = of(list);
+        for (at, row) in graph.iter().enumerate() {
+            for (from, to) in &row.above {
+                assert!(
+                    *to == row.lane || from == to,
+                    "row {at}: {from}->{to} misses the dot"
+                );
+                if at > 0 {
+                    assert!(
+                        graph[at - 1].below.iter().any(|(_, end)| end == from),
+                        "row {at}: lane {from} starts from nothing"
+                    );
+                }
+            }
+            for (from, to) in &row.below {
+                assert!(at + 1 < graph.len(), "the last row has a line going down");
+                assert!(
+                    graph[at + 1].above.iter().any(|(start, _)| start == to),
+                    "row {at}: {from}->{to} ends in mid-air"
+                );
+                assert!(
+                    *from == row.lane || row.above.iter().any(|(_, end)| end == from),
+                    "row {at}: {from}->{to} starts in mid-air"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_line_ends_on_a_node() {
+        assert_connected(&[("c", &["b"]), ("b", &["a"]), ("a", &[])]);
+        assert_connected(&[("m", &["b", "x"]), ("x", &["a"]), ("b", &["a"]), ("a", &[])]);
+        assert_connected(&[("t", &["p"]), ("u", &["p"]), ("p", &[])]);
+        assert_connected(&[
+            ("m2", &["m1", "y"]),
+            ("y", &["m1"]),
+            ("m1", &["b", "x"]),
+            ("x", &["a"]),
+            ("b", &["a"]),
+            ("a", &[]),
+        ]);
+    }
+
+    #[test]
+    fn a_merge_connects_to_both_parents() {
+        let graph = of(&[("m", &["b", "x"]), ("x", &["a"]), ("b", &["a"]), ("a", &[])]);
+        let leaving = graph[0].below.iter().filter(|(from, _)| *from == 0).count();
+        assert_eq!(leaving, 2);
+        // The first parent b keeps the lane; the second, x, sits where the other edge ends.
+        assert_eq!(graph[2].lane, graph[0].below[0].1);
+        assert_eq!(graph[1].lane, graph[0].below[1].1);
+    }
 }

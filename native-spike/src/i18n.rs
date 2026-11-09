@@ -717,6 +717,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "Prepared changes changed or are no longer eligible for commit title generation",
     ),
     (
+        "As alterações que ainda não viraram commit serão perdidas. Não dá para desfazer.",
+        "Changes that are not in a commit yet will be lost. This cannot be undone.",
+    ),
+    (
         "As combinações de atalho devem ser únicas.",
         "Shortcut combinations must be unique.",
     ),
@@ -1271,7 +1275,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Desafixar aba", "Unpin tab"),
     ("Descartada", "Dismissed"),
     ("Descartar", "Discard"),
+    ("Descartar alterações em {}?", "Discard changes to {}?"),
     ("Descartar alterações?", "Discard changes?"),
+    ("Descartar todas as alterações?", "Discard all changes?"),
+    ("Descartar tudo", "Discard all"),
     ("Desconhecido", "Unknown"),
     ("Descrição (opcional)", "Description (optional)"),
     (

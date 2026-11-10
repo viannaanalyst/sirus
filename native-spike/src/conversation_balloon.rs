@@ -17,8 +17,6 @@ const SIDE: f32 = 20.;
 const DRAWER_W: f32 = 720.;
 const DRAWER_MAX_H: f32 = 560.;
 const GROW: f32 = 0.42;
-/// A web view draws above GPUI, so the page leaves this strip free for the pill.
-const PAGE_ROOM: f32 = BOTTOM + PILL_H + 12.;
 /// How long a new request pulses on the pill before the drawer opens by itself.
 const AUTO_DELAY: f32 = 0.9;
 
@@ -278,11 +276,8 @@ impl Shell {
         let ix = self.active_conversation();
         let p = self.balloon.progress(now);
         let open = self.balloon.open;
-        crate::panel_browser::set_bottom_room(if self.balloon.drawer_visible(now) {
-            0.
-        } else {
-            PAGE_ROOM
-        });
+        // The page runs to the bottom: the balloon cuts its own hole in it (browser_holes.rs).
+        crate::panel_browser::set_bottom_room(0.);
         // Fades in with the panel filling the card.
         let presence = self.dock_max.at(now).clamp(0., 1.);
         let conversation = &self.conversations[ix];
@@ -544,6 +539,25 @@ impl Shell {
                     .hover(|s| s.border_color(accent_wash(0.6)))
                     .on_click(cx.listener(|this, _, _, cx| this.balloon_open(cx)))
             })
+            .child(
+                gpui::canvas(
+                    |bounds, window, _| {
+                        let zoom = f64::from(window.content_zoom());
+                        let b = bounds.map(|v| f64::from(f32::from(v)) * zoom);
+                        crate::browser_holes::report((
+                            b.origin.x,
+                            b.origin.y,
+                            b.size.width,
+                            b.size.height,
+                        ));
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full(),
+            )
             .children(pill)
             .children(drawer);
         let scrim = (p > 0.001).then(|| {

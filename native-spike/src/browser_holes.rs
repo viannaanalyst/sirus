@@ -16,8 +16,8 @@ use std::ffi::c_void;
 /// A rectangle in window points, from the top-left: (x, y, width, height).
 pub type Rect = (f64, f64, f64, f64);
 
-/// The corner radius of a hole, the cards' own.
-const RADIUS: f64 = 12.;
+/// The corner radius of a hole, the floating cards. own.
+const RADIUS: f64 = crate::theme::RADIUS_LG as f64;
 
 thread_local! {
     static REPORTED: RefCell<Vec<Rect>> = const { RefCell::new(Vec::new()) };

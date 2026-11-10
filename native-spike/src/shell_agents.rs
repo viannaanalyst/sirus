@@ -129,8 +129,13 @@ impl Shell {
                 .child(self.project_avatar_for(place.project, if in_footer { 14. } else { 17. }))
         });
         let slot = self.agents.slot.clone();
-        // Frosted, so it takes the color of the sidebar under it. Its corners are a session tab's.
-        let radius = crate::theme::RADIUS_MD;
+        // Frosted, so it takes the color of the sidebar under it. Its corners keep the model
+        // picker's proportions: 10px on the 30px floating pill, 7px on the 22px footer one.
+        let radius = if in_footer {
+            crate::theme::RADIUS_SM
+        } else {
+            crate::theme::RADIUS_MD
+        };
         let pill = div()
             .id("agents-pill")
             .relative()
@@ -139,18 +144,7 @@ impl Shell {
             .pl(px(8.))
             .pr(px(9.))
             .rounded(px(radius))
-            .border_1()
-            .border_color(crate::theme::border())
             .child(crate::theme::floating_surface(radius))
-            // The frosted surface paints over the pill's own border, so the edge rides on top.
-            .child(
-                div()
-                    .absolute()
-                    .inset_0()
-                    .rounded(px(radius))
-                    .border_1()
-                    .border_color(crate::theme::border()),
-            )
             .when(!in_footer, |d| d.shadow_lg())
             .flex()
             .items_center()
@@ -161,7 +155,7 @@ impl Shell {
             .opacity(appear.at(now).clamp(0., 1.))
             .cursor_pointer()
             .sinks()
-            .hover(|s| s.border_color(content(0.22)))
+            .hover(|s| s.bg(content(0.06)))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(|this, _, _, cx| this.toggle_agents_list(cx)))
             .child(

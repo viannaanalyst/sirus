@@ -1368,7 +1368,13 @@ pub struct Shell {
     question_picks: HashMap<String, usize>,
     /// The "Ou digite outra resposta…" field of each waiting question, by request id.
     question_fields: std::cell::RefCell<
-        HashMap<String, (gpui::Entity<crate::panel_files::TextField>, gpui::Subscription)>,
+        HashMap<
+            String,
+            (
+                gpui::Entity<crate::panel_files::TextField>,
+                gpui::Subscription,
+            ),
+        >,
     >,
     native_tx: async_channel::Sender<(&'static str, Value)>,
     agent_versions: HashMap<&'static str, String>,

@@ -2114,6 +2114,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Exibição", "Display"),
     ("Exibição da resposta", "Response streaming"),
+    ("Expandir painel", "Expand panel"),
     (
         "Explore todos os 100 componentes gratuitos com exemplos locais.",
         "Explore all 100 free components with local examples.",
@@ -2528,6 +2529,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Luminosidade da cor", "Color lightness"),
     ("Maio", "May"),
     ("Mais antigas", "Older"),
+    ("Mais ações", "More actions"),
     ("Mais escura ou mais clara.", "Darker or lighter."),
     ("Mantendo", "Keeping"),
     (
@@ -4467,6 +4469,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Restore this page's defaults?",
     ),
     ("Restaurar padrões", "Restore defaults"),
+    ("Restaurar painel", "Restore panel"),
     ("Restaurar preferências", "Reset preferences"),
     (
         "Restaurar preferências não apaga pastas de projetos. Requer confirmação.",

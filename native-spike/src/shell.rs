@@ -1624,6 +1624,8 @@ pub struct Shell {
     git_tx: async_channel::Sender<GitResult>,
     palette_ui: Option<PaletteState>,
     environment: Option<Tween>,
+    /// The panel header's "⋯" menu, when its trailing buttons don't fit (ADR-198).
+    header_more: Option<Tween>,
     dock_open: bool,
     dock: Tween,
     dock_max: Tween,
@@ -1642,6 +1644,10 @@ pub struct Shell {
     composer_rise: std::cell::RefCell<HashMap<usize, (Rc<std::cell::Cell<f32>>, Tween)>>,
     /// The composer's text width last drawn: a narrow one drops the labels that don't fit.
     composer_width: Rc<Cell<f32>>,
+    /// The panel header's band as last drawn, so its tier fits the room it has (ADR-198).
+    panel_header_width: Rc<Cell<f32>>,
+    /// The tier the panel header drew last, kept for the resize hysteresis (ADR-198).
+    header_tier: HeaderTier,
     /// The key that must be pressed once more to act, and when it was first pressed.
     press_again: Option<(Press, Instant)>,
     /// The pill over the project rail, for agents working in other projects.
@@ -2063,6 +2069,7 @@ impl Shell {
             git_tx,
             palette_ui: None,
             environment: None,
+            header_more: None,
             dock_open: false,
             dock: Tween::still(0., now),
             dock_max: Tween::still(0., now),
@@ -2076,6 +2083,8 @@ impl Shell {
             send_moving: Default::default(),
             composer_rise: Default::default(),
             composer_width: Default::default(),
+            panel_header_width: Default::default(),
+            header_tier: HeaderTier::Full,
             press_again: None,
             agents: Default::default(),
             actions: shell_actions::ActionsUi::new(),
@@ -6954,11 +6963,13 @@ impl Shell {
         }
         if key == "escape"
             && (self.environment.is_some()
+                || self.header_more.is_some()
                 || self.appearance.is_some()
                 || self.usage_page_open()
                 || self.menu.is_some())
         {
             self.environment = None;
+            self.header_more = None;
             self.appearance = None;
             self.close_usage_page(cx);
             self.menu = None;
@@ -8075,6 +8086,26 @@ impl Shell {
         }
     }
 
+    /// The widths the panel header's parts need at the current state, for its tier (ADR-198).
+    fn header_needs(&self, added: u32, removed: u32) -> HeaderNeeds {
+        let shown = self.git_facts().is_some();
+        let tabs_icon =
+            VISIBLE_PANES as f32 * (6. + 15. + 6.) + VISIBLE_PANES.saturating_sub(1) as f32 * 2.;
+        let label = PANES
+            .iter()
+            .take(VISIBLE_PANES)
+            .map(|(_, name, _)| header_label_width(crate::i18n::t(*name)))
+            .fold(0., f32::max);
+        HeaderNeeds {
+            tabs_icon,
+            tabs_label: tabs_icon + 5. + label,
+            git_full: self.git_button_width(shown, false),
+            git_icon: self.git_button_width(shown, true),
+            diff: diff_pill_width(added, removed),
+            icon: PLATE - 3.,
+        }
+    }
+
     fn titlebar(
         &mut self,
         width: f32,
@@ -8094,17 +8125,44 @@ impl Shell {
         let dock_width = self.dock_full(room, now) * open_dock;
         // Exactly over the card's hairline: gutter, card border, then the panel.
         let dock_edge = (width - 6. - 1. - dock_width - 1.).max(nav_end + 6.);
-        let git_room = self.git_button_width(open_dock < 0.01 || dock_width >= PANEL_WITH_DIFF);
-        let controls = (80. + 28. * open_dock + 72. + git_room).max(width - dock_edge - 16. + 6.);
+        let dock_open = open_dock > 0.01;
         let (added, removed) = self.diff_stat();
-        let git_button = if open_dock < 0.01 || dock_width >= PANEL_WITH_DIFF {
-            self.git_button(now, moving, cx)
+        // The band the panel's tabs and the bar's controls share, as the header last drew it.
+        let band = (width - 10. - (dock_edge + 8.)).max(0.);
+        let measured = self.panel_header_width.get();
+        let needs = self.header_needs(added, removed);
+        let tier = if dock_open {
+            let tier = header_tier(
+                if measured > 1. { measured } else { band },
+                needs,
+                self.header_tier,
+            );
+            self.header_tier = tier;
+            tier
         } else {
-            None
+            self.header_tier = HeaderTier::Full;
+            self.panel_header_width.set(0.);
+            self.header_more = None;
+            HeaderTier::Full
         };
+        let compact_git = tier != HeaderTier::Full;
+        let panel_names = tier == HeaderTier::Full || tier == HeaderTier::CompactGit;
+        let show_diff = tier == HeaderTier::Full || tier == HeaderTier::CompactGit;
+        let overflow = tier == HeaderTier::Overflow;
+        if !overflow {
+            self.header_more = None;
+        }
+        let git_button = self.git_button(now, moving, compact_git, cx);
+        let controls = needs.controls(tier);
         let tint: gpui::Hsla = gpui::rgb(crate::theme::DIFF_ADD).into();
         let changes_open = self.dock_open && self.dock_active == Some(CHANGES_PANE);
-        let strip = width - strip_left - 12. - PLATE - 6. - controls - 10.;
+        // A wide panel takes the whole bar, so the conversation's tabs stop at its edge.
+        let controls_room = if dock_open {
+            controls.max(width - dock_edge - 16. + 6.)
+        } else {
+            controls
+        };
+        let strip = width - strip_left - 12. - PLATE - 6. - controls_room - 10.;
         *moving |= self.layout_tabs(strip, now, reduced);
         *moving |= self.tab_glow.step(now);
         self.save_page_tabs();
@@ -8129,6 +8187,198 @@ impl Shell {
         let dock = self.pinned_dock(now, moving, reduced, cx);
         let tray = self.tray.at(now);
         let add_x = self.new_tab_x.at(now) + tray;
+        // The panel's tabs and the bar's controls share one band: each tier gives up a little
+        // more room, and the band clips rather than letting anything paint over anything else.
+        let tabs_row = div()
+            .flex()
+            .items_center()
+            .gap(px(2.))
+            .min_w_0()
+            .overflow_hidden()
+            .flex_shrink(1.)
+            .opacity(open_dock)
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .children(PANES.iter().take(VISIBLE_PANES).enumerate().map(
+                |(ix, (glyph, name, _))| {
+                    let chosen = self.dock_active == Some(ix);
+                    div()
+                        .id(("pane-tab", ix))
+                        .flex_shrink_0()
+                        .h(px(26.))
+                        .px(px(6.))
+                        .rounded(px(crate::theme::RADIUS_MD))
+                        .flex()
+                        .items_center()
+                        .gap(px(5.))
+                        .whitespace_nowrap()
+                        .text_size(px(12.5))
+                        .text_color(content(0.95))
+                        .when(chosen, |d| d.bg(content(0.1)))
+                        .when(!chosen, |d| d.hover(|s| s.bg(content(0.07))))
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if this.dock_active == Some(ix) {
+                                this.dock_active = None;
+                                this.chooser_since = Instant::now();
+                                cx.notify();
+                            } else {
+                                this.open_pane(ix, cx);
+                            }
+                        }))
+                        .child(icon(glyph, 15.).text_color(content(if chosen {
+                            0.95
+                        } else {
+                            0.5
+                        })))
+                        .when(chosen && panel_names, |d| d.child(crate::i18n::t(*name)))
+                        .tooltip(message_actions::name_tip(crate::i18n::t(*name)))
+                },
+            ));
+        let controls_el = {
+            let mut row = div()
+                .h(px(30.))
+                .flex()
+                .items_center()
+                .gap(px(4.))
+                .flex_shrink_0()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .children(git_button)
+                .when(show_diff, |d| {
+                    d.child(
+                        div()
+                            .id("top-diff")
+                            .h(px(24.))
+                            .px(px(6.))
+                            .rounded(px(crate::theme::RADIUS_SM))
+                            .border_1()
+                            .border_color(gpui::transparent_black())
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .text_size(px(crate::theme::DIFF_COUNT_SIZE))
+                            .cursor_pointer()
+                            // Dimmed with nothing changed; green-tinted with a ring while
+                            // the changes view is open.
+                            .when(added == 0 && removed == 0, |d| d.opacity(0.5))
+                            .when(changes_open, |d| {
+                                d.bg(gpui::Hsla { a: 0.11, ..tint })
+                                    .border_color(gpui::Hsla { a: 0.33, ..tint })
+                            })
+                            .when(!changes_open, |d| d.hover(|s| s.bg(content(0.07))))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                let open = this.dock_open && this.dock_active == Some(CHANGES_PANE);
+                                if open {
+                                    this.open_pane(2, cx);
+                                } else {
+                                    this.open_pane(CHANGES_PANE, cx);
+                                }
+                            }))
+                            .child(crate::theme::diff_counts(
+                                added.into(),
+                                removed.into(),
+                                false,
+                            )),
+                    )
+                })
+                .child(
+                    icon_button("top-search", "search", 16.)
+                        .on_click(cx.listener(|this, _, _, cx| this.toggle_palette(true, cx))),
+                );
+            if overflow {
+                row = row.child(
+                    toggled(
+                        icon_button("top-more", "more-horizontal", 16.),
+                        self.header_more.is_some(),
+                    )
+                    .tooltip(message_actions::name_tip(t("Mais ações")))
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_header_more(cx))),
+                );
+            } else {
+                row = row.child(
+                    toggled(
+                        icon_button("top-environment", "window", 16.),
+                        self.environment.is_some(),
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.header_more = None;
+                        this.appearance = None;
+                        this.environment = match this.environment {
+                            Some(_) => None,
+                            None => Some(Tween::from_to(
+                                0.,
+                                1.,
+                                Instant::now(),
+                                if cx.reduce_motion() { 0. } else { MENU },
+                                Curve::Expo,
+                            )),
+                        };
+                        cx.notify();
+                    })),
+                );
+                if dock_open {
+                    row = row.child(
+                        toggled(
+                            icon_button("dock-max", "expand", 14.),
+                            self.dock_max.to > 0.5,
+                        )
+                        .opacity(open_dock)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            let to = if this.dock_max.to > 0.5 { 0. } else { 1. };
+                            this.dock_max.set(
+                                to,
+                                Instant::now(),
+                                if cx.reduce_motion() { 0. } else { SIDEBAR },
+                                Curve::Expo,
+                            );
+                            cx.notify();
+                        })),
+                    );
+                }
+            }
+            row.child(
+                toggled(
+                    icon_button("top-panel", "sidebar-right", 16.),
+                    self.dock_open,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_dock(cx))),
+            )
+        };
+        let header = if dock_open {
+            let header_width = self.panel_header_width.clone();
+            div()
+                .absolute()
+                .left(px(dock_edge + 8.))
+                .right(px(10.))
+                .top(px(5.))
+                .h(px(30.))
+                .relative()
+                .flex()
+                .items_center()
+                .justify_between()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(
+                    gpui::canvas(
+                        move |bounds, window, _| {
+                            let width = f32::from(bounds.size.width);
+                            if (header_width.replace(width) - width).abs() > 0.5 {
+                                window.on_next_frame(|window, _| window.refresh());
+                            }
+                        },
+                        |_, _, _, _| {},
+                    )
+                    .absolute()
+                    .size_full(),
+                )
+                .child(tabs_row)
+                .child(controls_el)
+        } else {
+            div()
+                .absolute()
+                .right(px(10.))
+                .top(px(5.))
+                .h(px(30.))
+                .child(controls_el)
+        };
         div()
             .h(px(TITLE_BAR))
             .flex_shrink_0()
@@ -8160,109 +8410,8 @@ impl Shell {
                     }))
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_sidebar(cx))),
             )
-            .child(
-                div()
-                    .absolute()
-                    .right(px(10.))
-                    .top(px(5.))
-                    .h(px(30.))
-                    .flex()
-                    .items_center()
-                    .gap(px(4.))
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .children(git_button)
-                    .when(open_dock < 0.01 || dock_width >= PANEL_WITH_DIFF, |d| {
-                        d.child(
-                            div()
-                                .id("top-diff")
-                                .h(px(24.))
-                                .px(px(6.))
-                                .rounded(px(crate::theme::RADIUS_SM))
-                                .border_1()
-                                .border_color(gpui::transparent_black())
-                                .flex()
-                                .items_center()
-                                .gap(px(6.))
-                                .text_size(px(crate::theme::DIFF_COUNT_SIZE))
-                                .cursor_pointer()
-                                // Dimmed with nothing changed; green-tinted with a ring while
-                                // the changes view is open.
-                                .when(added == 0 && removed == 0, |d| d.opacity(0.5))
-                                .when(changes_open, |d| {
-                                    d.bg(gpui::Hsla { a: 0.11, ..tint })
-                                        .border_color(gpui::Hsla { a: 0.33, ..tint })
-                                })
-                                .when(!changes_open, |d| d.hover(|s| s.bg(content(0.07))))
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    let open =
-                                        this.dock_open && this.dock_active == Some(CHANGES_PANE);
-                                    if open {
-                                        this.open_pane(2, cx);
-                                    } else {
-                                        this.open_pane(CHANGES_PANE, cx);
-                                    }
-                                }))
-                                .child(crate::theme::diff_counts(
-                                    added.into(),
-                                    removed.into(),
-                                    false,
-                                )),
-                        )
-                    })
-                    .child(
-                        icon_button("top-search", "search", 16.)
-                            .on_click(cx.listener(|this, _, _, cx| this.toggle_palette(true, cx))),
-                    )
-                    .child(
-                        toggled(
-                            icon_button("top-environment", "window", 16.),
-                            self.environment.is_some(),
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.appearance = None;
-                            this.environment = match this.environment {
-                                Some(_) => None,
-                                None => Some(Tween::from_to(
-                                    0.,
-                                    1.,
-                                    Instant::now(),
-                                    if cx.reduce_motion() { 0. } else { MENU },
-                                    Curve::Expo,
-                                )),
-                            };
-                            cx.notify();
-                        })),
-                    )
-                    .when(open_dock > 0.01, |d| {
-                        d.child(
-                            toggled(
-                                icon_button("dock-max", "expand", 14.),
-                                self.dock_max.to > 0.5,
-                            )
-                            .opacity(open_dock)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                let to = if this.dock_max.to > 0.5 { 0. } else { 1. };
-                                this.dock_max.set(
-                                    to,
-                                    Instant::now(),
-                                    if cx.reduce_motion() { 0. } else { SIDEBAR },
-                                    Curve::Expo,
-                                );
-                                cx.notify();
-                            })),
-                        )
-                    })
-                    .child(
-                        toggled(
-                            icon_button("top-panel", "sidebar-right", 16.),
-                            self.dock_open,
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| this.toggle_dock(cx))),
-                    ),
-            )
-            .when(open_dock > 0.01, |d| {
-                let active_pane = self.dock_active;
-                let panel_names = dock_width >= PANEL_WITH_NAMES;
+            .child(header)
+            .when(dock_open, |d| {
                 d.child(
                     div()
                         .absolute()
@@ -8272,52 +8421,6 @@ impl Shell {
                         .h(px(16.))
                         .bg(content(0.14))
                         .opacity(open_dock),
-                )
-                .child(
-                    div()
-                        .absolute()
-                        .left(px(dock_edge + 8.))
-                        .top(px(7.))
-                        .h(px(26.))
-                        .opacity(open_dock)
-                        .flex()
-                        .items_center()
-                        .gap(px(2.))
-                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .children(PANES.iter().take(VISIBLE_PANES).enumerate().map(
-                            |(ix, (glyph, name, _))| {
-                                let chosen = active_pane == Some(ix);
-                                div()
-                                    .id(("pane-tab", ix))
-                                    .h(px(26.))
-                                    .px(px(6.))
-                                    .rounded(px(crate::theme::RADIUS_MD))
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(5.))
-                                    .text_size(px(12.5))
-                                    .text_color(content(0.95))
-                                    .when(chosen, |d| d.bg(content(0.1)))
-                                    .when(!chosen, |d| d.hover(|s| s.bg(content(0.07))))
-                                    .cursor_pointer()
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        if this.dock_active == Some(ix) {
-                                            this.dock_active = None;
-                                            this.chooser_since = Instant::now();
-                                            cx.notify();
-                                        } else {
-                                            this.open_pane(ix, cx);
-                                        }
-                                    }))
-                                    .child(icon(glyph, 15.).text_color(content(if chosen {
-                                        0.95
-                                    } else {
-                                        0.5
-                                    })))
-                                    .when(chosen && panel_names, |d| d.child(crate::i18n::t(*name)))
-                                    .tooltip(message_actions::name_tip(crate::i18n::t(*name)))
-                            },
-                        )),
                 )
             })
             .child(nav_button(
@@ -16967,6 +17070,110 @@ impl Shell {
 
     /// The Ambiente card, compact: one 26 px row per function, each opening in place. Same
     /// functions as Sirus's EnvironmentPanel.
+    /// Opens or closes the panel header's "⋯" menu.
+    fn toggle_header_more(&mut self, cx: &mut Context<Self>) {
+        self.environment = None;
+        let duration = if cx.reduce_motion() { 0. } else { MENU };
+        self.header_more = match self.header_more {
+            Some(_) => None,
+            None => Some(Tween::from_to(
+                0.,
+                1.,
+                Instant::now(),
+                duration,
+                Curve::Expo,
+            )),
+        };
+        cx.notify();
+    }
+
+    /// The panel header's "⋯" menu: the layout and expand buttons, when the header is too
+    /// narrow for them (ADR-198).
+    fn header_more_view(
+        &self,
+        now: Instant,
+        moving: &mut bool,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let open = self.header_more.as_ref()?;
+        if !open.done(now) {
+            *moving = true;
+        }
+        let p = open.at(now).clamp(0., 1.);
+        let row = |id: &'static str, glyph: &'static str, label: &'static str| {
+            div()
+                .id(id)
+                .h(px(26.))
+                .px(px(7.))
+                .rounded(px(crate::theme::RADIUS_MD))
+                .flex()
+                .items_center()
+                .gap(px(7.))
+                .text_size(px(12.5))
+                .text_color(content(0.75))
+                .hover(|s| s.bg(content(0.07)).text_color(content(1.)))
+                .cursor_pointer()
+                .child(icon(glyph, 14.).text_color(content(0.5)))
+                .child(div().flex_1().min_w_0().truncate().child(t(label)))
+        };
+        let expand_label = if self.dock_max.to > 0.5 {
+            "Restaurar painel"
+        } else {
+            "Expandir painel"
+        };
+        Some(
+            div()
+                .id("header-more-card")
+                .occlude()
+                .absolute()
+                .right(px(10.))
+                .top(px(TITLE_BAR + 10. + (1. - p) * -6.))
+                .w(px(196.))
+                .p(px(4.))
+                .rounded(px(crate::theme::RADIUS_LG))
+                .border_1()
+                .border_color(crate::theme::border())
+                .child(crate::theme::floating_surface(crate::theme::RADIUS_MD))
+                .shadow_lg()
+                .opacity(p)
+                .flex()
+                .flex_col()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(
+                    row("more-environment", "window", "Ambiente").on_click(cx.listener(
+                        |this, _, _, cx| {
+                            this.header_more = None;
+                            this.appearance = None;
+                            this.environment = Some(Tween::from_to(
+                                0.,
+                                1.,
+                                Instant::now(),
+                                if cx.reduce_motion() { 0. } else { MENU },
+                                Curve::Expo,
+                            ));
+                            cx.notify();
+                        },
+                    )),
+                )
+                .child(
+                    row("more-expand", "expand", expand_label).on_click(cx.listener(
+                        |this, _, _, cx| {
+                            this.header_more = None;
+                            let to = if this.dock_max.to > 0.5 { 0. } else { 1. };
+                            this.dock_max.set(
+                                to,
+                                Instant::now(),
+                                if cx.reduce_motion() { 0. } else { SIDEBAR },
+                                Curve::Expo,
+                            );
+                            cx.notify();
+                        },
+                    )),
+                )
+                .into_any_element(),
+        )
+    }
+
     fn environment_view(
         &self,
         now: Instant,
@@ -19419,10 +19626,113 @@ fn composer_fits(width: f32) -> (bool, bool) {
     (width > 0. && width < 440., width > 0. && width < 390.)
 }
 
-/// How wide the side panel must be for its bar to name the chosen pane, and to also leave the
-/// title bar's diff in place: below that, they would run into the controls beside them.
-const PANEL_WITH_NAMES: f32 = 440.;
-const PANEL_WITH_DIFF: f32 = 360.;
+/// How the panel header fits its width: everything, then the Git button as an icon, then the
+/// active tab's name and the diff counts gone, then the trailing buttons in a menu (ADR-198).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum HeaderTier {
+    Full,
+    CompactGit,
+    CompactTabs,
+    Overflow,
+}
+
+impl HeaderTier {
+    fn rank(self) -> usize {
+        match self {
+            HeaderTier::Full => 0,
+            HeaderTier::CompactGit => 1,
+            HeaderTier::CompactTabs => 2,
+            HeaderTier::Overflow => 3,
+        }
+    }
+}
+
+/// The widths the panel header's parts need, in px.
+#[derive(Clone, Copy, Debug)]
+struct HeaderNeeds {
+    tabs_icon: f32,
+    tabs_label: f32,
+    git_full: f32,
+    git_icon: f32,
+    diff: f32,
+    icon: f32,
+}
+
+impl HeaderNeeds {
+    /// A row's width: its items and the 4 px between them.
+    fn row(items: &[f32]) -> f32 {
+        items.iter().sum::<f32>() + 4. * items.len().saturating_sub(1) as f32
+    }
+
+    fn tabs(self, tier: HeaderTier) -> f32 {
+        match tier {
+            HeaderTier::Full | HeaderTier::CompactGit => self.tabs_label,
+            HeaderTier::CompactTabs | HeaderTier::Overflow => self.tabs_icon,
+        }
+    }
+
+    fn controls(self, tier: HeaderTier) -> f32 {
+        let mut items = Vec::with_capacity(6);
+        if self.git_full > 0. {
+            items.push(if tier == HeaderTier::Full {
+                self.git_full
+            } else {
+                self.git_icon
+            });
+        }
+        match tier {
+            HeaderTier::Full | HeaderTier::CompactGit => {
+                items.push(self.diff);
+                items.extend([self.icon; 4]);
+            }
+            HeaderTier::CompactTabs => items.extend([self.icon; 4]),
+            HeaderTier::Overflow => items.extend([self.icon; 3]),
+        }
+        Self::row(&items)
+    }
+
+    fn width(self, tier: HeaderTier) -> f32 {
+        self.tabs(tier) + HEADER_GAP + self.controls(tier)
+    }
+}
+
+/// The space the panel header leaves between its tabs and its controls.
+const HEADER_GAP: f32 = 8.;
+/// The room a wider tier needs beyond its own width, so a resize at the edge doesn't flicker
+/// between two tiers.
+const HEADER_HYSTERESIS: f32 = 16.;
+
+/// The widest tier that fits `width`, keeping `previous` until a wider one has room to spare.
+fn header_tier(width: f32, needs: HeaderNeeds, previous: HeaderTier) -> HeaderTier {
+    const ORDER: [HeaderTier; 4] = [
+        HeaderTier::Full,
+        HeaderTier::CompactGit,
+        HeaderTier::CompactTabs,
+        HeaderTier::Overflow,
+    ];
+    for tier in ORDER {
+        let room = if tier.rank() < previous.rank() {
+            width - HEADER_HYSTERESIS
+        } else {
+            width
+        };
+        if needs.width(tier) <= room {
+            return tier;
+        }
+    }
+    HeaderTier::Overflow
+}
+
+/// A rough width of a panel tab's name at 12.5 px, in px.
+fn header_label_width(text: &str) -> f32 {
+    text.chars().count() as f32 * 6.4
+}
+
+/// The diff counts' pill: its padding, the 6 px between the two numbers, and the numbers.
+fn diff_pill_width(added: u32, removed: u32) -> f32 {
+    let digits = |n: u32| crate::theme::format_count(n.into()).chars().count();
+    18. + 6. * (2 + digits(added) + digits(removed)) as f32
+}
 
 /// What the conversation keeps beside the side panel, and the least the panel takes.
 const CONVERSATION_MIN: f32 = 420.;
@@ -20073,6 +20383,7 @@ impl Render for Shell {
                 || self.tasks_page.popover.is_some()
                 || self.palette_ui.is_some()
                 || self.environment.is_some()
+                || self.header_more.is_some()
                 || self.menu.is_some()
                 || self.peek.is_some()
                 || self.project_menu.is_some()
@@ -20144,6 +20455,7 @@ impl Render for Shell {
         });
         let add_menu = self.add_menu_view(now, &mut moving, cx);
         let environment = self.environment_view(now, &mut moving, cx);
+        let header_more = self.header_more_view(now, &mut moving, cx);
         let git_menu = self.git_menu(now, &mut moving, size, cx);
         // Watches the pointer over the whole window, even above opaque panels.
         let view = cx.entity();
@@ -20278,7 +20590,7 @@ impl Render for Shell {
                     cx.notify();
                 }
                 let fade = if cx.reduce_motion() { 0. } else { MENU };
-                let closed = [this.incoming.close_at(Instant::now(), fade), this.menu.take().is_some(), this.environment.take().is_some(),this.composer_menu.take().is_some(), this.add_menu.take().is_some(), this.usage_popup.take().is_some(), this.usage_picker.take().is_some(), this.resources.close(), this.context.close(), this.close_project_menu(), this.session_filter.open.take().is_some(), this.context_menu.take().is_some(), this.term.close_menu(), this.close_sidebar_options(cx)];
+                let closed = [this.incoming.close_at(Instant::now(), fade), this.menu.take().is_some(), this.environment.take().is_some(), this.header_more.take().is_some(),this.composer_menu.take().is_some(), this.add_menu.take().is_some(), this.usage_popup.take().is_some(), this.usage_picker.take().is_some(), this.resources.close(), this.context.close(), this.close_project_menu(), this.session_filter.open.take().is_some(), this.context_menu.take().is_some(), this.term.close_menu(), this.close_sidebar_options(cx)];
                 this.goal_input = None;
                 if closed.contains(&true) {
                     cx.notify();
@@ -20388,6 +20700,7 @@ impl Render for Shell {
             .children(sidebar_card)
             .children(add_menu)
             .children(environment)
+            .children(header_more)
             .children(git_menu)
             .children(panel)
             .children(usage_page)
@@ -21113,5 +21426,70 @@ mod prompt_fold_tests {
     fn the_fold_button_has_english() {
         assert!(crate::i18n::with_locale(true, || t("Mostrar mais") == "Show more"));
         assert!(crate::i18n::with_locale(true, || t("Mostrar menos") == "Show less"));
+    }
+
+    fn header_needs() -> HeaderNeeds {
+        HeaderNeeds {
+            tabs_icon: 143.,
+            tabs_label: 224.,
+            git_full: 158.,
+            git_icon: 58.,
+            diff: 42.,
+            icon: 24.,
+        }
+    }
+
+    #[test]
+    fn a_wide_header_keeps_every_control() {
+        let needs = header_needs();
+        let full = needs.width(HeaderTier::Full);
+        assert_eq!(
+            header_tier(full + 1., needs, HeaderTier::Full),
+            HeaderTier::Full
+        );
+    }
+
+    #[test]
+    fn a_narrow_header_drops_the_git_label_then_the_tab_label_and_the_counts() {
+        let needs = header_needs();
+        let full = needs.width(HeaderTier::Full);
+        let compact_git = needs.width(HeaderTier::CompactGit);
+        let compact_tabs = needs.width(HeaderTier::CompactTabs);
+        assert_eq!(
+            header_tier(full - 1., needs, HeaderTier::Full),
+            HeaderTier::CompactGit
+        );
+        assert_eq!(
+            header_tier(compact_git - 1., needs, HeaderTier::CompactGit),
+            HeaderTier::CompactTabs
+        );
+        assert_eq!(
+            header_tier(compact_tabs - 1., needs, HeaderTier::CompactTabs),
+            HeaderTier::Overflow
+        );
+    }
+
+    #[test]
+    fn widening_back_waits_for_the_hysteresis() {
+        let needs = header_needs();
+        let full = needs.width(HeaderTier::Full);
+        assert_eq!(
+            header_tier(full + HEADER_HYSTERESIS - 1., needs, HeaderTier::CompactGit),
+            HeaderTier::CompactGit
+        );
+        assert_eq!(
+            header_tier(full + HEADER_HYSTERESIS, needs, HeaderTier::CompactGit),
+            HeaderTier::Full
+        );
+    }
+
+    #[test]
+    fn the_narrowest_tier_keeps_search_and_the_sidebar_toggle() {
+        let needs = header_needs();
+        // The Git icon, search, the "⋯" menu and the sidebar toggle, with three 4 px gaps.
+        assert_eq!(
+            needs.controls(HeaderTier::Overflow),
+            needs.git_icon + 3. * needs.icon + 12.
+        );
     }
 }

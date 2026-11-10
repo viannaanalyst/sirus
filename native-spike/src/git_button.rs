@@ -33,7 +33,7 @@ enum Committed {
 impl Shell {
     /// The branch's state, or None when the button has nothing to say: no upstream, a clean tree
     /// and nothing running.
-    fn git_facts(&self) -> Option<GitFacts> {
+    pub(super) fn git_facts(&self) -> Option<GitFacts> {
         let (added, removed) = self.diff_stat();
         let dirty = added + removed > 0;
         let value = self.incoming.value.as_ref();
@@ -47,8 +47,9 @@ impl Shell {
         })
     }
 
-    /// The room the button takes in the title bar, for the tab strip to leave.
-    pub(super) fn git_button_width(&self, shown: bool) -> f32 {
+    /// The room the button takes in the title bar, for the tab strip to leave. `compact` is the
+    /// icon-only button a narrow panel header uses (ADR-198).
+    pub(super) fn git_button_width(&self, shown: bool, compact: bool) -> f32 {
         let Some(facts) = self.git_facts().filter(|_| shown) else {
             return 0.;
         };
@@ -57,13 +58,14 @@ impl Shell {
             .running
             .map(Running::label)
             .or_else(|| git_split::quick_action(facts).label());
-        git_split::width_hint(label) + 4.
+        git_split::width_hint(if compact { None } else { label }) + 4.
     }
 
     pub(super) fn git_button(
         &mut self,
         now: Instant,
         moving: &mut bool,
+        compact: bool,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let facts = self.git_facts()?;
@@ -86,7 +88,7 @@ impl Shell {
             .id("git-quick")
             .h(px(BUTTON_HEIGHT))
             .pl(px(7.))
-            .pr(px(if label.is_some() { 6. } else { 7. }))
+            .pr(px(if label.is_some() && !compact { 6. } else { 7. }))
             .flex()
             .items_center()
             .gap(px(6.))
@@ -96,7 +98,7 @@ impl Shell {
             .whitespace_nowrap()
             .group_hover(GROUP, |s| s.bg(content(0.04)))
             .child(glyph)
-            .children(label.map(|label| div().child(label)))
+            .children(label.filter(|_| !compact).map(|label| div().child(label)))
             .when(!busy, |d| {
                 d.cursor_pointer()
                     .hover(|s| s.bg(content(0.08)))
@@ -126,6 +128,10 @@ impl Shell {
                 .items_center()
                 .flex_shrink_0()
                 .rounded(px(crate::theme::RADIUS_SM))
+                .when(compact, |d| match label {
+                    Some(label) => d.tooltip(text_tip(label.to_owned())),
+                    None => d,
+                })
                 .child(
                     gpui::canvas(|_, _, _| {}, move |frame, _, _, _| bounds.set(Some(frame)))
                         .absolute()
@@ -250,6 +256,7 @@ impl Shell {
 
     pub(super) fn git_menu_toggle(&mut self, cx: &mut Context<Self>) {
         self.environment = None;
+        self.header_more = None;
         let duration = if cx.reduce_motion() { 0. } else { MENU };
         let opening = !self.incoming.open;
         self.incoming.toggle(Instant::now(), duration);

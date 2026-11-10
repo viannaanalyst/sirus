@@ -1775,17 +1775,14 @@ impl Shell {
                 )
                 .into_any_element()
         };
-        let work: AnyElement = if page.loaded && page.tasks.is_empty() {
-            self.tasks_empty(cx)
-        } else {
-            div()
-                .flex_1()
-                .min_h_0()
-                .flex()
-                .child(self.tasks_list(cx))
-                .child(calendar)
-                .into_any_element()
-        };
+        // The calendar always shows, with or without tasks (ADR-198).
+        let work: AnyElement = div()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .child(self.tasks_list(cx))
+            .child(calendar)
+            .into_any_element();
         div()
             .id("tasks-page")
             .size_full()
@@ -1959,29 +1956,6 @@ impl Shell {
             .child(t("Nova tarefa"))
     }
 
-    fn tasks_empty(&self, cx: &mut Context<Self>) -> AnyElement {
-        div()
-            .flex_1()
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .gap(px(14.))
-            .child(icon("task-clock", 32.).text_color(content(0.3)))
-            .child(
-                div()
-                    .max_w(px(360.))
-                    .text_center()
-                    .text_size(px(14.))
-                    .text_color(content(0.6))
-                    .child(t(
-                        "Agende um prompt para rodar sozinho, uma vez ou em repetição.",
-                    )),
-            )
-            .child(self.tasks_new_button(cx))
-            .into_any_element()
-    }
-
     /// "Minhas tarefas": the tasks with their switches, at the left of the calendar.
     fn tasks_list(&self, cx: &mut Context<Self>) -> AnyElement {
         let page = &self.tasks_page;
@@ -2082,6 +2056,19 @@ impl Shell {
                     .child(tf("{} ativas", &[&self.tasks_active()])),
             )
             .children(rows)
+            .when(page.loaded && page.tasks.is_empty(), |d| {
+                d.child(
+                    div()
+                        .ml(px(6.))
+                        .mt(px(4.))
+                        .text_size(px(12.))
+                        .line_height(px(17.))
+                        .text_color(content(0.4))
+                        .child(t(
+                            "Nenhuma tarefa ainda. Clique num dia ou em + Nova tarefa.",
+                        )),
+                )
+            })
             .into_any_element()
     }
 

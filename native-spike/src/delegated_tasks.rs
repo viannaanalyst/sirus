@@ -27,6 +27,16 @@ pub(crate) fn state_label(status: &str) -> &'static str {
     }
 }
 
+/// A delegated task's row in the sidebar: 28 px tall, one after another with nothing between.
+pub(crate) const TASK_ROW: f32 = 28.;
+
+/// Where a task row sits when its slot starts at `y`: the row itself (top, height) is one pixel
+/// inside the slot so the hover and selection washes do not touch, and the rail (top, height)
+/// covers the whole slot, so the guide lines of consecutive rows meet and read as one line.
+pub(crate) fn task_slot(y: f32) -> ((f32, f32), (f32, f32)) {
+    ((y + 1., TASK_ROW - 2.), (y, TASK_ROW))
+}
+
 /// The launched sessions that notify their reply, in the order the reply launched them.
 pub(crate) fn delegated_ids(launched: &[String], notifies: impl Fn(&str) -> bool) -> Vec<String> {
     launched.iter().filter(|id| notifies(id)).cloned().collect()
@@ -218,7 +228,7 @@ impl Shell {
         };
         for task in tasks {
             wanted.push((Row::Conversation(*task), *y, *y));
-            *y += CONV_ROW;
+            *y += TASK_ROW;
         }
     }
 
@@ -343,16 +353,16 @@ impl Shell {
                 .text_color(gpui::rgb(0x6fcf8a))
                 .into_any_element()
         };
+        let ((row_top, row_h), (rail_top, rail_h)) = task_slot(y);
         let row = div()
             .id(("task", index))
             .absolute()
-            .left(px(22.))
+            .left(px(20.))
             .right(px(6.))
-            .top(px(y))
-            .h(px(CONV_ROW - 2.))
+            .top(px(row_top))
+            .h(px(row_h))
             .opacity(alpha)
             .rounded(px(crate::theme::RADIUS_MD))
-            .relative()
             .pl(px(TILE_RAIL_INDENT))
             .pr(px(8.))
             .flex()
@@ -372,7 +382,15 @@ impl Shell {
             })
             .cursor_pointer()
             .on_click(cx.listener(move |this, _, _, cx| this.open(index, cx)))
-            .child(rail(last))
+            .child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .top(px(rail_top - row_top))
+                    .h(px(rail_h))
+                    .child(rail(last)),
+            )
             .child(
                 div()
                     .size(px(14.))
@@ -382,7 +400,7 @@ impl Shell {
                     .justify_center()
                     .child(mark),
             )
-            .child(crate::tab_tile::provider_mark(conversation.provider, 11.))
+            .child(crate::tab_tile::provider_mark(conversation.provider, 14.))
             .child(
                 div()
                     .flex_1()
@@ -596,6 +614,16 @@ impl Shell {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn task_slots_abut_so_the_guide_is_one_line() {
+        let ((top, height), (rail_top, rail_h)) = task_slot(100.);
+        assert_eq!((top, height), (101., 26.));
+        assert_eq!((rail_top, rail_h), (100., TASK_ROW));
+        let (_, (next_top, _)) = task_slot(100. + TASK_ROW);
+        assert_eq!(rail_top + rail_h, next_top);
+        assert_eq!(TASK_ROW, 28.);
+    }
 
     #[test]
     fn only_notifying_sessions_are_delegated_and_keep_their_order() {

@@ -595,10 +595,6 @@ const ENTRIES: &[(&str, &str)] = &[
         "Add a folder with SKILL.md to the directory above or to a provider's skills folder, then refresh.",
     ),
     ("Age sem perguntar.", "Acts without asking."),
-    (
-        "Agende um prompt para rodar sozinho, uma vez ou em repetição.",
-        "Schedule a prompt to run by itself, once or on repeat.",
-    ),
     ("Agente", "Agent"),
     ("Agentes", "Agents"),
     ("Agentes podem usar este login", "Agents may use this login"),

@@ -759,29 +759,6 @@ pub fn save_background(path: &str, name: &str) -> bool {
         .is_ok_and(|s| s.success())
 }
 
-/// A real app's icon from the back end, as a file the interface can draw.
-pub fn save_icon(id: &str, png: &str) -> Option<PathBuf> {
-    if png.is_empty() {
-        return None;
-    }
-    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut bytes = Vec::with_capacity(png.len() / 4 * 3);
-    let (mut buffer, mut bits) = (0u32, 0u32);
-    for c in png.bytes().filter(|c| *c != b'=') {
-        buffer = (buffer << 6) | TABLE.iter().position(|t| *t == c)? as u32;
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            bytes.push((buffer >> bits) as u8);
-        }
-    }
-    let folder = data_dir().join("editor-icons");
-    std::fs::create_dir_all(&folder).ok()?;
-    let path = folder.join(format!("{id}.png"));
-    std::fs::write(&path, bytes).ok()?;
-    Some(path)
-}
-
 pub fn background_path(name: &str) -> PathBuf {
     data_dir().join("backgrounds").join(name)
 }

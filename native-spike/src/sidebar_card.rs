@@ -172,7 +172,6 @@ impl Shell {
             || self.appearance.is_some()
             || self.confirm.is_some()
             || self.usage_popup.is_some()
-            || self.environment.is_some()
             || self.theme_menu.is_some()
             || self.session_filter.open.is_some()
     }

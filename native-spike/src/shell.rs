@@ -3,6 +3,8 @@
 mod shell_actions;
 #[path = "shell_agents.rs"]
 mod shell_agents;
+#[path = "shell_remote_project.rs"]
+mod shell_remote_project;
 #[path = "shell_settle.rs"]
 mod shell_settle;
 #[path = "shell_terminal.rs"]
@@ -1085,6 +1087,8 @@ enum Waiting {
     Older(usize),
     Models(&'static str),
     Worktrees(String),
+    /// A clone or an added folder on a remote computer, answered in its dialog.
+    RemoteProject,
     ProjectAdded,
     AccountUsage(String),
     AccountCreated(&'static str),
@@ -1561,6 +1565,9 @@ pub struct Shell {
     project_button: std::rc::Rc<std::cell::Cell<Option<gpui::Bounds<Pixels>>>>,
     checkout_filter: HashMap<usize, String>,
     worktrees: HashMap<String, Vec<Value>>,
+    /// On a remote computer, whether each project's folder is a Git repository, as the host's
+    /// `list_worktrees` answered (`None` while asking). This Mac's own folders are read directly.
+    remote_repos: HashMap<String, Option<bool>>,
     usage_popup: Option<Tween>,
     handoffs: handoff::State,
     /// The providers each conversation already left on a usage limit (ADR-198), so a fallback
@@ -1620,6 +1627,8 @@ pub struct Shell {
     agents: shell_agents::AgentsPill,
     /// The footer's project actions.
     actions: shell_actions::ActionsUi,
+    /// New project on a remote computer (shell_remote_project.rs).
+    remote_project: Option<shell_remote_project::RemoteProject>,
     /// The Actions dialog closed: the keys go back to the composer on the next frame.
     refocus: bool,
     /// Where "Abrir no editor" was last drawn: its list opens beside it.
@@ -2008,6 +2017,7 @@ impl Shell {
             project_button: Default::default(),
             checkout_filter: HashMap::new(),
             worktrees: HashMap::new(),
+            remote_repos: HashMap::new(),
             usage_popup: None,
             handoffs: handoff::State::default(),
             limit_left: HashMap::new(),
@@ -2048,6 +2058,7 @@ impl Shell {
             press_again: None,
             agents: Default::default(),
             actions: shell_actions::ActionsUi::new(),
+            remote_project: None,
             refocus: false,
             project_editor_row: Default::default(),
             project_mute_row: Default::default(),
@@ -2230,24 +2241,21 @@ impl Shell {
                     self.models.insert(provider, models);
                 }
                 Some(Waiting::Worktrees(project)) if ok => {
+                    if self.on_remote() {
+                        self.remote_repos.insert(project.clone(), Some(true));
+                    }
                     self.worktrees
                         .insert(project, value.as_array().cloned().unwrap_or_default());
                 }
-                Some(Waiting::ProjectRemoved(ix)) if ok => self.forget_project(ix, cx),
-                Some(Waiting::ProjectAdded) if ok => {
-                    self.projects.push(Project {
-                        id: value["id"].as_str().unwrap_or("").to_owned(),
-                        name: value["name"].as_str().unwrap_or("").to_owned(),
-                        path: value["path"].as_str().unwrap_or("").to_owned(),
-                        appearance: value["appearance"].clone(),
-                        scripts: crate::project_scripts::Saved::of(&value["scripts"]),
-                        open: true,
-                        conversations: Vec::new(),
-                    });
-                    let ix = self.projects.len() - 1;
-                    self.project_order.insert(0, ix);
-                    self.switch_project(ix, cx);
+                // The host answers an error for a folder that is not a Git repository.
+                Some(Waiting::Worktrees(project)) => {
+                    if self.on_remote() {
+                        self.remote_repos.insert(project, Some(false));
+                    }
                 }
+                Some(Waiting::ProjectRemoved(ix)) if ok => self.forget_project(ix, cx),
+                Some(Waiting::ProjectAdded) if ok => self.adopt_project(&value, cx),
+                Some(Waiting::RemoteProject) => self.remote_project_answered(ok, &value, cx),
                 Some(Waiting::AccountUsage(id)) if ok => {
                     if let Some(page) = self.usage_accounts.as_mut() {
                         let who = value["account"]["email"]
@@ -2772,6 +2780,7 @@ impl Shell {
         self.refresh_skills();
         self.refresh_files();
         self.refresh_diff();
+        self.refresh_repo();
         self.first_run_check(cx);
         cx.notify();
     }
@@ -5091,9 +5100,7 @@ impl Shell {
         // Settings → Worktrees → Workspace padrão: a new worktree, or the project's own folder.
         // A folder that is not a Git repository has no worktrees: it works in place.
         let isolated = self.settings["defaultSessionWorkspace"].as_str() == Some("worktree")
-            && std::path::Path::new(&self.projects[project].path)
-                .join(".git")
-                .exists();
+            && self.project_is_repo(project);
         let id = self.backend.invoke("create_session", json!({ "request": { "projectId": self.projects[project].id, "agent": agent, "isolatedWorktree": isolated, "model": model } }));
         self.waiting.insert(id, Waiting::Created);
     }
@@ -5212,10 +5219,6 @@ impl Shell {
     }
 
     fn refresh_diff(&self) {
-        // This Mac's `git` cannot read a path on another computer.
-        if self.on_remote() {
-            return;
-        }
         let conversation = &self.conversations[self.active_conversation()];
         let path = conversation.worktree.clone();
         if path.is_empty() {
@@ -5336,6 +5339,7 @@ impl Shell {
     fn grabs_typing(&self) -> bool {
         self.card_typing()
             || self.actions.dialog.is_some()
+            || self.remote_project.is_some()
             || self.find.typing()
             || self.tasks_page_open()
             || self.queues.is_editing()
@@ -5542,6 +5546,7 @@ impl Shell {
         self.refresh_usage();
         self.refresh_skills();
         self.refresh_files();
+        self.refresh_repo();
         self.switch = Tween::from_to(0., 1., Instant::now(), SWITCH, Curve::Expo);
         cx.notify();
     }
@@ -7244,10 +7249,9 @@ impl Shell {
         self.add_menu = None;
     }
 
+    /// The picker is always this Mac's; on a remote computer the files go to the host as bytes
+    /// (`paste_prompt_attachments`), like a paste or a drop.
     fn pick_attachments(&mut self, cx: &mut Context<Self>) {
-        if self.this_mac_only(cx) {
-            return;
-        }
         let paths = cx.prompt_for_paths(gpui::PathPromptOptions {
             files: true,
             directories: true,
@@ -7267,9 +7271,6 @@ impl Shell {
     /// The microphone: records on the back end; stopping brings the text into the composer.
     /// Screenshots a window the person picks, then attaches it (`screencapture -iw`).
     fn attach_window(&mut self, cx: &mut Context<Self>) {
-        if self.this_mac_only(cx) {
-            return;
-        }
         let path = std::env::temp_dir().join(format!("sirus-janela-{}.png", uuid()));
         let (tx, rx) = async_channel::bounded(1);
         let shot = path.clone();
@@ -10190,7 +10191,9 @@ impl Shell {
 
     fn add_new_project(&mut self, cx: &mut Context<Self>) {
         self.close_project_menu();
-        if self.this_mac_only(cx) {
+        // Another computer's disk has no picker here: clone, or type a path on the host.
+        if self.on_remote() {
+            self.open_remote_project(cx);
             return;
         }
         let paths = cx.prompt_for_paths(gpui::PathPromptOptions {
@@ -13671,18 +13674,45 @@ impl Shell {
         )
     }
 
+    /// Whether the project's folder is a Git repository: read from this Mac's disk, or on a remote
+    /// computer from what the host said (`refresh_repo`); unknown counts as no.
+    fn project_is_repo(&self, project: usize) -> bool {
+        let project = &self.projects[project];
+        if self.on_remote() {
+            return self.remote_repos.get(&project.id) == Some(&Some(true));
+        }
+        std::path::Path::new(&project.path).join(".git").exists()
+    }
+
+    /// On a remote computer, asks the host whether the active project is a repository, once.
+    fn refresh_repo(&mut self) {
+        if !self.on_remote() {
+            return;
+        }
+        let Some(project) = self.project_of(self.active_conversation()) else {
+            return;
+        };
+        let id = self.projects[project].id.clone();
+        if id.is_empty() || self.remote_repos.contains_key(&id) {
+            return;
+        }
+        self.remote_repos.insert(id.clone(), None);
+        let call = self
+            .backend
+            .invoke("list_worktrees", json!({ "projectId": id }));
+        self.waiting.insert(call, Waiting::Worktrees(id));
+    }
+
     /// Where the empty conversation `ix` may work, if it may choose at all: the project's index
     /// and whether the chip opens a menu. A conversation that already ran shows where it works
     /// only when that is a worktree. Nothing for a folder without Git or a project on another Mac.
     fn workspace_chip_mode(&self, ix: usize) -> Option<(usize, bool)> {
         let project = self.project_of(ix)?;
         let conversation = &self.conversations[ix];
-        if conversation.session_id.is_empty() || self.on_remote() {
+        if conversation.session_id.is_empty() {
             return None;
         }
-        let git = std::path::Path::new(&self.projects[project].path)
-            .join(".git")
-            .exists();
+        let git = self.project_is_repo(project);
         let open = git && conversation.is_blank() && !conversation.working();
         (open || conversation.isolated).then_some((project, open))
     }
@@ -16140,8 +16170,8 @@ impl Shell {
     }
 
     fn open_pane(&mut self, kind: usize, cx: &mut Context<Self>) {
-        // Terminal, Files and Changes work on this Mac's folders.
-        if (kind <= 2 || kind == CHANGES_PANE) && self.this_mac_only(cx) {
+        // Files and Changes ask the host; the terminal still runs on this Mac.
+        if kind == 0 && self.this_mac_only(cx) {
             return;
         }
         if kind == 0 && self.term_redirect(cx) {
@@ -16168,6 +16198,7 @@ impl Shell {
                 backend: self.backend.clone(),
                 session_id: conversation.session_id.clone(),
                 worktree: conversation.worktree.clone(),
+                remote: self.on_remote(),
             };
             if let Some(view) = crate::panels::open(kind, context, cx) {
                 self.pane_views.insert(key, view);
@@ -19851,8 +19882,16 @@ impl Render for Shell {
         if std::mem::take(&mut self.refocus) {
             window.focus(&self.focus, cx);
         }
+        if let Some(field) = self
+            .remote_project
+            .as_mut()
+            .and_then(|dialog| dialog.focus_handle(cx))
+        {
+            window.focus(&field, cx);
+        }
         let actions_menu = self.actions_menu_view(now, &mut moving, cx);
         let action_dialog = self.action_dialog_view(now, &mut moving, cx);
+        let remote_project = self.remote_project_view(now, &mut moving, cx);
         let composer_menu = self.composer_menu_view(now, &mut moving, cx);
         let usage_popup = self.usage_popup_view(now, &mut moving, cx);
         let resources_popup = self.resources_popup_view(now, &mut moving, cx);
@@ -20164,6 +20203,7 @@ impl Render for Shell {
             .children(quit_notice)
             .children(actions_menu)
             .children(action_dialog)
+            .children(remote_project)
             .children(attachment_modal)
             .children(term_plus_menu)
             .children(menu)

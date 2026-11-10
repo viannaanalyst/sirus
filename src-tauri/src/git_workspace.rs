@@ -55,6 +55,17 @@ pub enum Action {
         from: String,
         skip: u32,
     },
+    /// The files one commit of the history changed, with their line counts.
+    CommitFiles {
+        session_id: String,
+        sha: String,
+    },
+    /// One file's diff in a commit of the history.
+    CommitDiff {
+        session_id: String,
+        sha: String,
+        path: String,
+    },
     /// Explicit fast-forward-only pull of the session branch from origin.
     Pull {
         session_id: String,
@@ -70,6 +81,8 @@ impl Action {
             | Self::Discard { session_id, .. }
             | Self::Diff { session_id, .. }
             | Self::History { session_id, .. }
+            | Self::CommitFiles { session_id, .. }
+            | Self::CommitDiff { session_id, .. }
             | Self::Pull { session_id, .. } => session_id,
         }
     }
@@ -91,6 +104,22 @@ pub enum Response {
         branch: String,
         summary: String,
     },
+    CommitFiles {
+        files: Vec<CommitFile>,
+        /// More than one parent: the files are those changed against the first.
+        merge: bool,
+        truncated: bool,
+    },
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitFile {
+    pub path: String,
+    /// A, M, D, T, ... as `git diff --name-status` prints it.
+    pub status: String,
+    /// `None` for a binary file.
+    pub added: Option<u64>,
+    pub removed: Option<u64>,
 }
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -678,6 +707,120 @@ pub fn amend_guard(cwd: &Path, expected: Option<&str>) -> Result<()> {
     }
     Ok(())
 }
+const COMMIT_FILES_MAX: usize = 3000;
+const COMMIT_DIFF_MAX: usize = 1024 * 1024;
+
+/// What `sha` is compared with (its first parent, or the empty tree for a root commit) and
+/// whether it is a merge. Only a hex commit id is accepted.
+fn commit_base(cwd: &Path, sha: &str) -> Result<(String, bool)> {
+    if sha.len() < 4 || sha.len() > 64 || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(Error::invalid_path("Invalid commit"));
+    }
+    let line = text(cwd, &["rev-list", "--parents", "-n", "1", sha])?;
+    let mut ids = line.split_whitespace();
+    if ids.next().is_none() {
+        return Err(Error::not_found("commit not found"));
+    }
+    let parents: Vec<&str> = ids.collect();
+    match parents.first() {
+        Some(first) => Ok(((*first).to_owned(), parents.len() > 1)),
+        None => Ok((
+            text(cwd, &["hash-object", "-t", "tree", "/dev/null"])?
+                .trim()
+                .to_owned(),
+            false,
+        )),
+    }
+}
+
+/// Joins `git diff --numstat -z` and `--name-status -z` into rows in path order.
+fn commit_rows(numstat: &[u8], statuses: &[u8]) -> Vec<CommitFile> {
+    let mut status_of = std::collections::HashMap::new();
+    let mut fields = statuses
+        .split(|byte| *byte == 0)
+        .filter(|field| !field.is_empty());
+    while let (Some(status), Some(path)) = (fields.next(), fields.next()) {
+        status_of.insert(
+            String::from_utf8_lossy(path).into_owned(),
+            status.first().map_or('M', |b| char::from(*b)),
+        );
+    }
+    let mut files: Vec<CommitFile> = numstat
+        .split(|byte| *byte == 0)
+        .filter(|record| !record.is_empty())
+        .filter_map(|record| {
+            let record = String::from_utf8_lossy(record);
+            let mut parts = record.splitn(3, '\t');
+            let (added, removed, path) = (parts.next()?, parts.next()?, parts.next()?.to_owned());
+            Some(CommitFile {
+                status: status_of.get(&path).copied().unwrap_or('M').to_string(),
+                added: added.parse().ok(),
+                removed: removed.parse().ok(),
+                path,
+            })
+        })
+        .collect();
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    files
+}
+
+/// The files `sha` changed, for a commit of the history.
+pub fn commit_files(cwd: &Path, sha: &str) -> Result<(Vec<CommitFile>, bool, bool)> {
+    let (base, merge) = commit_base(cwd, sha)?;
+    let diff = |flag: &str| {
+        output(
+            cwd,
+            &[
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-renames",
+                flag,
+                "-z",
+                &base,
+                sha,
+            ],
+        )
+    };
+    let mut files = commit_rows(&diff("--numstat")?, &diff("--name-status")?);
+    let truncated = files.len() > COMMIT_FILES_MAX;
+    files.truncate(COMMIT_FILES_MAX);
+    Ok((files, merge, truncated))
+}
+
+/// One file's unified diff in `sha`, cut at a line when it is long.
+pub fn commit_diff(cwd: &Path, sha: &str, path: &str) -> Result<String> {
+    if !valid_name(path) {
+        return Err(Error::invalid_path("Invalid workspace Git path"));
+    }
+    let (base, _) = commit_base(cwd, sha)?;
+    let bytes = output(
+        cwd,
+        &[
+            "--literal-pathspecs",
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-color",
+            "--no-renames",
+            &base,
+            sha,
+            "--",
+            path,
+        ],
+    )?;
+    let mut diff = String::from_utf8_lossy(&bytes).into_owned();
+    if diff.len() > COMMIT_DIFF_MAX {
+        let mut cut = COMMIT_DIFF_MAX;
+        while !diff.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        let cut = diff[..cut].rfind('\n').unwrap_or(cut);
+        diff.truncate(cut);
+    }
+    Ok(diff)
+}
+
 pub fn diff(cwd: &Path, path: &str, staged: bool, expected: &str) -> Result<String> {
     let cwd = std::fs::canonicalize(cwd)?;
     let current = snapshot(&cwd)?;
@@ -774,6 +917,51 @@ mod tests {
     use std::fs;
 
     #[test]
+    fn a_commit_lists_its_files_and_one_diff() {
+        let repo = Repo::new();
+        std::fs::write(repo.cwd().join("a.txt"), "one\n").unwrap();
+        run_ok(&repo.cwd(), &["add", "a.txt"]).unwrap();
+        run_ok(&repo.cwd(), &["commit", "-qm", "first"]).unwrap();
+        std::fs::write(repo.cwd().join("a.txt"), "one\ntwo\n").unwrap();
+        std::fs::write(repo.cwd().join("b.txt"), "x\n").unwrap();
+        run_ok(&repo.cwd(), &["add", "."]).unwrap();
+        run_ok(&repo.cwd(), &["commit", "-qm", "second"]).unwrap();
+        let sha = run_ok(&repo.cwd(), &["rev-parse", "HEAD"]).unwrap();
+        let sha = sha.trim();
+        let (files, merge, truncated) = commit_files(&repo.cwd(), sha).unwrap();
+        assert!(!merge && !truncated);
+        let rows: Vec<_> = files
+            .iter()
+            .map(|f| (f.path.as_str(), f.status.as_str(), f.added, f.removed))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("a.txt", "M", Some(1), Some(0)),
+                ("b.txt", "A", Some(1), Some(0))
+            ]
+        );
+        assert!(commit_diff(&repo.cwd(), sha, "a.txt")
+            .unwrap()
+            .contains("+two"));
+        // The root commit is shown against the empty tree.
+        let first = run_ok(&repo.cwd(), &["rev-parse", "HEAD~1"]).unwrap();
+        assert_eq!(commit_files(&repo.cwd(), first.trim()).unwrap().0.len(), 1);
+        assert!(commit_files(&repo.cwd(), "--output=x").is_err());
+        assert!(commit_diff(&repo.cwd(), sha, "../a").is_err());
+    }
+
+    #[test]
+    fn commit_rows_join_counts_and_statuses_and_mark_binaries() {
+        let numstat = b"3\t1\tsrc/b.rs\0-\t-\timg.png\0";
+        let statuses = b"M\0src/b.rs\0A\0img.png\0";
+        let rows = commit_rows(numstat, statuses);
+        assert_eq!(rows[0].path, "img.png");
+        assert_eq!((rows[0].added, rows[0].status.as_str()), (None, "A"));
+        assert_eq!((rows[1].added, rows[1].removed), (Some(3), Some(1)));
+    }
+
+    #[test]
     fn amend_replaces_an_unpushed_commit_and_refuses_a_pushed_one() {
         let repo = Repo::new();
         std::fs::write(repo.cwd().join("a.txt"), "one").unwrap();
@@ -811,7 +999,9 @@ mod tests {
         assert!(snapshot.head.is_none());
         assert!(title_context(&repo.cwd(), &snapshot.index_token).is_ok());
         let hash = run_ok(&repo.cwd(), &["rev-parse", ":file.txt"]).unwrap();
-        let entries = format!("0 0000000000000000000000000000000000000000\tfile.txt\n100644 {hash} 2\tfile.txt\n100644 {hash} 3\tfile.txt\n");
+        let entries = format!(
+            "0 0000000000000000000000000000000000000000\tfile.txt\n100644 {hash} 2\tfile.txt\n100644 {hash} 3\tfile.txt\n"
+        );
         let result = crate::git::run_input(
             &repo.cwd(),
             &["update-index", "--index-info"],
@@ -1211,7 +1401,10 @@ mod tests {
         let repo = Repo::new();
         let parent = head(&repo.cwd()).unwrap().unwrap();
         let tree = run_ok(&repo.cwd(), &["rev-parse", "HEAD^{tree}"]).unwrap();
-        let bytes = format!("tree {tree}\nparent {parent}\nauthor Fixture <fixture@example.invalid> 1700000000 +0000\ncommitter Fixture <fixture@example.invalid> 1700000000 +0000\n\nsubject\0author\0date\0refs\0{}\0\n", "f".repeat(40));
+        let bytes = format!(
+            "tree {tree}\nparent {parent}\nauthor Fixture <fixture@example.invalid> 1700000000 +0000\ncommitter Fixture <fixture@example.invalid> 1700000000 +0000\n\nsubject\0author\0date\0refs\0{}\0\n",
+            "f".repeat(40)
+        );
         let result = crate::git::run_input(
             &repo.cwd(),
             &[

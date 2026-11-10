@@ -67,6 +67,7 @@ fn build(context: PanelContext, mode: Mode, cx: &mut App) -> AnyView {
             backend: context.backend,
             session_id: context.session_id,
             root: context.worktree,
+            remote: context.remote,
             snapshot: None,
             counts: HashMap::new(),
             loading: false,
@@ -230,6 +231,8 @@ struct ChangesPanel {
     session_id: String,
     /// The session's folder, where `git` runs for the history views.
     root: String,
+    /// The folder is on another computer: a commit is read through the host, not this Mac's `git`.
+    remote: bool,
     snapshot: Option<Snapshot>,
     /// Added and removed line counts by path, from git_status.
     counts: HashMap<String, (u64, u64)>,
@@ -504,10 +507,20 @@ impl ChangesPanel {
             files: CommitFilesState::Loading,
             diff: None,
         });
-        let rx = run_blocking({
-            let sha = sha.clone();
-            move || local_git::commit_files(&root, &sha)
-        });
+        let rx = if self.remote {
+            let reply = self.backend.request(
+                "git_workspace_action",
+                json!({ "action": { "type": "commitFiles", "sessionId": self.session_id, "sha": sha.clone() } }),
+            );
+            run_blocking(move || {
+                settle_blocking(reply).map(|value| local_git::commit_files_from_host(&value))
+            })
+        } else {
+            run_blocking({
+                let sha = sha.clone();
+                move || local_git::commit_files(&root, &sha)
+            })
+        };
         cx.spawn(async move |this, cx| {
             let files = match rx.recv().await {
                 Ok(Ok(files)) => CommitFilesState::Ready(Rc::new(files)),
@@ -542,7 +555,17 @@ impl ChangesPanel {
         // A commit of the Histórico is read with `git` in the worktree, off the main thread.
         let root = self.root.clone();
         let (diff_sha, diff_path) = (sha.clone(), path.clone());
-        let rx = run_blocking(move || local_git::commit_file_diff(&root, &diff_sha, &diff_path));
+        let rx = if self.remote {
+            let reply = self.backend.request(
+                "git_workspace_action",
+                json!({ "action": { "type": "commitDiff", "sessionId": self.session_id, "sha": diff_sha, "path": diff_path } }),
+            );
+            run_blocking(move || {
+                settle_blocking(reply).map(|value| value["diff"].as_str().unwrap_or("").to_owned())
+            })
+        } else {
+            run_blocking(move || local_git::commit_file_diff(&root, &diff_sha, &diff_path))
+        };
         cx.spawn(async move |this, cx| {
             let diff = rx
                 .recv()
@@ -2721,6 +2744,15 @@ async fn with_fresh_index(
 }
 
 /// Resolves a back end request: the value, or the error's message.
+/// `settle` for a background thread.
+fn settle_blocking(rx: async_channel::Receiver<Result<Value, Value>>) -> Result<Value, String> {
+    match rx.recv_blocking() {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(error)) => Err(message(&error)),
+        Err(_) => Err(t("O motor do Sirus não respondeu.").into()),
+    }
+}
+
 async fn settle(rx: async_channel::Receiver<Result<Value, Value>>) -> Result<Value, String> {
     match rx.recv().await {
         Ok(Ok(value)) => Ok(value),

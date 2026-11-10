@@ -163,6 +163,7 @@ impl Shell {
         self.files = (String::new(), Vec::new());
         self.diffs.clear();
         self.worktrees.clear();
+        self.remote_repos.clear();
         self.secrets.clear();
         self.skills.clear();
         self.conversations.push(Conversation::placeholder());

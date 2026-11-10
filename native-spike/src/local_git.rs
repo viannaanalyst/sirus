@@ -32,6 +32,32 @@ pub struct CommitFiles {
     pub truncated: bool,
 }
 
+/// The files of a commit as the host's `git_workspace_action` `commitFiles` reply carries them
+/// (a remote computer's commit is read there, not with this Mac's `git`).
+pub fn commit_files_from_host(reply: &serde_json::Value) -> CommitFiles {
+    let files = reply["files"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|file| {
+            Some(CommitFile {
+                path: file["path"].as_str()?.to_owned(),
+                status: file["status"]
+                    .as_str()
+                    .and_then(|status| status.chars().next())
+                    .unwrap_or('M'),
+                added: file["added"].as_u64(),
+                removed: file["removed"].as_u64(),
+            })
+        })
+        .collect();
+    CommitFiles {
+        files,
+        merge: reply["merge"].as_bool().unwrap_or(false),
+        truncated: reply["truncated"].as_bool().unwrap_or(false),
+    }
+}
+
 fn git(root: &str, args: &[&str]) -> Result<Vec<u8>, String> {
     let output = Command::new("git")
         .arg("-C")
@@ -190,6 +216,29 @@ mod tests {
             .status()
             .unwrap();
         assert!(status.success(), "git {args:?}");
+    }
+
+    #[test]
+    fn a_hosts_commit_reply_becomes_the_same_rows() {
+        let reply = serde_json::json!({
+            "type": "commitFiles", "merge": true, "truncated": false,
+            "files": [
+                { "path": "a.rs", "status": "M", "added": 2, "removed": 1 },
+                { "path": "i.png", "status": "A", "added": null, "removed": null },
+            ]
+        });
+        let commit = commit_files_from_host(&reply);
+        assert!(commit.merge && !commit.truncated);
+        assert_eq!(commit.files.len(), 2);
+        assert_eq!(
+            (
+                commit.files[0].status,
+                commit.files[0].added,
+                commit.files[0].removed
+            ),
+            ('M', Some(2), Some(1))
+        );
+        assert_eq!((commit.files[1].status, commit.files[1].added), ('A', None));
     }
 
     #[test]

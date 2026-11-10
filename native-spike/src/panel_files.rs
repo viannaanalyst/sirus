@@ -75,6 +75,7 @@ pub fn new(context: PanelContext, cx: &mut App) -> AnyView {
             backend: context.backend,
             session_id: context.session_id,
             root: context.worktree,
+            remote: context.remote,
             folders: HashMap::new(),
             open: HashSet::new(),
             selected: None,
@@ -200,6 +201,8 @@ struct FilesPanel {
     /// When each open file was last read or written here; a different time means someone else
     /// changed it.
     disk_times: HashMap<String, std::time::SystemTime>,
+    /// The folder is on another computer: no local disk to stat, and the search asks the host.
+    remote: bool,
     /// The open files, in tab order.
     tabs: Vec<Opened>,
     /// The tab on screen; None while the tree is showing (no tab open, or `+` was pressed).
@@ -526,6 +529,9 @@ impl FilesPanel {
 
     /// When the file was last seen by this editor; `None` when it isn't on this Mac.
     fn disk_time(&self, path: &str) -> Option<std::time::SystemTime> {
+        if self.remote {
+            return None;
+        }
         std::fs::metadata(std::path::Path::new(&self.root).join(path))
             .ok()?
             .modified()
@@ -710,7 +716,8 @@ impl FilesPanel {
 
     /// Lists every file of the worktree on a background thread, then ranks the typed text again.
     fn reindex(&mut self, cx: &mut Context<Self>) {
-        if self.indexing {
+        // A remote folder has no list to read here: each search asks the host.
+        if self.indexing || self.remote {
             return;
         }
         self.indexing = true;
@@ -761,6 +768,10 @@ impl FilesPanel {
             self.searching = false;
             return;
         };
+        if self.remote {
+            self.search_on_host(query, cx);
+            return;
+        }
         let Some(index) = self.index.clone() else {
             return;
         };
@@ -772,6 +783,33 @@ impl FilesPanel {
             let _ = this.update(cx, |this, cx| {
                 if this.search_seq == seq {
                     this.hits = hits;
+                    this.searching = false;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// A search on a remote computer: the host finds the files whose path holds the first word
+    /// (`workspace_files`, capped), and the same ranking as a local search orders them.
+    fn search_on_host(&mut self, query: String, cx: &mut Context<Self>) {
+        let seq = self.search_seq;
+        let rx = self.backend.request(
+            "workspace_files",
+            json!({
+                "owner": { "sessionId": self.session_id },
+                "query": crate::remote_host::host_query(&query),
+            }),
+        );
+        cx.spawn(async move |this, cx| {
+            let reply = settle(rx).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.search_seq == seq {
+                    this.hits = match reply {
+                        Ok(value) => crate::remote_host::ranked_hits(&value, &query, RESULT_CAP),
+                        Err(_) => Vec::new(),
+                    };
                     this.searching = false;
                     cx.notify();
                 }

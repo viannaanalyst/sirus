@@ -8,6 +8,8 @@ pub struct PanelContext {
     pub backend: Backend,
     pub session_id: String,
     pub worktree: String,
+    /// The folder is on another computer: its files come from the host, not this Mac's disk.
+    pub remote: bool,
     /// Where the changes panes report the working tree's line totals for the top bar.
     pub stat_tx: async_channel::Sender<crate::shell::GitResult>,
 }

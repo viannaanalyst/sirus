@@ -76,6 +76,7 @@ mod project_wallpaper;
 mod provider_masks;
 mod pull_requests_page;
 mod quick_composer;
+mod remote_host;
 mod remote_tls;
 mod reply_render;
 mod reply_rich;

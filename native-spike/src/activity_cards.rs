@@ -26,7 +26,7 @@ const MAX_KEPT: usize = 24;
 pub(crate) const GRACE: Duration = Duration::from_millis(3200);
 /// Event ids remembered, so a repeated event does not stack a second card.
 const REMEMBERED: usize = 64;
-const WIDTH: f32 = 340.;
+const WIDTH: f32 = 300.;
 const SLIDE: f32 = 26.;
 const SLIDE_TIME: f32 = 0.26;
 
@@ -575,12 +575,12 @@ impl Shell {
             div()
                 .id(("activity-card-button", key + n))
                 .flex_1()
-                .h(px(30.))
+                .h(px(26.))
                 .rounded(px(crate::theme::RADIUS_MD))
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_size(px(13.))
+                .text_size(px(12.5))
                 .font_weight(FontWeight::MEDIUM)
                 .cursor_pointer()
                 .text_color(if main { on_accent() } else { content(0.9) })
@@ -609,14 +609,15 @@ impl Shell {
                 .child(button(1, t("Responder"), true).on_click(
                     cx.listener(move |this, _, window, cx| this.card_open(&b, true, window, cx)),
                 )),
-            Kind::Finished | Kind::Failed => {
-                div()
-                    .flex()
-                    .gap(px(7.))
-                    .child(button(0, t("Abrir"), false).on_click(cx.listener(
-                        move |this, _, window, cx| this.card_open(&a, false, window, cx),
-                    )))
-            }
+            // A lone action stays compact at the right edge instead of spanning the card.
+            Kind::Finished | Kind::Failed => div().flex().justify_end().child(
+                button(0, t("Abrir"), false)
+                    .flex_none()
+                    .px(px(14.))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.card_open(&a, false, window, cx)
+                    })),
+            ),
         };
         let border = match kind {
             Kind::Permission => gpui::Hsla {
@@ -630,7 +631,7 @@ impl Shell {
             .id(("activity-card", key))
             .relative()
             .w_full()
-            .p(px(12.))
+            .p(px(10.))
             .rounded(px(crate::theme::RADIUS_LG))
             .border_1()
             .border_color(border)
@@ -642,9 +643,9 @@ impl Shell {
                 div()
                     .id(("activity-card-close", key))
                     .absolute()
-                    .top(px(9.))
-                    .right(px(9.))
-                    .size(px(20.))
+                    .top(px(7.))
+                    .right(px(7.))
+                    .size(px(18.))
                     .rounded_full()
                     .flex()
                     .items_center()
@@ -661,14 +662,14 @@ impl Shell {
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(10.))
+                    .gap(px(8.))
                     .child(
                         div()
                             .flex_shrink_0()
                             .child(crate::project_avatar::project_avatar(
                                 &project.name,
                                 &project.appearance,
-                                30.,
+                                22.,
                             )),
                     )
                     .child(
@@ -681,7 +682,7 @@ impl Shell {
                             .child(
                                 div()
                                     .truncate()
-                                    .text_size(px(13.5))
+                                    .text_size(px(13.))
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(content(0.97))
                                     .child(conversation.title.clone()),
@@ -689,7 +690,7 @@ impl Shell {
                             .child(
                                 div()
                                     .truncate()
-                                    .text_size(px(12.))
+                                    .text_size(px(11.5))
                                     .text_color(content(0.5))
                                     .child(
                                         div()
@@ -710,18 +711,18 @@ impl Shell {
             .when(!event.detail.is_empty(), |d| {
                 d.child(
                     div()
-                        .mt(px(8.))
-                        .text_size(px(13.))
-                        .line_height(px(18.))
+                        .mt(px(6.))
+                        .text_size(px(12.5))
+                        .line_height(px(17.))
                         .line_clamp(2)
                         .text_color(content(0.82))
                         .when(kind == Kind::Permission, |d| {
-                            d.font_family("Menlo").text_size(px(12.))
+                            d.font_family("Menlo").text_size(px(11.5))
                         })
                         .child(event.detail.clone()),
                 )
             })
-            .child(div().mt(px(10.)).child(actions));
+            .child(div().mt(px(8.)).child(actions));
         Some(if reduced {
             card_el.into_any_element()
         } else {

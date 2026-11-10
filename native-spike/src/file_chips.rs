@@ -163,7 +163,8 @@ thread_local! {
     static LOCAL: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
 }
 
-/// A window on another computer: its folders aren't on this disk, so no chip opens.
+/// A window on another computer: its folders aren't on this disk, so chips open by their path
+/// alone (`target`).
 pub fn set_local(local: bool) {
     LOCAL.set(local);
 }
@@ -171,7 +172,17 @@ pub fn set_local(local: bool) {
 /// What a chip's `word` opens for a conversation in `root`, on this Mac.
 pub fn target(root: &str, word: &str) -> Option<Target> {
     if !LOCAL.get() {
-        return None;
+        // The folder is on another computer: this disk cannot say what exists, so a path inside
+        // the conversation's folder that reads as a file (an extension) or a folder (a trailing
+        // slash) opens; the Files pane asks the host and reports what is missing.
+        return resolve(root, word, None, None, |path| {
+            let named = path.file_name()?.to_str()?;
+            if word.trim().ends_with('/') {
+                Some(true)
+            } else {
+                named.contains('.').then_some(false)
+            }
+        });
     }
     let index = KNOWN.with_borrow(|known| known.get(root).and_then(|k| k.index.clone()));
     let home = std::env::var("HOME").ok();
@@ -319,5 +330,19 @@ mod tests {
         assert_eq!(found("Praying.es.js", &index), None);
         assert_eq!(found("deep", &index), folder("/work/app/web/deep"));
         assert_eq!(found("web/deep/", &index), folder("/work/app/web/deep"));
+    }
+
+    #[test]
+    fn on_another_computer_a_path_inside_the_folder_opens_by_its_shape() {
+        set_local(false);
+        let at = |word: &str| target("/home/sirus/app", word).map(|t| (t.path, t.folder));
+        assert_eq!(
+            at("/home/sirus/app/src/a.mjs"),
+            Some(("/home/sirus/app/src/a.mjs".into(), false))
+        );
+        assert_eq!(at("src/"), Some(("/home/sirus/app/src".into(), true)));
+        assert_eq!(at("node"), None);
+        assert_eq!(at("/etc/passwd.conf"), None);
+        set_local(true);
     }
 }

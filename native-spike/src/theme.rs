@@ -238,12 +238,13 @@ pub fn palette(look: &Look, system_dark: bool) -> Palette {
                 p.dark_lightness,
                 if glass { SHELL_ALPHA } else { 1. },
             ),
-            // The conversation card is clear over the glass, as Monocode's: the window's tint
-            // shows through it.
+            // The conversation card darkens the glass under it so the main pane reads deeper than
+            // the sidebar, as Monocode's does on screen: measured side by side over the same
+            // wallpaper, a 0.6 black veil puts Sirus's main pane at Monocode's values.
             pane: tint(
                 saturation,
                 p.dark_lightness * 0.4,
-                if glass { 0. } else { 1. },
+                if glass { 0.6 } else { 1. },
             ),
             field: tint(saturation * 0.8, DARK_FIELD, 1.),
             floating: tint(saturation * 0.7, DARK_FLOATING, 1.),
@@ -590,7 +591,7 @@ mod look_tests {
         assert_eq!(PRESETS[look.preset].name, "Tinta");
         assert_eq!(ACCENTS[look.accent.unwrap()].1, 0xec4899);
         let dark = palette(&look, true);
-        assert_eq!(dark.pane.a, 0.);
+        assert_eq!(dark.pane.a, 0.6);
         assert_eq!(dark.shell.a, SHELL_ALPHA);
         assert_eq!(dark.shell.l, 0.);
         assert_eq!(dark.ink, rgb(0xf5f5f5).into());

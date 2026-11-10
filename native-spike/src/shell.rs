@@ -1563,6 +1563,10 @@ pub struct Shell {
     split: split_panes::State,
     jump: Tween,
     trail_hover: Option<(usize, f32)>,
+    /// The message trail's own scroll, and the (conversation, turn) it last brought into view: a
+    /// long trail follows the lit tick, and the person can still scroll it in between.
+    trail_scroll: gpui::ScrollHandle,
+    trail_shown: Cell<Option<(usize, usize)>>,
     usage_accounts: Option<AccountsPage>,
     /// The usage popup's inline account list: the provider whose list is open.
     usage_picker: Option<&'static str>,
@@ -2019,6 +2023,8 @@ impl Shell {
             phase_scrolls: Default::default(),
             jump: Tween::still(0., now),
             trail_hover: None,
+            trail_scroll: gpui::ScrollHandle::new(),
+            trail_shown: Cell::new(None),
             usage_accounts: None,
             usage_picker: None,
             usage_account_views: HashMap::new(),
@@ -9684,15 +9690,21 @@ impl Shell {
                 break;
             }
         }
-        let at_bottom = f32::from(state.max_offset_for_scrollbar().y)
-            + f32::from(state.scroll_px_offset_for_scrollbar().y)
-            <= 2.;
+        let at_bottom = state.is_scrolled_to_end() == Some(true)
+            || f32::from(state.max_offset_for_scrollbar().y)
+                + f32::from(state.scroll_px_offset_for_scrollbar().y)
+                <= 2.;
         let current = current_turn(first, &tops, count, at_bottom);
         let mut last_visible = current;
         while last_visible + 1 < count
             && state.item_is_below_viewport(last_visible + 2) == Some(false)
         {
             last_visible += 1;
+        }
+        // A trail taller than its column keeps the lit tick in view.
+        if self.trail_shown.get() != Some((conversation, current)) {
+            self.trail_shown.set(Some((conversation, current)));
+            self.trail_scroll.scroll_to_item(current);
         }
         let hovered = self.trail_hover.map(|h| h.0);
         // At rest it stays clear of the text, which starts past its ticks: only pointing at it
@@ -9734,6 +9746,12 @@ impl Shell {
                     }))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.trail_hover = None;
+                        // The last tick is the end of the conversation, as the jump button.
+                        if at + 1 == count {
+                            this.glides.entry(conversation).or_default().follow_fast();
+                            cx.notify();
+                            return;
+                        }
                         target.pause_following_tail();
                         this.glides.entry(conversation).or_default().leave();
                         target.scroll_to(gpui::ListOffset {
@@ -9769,6 +9787,7 @@ impl Shell {
                 .child(
                     div()
                         .id("message-trail")
+                        .track_scroll(&self.trail_scroll)
                         .max_h(gpui::relative(0.8))
                         .overflow_y_scroll()
                         .py(px(8.))

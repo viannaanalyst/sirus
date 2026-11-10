@@ -459,25 +459,6 @@ fn tilde_parent(path: &str) -> String {
 }
 
 const HEADING: f32 = 28.;
-const DATE_GROUPS: [&str; 6] = [
-    "Hoje",
-    "Ontem",
-    "Últimos 7 dias",
-    "Últimos 30 dias",
-    "Mais antigas",
-    "Trabalhando ou esperando você",
-];
-/// The heading above the conversations that work or wait for you, when they go first.
-const ATTENTION_GROUP: u8 = 5;
-
-/// Where a heading sits: the attention group first, then the dates from newest.
-fn group_rank(group: u8) -> u8 {
-    if group == ATTENTION_GROUP {
-        0
-    } else {
-        group + 1
-    }
-}
 
 /// What the sidebar's funnel shows.
 #[derive(Default)]
@@ -506,16 +487,6 @@ fn days_ago(conversation: &Conversation) -> i64 {
         chrono::Local::now().date_naive(),
     );
     (today - when).num_days().max(0)
-}
-
-fn date_group(days: i64) -> u8 {
-    match days {
-        0 => 0,
-        1 => 1,
-        2..=6 => 2,
-        7..=29 => 3,
-        _ => 4,
-    }
 }
 
 /// The pages of the composer's + menu.
@@ -1361,7 +1332,6 @@ struct Menu {
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum Row {
-    Heading(u8),
     Conversation(usize),
     /// The docked "N conversas paradas" row under the list (ADR-198).
     Settled,
@@ -7271,26 +7241,17 @@ impl Shell {
                 .filter(|c| self.in_sidebar_list(project, *c) && !settled.contains(c))
                 .map(|c| (c, days_ago(&self.conversations[c])))
                 .collect();
-            // Settings → Geral → Trabalhando e esperando primeiro: those go above the dates.
+            // One list, newest first, with no date headings: the age shows in each row's time, its
+            // dotted texture and its bar. Settings → Geral → Trabalhando e esperando primeiro puts
+            // those at the top.
             let attention_first = self.settings["sidebarAttentionFirst"].as_bool() == Some(true);
-            let group_of = |conversation: usize, days: i64| {
-                let c = &self.conversations[conversation];
-                if attention_first && (c.working() || !c.pending.is_empty()) {
-                    ATTENTION_GROUP
-                } else {
-                    date_group(days)
-                }
-            };
-            listed.sort_by_key(|(c, days)| group_rank(group_of(*c, *days)));
+            listed.sort_by_key(|(c, days)| {
+                let c = &self.conversations[*c];
+                let attention = attention_first && (c.working() || !c.pending.is_empty());
+                (!attention, *days)
+            });
             let (_, kids) = self.project_tree(project);
-            let mut group = None;
-            for (conversation, days) in listed {
-                let this_group = group_of(conversation, days);
-                if group != Some(this_group) {
-                    group = Some(this_group);
-                    wanted.push((Row::Heading(this_group), y, y));
-                    y += HEADING;
-                }
+            for (conversation, _) in listed {
                 wanted.push((Row::Conversation(conversation), y, y));
                 y += CONV_ROW;
                 self.push_tasks(conversation, &kids, &mut wanted, &mut y);
@@ -8546,20 +8507,6 @@ impl Shell {
         for (row, y) in rows {
             let alpha = self.rows[&row].alpha.at(now);
             drawn.push(match row {
-                Row::Heading(group) => div()
-                    .absolute()
-                    .left_0()
-                    .right_0()
-                    .top(px(y))
-                    .h(px(HEADING))
-                    .opacity(alpha)
-                    .px(px(12.))
-                    .flex()
-                    .items_center()
-                    .text_size(px(11.5))
-                    .text_color(content(0.42))
-                    .child(crate::i18n::t(DATE_GROUPS[group as usize]))
-                    .into_any_element(),
                 Row::Conversation(index) => {
                     self.conversation_row(index, y, alpha, index == active, now, cx)
                 }
@@ -20972,13 +20919,6 @@ mod tests {
         assert_eq!(streamed(answer, Some("paragraph")), "One.\n\n");
         assert_eq!(streamed("Only half", Some("paragraph")), "");
         assert_eq!(streamed(answer, Some("turn")), "");
-    }
-
-    #[test]
-    fn the_attention_group_comes_before_the_dates() {
-        let mut groups = vec![2, ATTENTION_GROUP, 0, 4];
-        groups.sort_by_key(|g| group_rank(*g));
-        assert_eq!(groups, vec![ATTENTION_GROUP, 0, 2, 4]);
     }
 
     #[test]

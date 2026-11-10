@@ -92,9 +92,9 @@ pub const PRESETS: &[Preset] = &[
     Preset {
         name: "Sirus",
         hue: 255.,
-        saturation: 0.10,
+        saturation: 0.,
         accent: 0xbdb4f2,
-        dark_lightness: 0.06,
+        dark_lightness: 0.09,
         dark_ink: 0xebebeb,
     },
     Preset {

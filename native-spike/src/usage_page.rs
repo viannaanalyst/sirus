@@ -9,7 +9,10 @@
 
 use super::*;
 use crate::motion::{Count, Spin, progress};
-use crate::visuals::dither::{Align, Label, Scale, crosshair, hoverable, pointer, readout};
+use crate::visuals::charts::area_tone;
+use crate::visuals::dither::{
+    Align, Grid, Label, Scale, crosshair, hoverable, inked, pointer, readout,
+};
 use chrono::{Datelike, Local, NaiveDate, NaiveDateTime, TimeZone, Timelike};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -2582,9 +2585,13 @@ fn segmented<T: Copy + PartialEq + 'static>(
         }))
 }
 
-fn faded(mut color: gpui::Hsla, alpha: f32) -> gpui::Hsla {
-    color.a = alpha;
-    color
+/// A band edge at plot x `x`, read straight between the buckets' points as the outline is drawn.
+/// `values` needs at least two buckets.
+fn edge_at(values: &[f32], x: f32, plot_w: f32) -> f32 {
+    let last = values.len() - 1;
+    let t = (x / plot_w.max(1.) * last as f32).clamp(0., last as f32);
+    let i = (t.floor() as usize).min(last - 1);
+    values[i] + (values[i + 1] - values[i]) * (t - i as f32)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2647,37 +2654,42 @@ fn paint_area(
             cx,
         );
     }
-    // The area is revealed from the left edge of the plot by `grow`.
-    let reveal = Bounds::new(
-        gpui::point(px(ox + left - 1.), px(oy)),
-        gpui::size(px(plot_w * grow.clamp(0., 1.) + 1.), px(h)),
-    );
-    // Each band is inset by 1 px on both edges, so neighbours show a 2 px gap of the surface.
-    window.with_content_mask(Some(gpui::ContentMask { bounds: reveal }), |window| {
-        for (k, (color, low, high)) in bands.iter().enumerate() {
-            let mut path = gpui::PathBuilder::fill();
-            let upper =
-                |i: usize| (y_of(high[i]) + 1.).min(if k == 0 { base } else { y_of(low[i]) - 1. });
-            let lower = |i: usize| {
-                if k == 0 {
-                    base
-                } else {
-                    (y_of(low[i]) - 1.).max(upper(i))
+    // Each band is dithered in cells, dense at its top edge and thinning toward its bottom, as the
+    // chart's other areas are. Each band is inset by 1 px on both edges, so neighbours show a thin
+    // gap of the surface. The area is revealed from the left edge of the plot by `grow`.
+    if n > 1 {
+        let reveal = plot_w * grow.clamp(0., 1.);
+        let rel = |v: f64| plot_h * scale.depth(v).clamp(0., 1.);
+        // Each band's top and bottom edge at every bucket, in plot px.
+        let edges: Vec<(gpui::Hsla, Vec<f32>, Vec<f32>)> = bands
+            .iter()
+            .enumerate()
+            .map(|(k, (color, low, high))| {
+                let mut tops = Vec::with_capacity(n);
+                let mut bottoms = Vec::with_capacity(n);
+                for i in 0..n {
+                    let cap = if k == 0 { plot_h } else { rel(low[i]) - 1. };
+                    let upper = (rel(high[i]) + 1.).min(cap);
+                    tops.push(upper);
+                    bottoms.push(if k == 0 { plot_h } else { cap.max(upper) });
                 }
-            };
-            path.move_to(gpui::point(px(x_of(0)), px(upper(0))));
-            for i in 1..n {
-                path.line_to(gpui::point(px(x_of(i)), px(upper(i))));
+                (*color, tops, bottoms)
+            })
+            .collect();
+        let grid = Grid::new(gpui::point(px(ox + left), px(oy + top)), plot_w, plot_h);
+        grid.paint(window, |col, row| {
+            let (x, y) = Grid::center(col, row);
+            if x > reveal {
+                return None;
             }
-            for i in (0..n).rev() {
-                path.line_to(gpui::point(px(x_of(i)), px(lower(i))));
-            }
-            path.close();
-            if let Ok(path) = path.build() {
-                window.paint_path(path, faded(*color, 0.92));
-            }
-        }
-    });
+            let (hue, upper) = edges.iter().find_map(|(hue, tops, bottoms)| {
+                let (upper, lower) = (edge_at(tops, x, plot_w), edge_at(bottoms, x, plot_w));
+                (y >= upper && y < lower).then_some((*hue, upper))
+            })?;
+            let tone = area_tone((y - upper) / plot_h.max(1.), plot_h);
+            inked(col, row, tone).then_some(hue)
+        });
+    }
     // The crosshair and its card, while the pointer is over the plot.
     let plot = Bounds::new(
         gpui::point(px(ox + left), px(oy + top)),
@@ -2944,6 +2956,16 @@ mod tests {
             cost,
             tokens: cost.map(|c| c * 1000.),
         }
+    }
+
+    #[test]
+    fn a_band_edge_reads_between_buckets_and_holds_at_the_ends() {
+        let edges = [10., 20., 40.];
+        assert_eq!(edge_at(&edges, 0., 100.), 10.);
+        assert_eq!(edge_at(&edges, 25., 100.), 15.);
+        assert_eq!(edge_at(&edges, 75., 100.), 30.);
+        assert_eq!(edge_at(&edges, 100., 100.), 40.);
+        assert_eq!(edge_at(&edges, 130., 100.), 40.);
     }
 
     #[test]

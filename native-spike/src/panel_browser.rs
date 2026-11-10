@@ -4357,13 +4357,13 @@ impl Render for Browser {
             .when_some(self.device_bar(cx), |d, bar| d.child(bar))
             .when_some(self.dialog_bar(cx), |d, bar| d.child(bar))
             .child({
-                let device = self.device.is_some();
+                // The area around a device's frame keeps the window's own background, like the
+                // conversation beside it: no wash over it.
                 div()
                     .flex_1()
                     .w_full()
                     .relative()
                     .child(page)
-                    .when(device, |d| d.bg(theme::content(0.04)))
                     .children(start)
                     .children(none)
                     .children(in_window)

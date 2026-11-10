@@ -94,8 +94,8 @@ pub const PRESETS: &[Preset] = &[
         hue: 255.,
         saturation: 0.,
         accent: 0xbdb4f2,
-        dark_lightness: 0.09,
-        dark_ink: 0xebebeb,
+        dark_lightness: 0.,
+        dark_ink: 0xf5f5f5,
     },
     Preset {
         name: "Carvão",
@@ -174,8 +174,8 @@ pub const PRESETS: &[Preset] = &[
         hue: 0.,
         saturation: 0.,
         accent: 0x7aa7ff,
-        dark_lightness: 0.09,
-        dark_ink: 0xebebeb,
+        dark_lightness: 0.,
+        dark_ink: 0xf5f5f5,
     },
 ];
 
@@ -193,8 +193,8 @@ pub const ACCENTS: &[(&str, u32)] = &[
     ("Ciano", 0x4fc3cf),
 ];
 
-/// The `sidebar_opacity` as Monocode's default has it: how much of the desktop the tint hides.
-const SHELL_ALPHA: f32 = 0.85;
+/// Monocode's `sidebar_opacity` as the owner saved it (77%): black at this alpha over the blur.
+const SHELL_ALPHA: f32 = 0.77;
 /// The composer's raised card and the popovers keep the lightness they had over the old black
 /// base (#1c1c1c), whatever the base's own lightness is.
 const DARK_FIELD: f32 = 0.11;
@@ -592,7 +592,8 @@ mod look_tests {
         let dark = palette(&look, true);
         assert_eq!(dark.pane.a, 0.);
         assert_eq!(dark.shell.a, SHELL_ALPHA);
-        assert_eq!(dark.shell.l, 0.09);
+        assert_eq!(dark.shell.l, 0.);
+        assert_eq!(dark.ink, rgb(0xf5f5f5).into());
         assert_eq!(dark.field.l, DARK_FIELD);
         assert_eq!(dark.floating.l, DARK_FLOATING);
     }

@@ -207,7 +207,7 @@ pub fn start(data_dir: &Path, state_path: &Path, data: &mut crate::models::AppDa
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-struct Tokens {
+pub(crate) struct Tokens {
     access_token: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     refresh_token: Option<String>,
@@ -908,6 +908,59 @@ pub struct ConnectorStatus {
     pub account: Option<String>,
 }
 
+/// One connector's saved sign-in as it travels from the Mac to another computer: enough to find
+/// the same connector there (its id, or its address and name) and the tokens themselves.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct Login {
+    pub id: String,
+    pub name: String,
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    pub tokens: Tokens,
+}
+
+/// Every signed-in connector of this computer with its tokens. Only the Sirus window on this
+/// computer may ask (`browser_bridge`): it carries the sign-ins to the computer it is using.
+pub(crate) fn export_logins() -> Vec<Login> {
+    config()
+        .read()
+        .iter()
+        .filter(|connector| connector.auth != ConnectorAuth::None)
+        .filter_map(|connector| {
+            Some(Login {
+                id: connector.id.clone(),
+                name: connector.name.clone(),
+                url: connector.url.clone(),
+                label: connector.label.clone(),
+                tokens: load_tokens(&connector.id)?,
+            })
+        })
+        .collect()
+}
+
+/// A token this large is not a real one.
+const MAX_LOGIN_TOKEN: usize = 64 * 1024;
+
+/// The saved connector a login belongs to: the one with its id, else the only one with the same
+/// address, name and label (a list copied by hand may carry other ids).
+fn login_target<'a>(list: &'a [Connector], login: &Login) -> Option<&'a Connector> {
+    let signs_in = |connector: &&Connector| connector.auth != ConnectorAuth::None;
+    list.iter()
+        .filter(signs_in)
+        .find(|connector| connector.id == login.id)
+        .or_else(|| {
+            let mut same = list.iter().filter(signs_in).filter(|connector| {
+                connector.url == login.url
+                    && connector.name == login.name
+                    && connector.label == login.label
+            });
+            let first = same.next()?;
+            same.next().is_none().then_some(first)
+        })
+}
+
 fn status_of(connector: &Connector) -> ConnectorStatus {
     let tokens = match connector.auth {
         ConnectorAuth::None => None,
@@ -949,6 +1002,9 @@ pub enum Action {
     SetToken { id: String, token: String },
     /// Forgets the connector's sign-in.
     SignOut { id: String },
+    /// Keeps the sign-ins another computer carried over (the Mac's, `export_logins`) for the
+    /// connectors they belong to here.
+    ImportLogins { logins: Vec<Login> },
 }
 
 type SignIns = std::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Notify>>>;
@@ -1048,6 +1104,27 @@ pub async fn connector_action(
                     account,
                 },
             )?;
+        }
+        Action::ImportLogins { logins } => {
+            if logins.len() > MAX_CONNECTORS {
+                return Err(invalid("Too many sign-ins."));
+            }
+            let list = state.data.lock().settings.connectors.clone();
+            for login in &logins {
+                let tokens = &login.tokens;
+                if tokens.access_token.is_empty()
+                    || tokens.access_token.len() > MAX_LOGIN_TOKEN
+                    || tokens
+                        .refresh_token
+                        .as_ref()
+                        .is_some_and(|t| t.len() > MAX_LOGIN_TOKEN)
+                {
+                    continue;
+                }
+                if let Some(target) = login_target(&list, login) {
+                    save_tokens(&target.id, tokens)?;
+                }
+            }
         }
         Action::SignOut { id } => {
             if !id.is_empty()
@@ -1276,6 +1353,47 @@ mod tests {
             enabled: true,
             auth: ConnectorAuth::Oauth,
         }
+    }
+
+    fn login_of(connector: &Connector) -> Login {
+        Login {
+            id: connector.id.clone(),
+            name: connector.name.clone(),
+            url: connector.url.clone(),
+            label: connector.label.clone(),
+            tokens: Tokens {
+                access_token: "access".into(),
+                refresh_token: None,
+                expires_at: None,
+                token_endpoint: None,
+                client_id: None,
+                client_secret: None,
+                resource: None,
+                account: None,
+            },
+        }
+    }
+
+    #[test]
+    fn a_carried_login_finds_its_connector_by_id_or_by_its_one_twin() {
+        let first = connector("a-1", "Supabase");
+        let mut second = connector("a-2", "Supabase");
+        second.label = Some("Outra conta".into());
+        let list = vec![first.clone(), second.clone()];
+
+        // The same id wins.
+        assert_eq!(login_target(&list, &login_of(&second)).unwrap().id, "a-2");
+        // Another id with the one matching address, name and label still lands.
+        let mut moved = login_of(&first);
+        moved.id = "elsewhere".into();
+        assert_eq!(login_target(&list, &moved).unwrap().id, "a-1");
+        // Two twins are ambiguous: nothing is guessed.
+        let twins = vec![first.clone(), connector("a-3", "Supabase")];
+        assert!(login_target(&twins, &moved).is_none());
+        // A connector with no sign-in never takes one.
+        let mut open = connector("a-4", "Supabase");
+        open.auth = ConnectorAuth::None;
+        assert!(login_target(&[open], &login_of(&first)).is_none());
     }
 
     #[test]

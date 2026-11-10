@@ -1948,6 +1948,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Estado atualizado.", "Status updated."),
     ("Este Mac", "This Mac"),
     (
+        "Este Mac não tem logins de conectores para trazer.",
+        "This Mac has no connector sign-ins to bring.",
+    ),
+    (
         "Este Mac · clique para usar a VPS",
         "This Mac · click to use the VPS",
     ),
@@ -2769,6 +2773,10 @@ const ENTRIES: &[(&str, &str)] = &[
     (
         "Nenhum login do GitHub está esperando.",
         "No GitHub sign-in is waiting.",
+    ),
+    (
+        "Nenhum login do Mac correspondeu aos conectores deste computador.",
+        "None of this Mac's sign-ins matched this computer's connectors.",
     ),
     ("Nenhum login salvo.", "No saved logins."),
     (
@@ -4901,6 +4909,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Translucidez", "Translucency"),
     ("Trazer de volta ao painel", "Bring back to the pane"),
+    ("Trazer logins deste Mac", "Bring this Mac's sign-ins"),
     ("Trocar", "Change"),
     (
         "Trocar de branch exige confirmação.",

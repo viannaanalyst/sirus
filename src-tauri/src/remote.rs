@@ -86,6 +86,8 @@ const DENIED: &[&str] = &[
     "login_vault_answer_offer",
     "login_vault_answer_approval",
     "login_vault_autofill",
+    // Connector sign-ins stay on this Mac unless its own window carries them (ADR-137).
+    "connector_export_logins",
 ];
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1940,6 +1942,7 @@ mod tests {
             "remote_pair",
             "pick_folder",
             "computer_action",
+            "connector_export_logins",
             "browser_open",
             "browser_navigate",
             "plugin:opener|open_url",

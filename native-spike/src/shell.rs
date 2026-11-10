@@ -1744,6 +1744,26 @@ impl Shell {
                         this.computer_moved(&value, cx);
                         return;
                     }
+                    if key == "connectors_logins" {
+                        if let Some(error) = value["error"].as_str() {
+                            this.problem = Some(error.to_owned());
+                        } else {
+                            if value["statuses"].is_array() {
+                                this.settings_data
+                                    .insert("connectors", value["statuses"].clone());
+                            }
+                            if value["gained"].as_u64() == Some(0) {
+                                this.problem = Some(
+                                    crate::i18n::t(
+                                        "Nenhum login do Mac correspondeu aos conectores deste computador.",
+                                    )
+                                    .to_owned(),
+                                );
+                            }
+                        }
+                        cx.notify();
+                        return;
+                    }
                     this.settings_data.insert(key, value);
                     cx.notify();
                 });
@@ -3236,6 +3256,13 @@ impl Shell {
                 // The reply is the sign-in states; it lands in the page when a sign-in is over.
                 let id = self.backend.invoke(command, args);
                 self.waiting.insert(id, Waiting::SettingsData("connectors"));
+            }
+            // The Mac's connector sign-ins, carried to the computer the window is using.
+            "native_connector_bring_logins" => {
+                let backend = self.backend.clone();
+                self.native_task("connectors_logins", move || {
+                    crate::connector_logins::bring(&backend)
+                });
             }
             "native_github_list" => self.native_task("github", crate::native_actions::github_list),
             "native_github_switch" => {

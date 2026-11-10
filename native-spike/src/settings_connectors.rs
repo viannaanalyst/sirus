@@ -1015,6 +1015,31 @@ pub fn view<V: 'static>(
         }))
         .child(svg().path("plus").size(px(14.)).text_color(on_accent()))
         .child(t("Adicionar personalizado"));
+    // On another computer (the VPS) a service's sign-in cannot open a browser: the Mac's own
+    // sign-ins go over instead, so none is made twice (ADR-137).
+    let on_remote = data
+        .get("computers")
+        .is_some_and(|computers| computers["remote"].as_bool() == Some(true));
+    let bring = on_remote.then(|| {
+        div()
+            .id("cn-bring")
+            .h(px(32.))
+            .px(px(12.))
+            .rounded(px(crate::theme::RADIUS_MD))
+            .border_1()
+            .border_color(crate::theme::border())
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .text_size(px(13.))
+            .font_weight(FontWeight::MEDIUM)
+            .cursor_pointer()
+            .hover(|s| s.bg(content(0.06)))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                run(this, "native_connector_bring_logins", json!({}), cx);
+            }))
+            .child(t("Trazer logins deste Mac"))
+    });
     let mut page = div().w_full().flex().flex_col().mb(px(28.)).child(
         div()
             .flex()
@@ -1024,6 +1049,7 @@ pub fn view<V: 'static>(
                 search,
                 &t("Buscar conectores"),
             ))
+            .children(bring)
             .child(crate::settings_search::decorate(
                 add_custom,
                 &t("Adicionar personalizado"),

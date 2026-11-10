@@ -45,6 +45,7 @@ impl Shell {
         let value = json!({
             "list": list,
             "active": self.computers.active,
+            "remote": self.computers.remote(),
             "status": status_text(self.computers.status),
             "address": self.computers.add.address,
             "code": self.computers.add.code,

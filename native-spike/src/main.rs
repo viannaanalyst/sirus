@@ -26,6 +26,7 @@ mod chat_background;
 mod cli_diagnostics;
 mod computer_move;
 mod computers;
+mod connector_logins;
 mod connector_marks;
 mod conversation_settle;
 mod data;

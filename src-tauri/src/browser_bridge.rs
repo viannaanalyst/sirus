@@ -59,6 +59,8 @@ const VAULT_COMMANDS: &[&str] = &[
     "login_vault_note_submission",
     "login_vault_autofill",
     "login_vault_agent_fill",
+    // The Mac's connector sign-ins, carried to another computer by the window (ADR-137).
+    "connector_export_logins",
     "computer_action",
     "computer_remote_execute",
     "remote_action",
@@ -356,6 +358,9 @@ fn reply<T: serde::Serialize, E: serde::Serialize>(result: Result<T, E>) -> Resu
 async fn vault_command(app: &AppHandle, command: &str, args: &Value) -> Result<String, Value> {
     use crate::login_vault as vault;
     match command {
+        "connector_export_logins" => reply(Ok::<_, crate::error::Error>(
+            crate::connectors::export_logins(),
+        )),
         "login_vault_list" => reply(vault::login_vault_list().await),
         "login_vault_save" => {
             let input: vault::LoginInput =

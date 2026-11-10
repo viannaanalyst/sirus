@@ -29,3 +29,11 @@ Agents become far more useful when they can reach the services a project lives o
 ## Amendment, 2026-11-04: Cloudflare moved
 
 The catalog's Cloudflare entry pointed at `bindings.mcp.cloudflare.com`, which Cloudflare marked as deprecated; it only reaches Workers bindings, so an agent could not add a domain or change DNS. It now points at `mcp.cloudflare.com/mcp`, which covers the whole API through `search` and `execute`. At startup, `connectors::start` moves catalog connectors still on the old address, saves, and only then drops their old tokens, so the person signs in once more. Custom connectors keep the address they were given. That server's consent page starts at the minimal scopes: to change anything, choose the access on that page, or the agent can only read.
+
+## Amendment, 2026-11-10: bringing the Mac's sign-ins to another computer
+
+A service's sign-in needs a browser and a loopback redirect, which a headless host (the VPS) does not have, and the tokens live in the Mac's Keychain, so a list copied to the VPS showed every OAuth connector signed out. Settings → Connectors now has "Trazer logins deste Mac" while another computer is active. The window asks this Mac's own host for its sign-ins (`connector_export_logins`) and sends them to the active computer as `connector_action` `importLogins`; the host keeps each one for the connector with the same id, or the only one with the same address, name and label, and ignores the rest.
+
+- `connector_export_logins` is a window-only command (`browser_bridge.rs`, also in `DENIED` in `remote.rs`): a phone or a window on another computer is refused, so tokens never leave a Mac except through its own window.
+- The tokens are copies. A service that rotates its refresh token on use may invalidate one of the two; signing in again on that computer (or bringing the Mac's again) fixes it.
+- The state of a connector on the VPS is still its own: signing out there does not sign out on the Mac.

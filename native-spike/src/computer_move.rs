@@ -120,7 +120,7 @@ impl Peer for Oneshot {
     }
 }
 
-fn message_of(error: &Value) -> String {
+pub(crate) fn message_of(error: &Value) -> String {
     error["message"]
         .as_str()
         .or_else(|| error.as_str())

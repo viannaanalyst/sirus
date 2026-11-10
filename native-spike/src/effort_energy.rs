@@ -1,9 +1,8 @@
-//! The effort bar's moving fill, after Sirus's `.effort-slider`: a gradient, a nebula and a
-//! flare near the thumb, drifting stars, rising embers and, with Fast, lightning.
-use gpui::{
-    Bounds, ContentMask, Corners, Hsla, PathBuilder, Pixels, Rgba, Window, fill, linear_color_stop,
-    linear_gradient, point, px, size,
-};
+//! The effort bar's fill as ordered-dither pixels (the approved "D+" look): 2 px cells that thin
+//! out toward the empty end and heat from cool violet through the model's tone to a cream core at
+//! the thumb, with a slow twinkle, embers that rise from the tip and cool as they go, and with Fast
+//! a pixel lightning strike now and then. The empty part keeps a faint dotted track.
+use gpui::{Bounds, Hsla, Pixels, Rgba, Window, fill, point, px, size};
 
 pub struct Energy {
     /// How much of the bar is filled, 0 to 1.
@@ -30,311 +29,171 @@ pub fn blend(a: Hsla, b: Hsla, t: f32) -> Hsla {
     .into()
 }
 
-/// A wave going back and forth, like a CSS `alternate` animation.
-fn sway(time: f32, period: f32) -> f32 {
-    (time / period * std::f32::consts::PI).sin()
+/// One cell, in px.
+const CELL: f32 = 2.;
+/// The cream the hottest cells and new embers reach.
+const CREAM: u32 = 0xffe2c4;
+
+/// The 8x8 Bayer threshold of a cell, in (0, 1).
+fn bayer(x: usize, y: usize) -> f32 {
+    const D: [[u32; 2]; 2] = [[0, 2], [3, 1]];
+    let v: u32 = (0..3)
+        .map(|i| D[(y >> i) & 1][(x >> i) & 1] * 4u32.pow(2 - i as u32))
+        .sum();
+    (v as f32 + 0.5) / 64.
 }
 
-struct Area {
-    left: f32,
-    right: f32,
-    top: f32,
-    bottom: f32,
+/// A cheap hash of two integers, in 0..1.
+fn hash(a: u32, b: u32) -> f32 {
+    let mut h = a.wrapping_mul(0x9e37_79b1) ^ b.wrapping_mul(0x85eb_ca77);
+    h ^= h >> 15;
+    h = h.wrapping_mul(0x2c1b_3c6d);
+    h ^= h >> 12;
+    (h % 10_000) as f32 / 10_000.
 }
 
-/// A soft ellipse from stacked translucent quads, kept inside the filled part of the pill.
-fn glow(
-    window: &mut Window,
-    area: &Area,
-    center: (f32, f32),
-    radius: (f32, f32),
-    color: Hsla,
-    peak: f32,
-) {
-    const LAYERS: usize = 12;
-    for layer in 0..LAYERS {
-        let k = 1. - layer as f32 / LAYERS as f32;
-        let left = (center.0 - radius.0 * k).max(area.left);
-        let right = (center.0 + radius.0 * k).min(area.right);
-        let top = (center.1 - radius.1 * k).max(area.top);
-        let bottom = (center.1 + radius.1 * k).min(area.bottom);
-        if right <= left || bottom <= top {
-            continue;
-        }
-        let shape = Bounds::new(
-            point(px(left), px(top)),
-            size(px(right - left), px(bottom - top)),
-        );
-        let corner = (right - left).min(bottom - top) / 2.;
-        window.paint_quad(
-            fill(
-                shape,
-                Hsla {
-                    a: peak / LAYERS as f32,
-                    ..color
-                },
-            )
-            .corner_radii(px(corner)),
-        );
-    }
+/// The colour `u` (0..1) along the bar: cool, soft, tone, then cream as it heats.
+fn ramp(energy: &Energy, u: f32) -> Hsla {
+    let cream: Hsla = gpui::rgb(CREAM).into();
+    let dim = blend(energy.cool, gpui::black(), 0.45);
+    let stops = [
+        dim,
+        energy.cool,
+        energy.soft,
+        energy.tone,
+        blend(energy.tone, cream, 0.5),
+        cream,
+    ];
+    let at = u.clamp(0., 0.9999) * (stops.len() - 1) as f32;
+    let i = at as usize;
+    blend(stops[i], stops[i + 1], at - i as f32)
 }
 
-fn polyline(
-    window: &mut Window,
-    points: &[(f32, f32)],
-    origin: (f32, f32),
-    scale: (f32, f32),
-    width: f32,
-    color: Hsla,
-) {
-    let mut path = PathBuilder::stroke(px(width));
-    for (index, (x, y)) in points.iter().enumerate() {
-        let at = point(px(origin.0 + x * scale.0), px(origin.1 + y * scale.1));
-        if index == 0 {
-            path.move_to(at);
-        } else {
-            path.line_to(at);
-        }
-    }
-    if let Ok(path) = path.build() {
-        window.paint_path(path, color);
-    }
+/// Whether a cell centre lies inside the pill (a capsule `width` by `height`).
+fn in_pill(cx: f32, cy: f32, width: f32, height: f32) -> bool {
+    let r = height / 2.;
+    let nearest = cx.clamp(r, (width - r).max(r));
+    let (dx, dy) = (cx - nearest, cy - r);
+    dx * dx + dy * dy <= r * r
 }
 
 pub fn paint(bounds: Bounds<Pixels>, energy: &Energy, window: &mut Window) {
     let (x, y) = (f32::from(bounds.left()), f32::from(bounds.top()));
     let (width, height) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
-    let filled = width * energy.fill;
-    let round = height / 2.;
-    let split = filled * 0.63;
-    let speed = 1. - energy.heat * 0.6;
+    let cols = (width / CELL).ceil() as usize;
+    let rows = (height / CELL).ceil() as usize;
+    let filled = ((width * energy.fill) / CELL).round() as usize;
     let time = energy.time;
-    let color = |hex: u32| -> Hsla { gpui::rgb(hex).into() };
-
-    window.paint_quad(
-        fill(
-            Bounds::new(point(px(x), px(y)), size(px(split), px(height))),
-            linear_gradient(
-                90.,
-                linear_color_stop(energy.tone, 0.19),
-                linear_color_stop(energy.soft, 1.),
-            ),
-        )
-        .corner_radii(Corners {
-            top_left: px(round),
-            bottom_left: px(round),
-            top_right: px(0.),
-            bottom_right: px(0.),
-        }),
-    );
-    window.paint_quad(
-        fill(
-            Bounds::new(
-                point(px(x + split), px(y)),
-                size(px((filled - split).max(0.)), px(height)),
-            ),
-            linear_gradient(
-                90.,
-                linear_color_stop(energy.soft, 0.),
-                linear_color_stop(energy.cool, 1.),
-            ),
-        )
-        // Square: the thumb covers this end, so no dark notch shows beside it.
-        .corner_radii(Corners {
-            top_left: px(0.),
-            bottom_left: px(0.),
-            top_right: px(if energy.fill >= 1. { round } else { 0. }),
-            bottom_right: px(if energy.fill >= 1. { round } else { 0. }),
-        }),
-    );
-
-    let area = Area {
-        left: x,
-        right: x + filled,
-        top: y,
-        bottom: y + height,
-    };
-    let nebula_left = x + energy.fill * 0.55 * width - 90. + 18. * sway(time, 4.32 * speed);
-    glow(
-        window,
-        &area,
-        (nebula_left + 84., y + height * 0.4),
-        (132., 26.),
-        energy.cool,
-        0.75,
-    );
-    glow(
-        window,
-        &area,
-        (nebula_left + 136., y + height * 0.55),
-        (128., 26.),
-        energy.soft,
-        0.75,
-    );
-    glow(
-        window,
-        &area,
-        (nebula_left + 123., y + height * 0.49),
-        (38., 16.),
-        gpui::white(),
-        0.9,
-    );
-
-    let flare = x + energy.fill * 0.68 * width + 14. * sway(time, 2.88);
-    glow(
-        window,
-        &area,
-        (flare, y + height / 2.),
-        (20., height / 2.),
-        gpui::white(),
-        0.5 + 0.25 * sway(time, 2.88),
-    );
-
-    // Stars drift in a repeating strip, and leave the pill's round ends alone.
-    let drift = (time / (2.88 * speed)).fract() * 160.;
-    let stars: [(f32, f32, f32, f32); 4] = [
-        (14., 10., 1.1, 1.),
-        (48., 28., 1.6, 1.),
-        (109., 13., 1.1, 0.8),
-        (145., 27., 1.1, 1.),
-    ];
-    let mut strip = -160. + drift;
-    while strip < filled {
-        for (star_x, star_y, radius, alpha) in stars {
-            let at = x + strip + star_x;
-            let star_y = y + star_y * height / 38.;
-            if at < x + 6. || at > x + filled - 2. {
-                continue;
-            }
-            window.paint_quad(
-                fill(
-                    Bounds::new(
-                        point(px(at - radius), px(star_y - radius)),
-                        size(px(radius * 2.), px(radius * 2.)),
-                    ),
-                    Hsla {
-                        a: alpha,
-                        ..gpui::white()
-                    },
-                )
-                .corner_radii(px(radius)),
-            );
-        }
-        strip += 160.;
-    }
-
-    for ember in 0..energy.embers {
-        let phase = (time / 1.8 + ember as f32 * 0.19 / 1.8).fract();
-        let at = x + width * (0.06 + ember as f32 * 0.09) + phase * 5.;
-        if at > x + filled - 2. {
-            continue;
-        }
-        let rise = y + height - 3.5 - phase * 24.;
-        if rise < y {
-            continue;
-        }
-        let alpha = if phase < 0.2 {
-            phase / 0.2 * 0.8
-        } else {
-            0.8 * (1. - (phase - 0.2) / 0.8)
-        };
-        glow(
-            window,
-            &area,
-            (at, rise),
-            (4., 4.),
-            color(0xffb547),
-            alpha * 0.5,
-        );
-        window.paint_quad(
-            fill(
+    let mut cell = |cx: usize, cy: f32, color: Hsla| {
+        let (px_, py_) = (cx as f32 * CELL, cy * CELL);
+        if in_pill(px_ + CELL / 2., py_ + CELL / 2., width, height) {
+            window.paint_quad(fill(
                 Bounds::new(
-                    point(px(at - 1.25), px(rise - 1.25)),
-                    size(px(2.5), px(2.5)),
+                    point(px(x + px_), px(y + py_)),
+                    size(px(CELL - 0.4), px(CELL - 0.4)),
                 ),
-                Hsla {
-                    a: alpha,
-                    ..color(0xffd59a)
-                },
-            )
-            .corner_radii(px(1.25)),
+                color,
+            ));
+        }
+    };
+
+    // The empty part: a faint dotted track.
+    let track = Hsla {
+        a: 0.06,
+        ..gpui::white()
+    };
+    for cx in (filled + 2..cols).step_by(3) {
+        for cy in (1..rows).step_by(3) {
+            cell(cx, cy as f32, track);
+        }
+    }
+
+    // The fill: denser and hotter toward the thumb, thinner at the top and bottom edges.
+    let half = (rows.max(2) - 1) as f32 / 2.;
+    for cx in 0..filled {
+        let u = cx as f32 / (filled.max(2) - 1) as f32;
+        let twinkle =
+            0.06 * (time * 1.8 + cx as f32 * 0.9).sin() * (time * 0.7 + cx as f32 * 0.31).sin();
+        let density =
+            (0.12 + 0.86 * u.powf(1.8) + twinkle + if energy.fast { 0.05 } else { 0. }).min(1.);
+        let color = ramp(energy, 0.15 + 0.62 * u + 0.23 * u.powi(4) * energy.heat);
+        for cy in 0..rows {
+            let edge = (cy as f32 - half).abs() / half.max(1.);
+            if density * (1. - 0.35 * edge * edge) > bayer(cx, cy) {
+                cell(cx, cy as f32, color);
+            }
+        }
+    }
+
+    // The core: the last cells before the thumb flicker cream.
+    let cream: Hsla = gpui::rgb(CREAM).into();
+    let tick = (time * 30.) as usize;
+    for cx in filled.saturating_sub(5)..filled {
+        for cy in 1..rows.saturating_sub(1) {
+            if (cx + cy + tick) % 4 == 0 {
+                cell(cx, cy as f32, cream);
+            }
+        }
+    }
+
+    // Embers: each rises from near the tip on its own cycle, cooling and fading as it climbs.
+    for i in 0..energy.embers {
+        let speed = 0.55 + hash(i as u32, 7) * 0.5;
+        let phase = time * speed + hash(i as u32, 11);
+        let (cycle, t) = (phase.floor() as u32, phase.fract());
+        let start = filled as f32 - 1. - hash(i as u32, cycle) * 8.;
+        let drift = (hash(i as u32, cycle + 99) - 0.5) * 3. * t;
+        let cx = (start + drift).round().max(0.) as usize;
+        let cy = (rows as f32 - 1.) * (1. - t);
+        let color = if t < 0.4 {
+            cream
+        } else if t < 0.7 {
+            blend(energy.tone, cream, 0.5)
+        } else {
+            energy.tone
+        };
+        cell(
+            cx,
+            cy.round(),
+            Hsla {
+                a: color.a * (1. - t),
+                ..color
+            },
         );
     }
 
+    // Fast: a pixel lightning strike crosses the bar now and then.
     if energy.fast {
-        let scale = (width / 360., height / 40.);
-        let wobble = |index: usize| ((time * 9. + index as f32 * 1.7).sin()) * 1.6;
-        let main: Vec<(f32, f32)> = [
-            (0., 22.),
-            (31., 12.),
-            (45., 26.),
-            (79., 10.),
-            (95., 28.),
-            (142., 15.),
-            (130., 30.),
-            (181., 9.),
-            (202., 25.),
-            (231., 13.),
-            (251., 30.),
-            (290., 10.),
-            (308., 24.),
-            (360., 13.),
-        ]
-        .iter()
-        .enumerate()
-        .map(|(index, (px_x, px_y))| (*px_x, *px_y + wobble(index)))
-        .collect();
-        let mask = ContentMask {
-            bounds: Bounds::new(point(px(x), px(y)), size(px(filled), px(height))),
-        };
-        window.with_content_mask(Some(mask), |window| {
-            polyline(
-                window,
-                &main,
-                (x, y),
-                scale,
-                1.4,
-                Hsla {
-                    a: 0.85,
-                    ..gpui::white()
-                },
-            );
-        });
-        // A bright strike sweeps the bar now and then.
-        let strike = (time / 2.24).fract();
-        if strike < 0.3 {
-            let reach = ((strike / 0.18).min(1.) * 13.) as usize + 1;
-            let alpha = if strike < 0.18 {
-                1.
-            } else {
-                1. - (strike - 0.18) / 0.12
-            };
-            let bolt: [(f32, f32); 13] = [
-                (0., 30.),
-                (40., 14.),
-                (62., 32.),
-                (98., 10.),
-                (120., 34.),
-                (160., 12.),
-                (176., 30.),
-                (214., 8.),
-                (236., 30.),
-                (270., 14.),
-                (300., 34.),
-                (330., 16.),
-                (360., 24.),
-            ];
-            polyline(
-                window,
-                &bolt[..reach.min(13)],
-                (x, y - 4.),
-                (width / 360., (height + 8.) / 48.),
-                1.8,
-                Hsla {
-                    a: alpha,
-                    ..gpui::white()
-                },
-            );
+        let strike = (time / 1.4).fract();
+        if strike < 0.08 {
+            let seed = (time / 1.4).floor() as u32;
+            let mut cx = (filled as f32 * (0.4 + 0.5 * hash(seed, 3))) as i32;
+            for cy in 0..rows {
+                cell(cx.max(0) as usize, cy as f32, Hsla { a: 0.9, ..cream });
+                cx += if hash(seed, cy as u32) < 0.5 { -1 } else { 1 };
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_bayer_matrix_holds_each_threshold_once() {
+        let mut seen: Vec<u32> = (0..64)
+            .map(|i| (bayer(i % 8, i / 8) * 64. - 0.5).round() as u32)
+            .collect();
+        seen.sort_unstable();
+        assert_eq!(seen, (0..64).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn cells_outside_the_pill_ends_are_skipped() {
+        assert!(in_pill(16., 16., 256., 32.));
+        assert!(in_pill(128., 1., 256., 32.));
+        assert!(!in_pill(1., 1., 256., 32.));
+        assert!(!in_pill(255., 31., 256., 32.));
     }
 }

@@ -505,6 +505,47 @@ impl Shell {
             .into_any_element()
     }
 
+    /// Under a sent message, on hover: copies its text.
+    pub(super) fn user_copy_button(
+        &self,
+        index: usize,
+        text: String,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let key = format!("user {index}");
+        let copied = self.message_actions.copied.as_deref() == Some(key.as_str());
+        div()
+            .id(("turn-user-copy", index))
+            .h(px(24.))
+            .px(px(8.))
+            .rounded(px(crate::theme::RADIUS_SM))
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .text_size(px(12.))
+            .text_color(content(0.6))
+            .when(!copied, |d| {
+                d.invisible()
+                    .group_hover(format!("turn-actions-{index}"), |s| s.visible())
+            })
+            .cursor_pointer()
+            .sinks()
+            .hover(|s| s.bg(content(0.07)).text_color(content(0.9)))
+            .tooltip(name_tip(t("Copiar a mensagem")))
+            .child(icon(if copied { "check" } else { "copy" }, 12.))
+            .child(if copied { t("Copiado") } else { t("Copiar") })
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.run_action(
+                    Act::Copy {
+                        key: key.clone(),
+                        text: text.clone(),
+                    },
+                    cx,
+                )
+            }))
+            .into_any_element()
+    }
+
     /// Under the last sent message, on hover: takes it back into the composer and drops it and
     /// its reply, so sending answers the edited text (turn_edit.rs on the host).
     pub(super) fn edit_button(

@@ -1298,6 +1298,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Copiado", "Copied"),
     ("Copiar", "Copy"),
     ("Copiar ID da conversa", "Copy conversation ID"),
+    ("Copiar a mensagem", "Copy the message"),
     ("Copiar caminho", "Copy path"),
     ("Copiar endereço", "Copy address"),
     ("Copiar link", "Copy link"),

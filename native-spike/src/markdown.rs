@@ -1062,6 +1062,70 @@ fn code_block(code: &str) -> AnyElement {
 
 /// `marked` is false for a code block that only stands in for something else (a diagram's source).
 fn code_block_marked(code: &str, marked: bool) -> AnyElement {
+    let block = code_block_body(code, marked);
+    if !marked {
+        return block;
+    }
+    // A copy button in the corner, on hover; the group is named by the text so blocks don't share it.
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    code.hash(&mut hasher);
+    let hash = hasher.finish();
+    let group: SharedString = format!("code-copy-{hash:x}").into();
+    let text = code.trim_end_matches('\n').to_owned();
+    let copied = COPIED.with(|c| {
+        c.get()
+            .is_some_and(|(h, at)| h == hash && at.elapsed() < COPIED_FOR)
+    });
+    div()
+        .relative()
+        .group(group.clone())
+        .child(block)
+        .child(
+            div()
+                .id(group.clone())
+                .absolute()
+                .top(px(6.))
+                .right(px(6.))
+                .size(px(24.))
+                .rounded(px(crate::theme::RADIUS_SM))
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_color(content(if copied { 0.9 } else { 0.5 }))
+                .bg(content(0.06))
+                .when(!copied, |d| d.invisible())
+                .group_hover(group, |s| s.visible())
+                .cursor_pointer()
+                .hover(|s| s.bg(content(0.12)).text_color(content(0.9)))
+                .child(crate::theme::icon(
+                    if copied { "check" } else { "copy" },
+                    13.,
+                ))
+                .on_click(move |_, _, cx| {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(text.clone()));
+                    COPIED.with(|c| c.set(Some((hash, std::time::Instant::now()))));
+                    cx.refresh_windows();
+                    cx.spawn(async move |cx| {
+                        cx.background_executor().timer(COPIED_FOR).await;
+                        let _ = cx.update(|cx| cx.refresh_windows());
+                    })
+                    .detach();
+                }),
+        )
+        .into_any_element()
+}
+
+/// How long a code block's copy button shows its check mark.
+const COPIED_FOR: std::time::Duration = std::time::Duration::from_millis(1400);
+
+thread_local! {
+    /// The code block copied last and when.
+    static COPIED: std::cell::Cell<Option<(u64, std::time::Instant)>> =
+        const { std::cell::Cell::new(None) };
+}
+
+fn code_block_body(code: &str, marked: bool) -> AnyElement {
     div()
         .rounded(px(crate::theme::RADIUS_MD))
         .bg(content(0.05))

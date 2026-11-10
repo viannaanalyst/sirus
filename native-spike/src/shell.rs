@@ -16257,12 +16257,23 @@ impl Shell {
                         .flex_col_reverse()
                         .items_end()
                         .gap(px(2.))
-                        .when(failed_here, |d| {
-                            d.child(self.retry_button(index, conversation_session.clone(), cx))
-                        })
-                        .when(editable_here && !failed_here, |d| {
-                            d.child(self.edit_button(index, conversation, cx))
-                        })
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(2.))
+                                .child(self.user_copy_button(index, turn.user.clone(), cx))
+                                .when(failed_here, |d| {
+                                    d.child(self.retry_button(
+                                        index,
+                                        conversation_session.clone(),
+                                        cx,
+                                    ))
+                                })
+                                .when(editable_here && !failed_here, |d| {
+                                    d.child(self.edit_button(index, conversation, cx))
+                                }),
+                        )
                         .child(
                             div().flex().justify_end().child(
                                 div()

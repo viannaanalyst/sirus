@@ -8141,18 +8141,18 @@ impl Shell {
         let dock_edge = (width - 6. - 1. - dock_width - 1.).max(nav_end + 6.);
         let dock_open = open_dock > 0.01;
         let (added, removed) = self.diff_stat();
-        // The band the panel's tabs and the bar's controls share, as the header last drew it.
-        let band = (width - 10. - (dock_edge + 8.)).max(0.);
+        // How wide the header row actually drew, measured by its canvas. Until there is a real
+        // reading the header keeps everything: a guess from the frame's geometry could pick a
+        // narrower tier and hide the controls the person was looking at.
         let measured = self.panel_header_width.get();
         let needs = self.header_needs(added, removed);
-        let tier = if dock_open {
-            let tier = header_tier(
-                if measured > 1. { measured } else { band },
-                needs,
-                self.header_tier,
-            );
+        let tier = if dock_open && measured > 1. {
+            let tier = header_tier(measured, needs, self.header_tier);
             self.header_tier = tier;
             tier
+        } else if dock_open {
+            self.header_tier = HeaderTier::Full;
+            HeaderTier::Full
         } else {
             self.header_tier = HeaderTier::Full;
             self.panel_header_width.set(0.);
@@ -8365,7 +8365,6 @@ impl Shell {
                 .right(px(10.))
                 .top(px(5.))
                 .h(px(30.))
-                .relative()
                 .flex()
                 .items_center()
                 .justify_between()
@@ -17156,8 +17155,8 @@ impl Shell {
         cx.notify();
     }
 
-    /// The panel header's "⋯" menu: the layout and expand buttons, when the header is too
-    /// narrow for them (ADR-198).
+    /// The panel header's "⋯" menu: the diff counts, the layout and expand buttons, when the
+    /// header is too narrow for them (ADR-198).
     fn header_more_view(
         &self,
         now: Instant,
@@ -17169,6 +17168,7 @@ impl Shell {
             *moving = true;
         }
         let p = open.at(now).clamp(0., 1.);
+        let (added, removed) = self.diff_stat();
         let row = |id: &'static str, glyph: &'static str, label: &'static str| {
             div()
                 .id(id)
@@ -17208,6 +17208,20 @@ impl Shell {
                 .flex()
                 .flex_col()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .when(added + removed > 0, |d| {
+                    d.child(
+                        row("more-changes", PANES[CHANGES_PANE].0, PANES[CHANGES_PANE].1)
+                            .child(crate::theme::diff_counts(
+                                added.into(),
+                                removed.into(),
+                                false,
+                            ))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.header_more = None;
+                                this.open_pane(CHANGES_PANE, cx);
+                            })),
+                    )
+                })
                 .child(
                     row("more-environment", "window", "Ambiente").on_click(cx.listener(
                         |this, _, _, cx| {
@@ -19772,7 +19786,11 @@ const HEADER_GAP: f32 = 8.;
 const HEADER_HYSTERESIS: f32 = 16.;
 
 /// The widest tier that fits `width`, keeping `previous` until a wider one has room to spare.
+/// Without a real measurement the header keeps everything rather than guessing a narrower tier.
 fn header_tier(width: f32, needs: HeaderNeeds, previous: HeaderTier) -> HeaderTier {
+    if !(width > 1.) {
+        return HeaderTier::Full;
+    }
     const ORDER: [HeaderTier; 4] = [
         HeaderTier::Full,
         HeaderTier::CompactGit,
@@ -21514,6 +21532,25 @@ mod prompt_fold_tests {
         let full = needs.width(HeaderTier::Full);
         assert_eq!(
             header_tier(full + 1., needs, HeaderTier::Full),
+            HeaderTier::Full
+        );
+    }
+
+    #[test]
+    fn an_unmeasured_or_realistically_wide_header_keeps_every_control() {
+        let needs = header_needs();
+        // Before the canvas's first reading, or a width of nothing: never guess a narrower tier.
+        assert_eq!(
+            header_tier(0., needs, HeaderTier::Overflow),
+            HeaderTier::Full
+        );
+        assert_eq!(
+            header_tier(1., needs, HeaderTier::CompactTabs),
+            HeaderTier::Full
+        );
+        // A normal wide panel: the whole trailing group stays.
+        assert_eq!(
+            header_tier(1200., needs, HeaderTier::Full),
             HeaderTier::Full
         );
     }

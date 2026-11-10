@@ -23,6 +23,10 @@ pub(crate) const CLEAR_COMMAND: &str = "/clear";
 const COMPACT_TOKENS: u64 = 200_000;
 /// Without a known expiry: long enough that the provider's prompt cache has expired.
 const COMPACT_IDLE_MS: i64 = 70 * 60 * 1000;
+/// The popover's width: it holds the stats on one line and the full-width button.
+const POPUP_WIDTH: f32 = 200.;
+/// The least space kept between the popover and either edge of the window.
+const POPUP_EDGE: f32 = 8.;
 
 /// What the provider last reported (`Session.contextUsage`).
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -272,6 +276,17 @@ fn paint_ring(bounds: Bounds<Pixels>, ring: &Ring, color: gpui::Hsla, window: &m
     }
 }
 
+/// The popover's left x in window coordinates: centred over the ring, then pulled inside the
+/// window when the ring sits near an edge.
+pub(crate) fn popup_left(ring: Bounds<Pixels>, popup_width: f32, window_width: f32) -> f32 {
+    let centre = f32::from(ring.left()) + f32::from(ring.size.width) / 2.;
+    let left = centre - popup_width / 2.;
+    left.clamp(
+        POPUP_EDGE,
+        (window_width - popup_width - POPUP_EDGE).max(POPUP_EDGE),
+    )
+}
+
 impl Shell {
     /// The ring on the composer shelf; nothing until both numbers are known.
     pub(super) fn context_ring(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -372,13 +387,13 @@ impl Shell {
             conversation.native,
         );
         let strong = reading.level != Level::Normal;
-        let right = self.viewport_width - f32::from(anchor.right());
+        let left = popup_left(anchor, POPUP_WIDTH, self.viewport_width);
         let bottom = self.viewport_height - f32::from(anchor.top()) + 8. + (1. - phase) * -6.;
         let percent = reading.percent;
         let ring_color = level_color(reading.level).unwrap_or_else(|| content(0.7));
         let mut button = div()
             .id("context-compact")
-            .h(px(28.))
+            .h(px(30.))
             .w_full()
             .rounded(px(crate::theme::RADIUS_SM))
             .border_1()
@@ -431,13 +446,13 @@ impl Shell {
                 .occlude()
                 .absolute()
                 .bottom(px(bottom))
-                .right(px(right))
-                .w(px(208.))
+                .left(px(left))
+                .w(px(POPUP_WIDTH))
                 .opacity(phase)
                 .flex()
                 .flex_col()
                 .gap(px(6.))
-                .p(px(7.))
+                .p(px(10.))
                 .rounded(px(crate::theme::RADIUS_LG))
                 .border_1()
                 .border_color(crate::theme::border())
@@ -451,6 +466,7 @@ impl Shell {
                         .flex()
                         .items_center()
                         .gap(px(7.))
+                        .whitespace_nowrap()
                         .child(
                             canvas(
                                 |_, _, _| {},
@@ -858,6 +874,18 @@ mod tests {
             .unwrap()
             .to_rfc3339();
         assert!(!compact_before_send(&idle, now));
+    }
+
+    #[test]
+    fn the_popup_centres_over_the_ring_and_stays_inside_the_window() {
+        let ring = |x: f32| Bounds::new(point(px(x), px(300.)), size(px(24.), px(24.)));
+        // Centred: the ring's middle is at 512, so the 200px card starts at 412.
+        assert_eq!(popup_left(ring(500.), 200., 1000.), 412.);
+        // Pulled in from the left edge and from the right edge.
+        assert_eq!(popup_left(ring(4.), 200., 1000.), 8.);
+        assert_eq!(popup_left(ring(980.), 200., 1000.), 792.);
+        // A window narrower than the card still keeps the left margin.
+        assert_eq!(popup_left(ring(60.), 200., 150.), 8.);
     }
 
     #[test]

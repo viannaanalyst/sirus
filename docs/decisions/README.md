@@ -245,3 +245,4 @@ Write an ADR when a change constrains future work, is expensive to reverse, or r
 - [ADR-198: A one-line composer, limits that offer another account, and removing accounts](ADR-198-one-line-composer-limits-accounts.md)
 - [ADR-199: Ghostty's libghostty-vt as a second, switchable terminal engine](ADR-199-ghostty-terminal-engine.md)
 - [ADR-200: Scheduled tasks (Tarefas)](ADR-200-scheduled-tasks-tarefas.md)
+- [ADR-201: The embedded browser on a remote computer, and tunnels to its localhost](ADR-201-browser-on-remote-computers.md) — a Sirus window paired as a `desktop` may register as the browser client of a headless host (only the three client commands), which then lists the browser tools; `GET /api/tunnel?port=N` (device token as bearer, desktop only, loopback, 1024–65535, ≤64) pipes a TCP connection over the authenticated WebSocket, and the Mac opens a listener on the same port (or a rewritten one) when a page targets the remote computer's `localhost:PORT`.

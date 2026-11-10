@@ -24,7 +24,7 @@ const COMPACT_TOKENS: u64 = 200_000;
 /// Without a known expiry: long enough that the provider's prompt cache has expired.
 const COMPACT_IDLE_MS: i64 = 70 * 60 * 1000;
 /// The popover's width: it holds the stats on one line and the full-width button.
-const POPUP_WIDTH: f32 = 200.;
+const POPUP_WIDTH: f32 = 172.;
 /// The least space kept between the popover and either edge of the window.
 const POPUP_EDGE: f32 = 8.;
 

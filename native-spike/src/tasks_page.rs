@@ -1,6 +1,6 @@
 //! Tarefas (ADR-200): prompts that start a conversation by themselves, once or on a repeat rule.
 //! A page in its own tab, like Pull requests (shell_terminal.rs), opened from the sidebar's "Tarefas"
-//! row: a header (Nova tarefa, Hoje, the period, Dia | Semana | Mês), "Minhas tarefas" at the left
+//! row: a header (the period at the left, Dia | Semana | Mês and Nova tarefa at the right), "Minhas tarefas" at the left
 //! and a calendar (Mês by default, Semana, Dia) of the runs the host lists, a popover per run, and
 //! the "Nova tarefa" modal. The host
 //! (`scheduled_prompts.rs`) owns the tasks and the schedule maths; this module only draws what
@@ -34,7 +34,16 @@ const CHIP_STEP: f32 = 21.;
 const PAGE_CHROME: f32 = crate::theme::TITLE_BAR + crate::theme::FOOTER + 54.;
 const MODAL_WIDTH: f32 = 820.;
 const LABEL_WIDTH: f32 = 104.;
-const POPUP_GAP: f32 = 4.;
+/// The space between a field and the list that opens from it.
+const POPUP_GAP: f32 = 6.;
+/// The least room a list leaves to the window's edge.
+const POPUP_MARGIN: f32 = 12.;
+/// A list's fade and slide, in and out, in seconds.
+const POPUP_MOTION: f32 = 0.16;
+/// How far a list slides while it fades, in px.
+const POPUP_SLIDE: f32 = 6.;
+/// The prompt field grows to this height, then scrolls.
+const PROMPT_MAX_H: f32 = 220.;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum View {
@@ -719,6 +728,30 @@ pub(crate) fn upcoming(
         .collect()
 }
 
+/// Where a list of `size` opens for a field at `field`: directly below it, `POPUP_GAP` away and
+/// with its left edge on the field's, or above the field when the window has no room below.
+pub(crate) fn popover_origin(
+    field: Bounds<Pixels>,
+    size: gpui::Size<Pixels>,
+    window_height: Pixels,
+) -> gpui::Point<Pixels> {
+    let (gap, margin) = (px(POPUP_GAP), px(POPUP_MARGIN));
+    let below = field.bottom() + gap;
+    let above = field.top() - gap - size.height;
+    let fits_below = below + size.height <= window_height - margin;
+    let top = if fits_below {
+        below
+    } else if above >= margin {
+        above
+    } else if window_height - field.bottom() >= field.top() {
+        // Neither side has room: the roomier one, kept inside the window.
+        below.min(window_height - margin - size.height).max(margin)
+    } else {
+        above.max(margin)
+    };
+    gpui::point(field.origin.x, top)
+}
+
 /// A time field's step, as the arrows move it: hours wrap through the day, minutes go by five and
 /// carry into the hour.
 pub(crate) fn step_clock(minutes: u32, hours: bool, up: bool) -> u32 {
@@ -848,6 +881,8 @@ pub(crate) enum Field {
 pub(crate) enum Popup {
     Project,
     Date,
+    /// The composer's model catalog (`Shell::catalog_page`), choosing for the draft.
+    Model,
 }
 
 /// What stops the task from being created, as the footer's button finds it.
@@ -895,6 +930,10 @@ pub(super) struct Sheet {
     month: NaiveDate,
     field: Option<Field>,
     popup: Option<Popup>,
+    /// The list drawn, which outlives `popup` while it fades out.
+    popup_drawn: Option<Popup>,
+    /// 0 closed, 1 open: the list's fade and slide.
+    popup_open: Tween,
     /// A save was tried: problems show from now on.
     tried: bool,
     error: Option<String>,
@@ -902,6 +941,38 @@ pub(super) struct Sheet {
 }
 
 impl Sheet {
+    pub(super) fn provider(&self) -> &'static str {
+        self.provider
+    }
+
+    pub(super) fn model(&self) -> Option<&str> {
+        self.model.as_deref()
+    }
+
+    /// Opens, switches or closes the list under a field; it fades and slides either way.
+    fn set_popup(&mut self, popup: Option<Popup>) {
+        let now = Instant::now();
+        if popup.is_some() {
+            self.popup_drawn = popup;
+        }
+        self.popup_open.set(
+            if popup.is_some() { 1. } else { 0. },
+            now,
+            POPUP_MOTION,
+            Curve::Expo,
+        );
+        self.popup = popup;
+    }
+
+    /// The list to draw now and how far in it is (0 to 1); `None` once it has faded out.
+    fn popup_frame(&self, now: Instant) -> Option<(Popup, f32)> {
+        let shown = self.popup_open.at(now).clamp(0., 1.);
+        if self.popup.is_none() && self.popup_open.done(now) {
+            return None;
+        }
+        self.popup_drawn.map(|popup| (popup, shown))
+    }
+
     /// A form for a new task on `at`.
     fn blank(at: NaiveDateTime, project: String, provider: &'static str) -> Self {
         let mut weekdays = [false; 7];
@@ -929,6 +1000,8 @@ impl Sheet {
             month: month_first(at.date()),
             field: Some(Field::Prompt),
             popup: None,
+            popup_drawn: None,
+            popup_open: Tween::still(0., Instant::now()),
             tried: false,
             error: None,
             saving: false,
@@ -1153,6 +1226,10 @@ pub(super) struct State {
     pub(super) sheet: Option<Sheet>,
     scroll: gpui::ScrollHandle,
     sheet_scroll: gpui::ScrollHandle,
+    /// The prompt field's own scroll, once it is taller than `PROMPT_MAX_H`.
+    prompt_scroll: gpui::ScrollHandle,
+    /// The prompt's length when the caret was last followed, so only typing scrolls it.
+    prompt_seen: Rc<Cell<usize>>,
     /// Bumped by each request so a late answer to an older range is dropped.
     generation: u64,
     /// The grid scrolls to the morning (or to now) once after it opens or changes view.
@@ -1179,6 +1256,8 @@ impl Default for State {
             sheet: None,
             scroll: gpui::ScrollHandle::new(),
             sheet_scroll: gpui::ScrollHandle::new(),
+            prompt_scroll: gpui::ScrollHandle::new(),
+            prompt_seen: Rc::new(Cell::new(usize::MAX)),
             generation: 0,
             scrolled: Cell::new(false),
             shown: 0,
@@ -1200,6 +1279,13 @@ impl State {
 
     fn task(&self, id: &str) -> Option<&Task> {
         self.tasks.iter().find(|task| task.id == id)
+    }
+
+    /// The model list is open over the modal.
+    pub(super) fn model_open(&self) -> bool {
+        self.sheet
+            .as_ref()
+            .is_some_and(|sheet| sheet.popup == Some(Popup::Model))
     }
 
     /// The text the modal's focused field edits; keys go to `fallback` when none has focus.
@@ -1235,8 +1321,10 @@ impl Shell {
     fn tasks_close_layer(&mut self, cx: &mut Context<Self>) -> bool {
         let page = &mut self.tasks_page;
         if let Some(sheet) = page.sheet.as_mut() {
-            if sheet.popup.take().is_none() {
+            if sheet.popup.is_none() {
                 page.sheet = None;
+            } else {
+                sheet.set_popup(None);
             }
             cx.notify();
             return true;
@@ -1507,8 +1595,12 @@ impl Shell {
         cx.notify();
     }
 
-    /// The modal's segmented controls start in place each time it opens.
+    /// The modal's segmented controls start in place each time it opens, and so does the prompt.
     fn tasks_forget_pills(&self) {
+        self.tasks_page.prompt_seen.set(usize::MAX);
+        self.tasks_page
+            .prompt_scroll
+            .set_offset(gpui::point(px(0.), px(0.)));
         for key in [
             "tasks-effort",
             "tasks-worktree",
@@ -1650,6 +1742,39 @@ impl Shell {
             self.tasks_save(cx);
             return true;
         }
+        if self.tasks_page.model_open() && matches!(key, "backspace" | "up" | "down" | "enter") {
+            let rows = self.model_rows_for(ModelTarget::Task);
+            let count = rows.len();
+            match key {
+                "backspace" => {
+                    self.model_query.pop();
+                    self.model_selected = None;
+                }
+                "down" if count > 0 => {
+                    self.model_selected =
+                        Some(self.model_selected.map_or(0, |at| (at + 1) % count));
+                }
+                "up" if count > 0 => {
+                    self.model_selected = Some(
+                        self.model_selected
+                            .map_or(count - 1, |at| (at + count - 1) % count),
+                    );
+                }
+                "enter" => {
+                    if let Some(row) = self
+                        .model_selected
+                        .or((count == 1).then_some(0))
+                        .and_then(|at| rows.get(at))
+                    {
+                        self.tasks_choose_model(row.provider, row.id.clone(), cx);
+                    }
+                }
+                _ => {}
+            }
+            self.field_caret_moved.set(Instant::now());
+            cx.notify();
+            return true;
+        }
         let Some(sheet) = self.tasks_page.sheet.as_mut() else {
             return false;
         };
@@ -1671,7 +1796,7 @@ impl Shell {
                     Some(Field::Minute) => None,
                     None => Some(Field::Title),
                 };
-                sheet.popup = None;
+                sheet.set_popup(None);
                 true
             }
             "backspace" => {
@@ -1817,6 +1942,11 @@ impl Shell {
         let size = window.viewport_size();
         let (vw, vh) = (f32::from(size.width), f32::from(size.height));
         self.tasks_page.viewport.set((vw, vh));
+        if let Some(sheet) = self.tasks_page.sheet.as_ref()
+            && !sheet.popup_open.done(Instant::now())
+        {
+            window.request_animation_frame();
+        }
         self.tasks_popover(vw, vh, cx)
             .into_iter()
             .chain(self.tasks_sheet_view(vw, vh, cx))
@@ -1882,25 +2012,6 @@ impl Shell {
             .h(px(54.))
             .border_b_1()
             .border_color(content(0.07))
-            .child(self.tasks_new_button(cx))
-            .child(
-                div()
-                    .id("tasks-today")
-                    .h(px(30.))
-                    .px(px(13.))
-                    .rounded(px(8.))
-                    .border_1()
-                    .border_color(content(0.13))
-                    .bg(content(0.04))
-                    .flex()
-                    .items_center()
-                    .text_size(px(13.))
-                    .text_color(content(0.9))
-                    .cursor_pointer()
-                    .hover(|s| s.bg(content(0.09)))
-                    .on_click(cx.listener(|this, _, _, cx| this.tasks_today(cx)))
-                    .child(t("Hoje")),
-            )
             .child(arrow("tasks-prev", "‹", false, cx))
             .child(
                 div()
@@ -1932,6 +2043,8 @@ impl Shell {
                     ))
                     .children(segments),
             )
+            // Far right, after the view switch.
+            .child(self.tasks_new_button(cx))
             .into_any_element()
     }
 
@@ -3028,21 +3141,42 @@ impl Shell {
         cx.notify();
     }
 
-    fn tasks_pick_provider(&mut self, provider: &'static str, cx: &mut Context<Self>) {
-        let model = self.tasks_first_model(provider);
+    /// A pick in the catalog popover: the draft's provider and model. The effort follows the
+    /// model: a level it lacks is dropped (`tasks_settle`), and a new provider starts unchosen.
+    pub(super) fn tasks_choose_model(
+        &mut self,
+        provider: &'static str,
+        id: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.model_query.clear();
         self.tasks_edit_sheet(cx, |sheet| {
             if sheet.provider != provider {
-                sheet.provider = provider;
-                sheet.model = model;
                 sheet.effort = None;
             }
+            sheet.provider = provider;
+            sheet.model = Some(id);
+            sheet.set_popup(None);
         });
         self.tasks_settle();
     }
 
-    fn tasks_pick_model(&mut self, id: String, cx: &mut Context<Self>) {
-        self.tasks_edit_sheet(cx, |sheet| sheet.model = Some(id));
-        self.tasks_settle();
+    /// The popover's "‹ Esforço e velocidade" header: back to the modal, whose own controls
+    /// hold the effort.
+    pub(super) fn tasks_close_model(&mut self, cx: &mut Context<Self>) {
+        self.tasks_edit_sheet(cx, |sheet| sheet.set_popup(None));
+    }
+
+    /// The model button opens the catalog on the draft's provider, or closes it.
+    fn tasks_toggle_model(&mut self, cx: &mut Context<Self>) {
+        let open = self.tasks_page.model_open();
+        if !open && let Some(provider) = self.tasks_page.sheet.as_ref().map(|s| s.provider) {
+            self.reset_catalog(provider);
+        }
+        self.tasks_edit_sheet(cx, |sheet| {
+            sheet.field = None;
+            sheet.set_popup(if open { None } else { Some(Popup::Model) });
+        });
     }
 
     /// A text field drawn as a box; the focused one shows the caret.
@@ -3068,19 +3202,7 @@ impl Shell {
                 .child(t(placeholder))
                 .into_any_element()
         } else if lines {
-            let rows: Vec<&str> = text.split('\n').collect();
-            let last = rows.len() - 1;
-            div()
-                .flex()
-                .flex_col()
-                .children(rows.iter().enumerate().map(|(ix, row)| {
-                    div()
-                        .flex()
-                        .min_h(px(20.))
-                        .child(row.to_string())
-                        .when(focused && ix == last, |d| d.child(caret()))
-                }))
-                .into_any_element()
+            self.tasks_wrapped(text, focused)
         } else {
             div()
                 .flex()
@@ -3092,7 +3214,13 @@ impl Shell {
             .id(id)
             .w_full()
             .px(px(12.))
-            .when(lines, |d| d.py(px(10.)).min_h(px(112.)))
+            .when(lines, |d| {
+                d.py(px(10.))
+                    .min_h(px(112.))
+                    .max_h(px(PROMPT_MAX_H))
+                    .overflow_y_scroll()
+                    .track_scroll(&self.tasks_page.prompt_scroll)
+            })
             .when(!lines, |d| d.h(px(36.)).flex().items_center())
             .rounded(px(8.))
             .border_1()
@@ -3110,11 +3238,70 @@ impl Shell {
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.tasks_edit_sheet(cx, |sheet| {
                     sheet.field = Some(field);
-                    sheet.popup = None;
+                    sheet.set_popup(None);
                 });
                 this.field_caret_moved.set(Instant::now());
             }))
             .child(content_el)
+    }
+
+    /// The prompt's text wrapped to the field, as the composer lays its own out, with the caret
+    /// painted over the laid out text at its end. The caret is followed when the text changes.
+    fn tasks_wrapped(&self, text: &str, focused: bool) -> AnyElement {
+        let shown = if text.is_empty() { " " } else { text };
+        let styled = gpui::StyledText::new(SharedString::from(shown.to_owned()));
+        let layout = styled.layout().clone();
+        let len = text.len();
+        let lit = focused && self.field_caret_lit();
+        let scroll = self.tasks_page.prompt_scroll.clone();
+        let seen = self.tasks_page.prompt_seen.clone();
+        let overlay = gpui::canvas(
+            |_, _, _| {},
+            move |bounds, _, window, _| {
+                let line = layout.line_height();
+                let at = if len == 0 {
+                    Some(bounds.origin)
+                } else {
+                    layout.position_for_index(len)
+                };
+                let Some(at) = at else {
+                    return;
+                };
+                if seen.replace(len) != len {
+                    let top = at.y - bounds.origin.y;
+                    let scrolled = -scroll.offset().y;
+                    let target = follow_caret(top, line, scrolled, scroll.bounds().size.height);
+                    if target != scrolled {
+                        scroll.set_offset(gpui::point(px(0.), -target));
+                        window.on_next_frame(|window, _| window.refresh());
+                    }
+                }
+                if lit {
+                    let height = px(FIELD_CARET_HEIGHT);
+                    window.paint_quad(
+                        gpui::fill(
+                            Bounds::new(
+                                gpui::point(at.x, at.y + (line - height) / 2.),
+                                gpui::size(px(crate::theme::CARET_WIDTH), height),
+                            ),
+                            crate::theme::caret_color(),
+                        )
+                        .corner_radii(px(1.)),
+                    );
+                }
+            },
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full();
+        div()
+            .relative()
+            .w_full()
+            .min_w_0()
+            .child(styled)
+            .child(overlay)
+            .into_any_element()
     }
 
     /// A rounded chip: a preset, an example, a repeat's weekday.
@@ -3389,7 +3576,7 @@ impl Shell {
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.tasks_edit_sheet(cx, |sheet| {
                     sheet.field = Some(field);
-                    sheet.popup = None;
+                    sheet.set_popup(None);
                 });
             }))
             .child(
@@ -3518,11 +3705,11 @@ impl Shell {
             .on_click(cx.listener(|this, _, _, cx| {
                 this.tasks_edit_sheet(cx, |sheet| {
                     sheet.field = None;
-                    sheet.popup = if sheet.popup == Some(Popup::Project) {
+                    sheet.set_popup(if sheet.popup == Some(Popup::Project) {
                         None
                     } else {
                         Some(Popup::Project)
-                    };
+                    });
                 });
             }))
             .child(self.tasks_anchor("tasks-project"))
@@ -3580,110 +3767,54 @@ impl Shell {
                     dim,
                 )),
         );
-        // The model: provider tabs over the provider's models.
-        let providers = self.enabled_providers();
-        let tabs = providers.iter().enumerate().map(|(ix, provider)| {
-            let provider = *provider;
-            let on = sheet.provider == provider;
-            let color = Self::tasks_color(provider);
+        // The model: the composer's pill, which opens its catalog popover under it.
+        let model_open = sheet.popup == Some(Popup::Model);
+        let info = self.execution(sheet.provider, sheet.model.as_deref());
+        let model_button = div()
+            .id("tasks-model")
+            .relative()
+            .h(px(34.))
+            .px(px(10.))
+            .max_w(px(360.))
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .rounded(px(8.))
+            .border_1()
+            .border_color(if model_open { accent } else { content(0.13) })
+            .bg(crate::theme::field_fill())
+            .text_size(px(13.))
+            .text_color(content(0.92))
+            .cursor_pointer()
+            .hover(|s| s.border_color(content(0.25)))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(|this, _, _, cx| this.tasks_toggle_model(cx)))
+            .child(self.tasks_anchor("tasks-model"))
+            .child(provider_mark(sheet.provider, 16.))
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(self.model_display(sheet.provider, sheet.model.as_deref())),
+            )
+            .child(icon("chevron-down", 12.).text_color(dim));
+        let model_row = Self::tasks_form_row(
+            "Modelo",
+            false,
+            false,
             div()
-                .id(("tasks-provider", ix))
-                .h(px(36.))
-                .px(px(12.))
-                .mb(px(-1.))
-                .flex()
-                .items_center()
-                .gap(px(8.))
-                .border_b_2()
-                .border_color(if on { color } else { transparent() })
-                .text_size(px(13.))
-                .when(on, |d| d.font_weight(FontWeight::SEMIBOLD))
-                .text_color(content(if on { 1. } else { 0.48 }))
-                .cursor_pointer()
-                .when(!on, |d| d.hover(|s| s.text_color(content(0.92))))
-                .on_click(cx.listener(move |this, _, _, cx| this.tasks_pick_provider(provider, cx)))
-                .child(provider_mark(provider, 14.))
-                .child(provider_short(provider))
-        });
-        let favorites = self.favorite_models();
-        let rows = self.provider_model_rows(
-            sheet.provider,
-            (sheet.provider, sheet.model.as_deref()),
-            "",
-            &favorites,
-        );
-        let provider_color = Self::tasks_color(sheet.provider);
-        let models = rows.into_iter().enumerate().map(|(ix, row)| {
-            let on = sheet.model.as_deref() == Some(row.id.as_str());
-            let info = self.execution(sheet.provider, Some(&row.id));
-            let note = model_note(info.levels.len(), info.fast_ok);
-            let id = row.id.clone();
-            let mut wash = provider_color;
-            wash.a = 0.16;
-            div()
-                .id(("tasks-model", ix))
-                .h(px(36.))
-                .px(px(10.))
-                .rounded(px(6.))
                 .flex()
                 .items_center()
                 .gap(px(12.))
-                .cursor_pointer()
-                .when(on, |d| d.bg(wash))
-                .when(!on, |d| d.hover(|s| s.bg(content(0.05))))
-                .on_click(cx.listener(move |this, _, _, cx| this.tasks_pick_model(id.clone(), cx)))
+                .child(model_button)
                 .child(
                     div()
-                        .w(px(16.))
-                        .flex()
-                        .justify_center()
-                        .child(provider_mark(sheet.provider, 14.)),
-                )
-                .child(
-                    div()
-                        .text_size(px(13.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(row.name),
-                )
-                .child(
-                    div()
-                        .flex_1()
                         .min_w_0()
                         .truncate()
-                        .text_align(gpui::TextAlign::Right)
                         .text_size(px(11.5))
                         .text_color(dim)
-                        .child(note),
-                )
-                .child(div().w(px(14.)).flex().justify_center().when(on, |d| {
-                    d.child(icon("check", 12.).text_color(provider_color))
-                }))
-        });
-        let model_row = Self::tasks_form_row(
-            "Modelo",
-            true,
-            false,
-            div()
-                .rounded(px(10.))
-                .border_1()
-                .border_color(content(0.13))
-                .bg(content(0.03))
-                .overflow_hidden()
-                .child(
-                    div()
-                        .flex()
-                        .px(px(8.))
-                        .border_b_1()
-                        .border_color(content(0.07))
-                        .children(tabs),
-                )
-                .child(
-                    div()
-                        .id("tasks-models")
-                        .max_h(px(216.))
-                        .overflow_y_scroll()
-                        .p(px(4.))
-                        .children(models),
+                        .child(model_note(info.levels.len(), info.fast_ok)),
                 ),
         );
         // The effort: required, nothing preselected.
@@ -3847,12 +3978,13 @@ impl Shell {
             .on_click(cx.listener(|this, _, _, cx| {
                 this.tasks_edit_sheet(cx, |sheet| {
                     sheet.field = None;
-                    sheet.popup = if sheet.popup == Some(Popup::Date) {
+                    let open = if sheet.popup == Some(Popup::Date) {
                         None
                     } else {
                         sheet.month = month_first(sheet.date);
                         Some(Popup::Date)
                     };
+                    sheet.set_popup(open);
                 });
             }))
             .child(self.tasks_anchor("tasks-date"))
@@ -3927,7 +4059,7 @@ impl Shell {
                         Some(moment) => chip.on_click(cx.listener(move |this, _, _, cx| {
                             this.tasks_edit_sheet(cx, |sheet| {
                                 sheet.set_when(moment);
-                                sheet.popup = None;
+                                sheet.set_popup(None);
                             });
                         })),
                         None => chip,
@@ -4306,7 +4438,7 @@ impl Shell {
                 cx.listener(|this, _, _, cx| {
                     this.tasks_edit_sheet(cx, |sheet| {
                         sheet.field = None;
-                        sheet.popup = None;
+                        sheet.set_popup(None);
                     });
                     cx.stop_propagation();
                 }),
@@ -4350,9 +4482,13 @@ impl Shell {
         let mut out = Vec::new();
         let accent = crate::theme::accent();
         let dim = content(0.48);
-        if sheet.popup == Some(Popup::Project)
+        let frame = sheet.popup_frame(Instant::now());
+        let progress = |which: Popup| frame.filter(|(popup, _)| *popup == which).map(|(_, t)| t);
+        if let Some(shown) = progress(Popup::Project)
             && let Some(at) = self.tasks_page.anchor_of("tasks-project")
         {
+            let height = (self.projects.len() as f32 * 40. + 10.).min(282.);
+            let origin = popover_origin(at, gpui::size(at.size.width, px(height)), px(vh));
             let rows = self.projects.iter().enumerate().map(|(ix, project)| {
                 let id = project.id.clone();
                 let on = project.id == sheet.project;
@@ -4370,7 +4506,7 @@ impl Shell {
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.tasks_edit_sheet(cx, |sheet| {
                             sheet.project = id.clone();
-                            sheet.popup = None;
+                            sheet.set_popup(None);
                         });
                     }))
                     .child(self.project_avatar_for(ix, 24.))
@@ -4404,8 +4540,9 @@ impl Shell {
                     .id("tasks-project-menu")
                     .occlude()
                     .absolute()
-                    .left(at.origin.x)
-                    .top(at.origin.y + at.size.height + px(POPUP_GAP))
+                    .left(origin.x)
+                    .top(origin.y + px((1. - shown) * -POPUP_SLIDE))
+                    .opacity(shown)
                     .w(at.size.width)
                     .max_h(px(280.))
                     .overflow_y_scroll()
@@ -4420,17 +4557,43 @@ impl Shell {
                     .into_any_element(),
             );
         }
-        if sheet.popup == Some(Popup::Date)
+        if let Some(shown) = progress(Popup::Model)
+            && let Some(at) = self.tasks_page.anchor_of("tasks-model")
+        {
+            // The catalog's back row, 320 px of list, and the border.
+            let origin = popover_origin(at, gpui::size(px(288.), px(360.)), px(vh));
+            let mut moving = false;
+            let page = self.catalog_page(ModelTarget::Task, Instant::now(), &mut moving, cx);
+            if moving {
+                self.send_moving.set(true);
+            }
+            out.push(
+                div()
+                    .id("tasks-model-menu")
+                    .occlude()
+                    .absolute()
+                    .left(origin.x)
+                    .top(origin.y + px((1. - shown) * -POPUP_SLIDE))
+                    .opacity(shown)
+                    .w(px(288.))
+                    .rounded(px(crate::theme::RADIUS_LG))
+                    .border_1()
+                    .border_color(crate::theme::border())
+                    .child(crate::theme::floating_surface(crate::theme::RADIUS_LG))
+                    .shadow_lg()
+                    .overflow_hidden()
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(page)
+                    .into_any_element(),
+            );
+        }
+        if let Some(shown) = progress(Popup::Date)
             && let Some(at) = self.tasks_page.anchor_of("tasks-date")
         {
-            const HEIGHT: f32 = 330.;
-            let below = f32::from(at.origin.y + at.size.height) + POPUP_GAP;
-            let top = if below + HEIGHT > vh - 12. {
-                (f32::from(at.origin.y) - POPUP_GAP - HEIGHT).max(12.)
-            } else {
-                below
-            };
             let grid = month_grid(sheet.month, monday_first());
+            // Padding and border 26, month row 30, weekday row 20, then 33 a week.
+            let height = 76. + (grid.len() / 7) as f32 * 33.;
+            let origin = popover_origin(at, gpui::size(px(272.), px(height)), px(vh));
             let heads = weekday_order(monday_first()).into_iter().map(|day| {
                 div()
                     .flex_1()
@@ -4480,7 +4643,7 @@ impl Shell {
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             this.tasks_edit_sheet(cx, |sheet| {
                                                 sheet.set_date(day);
-                                                sheet.popup = None;
+                                                sheet.set_popup(None);
                                             });
                                         }))
                                 })
@@ -4514,8 +4677,9 @@ impl Shell {
                     .id("tasks-calendar-popup")
                     .occlude()
                     .absolute()
-                    .left(at.origin.x)
-                    .top(px(top))
+                    .left(origin.x)
+                    .top(origin.y + px((1. - shown) * -POPUP_SLIDE))
+                    .opacity(shown)
                     .w(px(272.))
                     .p(px(12.))
                     .rounded(px(10.))
@@ -4554,6 +4718,40 @@ mod tests {
 
     fn at(text: &str) -> NaiveDateTime {
         parse_at(text).unwrap()
+    }
+
+    fn field(x: f32, y: f32, w: f32, h: f32) -> Bounds<Pixels> {
+        Bounds::new(gpui::point(px(x), px(y)), gpui::size(px(w), px(h)))
+    }
+
+    fn origin(field: Bounds<Pixels>, height: f32, window: f32) -> (f32, f32) {
+        let at = popover_origin(field, gpui::size(px(272.), px(height)), px(window));
+        (f32::from(at.x), f32::from(at.y))
+    }
+
+    #[test]
+    fn a_popover_opens_below_its_field_six_px_away_and_flush_left() {
+        let at = origin(field(100., 200., 248., 36.), 274., 800.);
+        assert_eq!(at, (100., 242.));
+    }
+
+    #[test]
+    fn a_popover_flips_above_only_when_there_is_no_room_below() {
+        // 560 + 36 + 6 + 274 = 876 > 788: above, its bottom 6 px over the field.
+        let at = origin(field(100., 560., 248., 36.), 274., 800.);
+        assert_eq!(at, (100., 280.));
+        // Exactly the room that is left (window height minus the 12 px margin) still fits below.
+        let at = origin(field(100., 400., 248., 36.), 330., 794.);
+        assert_eq!(at.1, 442.);
+    }
+
+    #[test]
+    fn a_popover_with_no_room_either_way_stays_inside_the_window() {
+        let tall = origin(field(10., 150., 200., 36.), 400., 420.);
+        // More room below than above: below, pushed up to the margin.
+        assert_eq!(tall.1, 12.);
+        let low = origin(field(10., 300., 200., 36.), 400., 420.);
+        assert_eq!(low.1, 12.);
     }
 
     fn day(text: &str) -> NaiveDate {

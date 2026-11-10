@@ -1499,6 +1499,9 @@ pub struct Shell {
     /// When each prompt last folded or unfolded, and its bubble's width.
     prompt_moved: HashMap<(usize, usize), Instant>,
     prompt_widths: std::cell::RefCell<HashMap<(usize, usize), Rc<Cell<Pixels>>>>,
+    /// Where the conversation card sat last frame, so the chrome wash can skip it (Monocode paints
+    /// its 5% wash on the chrome only; under the clear card the glass shows untouched).
+    card_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// When each group of steps last changed between open and closed, and those running now.
     phase_moved: std::cell::RefCell<HashMap<(usize, usize, usize), Instant>>,
     phase_live: std::cell::RefCell<HashSet<(usize, usize, usize)>>,
@@ -1985,6 +1988,7 @@ impl Shell {
             project_switch: None,
             prompt_moved: HashMap::new(),
             prompt_widths: Default::default(),
+            card_bounds: Default::default(),
             phase_moved: Default::default(),
             phase_live: Default::default(),
             turn_width: Rc::new(Cell::new(px(0.))),
@@ -20688,7 +20692,10 @@ impl Render for Shell {
                     .size_full()
                     .flex()
                     .flex_col()
-                    .bg(chrome_wash())
+                    .relative()
+                    // The wash covers the chrome only: over glass the clear card keeps the raw
+                    // backdrop, as Monocode's main pane does; an opaque card covers it anyway.
+                    .child(chrome_wash_outside(self.card_bounds.clone()))
                     .when(pane_fill().a < 0.5, |d| d.opacity(1. - settings_cover))
                     .when(pane_fill().a < 0.5 && settings_cover >= 1., |d| d.invisible())
                     .child(titlebar)
@@ -20731,6 +20738,14 @@ impl Render for Shell {
                                                     .border_color(crate::theme::border())
                                                     .bg(pane_fill())
                                                     .overflow_hidden()
+                                                    .child({
+                                                        let card = self.card_bounds.clone();
+                                                        gpui::canvas(move |bounds, _, _| card.set(Some(bounds)), |_, _, _, _| {})
+                                                            .absolute()
+                                                            .top_0()
+                                                            .left_0()
+                                                            .size_full()
+                                                    })
                                                     .child(div().flex_1().min_h_0().w_full().flex()
                                                     .child(div().flex_1().min_w_0().h_full().flex().overflow_hidden().child(chat_slot))
                                                     .when_some(dock, |d, dock| {
@@ -21597,5 +21612,73 @@ mod prompt_fold_tests {
             needs.controls(HeaderTier::Overflow),
             needs.git_icon + 3. * needs.icon + 12.
         );
+    }
+}
+
+/// The 5% chrome wash over the window's tint, painted around the conversation card instead of
+/// under it: four bands (above, below, left, right of the card's last bounds).
+fn chrome_wash_outside(card: Rc<Cell<Option<Bounds<Pixels>>>>) -> impl IntoElement {
+    gpui::canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            let wash = chrome_wash();
+            let Some(c) = card.get().filter(|c| c.size.width > px(0.) && c.size.height > px(0.))
+            else {
+                window.paint_quad(gpui::fill(bounds, wash));
+                return;
+            };
+            for band in wash_bands(bounds, c) {
+                window.paint_quad(gpui::fill(band, wash));
+            }
+        },
+    )
+    .absolute()
+    .top_0()
+    .left_0()
+    .size_full()
+}
+
+/// The parts of `outer` not covered by `hole`, as up to four rectangles.
+fn wash_bands(outer: Bounds<Pixels>, hole: Bounds<Pixels>) -> Vec<Bounds<Pixels>> {
+    let (ol, ot, or, ob) = (outer.left(), outer.top(), outer.right(), outer.bottom());
+    let (hl, ht, hr, hb) = (
+        hole.left().max(ol),
+        hole.top().max(ot),
+        hole.right().min(or),
+        hole.bottom().min(ob),
+    );
+    let mut out = Vec::new();
+    let mut push = |l: Pixels, t: Pixels, r: Pixels, b: Pixels| {
+        if r > l && b > t {
+            out.push(Bounds::from_corners(gpui::point(l, t), gpui::point(r, b)));
+        }
+    };
+    push(ol, ot, or, ht);
+    push(ol, hb, or, ob);
+    push(ol, ht, hl, hb);
+    push(hr, ht, or, hb);
+    out
+}
+
+#[cfg(test)]
+mod wash_band_tests {
+    use super::*;
+
+    fn rect(l: f32, t: f32, r: f32, b: f32) -> Bounds<Pixels> {
+        Bounds::from_corners(gpui::point(px(l), px(t)), gpui::point(px(r), px(b)))
+    }
+
+    #[test]
+    fn the_wash_surrounds_the_card_and_never_covers_it() {
+        let bands = wash_bands(rect(0., 0., 100., 100.), rect(20., 30., 90., 95.));
+        assert_eq!(bands.len(), 4);
+        let area: f32 = bands
+            .iter()
+            .map(|b| f32::from(b.size.width) * f32::from(b.size.height))
+            .sum();
+        assert_eq!(area, 100. * 100. - 70. * 65.);
+        for b in &bands {
+            assert!(b.right() <= px(20.) || b.left() >= px(90.) || b.bottom() <= px(30.) || b.top() >= px(95.));
+        }
     }
 }

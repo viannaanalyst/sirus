@@ -43,9 +43,34 @@ pub(super) fn settle_bar(fill: f32, row_fade: f32) -> Option<Div> {
     )
 }
 
-/// The faint grid of dots behind an old row, painted as small quads only for those rows. It sits
-/// under the row's content, and is lifted past the row's fade like the bar.
-pub(super) fn settle_texture(alpha: f32, row_fade: f32) -> Option<impl IntoElement> {
+/// The dot's diameter, in px.
+const DOT: f32 = 1.5;
+
+/// The dots of one row's band, as centres in px from the band's top-left. The grid is anchored to
+/// the list (`top` is the row's place in it, so the grid moves with the rows when they scroll),
+/// and a band takes only the dots whose centres fall inside its `size`. Consecutive rows, each
+/// `CONV_ROW` tall, therefore split one continuous grid between them, and the rows' bands cover
+/// the spacing between the rows too.
+pub(super) fn texture_dots(size: (f32, f32), top: f32, gap: f32) -> Vec<(f32, f32)> {
+    // The grid centres `(k + 0.5) * gap` that lie in `[from, from + length)`.
+    let across = |from: f32, length: f32| {
+        let start = (from / gap - 0.5).ceil() as i64;
+        let end = ((from + length) / gap - 0.5).ceil() as i64;
+        (start..end).map(move |k| (k as f32 + 0.5) * gap)
+    };
+    let mut dots = Vec::new();
+    for y in across(top, size.1) {
+        for x in across(0., size.0) {
+            dots.push((x, y - top));
+        }
+    }
+    dots
+}
+
+/// The faint dots behind an old row, painted as small round quads over the row's whole pitch,
+/// its band from `top` down to the next row, so the group's texture is one area. It sits under
+/// the row's content, and is lifted past the row's fade like the bar.
+pub(super) fn settle_texture(alpha: f32, row_fade: f32, top: f32) -> Option<impl IntoElement> {
     if alpha <= 0. {
         return None;
     }
@@ -54,34 +79,78 @@ pub(super) fn settle_texture(alpha: f32, row_fade: f32) -> Option<impl IntoEleme
         gpui::canvas(
             |_, _, _| {},
             move |bounds, _, window, _| {
-                let gap = settle::TEXTURE_GAP;
-                let dot = px(1.2);
-                let (width, height) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
-                let mut y = gap / 2.;
-                while y < height {
-                    let mut x = gap / 2.;
-                    while x < width {
-                        window.paint_quad(
-                            gpui::fill(
-                                Bounds::new(
-                                    bounds.origin + gpui::point(px(x), px(y)),
-                                    gpui::size(dot, dot),
-                                ),
-                                color,
-                            )
-                            .corner_radii(dot),
-                        );
-                        x += gap;
-                    }
-                    y += gap;
+                let size = (f32::from(bounds.size.width), f32::from(bounds.size.height));
+                for (x, y) in texture_dots(size, top, settle::TEXTURE_GAP) {
+                    window.paint_quad(
+                        gpui::fill(
+                            Bounds::new(
+                                bounds.origin + gpui::point(px(x - DOT / 2.), px(y - DOT / 2.)),
+                                gpui::size(px(DOT), px(DOT)),
+                            ),
+                            color,
+                        )
+                        .corner_radii(px(DOT / 2.)),
+                    );
                 }
             },
         )
         .absolute()
         .top_0()
         .left_0()
-        .size_full(),
+        .right_0()
+        .h(px(super::CONV_ROW)),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The dots of a band, in the list's coordinates.
+    fn in_list(size: (f32, f32), top: f32) -> Vec<(f32, f32)> {
+        texture_dots(size, top, 6.)
+            .into_iter()
+            .map(|(x, y)| (x, y + top))
+            .collect()
+    }
+
+    #[test]
+    fn a_band_holds_a_grid_of_dots_inside_its_size() {
+        // Centres at 3, 9, 15, 21, 27 both ways: five columns in 30 px, five rows in 29 px.
+        let dots = texture_dots((30., 29.), 0., 6.);
+        assert_eq!(dots.len(), 25);
+        assert!(dots.iter().all(|(x, y)| *x < 30. && *y < 29.));
+        assert_eq!(dots[0], (3., 3.));
+    }
+
+    #[test]
+    fn consecutive_rows_split_one_grid_between_them() {
+        // Two 29 px rows at 0 and 29, 60 px wide: the union is the grid over 0..58, once each.
+        let mut union = in_list((60., 29.), 0.);
+        union.extend(in_list((60., 29.), 29.));
+        let mut grid: Vec<(f32, f32)> = (0..10)
+            .flat_map(|row| (0..10).map(move |col| (3. + 6. * col as f32, 3. + 6. * row as f32)))
+            .collect();
+        union.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        grid.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert_eq!(union, grid);
+    }
+
+    #[test]
+    fn a_row_moved_by_scrolling_keeps_its_dots_on_the_list_grid() {
+        // A row whose top is 4.5 px down the list: its dots stay on the list's rows at 3 + 6n,
+        // the first one 9 px down the list, and none is lost to the band's edge.
+        let dots = in_list((30., 29.), 4.5);
+        assert!(dots.iter().all(|(_, y)| y % 6. == 3.));
+        assert_eq!(dots.iter().map(|(_, y)| *y).fold(f32::MAX, f32::min), 9.);
+        assert_eq!(dots.len(), 25);
+    }
+
+    #[test]
+    fn a_band_without_width_or_height_has_no_dots() {
+        assert!(texture_dots((0., 29.), 0., 6.).is_empty());
+        assert!(texture_dots((30., 0.), 0., 6.).is_empty());
+    }
 }
 
 impl Shell {

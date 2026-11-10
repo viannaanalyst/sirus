@@ -19,8 +19,8 @@ pub const TRACK_ALPHA: f32 = 0.08;
 /// The texture shows from this age; its dots go from the first to the second opacity at the
 /// limit, `TEXTURE_GAP` px apart.
 pub const TEXTURE_FROM: Duration = Duration::days(1);
-pub const TEXTURE_ALPHA: (f32, f32) = (0.05, 0.10);
-pub const TEXTURE_GAP: f32 = 5.;
+pub const TEXTURE_ALPHA: (f32, f32) = (0.12, 0.22);
+pub const TEXTURE_GAP: f32 = 6.;
 
 /// The longest limit the Settings field takes; the host refuses more.
 pub const MAX_DAYS: u32 = 365;
@@ -155,25 +155,39 @@ mod tests {
     fn the_texture_starts_at_a_day_old() {
         assert!(close(texture(Duration::zero(), week()), 0.));
         assert!(close(texture(Duration::hours(23), week()), 0.));
-        assert!(close(texture(Duration::days(1), week()), 0.05));
+        assert!(close(texture(Duration::days(1), week()), 0.12));
         assert!(close(texture(Duration::hours(12), week()), 0.));
     }
 
     #[test]
     fn the_texture_ramps_from_a_day_to_the_limit() {
-        // Halfway between a day and the week: 0.05 + 0.05 / 2.
-        assert!(close(texture(Duration::days(4), week()), 0.075));
-        assert!(close(texture(week(), week()), 0.10));
-        assert!(close(texture(Duration::days(30), week()), 0.10));
+        // Halfway between a day and the week: 0.12 + 0.10 / 2.
+        assert!(close(texture(Duration::days(4), week()), 0.17));
+        assert!(close(texture(week(), week()), 0.22));
+        assert!(close(texture(Duration::days(30), week()), 0.22));
         // A limit of a day or less: the texture is at its top from the day on.
-        assert!(close(texture(Duration::days(1), Duration::days(1)), 0.10));
+        assert!(close(texture(Duration::days(1), Duration::days(1)), 0.22));
         assert!(close(texture(Duration::days(9), Duration::zero()), 0.));
+    }
+
+    #[test]
+    fn a_three_day_old_row_shows_its_texture_at_or_above_0_12() {
+        // What the eye gets: the lifted alpha times the row's fade, as the canvas inside the row
+        // is painted under the row's element opacity.
+        let (age, limit) = (Duration::days(3), week());
+        let row_fade = opacity(age, limit);
+        let shown = lifted(texture(age, limit), row_fade) * row_fade;
+        assert!(shown >= 0.12, "effective texture alpha {shown}");
+        assert!(close(shown, 0.1533));
+        // At the limit the lifted value still reaches the full texture alpha.
+        let row_fade = opacity(week(), limit);
+        assert!(close(lifted(TEXTURE_ALPHA.1, row_fade) * row_fade, 0.22));
     }
 
     #[test]
     fn the_row_fade_is_compensated_so_the_overlays_keep_their_alpha() {
         let fade = FADED as f32;
-        assert!(close(lifted(TEXTURE_ALPHA.1, fade) * fade, 0.10));
+        assert!(close(lifted(TEXTURE_ALPHA.1, fade) * fade, 0.22));
         assert!(close(lifted(TRACK_ALPHA, fade) * fade, TRACK_ALPHA));
         assert!(close(lifted(BAR_ALPHA, 1.), BAR_ALPHA));
         // A colour cannot go past full opacity, so at the limit the bar shows at the row's fade.

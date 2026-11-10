@@ -15509,9 +15509,10 @@ impl Shell {
                         if text.start >= end {
                             continue;
                         }
+                        let top = reply_top(beats, at, labelled);
                         // A settled turn's last words are drawn after its cards.
                         if !working && last_section && at + 1 == beats.len() {
-                            answer_view = Some((absolute, &shown_answer[text.start..end]));
+                            answer_view = Some((absolute, &shown_answer[text.start..end], top));
                             continue;
                         }
                         let body = transcript_select::scoped(
@@ -15525,7 +15526,7 @@ impl Shell {
                             || crate::markdown::render_rich(&shown_answer[text.start..end], &rich),
                         );
                         self.wake_reply_assets(cx);
-                        body
+                        padded_top(body, top)
                     }
                     data::Beat::Steps(steps) => self.phase_view(
                         conversation,
@@ -15772,21 +15773,24 @@ impl Shell {
                             })
                             .map(|(i, visual)| self.visual_element(index, i, visual, cx)),
                     )
-                    .when_some(answer_view, |d, (beat, shown)| {
-                        d.child(transcript_select::scoped(
-                            &self.select,
-                            transcript_select::Reply {
-                                conversation,
-                                turn: index,
-                                user: false,
-                                beat,
-                            },
-                            || {
-                                // Linked pictures and videos, diagrams, formulas and HTML open from here.
-                                let body = crate::markdown::render_rich(shown, &rich);
-                                self.wake_reply_assets(cx);
-                                body
-                            },
+                    .when_some(answer_view, |d, (beat, shown, top)| {
+                        d.child(padded_top(
+                            transcript_select::scoped(
+                                &self.select,
+                                transcript_select::Reply {
+                                    conversation,
+                                    turn: index,
+                                    user: false,
+                                    beat,
+                                },
+                                || {
+                                    // Linked pictures and videos, diagrams, formulas and HTML open from here.
+                                    let body = crate::markdown::render_rich(shown, &rich);
+                                    self.wake_reply_assets(cx);
+                                    body
+                                },
+                            ),
+                            top,
                         ))
                     })
                     .when_some(self.delegated_tasks_view(turn, cx), |d, row| d.child(row))
@@ -18433,6 +18437,24 @@ fn title_tab_or(title_tab: Option<AnyElement>, transcript: AnyElement) -> (AnyEl
     match title_tab {
         Some(page) => (page, false),
         None => (transcript, true),
+    }
+}
+
+/// The space above a reply's text beat: 12 px where a reply opens, 4 px when work or a receipt
+/// line sits above it, none when it follows another text beat.
+fn reply_top(beats: &[data::Beat], at: usize, labelled: bool) -> Option<f32> {
+    match at.checked_sub(1).map(|prev| &beats[prev]) {
+        Some(data::Beat::Text(_)) => None,
+        Some(data::Beat::Steps(_)) => Some(4.),
+        _ if labelled => Some(4.),
+        _ => Some(12.),
+    }
+}
+
+fn padded_top(body: AnyElement, top: Option<f32>) -> AnyElement {
+    match top {
+        Some(top) => div().pt(px(top)).child(body).into_any_element(),
+        None => body,
     }
 }
 

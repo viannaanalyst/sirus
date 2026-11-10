@@ -865,14 +865,48 @@ fn flowing(inl: Inline) -> AnyElement {
         .into_any_element()
 }
 
+/// The space above a block in a stack: 24 around a rule, 8 above a list, else the stack's gap.
+fn gap_above(prev: Option<&Block>, next: &Block, gap: f32) -> f32 {
+    if matches!(next, Block::Rule) || matches!(prev, Some(Block::Rule)) {
+        24.
+    } else if matches!(next, Block::List(..)) {
+        8.
+    } else {
+        gap
+    }
+}
+
 fn stack(blocks: Vec<Block>, gap: f32, rich: Option<&Rich>) -> Div {
-    div().flex().flex_col().gap(px(gap)).children(
-        blocks
-            .into_iter()
-            // A page link means nothing where replies have no viewer to open it in.
-            .filter(|b| rich.is_some() || !matches!(b, Block::HtmlFile(_)))
-            .map(|b| block(b, rich)),
-    )
+    // A page link means nothing where replies have no viewer to open it in.
+    let blocks: Vec<Block> = blocks
+        .into_iter()
+        .filter(|b| rich.is_some() || !matches!(b, Block::HtmlFile(_)))
+        .collect();
+    // Each block's space above, as an offset from the stack's gap.
+    let offsets: Vec<f32> = blocks
+        .iter()
+        .enumerate()
+        .map(|(at, b)| gap_above(at.checked_sub(1).map(|prev| &blocks[prev]), b, gap) - gap)
+        .collect();
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(gap))
+        .children(
+            blocks
+                .into_iter()
+                .zip(offsets)
+                .enumerate()
+                .map(|(at, (b, offset))| {
+                    let el = block(b, rich);
+                    // Only a block that needs more or less room than the gap is wrapped to shift it.
+                    if at == 0 || offset == 0. {
+                        el
+                    } else {
+                        div().mt(px(offset)).child(el).into_any_element()
+                    }
+                }),
+        )
 }
 
 /// A paragraph with formulas, once every formula is drawn (or failed): words and pictures in a
@@ -976,7 +1010,7 @@ fn block(b: Block, rich: Option<&Rich>) -> AnyElement {
                             .whitespace_nowrap()
                             .child(marker),
                     )
-                    .child(div().flex_1().min_w_0().child(stack(item, 4., rich)))
+                    .child(div().flex_1().min_w_0().child(stack(item, 16., rich)))
             });
             div()
                 .flex()
@@ -1000,7 +1034,7 @@ fn block(b: Block, rich: Option<&Rich>) -> AnyElement {
                             .flex_1()
                             .min_w_0()
                             .px(px(10.))
-                            .py(px(6.))
+                            .py(px(8.))
                             .text_size(px(12.))
                             .line_height(px(18.))
                             .child(text(c))
@@ -1011,7 +1045,8 @@ fn block(b: Block, rich: Option<&Rich>) -> AnyElement {
                 .flex_col()
                 .rounded(px(crate::theme::RADIUS_MD))
                 .border_1()
-                .border_color(crate::theme::border())
+                .border_color(content(0.1))
+                .bg(content(0.06))
                 .overflow_hidden()
                 .child(row(head, true))
                 .children(rows.into_iter().map(|r| row(r, false)))

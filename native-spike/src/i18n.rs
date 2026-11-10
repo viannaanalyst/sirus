@@ -2775,10 +2775,6 @@ const ENTRIES: &[(&str, &str)] = &[
         "Nenhum login do GitHub está esperando.",
         "No GitHub sign-in is waiting.",
     ),
-    (
-        "Nenhum login do Mac correspondeu aos conectores deste computador.",
-        "None of this Mac's sign-ins matched this computer's connectors.",
-    ),
     ("Nenhum login salvo.", "No saved logins."),
     (
         "Nenhum modelo corresponde à busca.",

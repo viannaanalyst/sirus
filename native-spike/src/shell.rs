@@ -1758,14 +1758,6 @@ impl Shell {
                                 this.settings_data
                                     .insert("connectors", value["statuses"].clone());
                             }
-                            if value["gained"].as_u64() == Some(0) {
-                                this.problem = Some(
-                                    crate::i18n::t(
-                                        "Nenhum login do Mac correspondeu aos conectores deste computador.",
-                                    )
-                                    .to_owned(),
-                                );
-                            }
                         }
                         cx.notify();
                         return;

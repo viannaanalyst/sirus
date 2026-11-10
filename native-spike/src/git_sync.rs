@@ -1,6 +1,4 @@
-//! Two Git functions of the environment card and the top bar, after Sirus: "Criar branch"
-//! (EnvironmentPanel's BranchRow, with the name checked here before the host is asked) and the
-//! state behind the top bar's Git split button (git_split.rs and git_button.rs, ADR-148 and
+//! The state behind the top bar's Git split button (git_split.rs and git_button.rs, ADR-148 and
 //! ADR-198): what the branch is ahead of or behind its upstream, when GitHub was last asked, what
 //! the button is doing and whether its menu is open. The host does the Git work; this module
 //! reads its answers and keeps the state. shell.rs asks `observe` on each frame, sends the
@@ -9,73 +7,11 @@
 use crate::git_split::Running;
 use crate::i18n::t;
 use crate::motion::{Curve, Tween};
-use crate::theme::{accent, content, primary_action};
-use gpui::{AnyElement, App, ClickEvent, Div, Window, div, prelude::*, px, rgb};
 use serde_json::Value;
 use std::time::{Duration, Instant};
 
 /// Sirus asks again every 5 minutes while the window is visible (lib/git-incoming.ts).
 pub const INCOMING_REFRESH: Duration = Duration::from_secs(5 * 60);
-/// Longest branch name the host takes (its MAX_BRANCH_NAME).
-const MAX_BRANCH_NAME: usize = 120;
-
-// --- Branch names -----------------------------------------------------------------------------
-
-/// Why a typed branch name cannot be created. `Empty` shows no message: the button is just off.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NameProblem {
-    Empty,
-    TooLong,
-    Invalid,
-    Exists,
-}
-
-/// The trimmed name when it can be created as a new local branch. The rules are the host's
-/// (`valid_branch_chars` plus `git check-ref-format --branch`), so a name passing here can still
-/// be refused by the host, and its error is shown as is.
-pub fn check_branch_name(raw: &str, existing: &[String]) -> Result<String, NameProblem> {
-    let name = raw.trim();
-    if name.is_empty() {
-        return Err(NameProblem::Empty);
-    }
-    if name.len() > MAX_BRANCH_NAME {
-        return Err(NameProblem::TooLong);
-    }
-    if !valid_shape(name) {
-        return Err(NameProblem::Invalid);
-    }
-    if existing.iter().any(|branch| branch == name) {
-        return Err(NameProblem::Exists);
-    }
-    Ok(name.to_owned())
-}
-
-fn valid_shape(name: &str) -> bool {
-    name.chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '-' | '_'))
-        && !name.starts_with('-')
-        && name != "@"
-        && !name.contains("..")
-        && !name.contains("//")
-        && !name.contains("@{")
-        && !name.ends_with('/')
-        && !name.ends_with('.')
-        && name
-            .split('/')
-            .all(|part| !part.is_empty() && !part.starts_with('.') && !part.ends_with(".lock"))
-}
-
-/// The line shown under the field for a problem; `None` for `Empty`.
-pub fn problem_text(problem: NameProblem) -> Option<&'static str> {
-    match problem {
-        NameProblem::Empty => None,
-        NameProblem::TooLong => Some(t("Nome longo demais (120 caracteres no máximo).")),
-        NameProblem::Invalid => Some(t(
-            "Nome inválido: use letras, números, /, ., - e _, sem espaços nem .. e sem começar com - ou terminar com / ou ponto.",
-        )),
-        NameProblem::Exists => Some(t("Já existe um branch com esse nome.")),
-    }
-}
 
 // --- Incoming state ---------------------------------------------------------------------------
 
@@ -258,122 +194,10 @@ impl IncomingState {
     }
 }
 
-/// The name field's frame (after the commit field), with the error line under it.
-pub fn branch_field(
-    draft: &str,
-    error: Option<&str>,
-    can_create: bool,
-    busy: bool,
-    on_create: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> AnyElement {
-    let mut field: Div = div()
-        .h(px(24.))
-        .px(px(6.))
-        .rounded(px(crate::theme::RADIUS_SM))
-        .border_1()
-        .border_color(crate::theme::border())
-        .flex()
-        .items_center()
-        .gap(px(1.))
-        .text_size(px(12.));
-    field = if draft.is_empty() {
-        field.child(div().w(px(1.5)).h(px(13.)).bg(accent())).child(
-            div()
-                .text_color(content(0.4))
-                .child(t("Nome do novo branch")),
-        )
-    } else {
-        field
-            .child(
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .text_color(content(0.95))
-                    .child(draft.to_owned()),
-            )
-            .child(div().w(px(1.5)).h(px(13.)).bg(accent()))
-    };
-    let (fill, ink) = primary_action(can_create && !busy);
-    let mut create = div()
-        .id("env-branch-create")
-        .h(px(22.))
-        .px(px(8.))
-        .rounded(px(crate::theme::RADIUS_SM))
-        .flex()
-        .items_center()
-        .justify_center()
-        .text_size(px(11.5))
-        .bg(fill)
-        .text_color(ink)
-        .child(t("Criar"));
-    if can_create && !busy {
-        create = create
-            .cursor_pointer()
-            .hover(|s| s.opacity(0.88))
-            .on_click(on_create);
-    }
-    let mut column = div()
-        .flex()
-        .flex_col()
-        .gap(px(3.))
-        .child(field)
-        .child(create);
-    if let Some(error) = error {
-        column = column.child(
-            div()
-                .px(px(6.))
-                .text_size(px(11.5))
-                .text_color(rgb(0xe08a8a))
-                .child(error.to_owned()),
-        );
-    }
-    column.into_any_element()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
-
-    fn existing() -> Vec<String> {
-        vec!["main".into(), "feature/login".into()]
-    }
-
-    #[test]
-    fn branch_names_follow_the_host_rules() {
-        let ok = |name: &str| check_branch_name(name, &existing());
-        assert_eq!(
-            ok("  feature/new-ui_2.0  "),
-            Ok("feature/new-ui_2.0".into())
-        );
-        assert_eq!(ok(""), Err(NameProblem::Empty));
-        assert_eq!(ok("   "), Err(NameProblem::Empty));
-        assert_eq!(ok("main"), Err(NameProblem::Exists));
-        assert_eq!(ok("-rf"), Err(NameProblem::Invalid));
-        assert_eq!(ok("a..b"), Err(NameProblem::Invalid));
-        assert_eq!(ok("a b"), Err(NameProblem::Invalid));
-        assert_eq!(ok("ação"), Err(NameProblem::Invalid));
-        assert_eq!(ok("a~b"), Err(NameProblem::Invalid));
-        assert_eq!(ok("a:b"), Err(NameProblem::Invalid));
-        assert_eq!(ok("a@{b"), Err(NameProblem::Invalid));
-        assert_eq!(ok("@"), Err(NameProblem::Invalid));
-        assert_eq!(ok("trail/"), Err(NameProblem::Invalid));
-        assert_eq!(ok("trail."), Err(NameProblem::Invalid));
-        assert_eq!(ok("a//b"), Err(NameProblem::Invalid));
-        assert_eq!(ok("/lead"), Err(NameProblem::Invalid));
-        assert_eq!(ok(".hidden"), Err(NameProblem::Invalid));
-        assert_eq!(ok("x/.hidden"), Err(NameProblem::Invalid));
-        assert_eq!(ok("name.lock"), Err(NameProblem::Invalid));
-        assert_eq!(ok(&"a".repeat(121)), Err(NameProblem::TooLong));
-        assert!(ok(&"a".repeat(120)).is_ok());
-    }
-
-    #[test]
-    fn problems_have_text_except_empty() {
-        assert_eq!(problem_text(NameProblem::Empty), None);
-        assert!(problem_text(NameProblem::Exists).is_some());
-        assert!(problem_text(NameProblem::Invalid).is_some());
-    }
 
     #[test]
     fn incoming_answers_are_read_like_the_react_client() {

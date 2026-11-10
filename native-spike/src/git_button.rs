@@ -255,7 +255,6 @@ impl Shell {
     }
 
     pub(super) fn git_menu_toggle(&mut self, cx: &mut Context<Self>) {
-        self.environment = None;
         self.header_more = None;
         let duration = if cx.reduce_motion() { 0. } else { MENU };
         let opening = !self.incoming.open;

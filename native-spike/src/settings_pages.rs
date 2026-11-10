@@ -2000,12 +2000,6 @@ const KEYBINDINGS: &[(&str, &str, &str, &str)] = &[
         "meta+alt+b",
     ),
     (
-        "toggle-environment",
-        "Mostrar/ocultar Ambiente",
-        "Visualização",
-        "meta+alt+e",
-    ),
-    (
         "find-in-conversation",
         "Buscar nesta conversa",
         "Sessão",

@@ -663,7 +663,6 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Alto", "High"),
     ("Alto contraste", "High contrast"),
     ("Amanhã às 9:00", "Tomorrow at 9:00"),
-    ("Ambiente", "Environment"),
     ("Ameixa", "Plum"),
     ("Amostra", "Sample"),
     ("Analisar anexos", "Analyze attachments"),
@@ -1315,10 +1314,8 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Corrigir CI automaticamente", "Fix CI automatically"),
     ("Corrigir o último", "Amend last"),
     ("Criando…", "Creating…"),
-    ("Criar", "Create"),
     ("Criar MR", "Open MR"),
     ("Criar PR", "Create PR"),
-    ("Criar branch…", "Create branch…"),
     ("Criar merge commit", "Create a merge commit"),
     ("Criar tarefa", "Create task"),
     (
@@ -2417,10 +2414,6 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Já está em dia", "Already up to date"),
     ("Já está em dia.", "Already up to date."),
     (
-        "Já existe um branch com esse nome.",
-        "A branch with this name already exists.",
-    ),
-    (
         "Já existe um item com este nome.",
         "An entry with this name already exists.",
     ),
@@ -2662,7 +2655,6 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Mostrar terminal ao rodar", "Show terminal when running"),
     ("Mostrar tudo", "Show All"),
     ("Mostrar {} anteriores", "Show {} earlier"),
-    ("Mostrar/ocultar Ambiente", "Toggle Environment"),
     (
         "Mostre notificações e toque sons também enquanto o Sirus estiver ativo.",
         "Also show system alerts and play sounds while Sirus is active.",
@@ -2803,7 +2795,6 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Nenhum pull request aberto.", "No open pull requests."),
     ("Nenhum pull request fechado.", "No closed pull requests."),
     ("Nenhum pull request mesclado.", "No merged pull requests."),
-    ("Nenhum servidor local", "No local servers"),
     (
         "Nenhum simulador de iOS encontrado.",
         "No iOS simulator found.",
@@ -2862,16 +2853,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Nome de anexo inválido.", "Invalid attachment name."),
     ("Nome de branch inválido", "Invalid branch name"),
     ("Nome do arquivo", "File name"),
-    ("Nome do novo branch", "New branch name"),
     ("Nome do perfil", "Profile name"),
-    (
-        "Nome inválido: use letras, números, /, ., - e _, sem espaços nem .. e sem começar com - ou terminar com / ou ponto.",
-        "Invalid name: use letters, numbers, /, ., - and _, with no spaces or .., and not starting with - or ending with / or a dot.",
-    ),
-    (
-        "Nome longo demais (120 caracteres no máximo).",
-        "Name too long (120 characters at most).",
-    ),
     (
         "Nomes de skills desativadas inválidos.",
         "Invalid disabled skill names.",
@@ -4337,7 +4319,6 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Puxando…", "Pulling…"),
     ("Puxar", "Pull"),
     ("Puxar agora", "Pull now"),
-    ("Puxar da origem", "Pull from origin"),
     ("Puxe antes de enviar.", "Pull before pushing."),
     ("Páginas claras", "Light pages"),
     ("Páginas escuras", "Dark pages"),
@@ -5343,7 +5324,6 @@ const ENTRIES: &[(&str, &str)] = &[
         "as referências da barra lateral excedem seus limites",
         "sidebar references exceed their bounds",
     ),
-    ("atual", "current"),
     ("banco de dados indisponível", "database unavailable"),
     ("binário", "binary"),
     ("bloqueado", "blocked"),

@@ -1102,16 +1102,11 @@ enum Waiting {
     Skills,
     Secrets,
     Agents,
-    Branches,
-    /// `create_branch` from the Ambiente card's name field.
-    BranchCreate,
     /// `git_incoming` for a conversation generation (git_sync.rs).
     Incoming(u64),
     /// `git_sync_pull` for a conversation generation; true when a push follows (git_button.rs).
     IncomingPull(u64, bool),
-    Servers,
     Editors,
-    Icons,
     Attached(usize),
     Dictated(bool),
     /// A provider_usage reply for one of the bottom bar's chosen providers.
@@ -1365,22 +1360,11 @@ pub struct Shell {
     visual_views: std::cell::RefCell<HashMap<String, gpui::AnyView>>,
     native_tx: async_channel::Sender<(&'static str, Value)>,
     agent_versions: HashMap<&'static str, String>,
-    /// Which row of Ambiente is open.
-    env_open: Option<&'static str>,
-    /// How far each row of the Environment popup has slid open.
-    env_folds: std::cell::RefCell<HashMap<&'static str, Tween>>,
-    env_branches: Vec<String>,
-    /// The name typed under "Criar branch…", when that row is open.
-    branch_draft: Option<String>,
-    branch_error: Option<String>,
-    branch_busy: bool,
     /// The header's Puxar button and its popover (git_sync.rs).
     incoming: IncomingState,
     /// Where the Git split button was last painted, for its menu to sit under (git_button.rs).
     git_bounds: Rc<Cell<Option<gpui::Bounds<gpui::Pixels>>>>,
-    env_servers: Vec<String>,
     env_editors: Vec<(String, String)>,
-    env_icons: HashMap<String, std::path::PathBuf>,
     /// The Settings text field being typed in: its key and text.
     setting_edit: Option<(&'static str, String)>,
     /// Each side panel, per conversation; they keep their state while hidden.
@@ -1605,7 +1589,6 @@ pub struct Shell {
     diffs: HashMap<String, (u32, u32)>,
     git_tx: async_channel::Sender<GitResult>,
     palette_ui: Option<PaletteState>,
-    environment: Option<Tween>,
     /// The panel header's "⋯" menu, when its trailing buttons don't fit (ADR-198).
     header_more: Option<Tween>,
     dock_open: bool,
@@ -1900,17 +1883,9 @@ impl Shell {
             visual_views: Default::default(),
             native_tx,
             agent_versions: HashMap::new(),
-            env_open: None,
-            env_folds: Default::default(),
-            env_branches: Vec::new(),
-            branch_draft: None,
-            branch_error: None,
-            branch_busy: false,
             incoming: IncomingState::default(),
             git_bounds: Rc::new(Cell::new(None)),
-            env_servers: Vec::new(),
             env_editors: Vec::new(),
-            env_icons: HashMap::new(),
             setting_edit: None,
             pane_views: HashMap::new(),
             settled_open: false,
@@ -2053,7 +2028,6 @@ impl Shell {
             diffs: HashMap::new(),
             git_tx,
             palette_ui: None,
-            environment: None,
             header_more: None,
             dock_open: false,
             dock: Tween::still(0., now),
@@ -2437,22 +2411,6 @@ impl Shell {
                     // A prompt link that started the app waited for the providers to be known.
                     self.take_prompt_link(cx);
                 }
-                Some(Waiting::Branches) if ok => {
-                    self.env_branches = value
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .filter_map(|b| b["name"].as_str().map(str::to_owned))
-                        .collect();
-                }
-                Some(Waiting::Servers) if ok => {
-                    self.env_servers = value
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .filter_map(|s| s["url"].as_str().map(str::to_owned))
-                        .collect();
-                }
                 Some(Waiting::Editors) if ok => {
                     self.env_editors = value
                         .as_array()
@@ -2463,17 +2421,6 @@ impl Shell {
                             Some((e["id"].as_str()?.to_owned(), e["name"].as_str()?.to_owned()))
                         })
                         .collect();
-                }
-                Some(Waiting::Icons) if ok => {
-                    for item in value.as_array().into_iter().flatten() {
-                        let (Some(id), Some(png)) = (item["id"].as_str(), item["png"].as_str())
-                        else {
-                            continue;
-                        };
-                        if let Some(path) = backend::save_icon(id, png) {
-                            self.env_icons.insert(id.to_owned(), path);
-                        }
-                    }
                 }
                 Some(Waiting::Skills) if ok => {
                     self.skills = value["catalog"]["skills"]
@@ -2575,7 +2522,6 @@ impl Shell {
                 }
                 Some(Waiting::Declined(key)) => self.declined_reply(key, ok, &value, cx),
                 Some(Waiting::Subagent(call)) => self.subagent_reply(call, ok, &value, cx),
-                Some(Waiting::BranchCreate) => self.branch_created(ok, &value, cx),
                 Some(Waiting::Incoming(generation)) => {
                     if self.incoming.answer(generation, ok, &value) {
                         // The branch row's ↑↓ read the same upstream.
@@ -2813,7 +2759,6 @@ impl Shell {
         for (command, waiting) in [
             ("detect_agents", Waiting::Agents),
             ("detect_editors", Waiting::Editors),
-            ("editor_app_icons", Waiting::Icons),
         ] {
             let id = self.backend.invoke(command, json!({}));
             self.waiting.insert(id, waiting);
@@ -5402,11 +5347,6 @@ impl Shell {
         if let Some((_, value)) = self.setting_edit.as_mut() {
             return Some(value);
         }
-        if self.env_open == Some("branch") {
-            if let Some(draft) = self.branch_draft.as_mut() {
-                return Some(draft);
-            }
-        }
         if let Some(goal) = self.goal_input.as_mut() {
             return Some(goal);
         }
@@ -6550,23 +6490,6 @@ impl Shell {
             cx.notify();
             return;
         }
-        if self.env_open == Some("branch")
-            && self.branch_draft.is_some()
-            && matches!(key, "enter" | "escape" | "backspace")
-        {
-            match key {
-                "enter" => self.submit_branch(cx),
-                "escape" => self.branch_draft = None,
-                _ => {
-                    if let Some(draft) = self.branch_draft.as_mut() {
-                        draft.pop();
-                    }
-                }
-            }
-            cx.stop_propagation();
-            cx.notify();
-            return;
-        }
         if self.setting_edit.is_some() && matches!(key, "enter" | "escape" | "backspace") {
             match key {
                 "enter" => {
@@ -6953,13 +6876,11 @@ impl Shell {
             return;
         }
         if key == "escape"
-            && (self.environment.is_some()
-                || self.header_more.is_some()
+            && (self.header_more.is_some()
                 || self.appearance.is_some()
                 || self.usage_page_open()
                 || self.menu.is_some())
         {
-            self.environment = None;
             self.header_more = None;
             self.appearance = None;
             self.close_usage_page(cx);
@@ -8275,47 +8196,24 @@ impl Shell {
                     .tooltip(message_actions::name_tip(t("Mais ações")))
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_header_more(cx))),
                 );
-            } else {
+            } else if dock_open {
                 row = row.child(
                     toggled(
-                        icon_button("top-environment", "window", 16.),
-                        self.environment.is_some(),
+                        icon_button("dock-max", "expand", 14.),
+                        self.dock_max.to > 0.5,
                     )
+                    .opacity(open_dock)
                     .on_click(cx.listener(|this, _, _, cx| {
-                        this.header_more = None;
-                        this.appearance = None;
-                        this.environment = match this.environment {
-                            Some(_) => None,
-                            None => Some(Tween::from_to(
-                                0.,
-                                1.,
-                                Instant::now(),
-                                if cx.reduce_motion() { 0. } else { MENU },
-                                Curve::Expo,
-                            )),
-                        };
+                        let to = if this.dock_max.to > 0.5 { 0. } else { 1. };
+                        this.dock_max.set(
+                            to,
+                            Instant::now(),
+                            if cx.reduce_motion() { 0. } else { SIDEBAR },
+                            Curve::Expo,
+                        );
                         cx.notify();
                     })),
                 );
-                if dock_open {
-                    row = row.child(
-                        toggled(
-                            icon_button("dock-max", "expand", 14.),
-                            self.dock_max.to > 0.5,
-                        )
-                        .opacity(open_dock)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            let to = if this.dock_max.to > 0.5 { 0. } else { 1. };
-                            this.dock_max.set(
-                                to,
-                                Instant::now(),
-                                if cx.reduce_motion() { 0. } else { SIDEBAR },
-                                Curve::Expo,
-                            );
-                            cx.notify();
-                        })),
-                    );
-                }
             }
             row.child(
                 toggled(
@@ -16506,7 +16404,6 @@ impl Shell {
     }
 
     fn toggle_palette(&mut self, files: bool, cx: &mut Context<Self>) {
-        self.environment = None;
         self.appearance = None;
         self.refresh_files();
         crate::segment_pill::forget("palette");
@@ -16539,14 +16436,6 @@ impl Shell {
     fn diff_stat(&self) -> (u32, u32) {
         let path = &self.conversations[self.active_conversation()].worktree;
         self.diffs.get(path).copied().unwrap_or((0, 0))
-    }
-
-    fn active_project(&self) -> String {
-        let c = self.active_conversation();
-        self.projects
-            .iter()
-            .find(|p| p.conversations.contains(&c))
-            .map_or(String::new(), |p| p.name.clone())
     }
 
     /// As Sirus's command palette: conversations, words inside messages, then commands.
@@ -17050,41 +16939,8 @@ impl Shell {
         )
     }
 
-    fn toggle_env_row(&mut self, row: &'static str) {
-        self.branch_draft = None;
-        self.branch_error = None;
-        self.env_open = if self.env_open == Some(row) {
-            None
-        } else {
-            Some(row)
-        };
-        let ix = self.active_conversation();
-        let session = self.conversations[ix].session_id.clone();
-        match row {
-            "branch" => {
-                if let Some(project) = self.project_of(ix) {
-                    let id = self.backend.invoke(
-                        "list_branches",
-                        json!({ "projectId": self.projects[project].id }),
-                    );
-                    self.waiting.insert(id, Waiting::Branches);
-                }
-            }
-            "servers" => {
-                let id = self
-                    .backend
-                    .invoke("local_servers_list", json!({ "sessionId": session }));
-                self.waiting.insert(id, Waiting::Servers);
-            }
-            _ => {}
-        }
-    }
-
-    /// The Ambiente card, compact: one 26 px row per function, each opening in place. Same
-    /// functions as Sirus's EnvironmentPanel.
     /// Opens or closes the panel header's "⋯" menu.
     fn toggle_header_more(&mut self, cx: &mut Context<Self>) {
-        self.environment = None;
         let duration = if cx.reduce_motion() { 0. } else { MENU };
         self.header_more = match self.header_more {
             Some(_) => None,
@@ -17167,22 +17023,6 @@ impl Shell {
                     )
                 })
                 .child(
-                    row("more-environment", "window", "Ambiente").on_click(cx.listener(
-                        |this, _, _, cx| {
-                            this.header_more = None;
-                            this.appearance = None;
-                            this.environment = Some(Tween::from_to(
-                                0.,
-                                1.,
-                                Instant::now(),
-                                if cx.reduce_motion() { 0. } else { MENU },
-                                Curve::Expo,
-                            ));
-                            cx.notify();
-                        },
-                    )),
-                )
-                .child(
                     row("more-expand", "expand", expand_label).on_click(cx.listener(
                         |this, _, _, cx| {
                             this.header_more = None;
@@ -17201,337 +17041,6 @@ impl Shell {
         )
     }
 
-    fn environment_view(
-        &self,
-        now: Instant,
-        moving: &mut bool,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        let open = self.environment.as_ref()?;
-        if !open.done(now) {
-            *moving = true;
-        }
-        let p = open.at(now).clamp(0., 1.);
-        let ix = self.active_conversation();
-        let conversation = &self.conversations[ix];
-        let session = conversation.session_id.clone();
-        let row = |id: &'static str, glyph: &'static str, label: String| {
-            crate::hover_track::list("environment").row_named(
-                div()
-                    .id(id)
-                    .relative()
-                    .h(px(26.))
-                    .px(px(7.))
-                    .rounded(px(crate::theme::RADIUS_MD))
-                    .flex()
-                    .items_center()
-                    .gap(px(7.))
-                    .text_size(px(12.5))
-                    .text_color(content(0.75))
-                    .hover(|s| s.text_color(content(1.)))
-                    .cursor_pointer()
-                    .child(icon(glyph, 14.).text_color(content(0.5)))
-                    .child(div().flex_1().min_w_0().truncate().child(label)),
-                id,
-                false,
-            )
-        };
-        let value = |text: String| {
-            div()
-                .flex_shrink_0()
-                .max_w(px(96.))
-                .truncate()
-                .text_size(px(11.5))
-                .text_color(content(0.45))
-                .child(text)
-        };
-        let expand = |id: &'static str,
-                      glyph: &'static str,
-                      label: &str,
-                      trailing: String,
-                      cx: &mut Context<Self>| {
-            row(id, glyph, label.to_owned())
-                .child(value(trailing))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.toggle_env_row(id);
-                    cx.notify();
-                }))
-        };
-        let sub = |fold: f32, children: Vec<AnyElement>| {
-            let body = div()
-                .mx(px(2.))
-                .mb(px(3.))
-                .p(px(3.))
-                .rounded(px(crate::theme::RADIUS_MD))
-                .bg(content(0.03))
-                .flex()
-                .flex_col()
-                .children(children);
-            if fold >= 0.999 {
-                body
-            } else {
-                // What the card has inside its padding and border.
-                div()
-                    .w_full()
-                    .overflow_hidden()
-                    .opacity(fold)
-                    .child(crate::disclosure::Disclosure::new(body, px(238.), fold))
-            }
-        };
-        // A row slides open and shut however `env_open` changed.
-        let glide = if cx.reduce_motion() {
-            0.
-        } else {
-            crate::disclosure::REVEAL
-        };
-        let fold_of = |row: &'static str, moving: &mut bool| {
-            let mut folds = self.env_folds.borrow_mut();
-            let fold = folds.entry(row).or_insert(Tween::still(0., now));
-            let to = if self.env_open == Some(row) { 1. } else { 0. };
-            if fold.to != to {
-                fold.set(to, now, glide, Curve::Expo);
-            }
-            if !fold.done(now) {
-                *moving = true;
-            }
-            let shown = fold.at(now).clamp(0., 1.);
-            (shown > 0.001).then_some(shown)
-        };
-        let mut rows: Vec<AnyElement> = vec![
-            div()
-                .h(px(22.))
-                .px(px(7.))
-                .flex()
-                .items_center()
-                .justify_between()
-                .text_size(px(12.))
-                .text_color(content(0.45))
-                .child(t("Ambiente"))
-                .into_any_element(),
-            expand(
-                "branch",
-                "branch",
-                "Branch",
-                conversation.branch.clone(),
-                cx,
-            )
-            .into_any_element(),
-        ];
-        if let Some(fold) = fold_of("branch", moving) {
-            let current = conversation.branch.clone();
-            let project_id = self
-                .project_of(ix)
-                .map(|p| self.projects[p].id.clone())
-                .unwrap_or_default();
-            let session_for_pull = session.clone();
-            let mut list: Vec<AnyElement> = self
-                .env_branches
-                .iter()
-                .take(8)
-                .enumerate()
-                .map(|(i, branch)| {
-                    let (name, project_id) = (branch.clone(), project_id.clone());
-                    div()
-                        .id(("env-branch-item", i))
-                        .h(px(24.))
-                        .px(px(6.))
-                        .rounded(px(crate::theme::RADIUS_SM))
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .text_size(px(12.))
-                        .text_color(content(0.8))
-                        .cursor_pointer()
-                        .hover(|s| s.bg(content(0.07)))
-                        .child(div().min_w_0().truncate().child(branch.clone()))
-                        .when(*branch == current, |d| {
-                            d.child(
-                                div()
-                                    .flex_shrink_0()
-                                    .text_size(px(11.))
-                                    .text_color(content(0.4))
-                                    .child(t("atual")),
-                            )
-                        })
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.backend.invoke(
-                                "checkout_branch",
-                                json!({ "projectId": project_id, "branch": name, "confirm": true }),
-                            );
-                            this.env_open = None;
-                            cx.notify();
-                        }))
-                        .into_any_element()
-                })
-                .collect();
-            list.push(div().id("env-pull").h(px(24.)).px(px(6.)).rounded(px(crate::theme::RADIUS_SM)).flex().items_center().text_size(px(12.)).text_color(content(0.6)).cursor_pointer().hover(|s| s.bg(content(0.07)))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.backend.invoke("git_workspace_action", json!({ "action": { "type": "pull", "sessionId": session_for_pull, "confirm": true } }));
-                    cx.notify();
-                }))
-                .child(t("Puxar da origem")).into_any_element());
-            list.push(
-                div()
-                    .id("env-branch-new")
-                    .h(px(24.))
-                    .px(px(6.))
-                    .rounded(px(crate::theme::RADIUS_SM))
-                    .flex()
-                    .items_center()
-                    .text_size(px(12.))
-                    .text_color(content(0.6))
-                    .cursor_pointer()
-                    .hover(|s| s.bg(content(0.07)))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.branch_draft = Some(String::new());
-                        this.branch_error = None;
-                        cx.notify();
-                    }))
-                    .child(t("Criar branch…"))
-                    .into_any_element(),
-            );
-            // The name field (git_sync.rs): the problem with the typed name shows under it, else
-            // the host's last answer.
-            if let Some(draft) = self.branch_draft.clone() {
-                let checked = git_sync::check_branch_name(&draft, &self.env_branches);
-                let problem = checked
-                    .as_ref()
-                    .err()
-                    .and_then(|p| git_sync::problem_text(*p));
-                let error = problem
-                    .map(str::to_owned)
-                    .or_else(|| self.branch_error.clone());
-                list.push(git_sync::branch_field(
-                    &draft,
-                    error.as_deref(),
-                    checked.is_ok(),
-                    self.branch_busy,
-                    cx.listener(|this, _, _, cx| this.submit_branch(cx)),
-                ));
-            }
-            rows.push(sub(fold, list).into_any_element());
-        }
-        rows.push(
-            expand(
-                "servers",
-                "server",
-                t("Servidores locais"),
-                if self.env_servers.is_empty() {
-                    String::new()
-                } else {
-                    self.env_servers.len().to_string()
-                },
-                cx,
-            )
-            .into_any_element(),
-        );
-        if let Some(fold) = fold_of("servers", moving) {
-            let list: Vec<AnyElement> = if self.env_servers.is_empty() {
-                vec![
-                    div()
-                        .h(px(24.))
-                        .px(px(6.))
-                        .flex()
-                        .items_center()
-                        .text_size(px(12.))
-                        .text_color(content(0.4))
-                        .child(t("Nenhum servidor local"))
-                        .into_any_element(),
-                ]
-            } else {
-                self.env_servers.iter().enumerate().map(|(i, url)| {
-                    let (stop_url, stop_session) = (url.clone(), session.clone());
-                    div().h(px(24.)).px(px(6.)).flex().items_center().gap(px(6.)).text_size(px(12.)).text_color(content(0.8))
-                        .child(div().size(px(6.)).flex_shrink_0().rounded_full().bg(rgb(0x7ad69a)))
-                        .child(div().flex_1().min_w_0().truncate().child(url.clone()))
-                        .child(div().id(("env-stop", i)).flex_shrink_0().text_size(px(11.)).text_color(content(0.45)).cursor_pointer().hover(|s| s.text_color(content(0.9)))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.backend.invoke("local_server_action", json!({ "action": { "type": "stop", "sessionId": stop_session, "url": stop_url } }));
-                                this.env_servers.retain(|u| *u != stop_url);
-                                cx.notify();
-                            }))
-                            .child(t("Parar")))
-                        .into_any_element()
-                }).collect()
-            };
-            rows.push(sub(fold, list).into_any_element());
-        }
-        rows.push(
-            div()
-                .my(px(3.))
-                .mx(px(5.))
-                .h(px(1.))
-                .bg(content(0.08))
-                .into_any_element(),
-        );
-        rows.push(
-            expand("repo", "folder", &self.active_project(), String::new(), cx).into_any_element(),
-        );
-        if let Some(fold) = fold_of("repo", moving) {
-            let mut list: Vec<AnyElement> = self.env_editors.iter().enumerate().map(|(i, (id, name))| {
-                let (editor, editor_session) = (id.clone(), session.clone());
-                div().id(("env-editor", i)).h(px(26.)).px(px(6.)).rounded(px(crate::theme::RADIUS_SM)).flex().items_center().gap(px(7.)).text_size(px(12.)).text_color(content(0.8)).cursor_pointer().hover(|s| s.bg(content(0.07)))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if !this.this_mac_only(cx) {
-                            this.backend.invoke("open_in_editor", json!({ "sessionId": editor_session, "editor": editor, "path": Value::Null }));
-                        }
-                        this.environment = None;
-                        cx.notify();
-                    }))
-                    .child(match self.env_icons.get(id) {
-                        Some(path) => gpui::img(path.clone()).size(px(16.)).flex_shrink_0().into_any_element(),
-                        None => icon("folder", 14.).text_color(content(0.5)).into_any_element(),
-                    })
-                    .child(name.clone())
-                    .into_any_element()
-            }).collect();
-            let path = conversation.worktree.clone();
-            list.push(
-                div()
-                    .id("env-copy-path")
-                    .h(px(24.))
-                    .px(px(6.))
-                    .rounded(px(crate::theme::RADIUS_SM))
-                    .flex()
-                    .items_center()
-                    .text_size(px(12.))
-                    .text_color(content(0.6))
-                    .cursor_pointer()
-                    .hover(|s| s.bg(content(0.07)))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(path.clone()));
-                        this.env_open = None;
-                        cx.notify();
-                    }))
-                    .child(t("Copiar caminho"))
-                    .into_any_element(),
-            );
-            rows.push(sub(fold, list).into_any_element());
-        }
-        Some(
-            div()
-                .id("environment-card")
-                .occlude()
-                .absolute()
-                .right(px(10.))
-                .top(px(TITLE_BAR + 10. + (1. - p) * -6.))
-                .w(px(248.))
-                .p(px(4.))
-                .rounded(px(crate::theme::RADIUS_LG))
-                .border_1()
-                .border_color(crate::theme::border())
-                .child(crate::theme::floating_surface(crate::theme::RADIUS_MD))
-                .shadow_lg()
-                .opacity(p)
-                .flex()
-                .flex_col()
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .child(crate::hover_track::list("environment").pill())
-                .children(rows)
-                .into_any_element(),
-        )
-    }
-
     /// Asks the host for the selected conversation's incoming commits (git_sync.rs).
     fn incoming_fetch(&mut self) {
         let session = self.incoming.session().to_owned();
@@ -17543,43 +17052,6 @@ impl Shell {
             .backend
             .invoke("git_incoming", json!({ "sessionId": session }));
         self.waiting.insert(id, Waiting::Incoming(generation));
-    }
-
-    /// "Criar branch…" in the Ambiente card: checks the name, then the host creates and switches.
-    fn submit_branch(&mut self, cx: &mut Context<Self>) {
-        let Some(draft) = self.branch_draft.clone() else {
-            return;
-        };
-        let ix = self.active_conversation();
-        let Some(project) = self.project_of(ix) else {
-            return;
-        };
-        if self.branch_busy {
-            return;
-        }
-        if let Ok(name) = git_sync::check_branch_name(&draft, &self.env_branches) {
-            self.branch_busy = true;
-            self.branch_error = None;
-            let id = self.backend.invoke(
-                "create_branch",
-                json!({ "projectId": self.projects[project].id, "branch": name, "confirm": true }),
-            );
-            self.waiting.insert(id, Waiting::BranchCreate);
-        }
-        cx.notify();
-    }
-
-    fn branch_created(&mut self, ok: bool, value: &Value, cx: &mut Context<Self>) {
-        self.branch_busy = false;
-        if ok {
-            self.branch_draft = None;
-            self.branch_error = None;
-            self.env_open = None;
-            self.refresh_diff();
-        } else {
-            self.branch_error = Some(error_text(value));
-        }
-        cx.notify();
     }
 
     fn toggle_appearance(&mut self, cx: &mut Context<Self>) {
@@ -19710,9 +19182,9 @@ impl HeaderNeeds {
         match tier {
             HeaderTier::Full | HeaderTier::CompactGit => {
                 items.push(self.diff);
-                items.extend([self.icon; 4]);
+                items.extend([self.icon; 3]);
             }
-            HeaderTier::CompactTabs => items.extend([self.icon; 4]),
+            HeaderTier::CompactTabs => items.extend([self.icon; 3]),
             HeaderTier::Overflow => items.extend([self.icon; 3]),
         }
         Self::row(&items)
@@ -20439,7 +19911,6 @@ impl Render for Shell {
                 || self.tasks_page.sheet.is_some()
                 || self.tasks_page.popover.is_some()
                 || self.palette_ui.is_some()
-                || self.environment.is_some()
                 || self.header_more.is_some()
                 || self.menu.is_some()
                 || self.peek.is_some()
@@ -20510,7 +19981,6 @@ impl Render for Shell {
                 .child(notice)
         });
         let add_menu = self.add_menu_view(now, &mut moving, cx);
-        let environment = self.environment_view(now, &mut moving, cx);
         let header_more = self.header_more_view(now, &mut moving, cx);
         let git_menu = self.git_menu(now, &mut moving, size, cx);
         // Watches the pointer over the whole window, even above opaque panels.
@@ -20656,7 +20126,7 @@ impl Render for Shell {
                     cx.notify();
                 }
                 let fade = if cx.reduce_motion() { 0. } else { MENU };
-                let closed = [this.incoming.close_at(Instant::now(), fade), this.menu.take().is_some(), this.environment.take().is_some(), this.header_more.take().is_some(),this.composer_menu.take().is_some(), this.add_menu.take().is_some(), this.usage_popup.take().is_some(), this.usage_picker.take().is_some(), this.resources.close(), this.context.close(), this.close_project_menu(), this.session_filter.open.take().is_some(), this.context_menu.take().is_some(), this.term.close_menu(), this.close_sidebar_options(cx)];
+                let closed = [this.incoming.close_at(Instant::now(), fade), this.menu.take().is_some(), this.header_more.take().is_some(),this.composer_menu.take().is_some(), this.add_menu.take().is_some(), this.usage_popup.take().is_some(), this.usage_picker.take().is_some(), this.resources.close(), this.context.close(), this.close_project_menu(), this.session_filter.open.take().is_some(), this.context_menu.take().is_some(), this.term.close_menu(), this.close_sidebar_options(cx)];
                 this.goal_input = None;
                 if closed.contains(&true) {
                     cx.notify();
@@ -20776,7 +20246,6 @@ impl Render for Shell {
             .children(context_popup)
             .children(sidebar_card)
             .children(add_menu)
-            .children(environment)
             .children(header_more)
             .children(git_menu)
             .children(panel)

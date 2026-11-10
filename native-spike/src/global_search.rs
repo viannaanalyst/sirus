@@ -120,7 +120,6 @@ pub(crate) fn hits_of(reply: &Value, needle: &str, known: impl Fn(&str) -> bool)
 impl Shell {
     /// ⌘⇧F: the palette as an all-conversation message search; again to close it.
     pub(super) fn toggle_global_search(&mut self, cx: &mut Context<Self>) {
-        self.environment = None;
         self.appearance = None;
         if self.palette_ui.as_ref().is_some_and(|p| p.all) {
             self.palette_ui = None;

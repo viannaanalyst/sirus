@@ -1479,6 +1479,13 @@ pub fn opencode(v: &Value) -> Vec<ActivityItem> {
         .as_str()
         .unwrap_or("")
         .to_owned();
+    // OpenCode's bash tool (and others') takes a `description` of what the command is for.
+    if row.caption.is_empty() && row.kind == ItemKind::Command {
+        row.caption = short(
+            v["rawInput"]["description"].as_str().unwrap_or("").trim(),
+            120,
+        );
+    }
     // OpenCode's `todowrite` and Cursor's todo updates carry the list in the call's input.
     let plan = plan_signal(&v["rawInput"]["todos"]);
     std::iter::once(row).chain(plan).collect()
@@ -1887,6 +1894,18 @@ mod tests {
         );
         assert_eq!(items[0].kind, ItemKind::Edit);
         assert_eq!(items[0].state, ItemState::Failed);
+    }
+
+    #[test]
+    fn an_acp_command_keeps_the_models_description_as_its_caption() {
+        let call = |kind: &str| {
+            opencode(
+                &json!({"sessionUpdate":"tool_call","toolCallId":"a","kind":kind,
+                "rawInput":{"command":"ls","description":" List the keys "}}),
+            )
+        };
+        assert_eq!(call("execute")[0].caption, "List the keys");
+        assert_eq!(call("read")[0].caption, "");
     }
 
     #[test]

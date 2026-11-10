@@ -1,4 +1,5 @@
-//! The macOS menu bar: Sirus, Arquivo, Visualizar, Janela and Ajuda. Each item runs what the
+//! The macOS menu bar: Sirus, Arquivo, Visualizar, Janela and Ajuda, each item with its SF Symbol
+//! as the system's own apps show them. Each item runs what the
 //! window's own keys run. No shortcuts are bound here, so the keys keep going through the shell's
 //! key handler as before; the menus are for clicking.
 use gpui::{App, Menu, MenuItem, actions};
@@ -23,6 +24,11 @@ actions!(
     ]
 );
 
+/// An item's title with its SF Symbol, which the vendored macOS menu code splits at `\u{1f}`.
+fn icon(symbol: &str, title: &str) -> String {
+    format!("{symbol}\u{1f}{title}")
+}
+
 /// The menus, in the app's language, and the items that need no window.
 pub fn install(cx: &mut App) {
     use crate::i18n::t;
@@ -33,29 +39,38 @@ pub fn install(cx: &mut App) {
     cx.on_action(|_: &OpenSite, cx| cx.open_url("https://siruscode.com"));
     cx.set_menus([
         Menu::new("Sirus").items([
-            MenuItem::action(t("Configurações…"), OpenSettings),
+            MenuItem::action(icon("gearshape", t("Configurações…")), OpenSettings),
             MenuItem::separator(),
-            MenuItem::action(t("Ocultar Sirus"), HideApp),
-            MenuItem::action(t("Ocultar outros"), HideOthers),
-            MenuItem::action(t("Mostrar tudo"), ShowAll),
+            MenuItem::action(icon("eye.slash", t("Ocultar Sirus")), HideApp),
+            MenuItem::action(icon("eye.slash.circle", t("Ocultar outros")), HideOthers),
+            MenuItem::action(icon("eye", t("Mostrar tudo")), ShowAll),
             MenuItem::separator(),
-            MenuItem::action(t("Sair do Sirus"), QuitApp),
+            MenuItem::action(icon("power", t("Sair do Sirus")), QuitApp),
         ]),
         Menu::new(t("Arquivo")).items([
-            MenuItem::action(t("Nova conversa"), NewConversation),
-            MenuItem::action(t("Fechar aba"), CloseTab),
+            MenuItem::action(
+                icon("square.and.pencil", t("Nova conversa")),
+                NewConversation,
+            ),
+            MenuItem::action(icon("xmark.square", t("Fechar aba")), CloseTab),
         ]),
         Menu::new(t("Visualizar")).items([
-            MenuItem::action(t("Barra lateral"), ToggleSidebar),
-            MenuItem::action(t("Painel lateral"), ToggleDock),
+            MenuItem::action(icon("sidebar.left", t("Barra lateral")), ToggleSidebar),
+            MenuItem::action(icon("sidebar.right", t("Painel lateral")), ToggleDock),
             MenuItem::separator(),
-            MenuItem::action(t("Paleta de comandos"), OpenPalette),
-            MenuItem::action(t("Buscar em tudo"), SearchEverything),
+            MenuItem::action(icon("command", t("Paleta de comandos")), OpenPalette),
+            MenuItem::action(
+                icon("magnifyingglass", t("Buscar em tudo")),
+                SearchEverything,
+            ),
         ]),
         Menu::new(t("Janela")).items([
-            MenuItem::action(t("Minimizar"), Minimize),
-            MenuItem::action(t("Zoom"), Zoom),
+            MenuItem::action(icon("minus.square", t("Minimizar")), Minimize),
+            MenuItem::action(icon("arrow.up.left.and.arrow.down.right", t("Zoom")), Zoom),
         ]),
-        Menu::new(t("Ajuda")).items([MenuItem::action(t("Site do Sirus"), OpenSite)]),
+        Menu::new(t("Ajuda")).items([MenuItem::action(
+            icon("globe", t("Site do Sirus")),
+            OpenSite,
+        )]),
     ]);
 }

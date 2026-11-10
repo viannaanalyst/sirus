@@ -361,6 +361,11 @@ impl MacPlatform {
                     checked,
                     disabled,
                 } => {
+                    // Sirus: "symbol\u{1f}Title" gives the item an SF Symbol beside its title.
+                    let (symbol, name) = match name.split_once('\u{1f}') {
+                        Some((symbol, title)) => (Some(symbol), title),
+                        None => (None, name.as_ref()),
+                    };
                     // Note that this is intentionally using earlier bindings, whereas typically
                     // later ones take display precedence. See the discussion on
                     // https://github.com/zed-industries/zed/issues/23621
@@ -454,6 +459,18 @@ impl MacPlatform {
                             .autorelease();
                     }
 
+                    if let Some(symbol) = symbol
+                        && Self::os_version() >= Version::new(11, 0, 0)
+                    {
+                        let image: id = msg_send![
+                            objc::class!(NSImage),
+                            imageWithSystemSymbolName: ns_string(symbol)
+                            accessibilityDescription: nil
+                        ];
+                        if image != nil {
+                            let _: () = msg_send![item, setImage: image];
+                        }
+                    }
                     if *checked {
                         item.setState_(NSVisualEffectState::Active);
                     }

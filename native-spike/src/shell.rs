@@ -1503,7 +1503,7 @@ pub struct Shell {
     /// The secret request on show: its field, where it is saved and its menus (secret_card.rs).
     secret_card: Option<secret_card::SecretCard>,
     /// What the card says for a few seconds once the key has gone.
-    secret_done: Option<String>,
+    secret_done: Option<(String, Instant)>,
     /// The Infisical key being handed to a request.
     secret_picked: Option<String>,
     mention_selected: usize,
@@ -15057,7 +15057,7 @@ impl Shell {
             })
             .when_some(
                 self.secret_done.clone().filter(|_| self.secrets.is_empty()),
-                |d, line| d.child(self.secret_done_view(&line)),
+                |d, (line, since)| d.child(self.secret_done_view(&line, since)),
             )
             .when_some(pending, |d, request| {
                 d.child(

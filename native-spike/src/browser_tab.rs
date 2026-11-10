@@ -519,7 +519,7 @@ pub fn create(
             objc2_foundation::NSPoint::new(0., 0.),
             objc2_foundation::NSSize::new(1280., 800.),
         );
-        let web = WKWebView::initWithFrame_configuration(mtm.alloc::<WKWebView>(), frame, &config);
+        let web = crate::browser_holes::PageView::create(mtm, frame, &config);
         web.setCustomUserAgent(Some(&NSString::from_str(&safari_user_agent())));
         if zoom != 1.0 {
             web.setPageZoom(zoom);

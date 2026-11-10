@@ -630,11 +630,17 @@ impl Shell {
     fn finish_secret(&mut self, id: &str, line: String, cx: &mut Context<Self>) {
         self.secret_card = None;
         self.secrets.retain(|r| r["id"].as_str() != Some(id));
-        self.secret_done = Some(line.clone());
+        self.secret_done = Some((line.clone(), Instant::now()));
         cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(Duration::from_secs(7)).await;
+            cx.background_executor()
+                .timer(Duration::from_secs_f32(DONE_SECS))
+                .await;
             let _ = this.update(cx, |this, cx| {
-                if this.secret_done.as_deref() == Some(line.as_str()) {
+                if this
+                    .secret_done
+                    .as_ref()
+                    .is_some_and(|(shown, _)| *shown == line)
+                {
                     this.secret_done = None;
                     cx.notify();
                 }
@@ -1320,25 +1326,151 @@ impl Shell {
             .into_any_element()
     }
 
-    /// The card's collapsed line once the key has gone.
-    pub(super) fn secret_done_view(&self, line: &str) -> AnyElement {
+    /// The card's collapsed line once the key has gone: a pixel padlock closes, the line fades in,
+    /// a row of pixels counts the seconds down, and the box comes apart in pixels at the end.
+    pub(super) fn secret_done_view(&self, line: &str, since: Instant) -> AnyElement {
+        let t = since.elapsed().as_secs_f32();
+        let u = (t / DONE_SECS).min(1.);
+        // The last tenth: the box erodes from the right.
+        let k = ((u - 0.9) / 0.1).clamp(0., 1.);
+        let tone: Hsla = rgb(0x7be0a2).into();
+        let text = ((t - 0.45) / 0.35).clamp(0., 1.) * (1. - k);
+        let fill = field_fill();
+        let body = gpui::canvas(
+            |_, _, _| {},
+            move |bounds, _, window, _| {
+                const CELL: f32 = 4.;
+                let (w, h) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
+                let (cols, rows) = ((w / CELL).ceil() as u32, (h / CELL).ceil() as u32);
+                for y in 0..rows {
+                    for x in 0..cols {
+                        let across = x as f32 / cols.max(1) as f32;
+                        if k > 0.
+                            && across > 1. - k * 1.2 + crate::project_wallpaper::bayer8(x, y) * 0.2
+                        {
+                            continue;
+                        }
+                        window.paint_quad(gpui::fill(
+                            gpui::Bounds::new(
+                                bounds.origin
+                                    + gpui::point(px(x as f32 * CELL), px(y as f32 * CELL)),
+                                gpui::size(
+                                    px(CELL.min(w - x as f32 * CELL)),
+                                    px(CELL.min(h - y as f32 * CELL)),
+                                ),
+                            ),
+                            fill,
+                        ));
+                    }
+                }
+                if u < 1. {
+                    window.request_animation_frame();
+                }
+            },
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full();
         div()
+            .relative()
             .mb(px(8.))
-            .px(px(14.))
-            .py(px(10.))
+            .h(px(46.))
             .rounded(px(crate::theme::RADIUS_LG))
-            .border_1()
-            .border_color(crate::theme::border())
-            .bg(field_fill())
-            .flex()
-            .items_center()
-            .gap(px(8.))
-            .text_size(px(12.5))
-            .text_color(content(0.75))
-            .child(icon("lock", 14.).text_color(amber(1.)))
-            .child(div().flex_1().min_w_0().child(line.to_owned()))
+            .overflow_hidden()
+            .child(body)
+            .child(super::question_dither(tone, 0.28 * (1. - k), false))
+            .child(super::dashed_frame(
+                crate::theme::RADIUS_LG,
+                Hsla {
+                    a: 0.5 * (1. - k),
+                    ..tone
+                },
+            ))
+            .child(
+                div()
+                    .relative()
+                    .size_full()
+                    .px(px(14.))
+                    .flex()
+                    .items_center()
+                    .gap(px(12.))
+                    .child(pixel_lock(t > 0.38, tone))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(px(13.5))
+                            .text_color(content(0.9))
+                            .opacity(text)
+                            .child(line.to_owned()),
+                    )
+                    .child(pixel_countdown(1. - u, tone, 1. - k)),
+            )
             .into_any_element()
     }
+}
+
+/// How long the saved-key line stays.
+pub(super) const DONE_SECS: f32 = 7.;
+
+/// A padlock of 2 px cells, its shackle up (open) or down (closed).
+fn pixel_lock(closed: bool, tone: Hsla) -> impl IntoElement {
+    const SHUT: [&str; 10] = [
+        "..XXXX..", ".XX..XX.", ".X....X.", ".X....X.", "XXXXXXXX", "XXXXXXXX", "XXX..XXX",
+        "XXX..XXX", "XXXXXXXX", "XXXXXXXX",
+    ];
+    const OPEN: [&str; 10] = [
+        "..XXXX..", ".XX..XX.", ".X....X.", ".X......", "XXXXXXXX", "XXXXXXXX", "XXX..XXX",
+        "XXX..XXX", "XXXXXXXX", "XXXXXXXX",
+    ];
+    let map = if closed { SHUT } else { OPEN };
+    gpui::canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            for (y, row) in map.iter().enumerate() {
+                for (x, c) in row.bytes().enumerate() {
+                    if c == b'X' {
+                        window.paint_quad(gpui::fill(
+                            gpui::Bounds::new(
+                                bounds.origin + gpui::point(px(x as f32 * 2.), px(y as f32 * 2.)),
+                                gpui::size(px(1.6), px(1.6)),
+                            ),
+                            tone,
+                        ));
+                    }
+                }
+            }
+        },
+    )
+    .flex_shrink_0()
+    .w(px(16.))
+    .h(px(20.))
+}
+
+/// A row of 14 pixels that go out one by one as `left` (1 to 0) runs down.
+fn pixel_countdown(left: f32, tone: Hsla, alpha: f32) -> impl IntoElement {
+    const CELLS: u32 = 14;
+    gpui::canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            let lit = (CELLS as f32 * left).ceil() as u32;
+            for i in 0..CELLS {
+                let a = if i < lit { 0.9 } else { 0.18 } * alpha;
+                window.paint_quad(gpui::fill(
+                    gpui::Bounds::new(
+                        bounds.origin + gpui::point(px(i as f32 * 5.), px(0.)),
+                        gpui::size(px(3.), px(3.)),
+                    ),
+                    Hsla { a, ..tone },
+                ));
+            }
+        },
+    )
+    .flex_shrink_0()
+    .w(px(CELLS as f32 * 5.))
+    .h(px(3.))
 }
 
 /// How long the value is, as a short pixel bar: dithered cells fill a share of it (a typical

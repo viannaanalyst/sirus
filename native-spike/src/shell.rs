@@ -15444,9 +15444,12 @@ impl Shell {
                     } else {
                         crate::step_lines::text(&step_line(step))
                     };
+                    // One line, cut with "…": the row is a fixed 28 px, so a long command that
+                    // wrapped showed only a clipped sliver of its first line.
                     div()
                         .flex_1()
                         .min_w_0()
+                        .truncate()
                         .child(shimmer(text, clock))
                         .into_any_element()
                 }

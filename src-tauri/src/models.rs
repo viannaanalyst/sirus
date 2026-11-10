@@ -788,6 +788,9 @@ pub struct AppSettings {
     pub chat_background_empty_visibility: u8,
     /// Image strength once the conversation has messages, in percent.
     pub chat_background_session_visibility: u8,
+    /// The dithered glow in the project's colour behind the conversation card, when no image is
+    /// chosen. Off, the card shows the window's glass.
+    pub project_wallpaper: bool,
     pub worktree_base_path: Option<String>,
     pub default_session_workspace: SessionWorkspacePref,
     pub confirm_close_running: bool,
@@ -1035,6 +1038,7 @@ impl Default for AppSettings {
             chat_background_show_on: "all".into(),
             chat_background_empty_visibility: 24,
             chat_background_session_visibility: 24,
+            project_wallpaper: true,
             worktree_base_path: None,
             default_session_workspace: SessionWorkspacePref::Ask,
             confirm_close_running: true,

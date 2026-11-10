@@ -7,13 +7,13 @@
 
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
-use std::sync::{Arc, OnceLock, mpsc};
+use std::sync::{mpsc, Arc, OnceLock};
 use std::time::Duration;
 
 use crate::runtime::{AppHandle, Emitter, Manager, State};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use crate::commands::AppState;
 use crate::error::{Error, Result as IpcResult};
@@ -933,10 +933,8 @@ mod tests {
         }
         assert!(write_file(&root, "missing/dir.txt", None, "x").is_err());
         let tools = tool_definitions();
-        assert!(
-            tools
-                .iter()
-                .all(|tool| tool["inputSchema"]["type"] == "object")
-        );
+        assert!(tools
+            .iter()
+            .all(|tool| tool["inputSchema"]["type"] == "object"));
     }
 }

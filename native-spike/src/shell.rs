@@ -471,12 +471,6 @@ struct SessionFilter {
     hidden_providers: Vec<&'static str>,
 }
 
-impl SessionFilter {
-    fn active(&self) -> bool {
-        !self.status.is_empty() || self.days != 0 || !self.hidden_providers.is_empty()
-    }
-}
-
 /// Whole days since midnight today for a conversation's last activity; today is 0.
 fn days_ago(conversation: &Conversation) -> i64 {
     let Ok(when) = chrono::DateTime::parse_from_rfc3339(&conversation.last_activity) else {
@@ -1296,6 +1290,9 @@ const SELECTED_MIN: f32 = 112.;
 const SIDEBAR_MIN: f32 = 196.;
 const SIDEBAR_MAX: f32 = 420.;
 const CONV_ROW: f32 = 29.;
+/// The sidebar's hover pill and its open conversation: faint, so the rows' dots show through.
+const SIDEBAR_HOVER: f32 = 0.04;
+const SIDEBAR_SELECTED: f32 = 0.07;
 const STEP_ROW: f32 = 28.;
 
 struct Tab {
@@ -8513,28 +8510,20 @@ impl Shell {
                 Row::Settled => self.settled_row(y, alpha, cx),
             });
         }
-        let contents = |id: &'static str,
-                        this: &Self,
-                        cx: &mut Context<Self>,
-                        drawn: Vec<AnyElement>| {
-            div()
-                .absolute()
-                .top_0()
-                .bottom_0()
-                .left_0()
-                .w(px(width))
-                .flex()
-                .flex_col()
-                .child(this.project_header(cx))
-                .child(this.sidebar_nav(&nav, cx))
-                .child(
-                    div()
-                        .relative()
-                        .flex_1()
-                        .min_h_0()
-                        .flex()
-                        .flex_col()
-                        .child(
+        let contents =
+            |id: &'static str, this: &Self, cx: &mut Context<Self>, drawn: Vec<AnyElement>| {
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left_0()
+                    .w(px(width))
+                    .flex()
+                    .flex_col()
+                    .child(this.project_header(cx))
+                    .child(this.sidebar_nav(&nav, cx))
+                    .child(
+                        div().relative().flex_1().min_h_0().flex().flex_col().child(
                             div()
                                 .id(id)
                                 .flex_1()
@@ -8548,13 +8537,18 @@ impl Shell {
                                         .relative()
                                         .w_full()
                                         .h(px(height + 12.))
-                                        .child(crate::hover_track::list("sidebar").pill())
+                                        .child(
+                                            crate::hover_track::list_with_fill(
+                                                "sidebar",
+                                                SIDEBAR_HOVER,
+                                            )
+                                            .pill(),
+                                        )
                                         .children(drawn),
                                 ),
-                        )
-                        .child(this.filter_button(cx)),
-                )
-        };
+                        ),
+                    )
+            };
         // A collapsed sidebar slides out over the workspace while the pointer holds it there.
         if open < 0.001 {
             let Some(peek) = self.peek.as_ref() else {
@@ -8667,52 +8661,6 @@ impl Shell {
                 "approval" => !conversation.pending.is_empty(),
                 _ => !conversation.working() && conversation.pending.is_empty(),
             })
-    }
-
-    fn filter_button(&self, cx: &mut Context<Self>) -> AnyElement {
-        let store = self.filter_button_at.clone();
-        let lit = self.session_filter.open.is_some() || self.session_filter.active();
-        div()
-            .id("session-filter")
-            .absolute()
-            .top(px(6.))
-            .right(px(8.))
-            .size(px(24.))
-            .rounded(px(crate::theme::RADIUS_SM))
-            .flex()
-            .items_center()
-            .justify_center()
-            .cursor_pointer()
-            .sinks()
-            .when(lit, |d| d.bg(content(0.09)))
-            .hover(|s| s.bg(content(0.07)))
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.session_filter.open = match this.session_filter.open {
-                    Some(_) => None,
-                    None => Some(Tween::from_to(
-                        0.,
-                        1.,
-                        Instant::now(),
-                        if cx.reduce_motion() { 0. } else { 0.16 },
-                        Curve::Expo,
-                    )),
-                };
-                cx.notify();
-            }))
-            .child(
-                gpui::canvas(move |bounds, _, _| store.set(Some(bounds)), |_, _, _, _| {})
-                    .absolute()
-                    .size_full(),
-            )
-            .child(
-                icon("filter", 14.).text_color(if self.session_filter.active() {
-                    accent()
-                } else {
-                    content(0.55)
-                }),
-            )
-            .into_any_element()
     }
 
     fn filter_menu_view(
@@ -12287,6 +12235,17 @@ impl Shell {
         let editing = draft.is_some();
         // Where the row was painted, for its hover card (sidebar_card.rs).
         let place = sidebar_card::Place::default();
+        let project_tint: gpui::Hsla = self
+            .current_project
+            .map(|ix| {
+                let project = &self.projects[ix];
+                gpui::rgb(crate::project_avatar::project_color(
+                    &project.name,
+                    &project.appearance,
+                ))
+                .into()
+            })
+            .unwrap_or_else(crate::theme::accent);
         let row = div()
             .id(("conversation", index))
             .absolute()
@@ -12301,7 +12260,19 @@ impl Shell {
             .flex()
             .items_center()
             .gap(px(8.))
-            .when(active, |d| d.bg(content(0.09)))
+            // The open conversation: a faint wash and a short bar in the project's colour.
+            .when(active, |d| {
+                d.bg(content(SIDEBAR_SELECTED)).child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .top(px(8.))
+                        .bottom(px(8.))
+                        .w(px(2.))
+                        .rounded_full()
+                        .bg(project_tint),
+                )
+            })
             .when(self.picked.contains(&index), |d| {
                 d.bg(crate::theme::accent_wash(0.18))
             })
@@ -12379,7 +12350,7 @@ impl Shell {
                         .child(conversation.age()),
                 )
             });
-        crate::hover_track::list("sidebar")
+        crate::hover_track::list_with_fill("sidebar", SIDEBAR_HOVER)
             .row(row, index, active)
             .into_any_element()
     }
@@ -20389,8 +20360,11 @@ impl Render for Shell {
         // A chosen picture wins; otherwise the project's dithered glow, in its colour.
         let chat_background = crate::chat_background::layer(&self.settings, empty_chat, window, cx)
             .or_else(|| {
-                // A dark-theme look: light ink means a dark window.
-                if crate::theme::content(1.).l < 0.5 {
+                // Settings → Aparência → Papel de parede do projeto; a dark-theme look only
+                // (light ink means a dark window).
+                if self.settings["projectWallpaper"].as_bool() == Some(false)
+                    || crate::theme::content(1.).l < 0.5
+                {
                     return None;
                 }
                 let project = &self.projects[self.current_project?];

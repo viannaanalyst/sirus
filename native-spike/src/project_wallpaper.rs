@@ -16,7 +16,7 @@ const INTENSITY: f32 = 0.30;
 /// How far up the glow reaches, as a share of the card's height.
 const HEIGHT: f32 = 0.30;
 /// How much the project's own shape bends the glow, 0..1.
-const SHAPE: f32 = 0.45;
+const SHAPE: f32 = 0.35;
 /// The card's size is rounded up to this many device pixels, so a resize reuses pictures.
 const STEP: u32 = 64;
 /// The darkest colour, the card's near black.
@@ -258,4 +258,3 @@ mod tests {
         assert!(key_for(1, 2, (0., 600.), 2.).is_none());
     }
 }
-

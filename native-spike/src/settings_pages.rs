@@ -1480,7 +1480,7 @@ fn general(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
     let sidebar_rows: &[SwitchRow] = &[(
         t("Trabalhando ou esperando você primeiro"),
         t(
-            "Na barra lateral, as conversas em que um agente trabalha ou espera sua aprovação ficam num grupo acima das datas.",
+            "Na barra lateral, as conversas em que um agente trabalha ou espera sua aprovação ficam no topo da lista.",
         ),
         top("sidebarAttentionFirst"),
     )];
@@ -3784,6 +3784,14 @@ fn appearance_data_groups(settings: &Value) -> Vec<Group> {
         ],
     );
 
+    let wallpaper = switch_row(
+        s,
+        t("Papel de parede do projeto"),
+        t(
+            "Um brilho pixelado na cor do projeto, embaixo da conversa. Desligado, a conversa fica translúcida. Uma imagem escolhida abaixo tem prioridade.",
+        ),
+        top("projectWallpaper"),
+    );
     let background_rows = match s["chatBackground"].as_str() {
         None => vec![row(
             t("Escolher uma imagem"),
@@ -3870,6 +3878,8 @@ fn appearance_data_groups(settings: &Value) -> Vec<Group> {
             ),
         ],
     };
+    let mut background_rows = background_rows;
+    background_rows.insert(0, wallpaper);
     let background = group(t("Fundo do chat"), background_rows);
 
     vec![effects, background]

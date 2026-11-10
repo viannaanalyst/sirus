@@ -412,7 +412,7 @@ impl Shell {
                     .text_color(content(0.35))
                     .child(conversation.age()),
             );
-        crate::hover_track::list("sidebar")
+        crate::hover_track::list_with_fill("sidebar", SIDEBAR_HOVER)
             .row(row, index, selected)
             .into_any_element()
     }

@@ -174,6 +174,8 @@ struct Inner {
     rows: Vec<RowInfo>,
     /// Paints the ⌘K palette's selection (`segment_pill::paint_row`) instead of a plain fill.
     barred: bool,
+    /// The plain pill's opacity of the ink, `FILL` unless the list asks for another.
+    fill: f32,
 }
 
 impl Inner {
@@ -205,16 +207,22 @@ thread_local! {
 /// The track of the list named `key`, made on first use. The UI is single-threaded, so the
 /// registry is thread-local and rows need no field on the view.
 pub fn list(key: &str) -> HoverTrack {
-    track(key, false)
+    track(key, false, FILL)
+}
+
+/// `list` with a pill of its own strength: the sidebar's is fainter, so the dotted texture of
+/// its rows still shows through.
+pub fn list_with_fill(key: &str, fill: f32) -> HoverTrack {
+    track(key, false, fill)
 }
 
 /// `list`, but the hovered row wears the palette's selection: its wash and the accent bar at its
 /// left edge, with the pill's own rounding.
 pub fn list_barred(key: &str) -> HoverTrack {
-    track(key, true)
+    track(key, true, FILL)
 }
 
-fn track(key: &str, barred: bool) -> HoverTrack {
+fn track(key: &str, barred: bool, fill: f32) -> HoverTrack {
     TRACKS.with(|tracks| {
         tracks
             .borrow_mut()
@@ -224,6 +232,7 @@ fn track(key: &str, barred: bool) -> HoverTrack {
                     pill: Pill::new(Instant::now()),
                     rows: Vec::new(),
                     barred,
+                    fill,
                 })))
             })
             .clone()
@@ -255,7 +264,7 @@ impl HoverTrack {
                             );
                         } else {
                             window.paint_quad(
-                                fill(bounds, content(FILL * alpha)).corner_radii(px(RADIUS)),
+                                fill(bounds, content(inner.fill * alpha)).corner_radii(px(RADIUS)),
                             );
                         }
                     }

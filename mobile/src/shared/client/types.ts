@@ -415,6 +415,8 @@ export interface AppSettings {
   /** Image strength (%) before a conversation has messages, and once it has. */
   chatBackgroundEmptyVisibility: number;
   chatBackgroundSessionVisibility: number;
+  /** The dithered glow in the project's colour behind the conversation, when no image is chosen. */
+  projectWallpaper: boolean;
   worktreeBasePath: string | null;
   defaultSessionWorkspace: "ask" | "checkout" | "worktree";
   confirmCloseRunning: boolean;

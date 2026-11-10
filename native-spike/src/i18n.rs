@@ -2693,8 +2693,8 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Mês", "Month"),
     ("Mínimo", "Minimal"),
     (
-        "Na barra lateral, as conversas em que um agente trabalha ou espera sua aprovação ficam num grupo acima das datas.",
-        "In the sidebar, conversations where an agent is working or waiting for your approval sit in a group above the dates.",
+        "Na barra lateral, as conversas em que um agente trabalha ou espera sua aprovação ficam no topo da lista.",
+        "In the sidebar, conversations where an agent is working or waiting for your approval sit at the top of the list.",
     ),
     ("Na fila", "Queue"),
     ("Na pasta do projeto", "In the project's folder"),
@@ -4076,6 +4076,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Palavra por palavra", "Token by token"),
     ("Paleta de comandos", "Command Palette"),
+    ("Papel de parede do projeto", "Project wallpaper"),
     ("Parada", "Stopped"),
     ("Parando…", "Stopping…"),
     ("Parar a gravação", "Stop recording"),
@@ -4941,6 +4942,10 @@ const ENTRIES: &[(&str, &str)] = &[
     (
         "Um aparelho conectado pode fazer o que esta janela faz: abrir sessões, enviar mensagens, aprovar ações, fazer commit e push. Seletores de arquivo, ditado e controle do computador ficam só no Mac. Remova o aparelho que não usar mais.",
         "A connected device can do what this window does: start sessions, send messages, approve actions, commit and push. Pickers, dictation and computer use stay on the Mac. Remove a device you no longer use.",
+    ),
+    (
+        "Um brilho pixelado na cor do projeto, embaixo da conversa. Desligado, a conversa fica translúcida. Uma imagem escolhida abaixo tem prioridade.",
+        "A pixelated glow in the project's colour under the conversation. Off, the conversation is translucent. An image chosen below takes priority.",
     ),
     (
         "Um chat lateral não pode abrir outro chat lateral.",

@@ -941,13 +941,15 @@ mod tests {
     #[test]
     fn a_failed_turn_leaves_no_pending_request_behind() {
         let mut session: Session = serde_json::from_value(serde_json::json!({"id":"s","title":"Test","projectId":"p","agent":"claude","status":"waiting","createdAt":"time","lastActivityAt":"time","worktree":{"path":"/unused","branch":"main","isolated":false},"messages":[]})).unwrap();
-        session.pending_requests.push(crate::models::PendingRequest {
-            request_id: "r".into(),
-            generation: "g".into(),
-            turn_id: "t".into(),
-            item_id: "i".into(),
-            kind: crate::models::PendingRequestKind::UserInput { questions: vec![] },
-        });
+        session
+            .pending_requests
+            .push(crate::models::PendingRequest {
+                request_id: "r".into(),
+                generation: "g".into(),
+                turn_id: "t".into(),
+                item_id: "i".into(),
+                kind: crate::models::PendingRequestKind::UserInput { questions: vec![] },
+            });
         finalize_session(&mut session, Some(1), false, false, false, None);
         assert_eq!(session.status, SessionStatus::Failed);
         assert!(session.pending_requests.is_empty());

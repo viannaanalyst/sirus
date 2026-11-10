@@ -20388,8 +20388,15 @@ impl Render for Shell {
                 }
                 let project = &self.projects[self.current_project?];
                 let card = self.card_bounds.get()?;
+                // Settings → Aparência: each project's icon colour, or one colour for all.
+                let fixed = (self.settings["projectWallpaperColorMode"].as_str() == Some("fixed"))
+                    .then(|| self.settings["projectWallpaperColor"].as_str())
+                    .flatten()
+                    .and_then(|hex| u32::from_str_radix(hex.strip_prefix('#')?, 16).ok());
                 crate::project_wallpaper::layer(
-                    crate::project_avatar::project_color(&project.name, &project.appearance),
+                    fixed.unwrap_or_else(|| {
+                        crate::project_avatar::project_color(&project.name, &project.appearance)
+                    }),
                     crate::project_wallpaper::seed_of(&project.name),
                     (f32::from(card.size.width), f32::from(card.size.height)),
                     window,

@@ -791,6 +791,10 @@ pub struct AppSettings {
     /// The dithered glow in the project's colour behind the conversation card, when no image is
     /// chosen. Off, the card shows the window's glass.
     pub project_wallpaper: bool,
+    /// Whose colour the wallpaper takes: `project` (each project's icon colour) or `fixed`.
+    pub project_wallpaper_color_mode: String,
+    /// The one colour of every project's wallpaper in `fixed` mode, as `#rrggbb`.
+    pub project_wallpaper_color: String,
     pub worktree_base_path: Option<String>,
     pub default_session_workspace: SessionWorkspacePref,
     pub confirm_close_running: bool,
@@ -1039,6 +1043,8 @@ impl Default for AppSettings {
             chat_background_empty_visibility: 24,
             chat_background_session_visibility: 24,
             project_wallpaper: true,
+            project_wallpaper_color_mode: "project".into(),
+            project_wallpaper_color: "#5b8def".into(),
             worktree_base_path: None,
             default_session_workspace: SessionWorkspacePref::Ask,
             confirm_close_running: true,
@@ -1178,6 +1184,13 @@ pub(crate) fn valid_github_pin(pin: &str) -> bool {
         && crate::pull_requests::repository(&format!("https://github.com/{repo}")).is_some()
 }
 
+/// `#rrggbb`.
+fn is_hex_color(value: &str) -> bool {
+    value
+        .strip_prefix('#')
+        .is_some_and(|digits| digits.len() == 6 && digits.chars().all(|c| c.is_ascii_hexdigit()))
+}
+
 impl AppSettings {
     pub fn validate_controls(&self) -> crate::error::Result<()> {
         crate::skills::validate_disabled(&self.disabled_skills)?;
@@ -1249,6 +1262,8 @@ impl AppSettings {
             || !["empty", "all"].contains(&self.chat_background_show_on.as_str())
             || self.chat_background_empty_visibility > 100
             || self.chat_background_session_visibility > 100
+            || !["project", "fixed"].contains(&self.project_wallpaper_color_mode.as_str())
+            || !is_hex_color(&self.project_wallpaper_color)
         {
             return Err(Error::new("invalid_settings", "Invalid chat background."));
         }

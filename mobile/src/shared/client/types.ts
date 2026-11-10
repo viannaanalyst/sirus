@@ -417,6 +417,9 @@ export interface AppSettings {
   chatBackgroundSessionVisibility: number;
   /** The dithered glow in the project's colour behind the conversation, when no image is chosen. */
   projectWallpaper: boolean;
+  /** Each project's icon colour, or one colour (`projectWallpaperColor`) for all of them. */
+  projectWallpaperColorMode: "project" | "fixed";
+  projectWallpaperColor: string;
   worktreeBasePath: string | null;
   defaultSessionWorkspace: "ask" | "checkout" | "worktree";
   confirmCloseRunning: boolean;

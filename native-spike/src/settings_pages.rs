@@ -3879,7 +3879,40 @@ fn appearance_data_groups(settings: &Value) -> Vec<Group> {
         ],
     };
     let mut background_rows = background_rows;
-    background_rows.insert(0, wallpaper);
+    let fixed = s["projectWallpaperColorMode"].as_str() == Some("fixed");
+    let mut wallpaper_rows = vec![
+        wallpaper,
+        row(
+            t("Cor do papel de parede"),
+            t("A cor do ícone de cada projeto, ou uma cor só para todos."),
+            vec![pick(
+                s,
+                top("projectWallpaperColorMode"),
+                &[("project", t("Cor do projeto")), ("fixed", t("Cor padrão"))],
+            )],
+        ),
+    ];
+    if fixed {
+        wallpaper_rows.push(row(
+            t("Cor padrão"),
+            t("A cor do papel de parede em todos os projetos."),
+            vec![pick(
+                s,
+                top("projectWallpaperColor"),
+                &[
+                    ("#5b8def", t("Azul")),
+                    ("#8b7cf6", t("Roxo")),
+                    ("#38bdf8", t("Ciano")),
+                    ("#2dd4bf", t("Verde-água")),
+                    ("#fb923c", t("Laranja")),
+                    ("#f472b6", t("Rosa")),
+                ],
+            )],
+        ));
+    }
+    for (at, row) in wallpaper_rows.into_iter().enumerate() {
+        background_rows.insert(at, row);
+    }
     let background = group(t("Fundo do chat"), background_rows);
 
     vec![effects, background]

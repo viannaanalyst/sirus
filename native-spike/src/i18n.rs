@@ -264,6 +264,14 @@ const ENTRIES: &[(&str, &str)] = &[
         "The conversation is too large to export.",
     ),
     (
+        "A cor do papel de parede em todos os projetos.",
+        "The wallpaper's colour in every project.",
+    ),
+    (
+        "A cor do ícone de cada projeto, ou uma cor só para todos.",
+        "Each project's icon colour, or one colour for all of them.",
+    ),
+    (
         "A correção exige um conjunto preparado completo e sem conflitos neste espaço de trabalho.",
         "Amend requires a complete, conflict-free staged set inside this workspace",
     ),
@@ -1297,6 +1305,9 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Copiar link do prompt", "Copy prompt link"),
     ("Cor", "Color"),
     ("Cor de destaque", "Accent color"),
+    ("Cor do papel de parede", "Wallpaper colour"),
+    ("Cor do projeto", "Project colour"),
+    ("Cor padrão", "Default colour"),
     ("Cores", "Colors"),
     ("Cores do diff", "Diff colors"),
     ("Cores do tema", "Theme colors"),
@@ -2438,6 +2449,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "You can use Sirus from your phone now.",
     ),
     ("Já usado por {}", "Already used by {}"),
+    ("Laranja", "Orange"),
     (
         "Leia antes de enviar. Nada foi enviado.",
         "Read it before you send. Nothing was sent.",
@@ -4558,6 +4570,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Rolou", "Scrolled"),
     ("Rosa", "Pink"),
     ("Rosto", "Face"),
+    ("Roxo", "Purple"),
     ("Rápida", "Fast"),
     ("Rápido", "Fast"),
     ("Rótulo da conta", "Account label"),
@@ -5161,6 +5174,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Ver saída", "Show output"),
     ("Ver uso do provedor", "View provider usage"),
     ("Verde", "Green"),
+    ("Verde-água", "Teal"),
     (
         "Verifica em segundo plano se Codex, Claude e outras CLIs têm versões mais novas.",
         "Check Codex, Claude and other provider CLIs for newer versions in the background.",

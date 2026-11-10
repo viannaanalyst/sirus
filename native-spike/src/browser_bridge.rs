@@ -107,7 +107,13 @@ async fn answer(request: Value, backend: Backend, cx: &mut AsyncApp) {
     let tool = request["tool"].as_str().unwrap_or_default().to_owned();
     // A page an agent drives must not walk off with the keys of someone typing in the app.
     let keys_home = on_window(cx, panel_browser::keyboard_home).unwrap_or(false);
-    let result = run(&session, &tool, &request["args"], &backend, cx).await;
+    // Sign-ins and computer use run here only for another computer's host: this Mac's own
+    // host runs them itself.
+    let result = if local_command(&tool).is_some() && !from_remote(&request) {
+        Err("this Mac runs that itself".to_owned())
+    } else {
+        run(&session, &tool, &request["args"], &backend, cx).await
+    };
     if keys_home {
         on_window(cx, panel_browser::reclaim_keyboard);
     }
@@ -150,6 +156,11 @@ async fn run(
 ) -> Result<Value, String> {
     if session.is_empty() {
         return Err("missing session".into());
+    }
+    // A remote host hands this Mac the sign-in and the computer use whole: the saved logins
+    // and the screen are this Mac's, and the approval cards show in this window (ADR-201 addendum).
+    if let Some(command) = local_command(tool) {
+        return local_run(command, session, tool, args, backend, cx).await;
     }
     let mut provider = None;
     let entity = cx.update(|app| {
@@ -206,6 +217,63 @@ async fn run(
             let png = wait(answer, cx).await?;
             Ok(json!({ "data": base64::engine::general_purpose::STANDARD.encode(png) }))
         }
+    }
+}
+
+/// How long a request waits for the person to answer an approval card, and then to act.
+const APPROVED_TIMEOUT: Duration = Duration::from_secs(170);
+
+/// The command of this Mac's own host that runs a tool a remote host forwarded, if it is one:
+/// the agent's sign-in (this Mac's vault) or a computer-use call (this Mac's screen).
+fn local_command(tool: &str) -> Option<&'static str> {
+    match tool {
+        "browser_fill_login" => Some("login_vault_agent_fill"),
+        _ if tool.starts_with("computer_") => Some("computer_remote_execute"),
+        _ => None,
+    }
+}
+
+/// The arguments of that command: the sign-in takes what the model named; a computer call
+/// takes its tool, arguments and the conversation's context, which came in `args`.
+fn local_args(command: &str, session: &str, tool: &str, args: &Value) -> Value {
+    if command == "login_vault_agent_fill" {
+        let mut input = json!({ "sessionId": session });
+        for key in ["part", "username"] {
+            input[key] = args[key].clone();
+        }
+        input
+    } else {
+        json!({
+            "sessionId": session,
+            "tool": tool,
+            "arguments": args["arguments"],
+            "context": args["context"],
+        })
+    }
+}
+
+/// Runs the tool on this Mac's own host and waits for the person's card and the action.
+async fn local_run(
+    command: &str,
+    session: &str,
+    tool: &str,
+    args: &Value,
+    backend: &Backend,
+    cx: &mut AsyncApp,
+) -> Result<Value, String> {
+    let reply = backend.request_local(command, local_args(command, session, tool, args));
+    match reply
+        .recv()
+        .with_timeout(APPROVED_TIMEOUT, cx.background_executor())
+        .await
+    {
+        Ok(Ok(Ok(value))) => Ok(value),
+        Ok(Ok(Err(error))) => Err(error["message"]
+            .as_str()
+            .unwrap_or("this Mac could not do that")
+            .to_owned()),
+        Ok(Err(_)) => Err("this Mac did not answer".into()),
+        Err(_) => Err("this Mac did not answer in time".into()),
     }
 }
 
@@ -489,6 +557,44 @@ mod tests {
         let mut list = list;
         remove(&mut list, "a");
         assert_eq!(list.as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn sign_ins_and_computer_use_run_on_this_macs_host_with_no_value_from_the_remote() {
+        assert_eq!(
+            local_command("browser_fill_login"),
+            Some("login_vault_agent_fill")
+        );
+        for tool in ["computer_apps", "computer_click", "computer_launch"] {
+            assert_eq!(
+                local_command(tool),
+                Some("computer_remote_execute"),
+                "{tool}"
+            );
+        }
+        for tool in ["browser_open", "browser_snapshot", "fill_login_page"] {
+            assert_eq!(local_command(tool), None, "{tool}");
+        }
+        // Only the part and the username go on, whatever else the request carried.
+        let fill = local_args(
+            "login_vault_agent_fill",
+            "s1",
+            "browser_fill_login",
+            &json!({ "part": "totp", "username": "me", "password": "nope" }),
+        );
+        assert_eq!(
+            fill,
+            json!({ "sessionId": "s1", "part": "totp", "username": "me" })
+        );
+        let computer = local_args(
+            "computer_remote_execute",
+            "s1",
+            "computer_click",
+            &json!({ "arguments": { "app": "Notes" }, "context": { "provider": "Codex" } }),
+        );
+        assert_eq!(computer["tool"], "computer_click");
+        assert_eq!(computer["arguments"]["app"], "Notes");
+        assert_eq!(computer["context"]["provider"], "Codex");
     }
 
     #[test]

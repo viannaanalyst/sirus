@@ -4,18 +4,16 @@
 //! a fixed blocklist, per-session app approval, planning read-only, the
 //! physical Escape kill switch and the visible control indicator.
 
-use std::collections::{HashMap, VecDeque};
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, OnceLock};
-use std::time::{Duration, Instant};
-
-#[cfg(target_os = "macos")]
 use crate::runtime::Manager;
 use crate::runtime::{AppHandle, Emitter, State};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::{HashMap, VecDeque};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{mpsc, Arc, OnceLock};
+use std::time::{Duration, Instant};
 
 use crate::commands::AppState;
 #[cfg(target_os = "macos")]
@@ -263,10 +261,24 @@ pub struct Endpoint {
     pub token: String,
 }
 
-/// The computer server is offered to a turn only while the Settings switch is on,
-/// and only in the macOS app, the one build whose bridge server listens.
+/// Whether turns are offered the computer server: on a Mac while the Settings switch is on; on
+/// another computer's headless host while a Sirus window is paired with it, which runs the
+/// calls on its own Mac, where the switch and the approval cards are (ADR-201 addendum).
+fn offered(is_mac: bool, switched_on: bool, window_paired: bool) -> bool {
+    if is_mac {
+        switched_on
+    } else {
+        window_paired
+    }
+}
+
+/// The computer server is offered to a turn under `offered`'s rule.
 pub fn endpoint(session_id: &str) -> Option<Endpoint> {
-    if !cfg!(target_os = "macos") || !enabled() {
+    if !offered(
+        cfg!(target_os = "macos"),
+        enabled(),
+        crate::remote::desktop_client_possible(),
+    ) {
         return None;
     }
     let (_, socket) = APP.get()?;
@@ -357,7 +369,7 @@ pub fn acp_server(session_id: &str) -> Option<Value> {
     }))
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 fn start_server(app: AppHandle, socket: PathBuf) {
     let _ = std::fs::remove_file(&socket);
     crate::runtime::async_runtime::spawn(async move {
@@ -381,10 +393,10 @@ fn start_server(app: AppHandle, socket: PathBuf) {
     });
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(unix))]
 fn start_server(_app: AppHandle, _socket: PathBuf) {}
 
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 async fn handle_connection(stream: tokio::net::UnixStream, app: AppHandle) {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     let (read, mut write) = stream.into_split();
@@ -483,20 +495,63 @@ fn valid_ref(reference: &str) -> bool {
         && reference[1..].chars().all(|c| c.is_ascii_digit())
 }
 
-#[cfg(target_os = "macos")]
-/// The session's provider (title for the approval card, key for the pointer) and planning mode.
-fn session_context(app: &AppHandle, session_id: &str) -> Option<(String, &'static str, bool)> {
+/// What a computer-use call needs to know about its conversation: the provider's title (the
+/// approval card) and key (the pointer's colour), and whether planning mode is on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Context {
+    provider: String,
+    key: String,
+    planning: bool,
+}
+
+impl Context {
+    fn to_json(&self) -> Value {
+        json!({ "provider": self.provider, "key": self.key, "planning": self.planning })
+    }
+
+    /// The context a remote host sent along with a call. The host is the person's own, but
+    /// the text lands on an approval card here, so it is kept short and plain.
+    fn from_json(value: &Value) -> Context {
+        let word = |key: &str, limit: usize| -> String {
+            value
+                .get(key)
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .chars()
+                .filter(|c| !c.is_control())
+                .take(limit)
+                .collect()
+        };
+        let mut provider = word("provider", 40);
+        if provider.trim().is_empty() {
+            provider = "An agent on another computer".into();
+        }
+        let key: String = word("key", 20)
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .collect();
+        Context {
+            provider,
+            key,
+            // Planning is read-only: a missing or odd value must not unlock actions.
+            planning: value.get("planning").and_then(Value::as_bool) != Some(false),
+        }
+    }
+}
+
+/// The session's provider and planning mode, on a host that owns the session.
+fn session_context(app: &AppHandle, session_id: &str) -> Option<Context> {
     let state = app.state::<Arc<AppState>>();
     let data = state.data.lock();
     let session = data
         .sessions
         .iter()
         .find(|session| session.id == session_id)?;
-    Some((
-        session.agent.title().to_string(),
-        session.agent.key(),
-        session.execution.planning,
-    ))
+    Some(Context {
+        provider: session.agent.title().to_string(),
+        key: session.agent.key().to_string(),
+        planning: session.execution.planning,
+    })
 }
 
 #[cfg(target_os = "macos")]
@@ -659,14 +714,61 @@ fn observation(
 
 #[cfg(target_os = "macos")]
 fn execute(app: &AppHandle, session_id: &str, tool: &str, args: &Value) -> Result<Value, String> {
+    let context = session_context(app, session_id)
+        .ok_or_else(|| "this session no longer exists".to_string())?;
+    execute_in(app, session_id, &context, tool, args)
+}
+
+/// A call from the host of another computer, run on this Mac's screen: the conversation lives
+/// there, so what the approval card and the pointer need comes with the call (ADR-201 addendum). The
+/// Settings switch, the blocklist and the approval card are this Mac's own.
+pub fn execute_remote(
+    app: &AppHandle,
+    session_id: &str,
+    tool: &str,
+    args: &Value,
+    context: &Value,
+) -> Result<Value, String> {
+    if !tool.starts_with("computer_") || session_id.is_empty() || session_id.len() > 128 {
+        return Err("not a computer action".into());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        execute_in(app, session_id, &Context::from_json(context), tool, args)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, args, context);
+        Err("Computer use is only available on macOS".into())
+    }
+}
+
+/// On a host that is not a Mac, a call goes to the Sirus window of the Mac that is paired with
+/// it, which runs it on its own screen (ADR-201 addendum).
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+fn forward(app: &AppHandle, session_id: &str, tool: &str, args: &Value) -> Result<Value, String> {
+    let context = session_context(app, session_id)
+        .ok_or_else(|| "this session no longer exists".to_string())?;
+    crate::browser_bridge::call_computer(session_id, tool, args.clone(), context.to_json())
+}
+
+#[cfg(target_os = "macos")]
+fn execute_in(
+    app: &AppHandle,
+    session_id: &str,
+    context: &Context,
+    tool: &str,
+    args: &Value,
+) -> Result<Value, String> {
     if !enabled() {
         return Err(
             "Computer use is turned off. The person can enable it in Sirus Settings → Computer."
                 .into(),
         );
     }
-    let (provider, provider_key, planning) = session_context(app, session_id)
-        .ok_or_else(|| "this session no longer exists".to_string())?;
+    let provider = context.provider.clone();
+    let provider_key = context.key.as_str();
+    let planning = context.planning;
     if tool == "computer_apps" {
         let apps: Vec<Value> = computer::running_apps()
             .into_iter()
@@ -885,13 +987,8 @@ fn execute(app: &AppHandle, session_id: &str, tool: &str, args: &Value) -> Resul
 }
 
 #[cfg(not(target_os = "macos"))]
-fn execute(
-    _app: &AppHandle,
-    _session_id: &str,
-    _tool: &str,
-    _args: &Value,
-) -> Result<Value, String> {
-    Err("Computer use is only available on macOS".into())
+fn execute(app: &AppHandle, session_id: &str, tool: &str, args: &Value) -> Result<Value, String> {
+    forward(app, session_id, tool, args)
 }
 
 pub fn tool_definitions() -> Vec<Value> {
@@ -1024,6 +1121,38 @@ mod tests {
             "mcp_servers.{SERVER_NAME}.env_vars=[\"{TOKEN_ENV}\"]"
         )));
         assert_eq!(env, vec![(TOKEN_ENV, "computer-secret-token".to_string())]);
+    }
+
+    #[test]
+    fn a_mac_follows_its_switch_and_another_host_follows_a_paired_window() {
+        assert!(offered(true, true, false));
+        assert!(!offered(true, false, true));
+        assert!(offered(false, false, true));
+        assert!(!offered(false, true, false));
+    }
+
+    #[test]
+    fn a_remote_hosts_context_is_trimmed_and_planning_stays_on_unless_said_off() {
+        let context = Context::from_json(&json!({
+            "provider": "Claude Code\n\u{7}",
+            "key": "claude!/..",
+            "planning": false,
+        }));
+        assert_eq!(
+            context,
+            Context {
+                provider: "Claude Code".into(),
+                key: "claude".into(),
+                planning: false,
+            }
+        );
+        assert_eq!(Context::from_json(&context.to_json()), context);
+        // Nothing sent: a generic title, and planning (read-only) stays on.
+        let empty = Context::from_json(&Value::Null);
+        assert!(empty.planning && !empty.provider.is_empty() && empty.key.is_empty());
+        assert!(Context::from_json(&json!({ "planning": "no" })).planning);
+        let long = Context::from_json(&json!({ "provider": "x".repeat(500) }));
+        assert_eq!(long.provider.chars().count(), 40);
     }
 
     #[test]

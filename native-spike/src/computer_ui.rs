@@ -77,7 +77,17 @@ impl Shell {
                     Err(error) => self.computers.note = Some(error),
                 }
             }
-            "native_computer_pair" => self.pair_computer(),
+            // A code still being typed counts: the click on Parear leaves the field.
+            "native_computer_pair" => {
+                if let Some((key, text)) = self.setting_edit.take() {
+                    match key {
+                        ADDRESS => self.computers.add.address = text.trim().to_owned(),
+                        CODE => self.computers.add.code = text.trim().to_owned(),
+                        _ => self.setting_edit = Some((key, text)),
+                    }
+                }
+                self.pair_computer()
+            }
             _ => {}
         }
         self.publish_computers();

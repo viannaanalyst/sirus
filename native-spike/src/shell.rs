@@ -3089,6 +3089,15 @@ impl Shell {
     }
 
     fn edit_setting(&mut self, key: &'static str, text: String, cx: &mut Context<Self>) {
+        // Moving to another field keeps what was typed in the one being left, as a commit would:
+        // the pairing form lost its address when the code field was clicked.
+        if self
+            .setting_edit
+            .as_ref()
+            .is_some_and(|(editing, _)| *editing != key)
+        {
+            self.commit_setting_edit(cx);
+        }
         self.setting_edit = Some((key, text));
         cx.notify();
     }

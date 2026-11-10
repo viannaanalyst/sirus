@@ -16508,6 +16508,31 @@ impl Shell {
         let local = !self.on_remote();
         crate::file_chips::set_local(local);
         if !local {
+            // A bare name on another computer is found by its host.
+            for (root, name) in crate::file_chips::wanted() {
+                let Some(session) = self
+                    .conversations
+                    .iter()
+                    .find(|c| c.worktree == root)
+                    .map(|c| c.session_id.clone())
+                else {
+                    continue;
+                };
+                let rx = self.backend.request(
+                    "workspace_files",
+                    json!({ "owner": { "sessionId": session }, "query": name }),
+                );
+                cx.spawn(async move |this, cx| {
+                    let found = match rx.recv().await {
+                        Ok(Ok(reply)) => crate::file_chips::pick(&reply, &name),
+                        _ => None,
+                    };
+                    if crate::file_chips::answer(&root, &name, found) {
+                        let _ = this.update(cx, |_, cx| cx.notify());
+                    }
+                })
+                .detach();
+            }
             return;
         }
         for tab in &self.tabs {

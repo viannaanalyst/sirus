@@ -175,6 +175,10 @@ pub fn target(root: &str, word: &str) -> Option<Target> {
         // The folder is on another computer: this disk cannot say what exists, so a path inside
         // the conversation's folder that reads as a file (an extension) or a folder (a trailing
         // slash) opens; the Files pane asks the host and reports what is missing.
+        let bare = without_position(word.trim());
+        if !bare.is_empty() && !bare.contains('/') && !bare.starts_with('~') {
+            return host_known(root, bare);
+        }
         return resolve(root, word, None, None, |path| {
             let named = path.file_name()?.to_str()?;
             if word.trim().ends_with('/') {
@@ -188,6 +192,66 @@ pub fn target(root: &str, word: &str) -> Option<Target> {
     let home = std::env::var("HOME").ok();
     resolve(root, word, home.as_deref(), index.as_deref(), |path| {
         std::fs::metadata(path).ok().map(|meta| meta.is_dir())
+    })
+}
+
+/// What the host said about a bare name in a folder: `None` asked and still unanswered,
+/// `Some(None)` not there, `Some(Some((relative path, is a folder)))` found.
+type Answer = Option<Option<(String, bool)>>;
+
+thread_local! {
+    static HOST_NAMES: RefCell<HashMap<(String, String), Answer>> = RefCell::new(HashMap::new());
+    static HOST_WANTED: RefCell<Vec<(String, String)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// A bare name on another computer opens where the host found it. Until it answers the chip is
+/// plain, and the name is queued for `wanted`.
+fn host_known(root: &str, name: &str) -> Option<Target> {
+    let key = (root.to_owned(), name.to_owned());
+    let known = HOST_NAMES.with_borrow_mut(|names| match names.get(&key) {
+        Some(answer) => answer.clone(),
+        None => {
+            names.insert(key.clone(), None);
+            HOST_WANTED.with_borrow_mut(|wanted| wanted.push(key.clone()));
+            None
+        }
+    });
+    let (found, folder) = known??;
+    Some(Target {
+        path: Path::new(root).join(found).to_string_lossy().into_owned(),
+        folder,
+        outside: false,
+    })
+}
+
+/// The (folder, name) pairs waiting for the host, taken once.
+pub fn wanted() -> Vec<(String, String)> {
+    HOST_WANTED.with_borrow_mut(std::mem::take)
+}
+
+/// The shallowest entry of a `workspace_files` reply whose last component is `name`.
+pub fn pick(reply: &serde_json::Value, name: &str) -> Option<(String, bool)> {
+    reply["entries"]
+        .as_array()?
+        .iter()
+        .filter_map(|entry| {
+            let path = entry["path"].as_str()?;
+            (path.trim_end_matches('/').rsplit('/').next() == Some(name)).then(|| {
+                (
+                    path.trim_end_matches('/').to_owned(),
+                    entry["isDir"] == true,
+                )
+            })
+        })
+        .min_by_key(|(path, _)| (path.matches('/').count(), path.clone()))
+}
+
+/// Keeps the host's answer. True when chips should be drawn again.
+pub fn answer(root: &str, name: &str, found: Option<(String, bool)>) -> bool {
+    HOST_NAMES.with_borrow_mut(|names| {
+        names
+            .insert((root.to_owned(), name.to_owned()), Some(found))
+            .is_none_or(|before| before.is_none())
     })
 }
 
@@ -330,6 +394,28 @@ mod tests {
         assert_eq!(found("Praying.es.js", &index), None);
         assert_eq!(found("deep", &index), folder("/work/app/web/deep"));
         assert_eq!(found("web/deep/", &index), folder("/work/app/web/deep"));
+    }
+
+    #[test]
+    fn a_bare_name_on_another_computer_waits_for_the_host_and_opens_where_it_is() {
+        set_local(false);
+        assert_eq!(target("/h/app", "cofre.py"), None);
+        assert_eq!(wanted(), vec![("/h/app".to_owned(), "cofre.py".to_owned())]);
+        assert_eq!(target("/h/app", "cofre.py:3"), None);
+        assert!(wanted().is_empty());
+        let reply = serde_json::json!({"entries":[
+            {"path":"a/b/cofre.py","isDir":false},{"path":"x/cofre.py","isDir":false},
+            {"path":"cofre.py.bak","isDir":false}]});
+        let found = pick(&reply, "cofre.py");
+        assert_eq!(found, Some(("x/cofre.py".to_owned(), false)));
+        assert!(answer("/h/app", "cofre.py", found));
+        assert_eq!(
+            target("/h/app", "cofre.py").map(|t| t.path),
+            Some("/h/app/x/cofre.py".to_owned())
+        );
+        assert!(answer("/h/app", "nada.py", None));
+        assert_eq!(target("/h/app", "nada.py"), None);
+        set_local(true);
     }
 
     #[test]

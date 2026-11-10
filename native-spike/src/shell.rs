@@ -4479,16 +4479,6 @@ impl Shell {
         } else {
             self.bar_values.get(provider).unwrap_or(&Value::Null)
         };
-        let updated = value["updatedAt"].as_i64().map(|at| {
-            let minutes = (chrono::Utc::now().timestamp_millis() - at) / 60_000;
-            if minutes < 1 {
-                crate::i18n::t("Atualizado agora").to_owned()
-            } else if minutes < 60 {
-                tf("Atualizado há {} min", &[&minutes])
-            } else {
-                tf("Atualizado há {} h", &[&(minutes / 60)])
-            }
-        });
         let accounts = self.accounts_of(provider);
         let chosen = self.selected_accounts[provider]
             .as_str()
@@ -4651,13 +4641,6 @@ impl Shell {
             .usage_chip
             .get()
             .map_or(8., |bounds| f32::from(bounds.left()));
-        let spin = if self.usage_refreshing {
-            *moving = true;
-            now.saturating_duration_since(self.composer_menu_at)
-                .as_secs_f32()
-        } else {
-            0.
-        };
         Some(
             div()
                 .id("usage-popup")
@@ -4735,60 +4718,6 @@ impl Shell {
                 })
                 .when(self.usage_accounts.is_some(), |d| {
                     d.child(self.accounts_page_view(provider, cx))
-                })
-                .when(self.usage_accounts.is_none(), |d| {
-                    d.child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(10.))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .flex()
-                                    .flex_col()
-                                    .child(
-                                        div()
-                                            .truncate()
-                                            .text_size(px(14.5))
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .text_color(content(0.97))
-                                            .child(tf("Uso do {}", &[&provider_title(provider)])),
-                                    )
-                                    .children(updated.map(|u| {
-                                        div()
-                                            .mt(px(2.))
-                                            .text_size(px(11.5))
-                                            .text_color(content(0.45))
-                                            .child(u)
-                                    })),
-                            )
-                            .child(
-                                div()
-                                    .id("usage-refresh")
-                                    .size(px(26.))
-                                    .flex_shrink_0()
-                                    .rounded(px(crate::theme::RADIUS_MD))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .cursor_pointer()
-                                    .hover(|s| s.bg(content(0.07)))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.composer_menu_at = Instant::now();
-                                        this.request_usage(true);
-                                        cx.notify();
-                                    }))
-                                    .child(
-                                        icon("refresh", 14.)
-                                            .text_color(content(0.55))
-                                            .with_transformation(Transformation::rotate(
-                                                gpui::radians(spin * std::f32::consts::TAU),
-                                            )),
-                                    ),
-                            ),
-                    )
                 })
                 .when_some(
                     account.filter(|_| self.usage_accounts.is_none()),
@@ -4912,10 +4841,10 @@ impl Shell {
                 .when(self.usage_accounts.is_none(), |d| {
                     d.child(
                         div()
+                            // No rule above the buttons: right under the limits card's own border it
+                            // read as a doubled line.
                             .mt_auto()
                             .pt(px(10.))
-                            .border_t_1()
-                            .border_color(content(0.07))
                             .flex()
                             .gap(px(6.))
                             .child(add)

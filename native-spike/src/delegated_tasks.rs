@@ -327,37 +327,42 @@ impl Shell {
             .is_none_or(|parent| self.tasks_of(parent).last() == Some(&index));
         let waiting = !conversation.pending.is_empty();
         let status = conversation.status.as_str();
-        let mark: AnyElement = if waiting {
-            div()
-                .size(px(7.))
-                .rounded_full()
-                .bg(state_color("waiting"))
-                .into_any_element()
+        // A finished task shows no mark: only running, failed and waiting ones say something.
+        let mark: Option<AnyElement> = if waiting {
+            Some(
+                div()
+                    .size(px(7.))
+                    .rounded_full()
+                    .bg(state_color("waiting"))
+                    .into_any_element(),
+            )
         } else if status == "failed" {
-            icon("close", 10.)
-                .text_color(gpui::rgb(0xff7a7a))
-                .into_any_element()
+            Some(
+                icon("close", 10.)
+                    .text_color(gpui::rgb(0xff7a7a))
+                    .into_any_element(),
+            )
         } else if active(status) {
-            div()
-                .size(px(12.))
-                .flex_shrink_0()
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(spinner_at(
-                    (now.duration_since(self.epoch).as_secs_f32() / SPINNER_PERIOD).fract(),
-                ))
-                .into_any_element()
+            Some(
+                div()
+                    .size(px(12.))
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(spinner_at(
+                        (now.duration_since(self.epoch).as_secs_f32() / SPINNER_PERIOD).fract(),
+                    ))
+                    .into_any_element(),
+            )
         } else {
-            icon("check", 10.)
-                .text_color(gpui::rgb(0x6fcf8a))
-                .into_any_element()
+            None
         };
         let ((row_top, row_h), (rail_top, rail_h)) = task_slot(y);
         let row = div()
             .id(("task", index))
             .absolute()
-            .left(px(20.))
+            .left(px(8.))
             .right(px(6.))
             .top(px(row_top))
             .h(px(row_h))
@@ -391,15 +396,15 @@ impl Shell {
                     .h(px(rail_h))
                     .child(rail(last)),
             )
-            .child(
+            .children(mark.map(|mark| {
                 div()
                     .size(px(14.))
                     .flex_shrink_0()
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(mark),
-            )
+                    .child(mark)
+            }))
             .child(crate::tab_tile::provider_mark(conversation.provider, 14.))
             .child(
                 div()

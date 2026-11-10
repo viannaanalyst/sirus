@@ -1510,7 +1510,8 @@ pub struct Shell {
     /// A token whose completion the person dismissed.
     mention_dismissed: Option<usize>,
     /// The provider switch animation: which logo, since when.
-    switch_anim: Option<(&'static str, Instant)>,
+    /// A provider change: the card flips from the old provider's mark to the new one's.
+    switch_anim: Option<(&'static str, &'static str, Instant)>,
     effort_bar: Tween,
     effort_drag: bool,
     effort_label_from: Option<(String, Instant)>,
@@ -12841,75 +12842,52 @@ impl Shell {
         )
     }
 
-    /// Composer B: the field is a raised card over a shelf holding the session's settings.
-    /// Typing comes with the real composer in part 2; Enter simulates a reply.
-    /// Changing provider: its logo forms in pixels, like the project avatars, then comes apart.
+    /// Changing provider: a card in the top right corner flips from the old provider's mark to the
+    /// new one's (the width closes and opens again, and the card rises while it turns), holds, then
+    /// fades. Reduced motion skips it (`pick_model`).
     fn switch_view(&self, now: Instant, moving: &mut bool) -> Option<AnyElement> {
-        const DURATION: f32 = 1.4;
-        let (provider, start) = self.switch_anim?;
+        const DURATION: f32 = 1.3;
+        const SIDE: f32 = 46.;
+        let (from, to, start) = self.switch_anim?;
         let a = now.duration_since(start).as_secs_f32() / DURATION;
         if a >= 1. {
             return None;
         }
         *moving = true;
-        let fill: gpui::Hsla = match provider {
-            "claude" => rgb(0xe3876a).into(),
-            "codex" => rgb(0x7a8cff).into(),
-            _ => content(0.75),
+        // The turn takes the first 55% with a soft start and end.
+        let q = (a / 0.55).min(1.);
+        let turn = if q < 0.5 {
+            4. * q * q * q
+        } else {
+            1. - (-2. * q + 2.).powi(3) / 2.
         };
-        let mask = crate::provider_masks::mask(provider);
+        let angle = turn * std::f32::consts::PI;
+        let open = angle.cos();
+        let shown = if open >= 0. { from } else { to };
+        let across = open.abs().max(0.04);
+        let lift = angle.sin() * 8.;
+        let fade = 1. - ((a - 0.8) / 0.2).clamp(0., 1.);
+        let card = crate::tab_tile::mark_tile(
+            &crate::tab_tile::TileSize {
+                w: SIDE * across,
+                h: SIDE,
+                radius: 12.,
+            },
+            Face::provider(shown),
+            crate::theme::provider_glyph(shown, SIDE * 0.58 * across),
+        );
         Some(
             div()
                 .absolute()
-                .left(gpui::relative(0.5))
-                .top(gpui::relative(0.4))
-                .ml(px(-66.))
-                .mt(px(-66.))
-                .size(px(132.))
-                .child(
-                    gpui::canvas(
-                        |_, _, _| {},
-                        move |bounds, _, window, _| {
-                            const CELL: f32 = 6.;
-                            for (y, row) in mask.iter().enumerate() {
-                                for (x, c) in row.bytes().enumerate() {
-                                    if c != b'#' {
-                                        continue;
-                                    }
-                                    // A steady random per pixel: each arrives and leaves in its own time.
-                                    let r = (((x * 73 + y * 151) * 2654435761usize % 1000) as f32)
-                                        / 1000.;
-                                    let arrive = (a / 0.45 / (0.35 + r * 0.65)).min(1.);
-                                    let leave = if a > 0.7 {
-                                        (1. - (a - 0.7) / 0.3 / (0.3 + r * 0.7)).max(0.)
-                                    } else {
-                                        1.
-                                    };
-                                    if arrive <= 0. || leave <= 0. {
-                                        continue;
-                                    }
-                                    let drop = (1. - arrive) * 14. * (r - 0.5) * CELL;
-                                    let origin = bounds.origin
-                                        + gpui::point(
-                                            px(x as f32 * CELL),
-                                            px(y as f32 * CELL + drop),
-                                        );
-                                    window.paint_quad(gpui::fill(
-                                        Bounds::new(
-                                            origin,
-                                            gpui::size(px(CELL - 1.), px(CELL - 1.)),
-                                        ),
-                                        gpui::Hsla {
-                                            a: fill.a * arrive.min(leave),
-                                            ..fill
-                                        },
-                                    ));
-                                }
-                            }
-                        },
-                    )
-                    .size_full(),
-                )
+                .right(px(24.))
+                .top(px(16.))
+                .w(px(SIDE))
+                .h(px(SIDE + 8.))
+                .flex()
+                .items_end()
+                .justify_center()
+                .opacity(fade)
+                .child(div().mb(px(lift)).child(card))
                 .into_any_element(),
         )
     }
@@ -13281,8 +13259,9 @@ impl Shell {
     fn pick_model(&mut self, provider: &'static str, id: String, cx: &mut Context<Self>) {
         let ix = self.active_conversation();
         let session = self.conversations[ix].session_id.clone();
-        if self.conversations[ix].provider != provider {
-            self.switch_anim = Some((provider, Instant::now()));
+        let before = self.conversations[ix].provider;
+        if before != provider && !cx.reduce_motion() {
+            self.switch_anim = Some((before, provider, Instant::now()));
         }
         self.conversations[ix].provider = provider;
         self.conversations[ix].model = Some(id.clone());

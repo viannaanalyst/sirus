@@ -74,7 +74,6 @@ mod project_files;
 mod project_scripts;
 mod project_scripts_view;
 mod project_wallpaper;
-mod provider_masks;
 mod pull_requests_page;
 mod quick_composer;
 mod remote_host;

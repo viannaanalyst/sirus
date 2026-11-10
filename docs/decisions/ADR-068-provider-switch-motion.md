@@ -32,3 +32,7 @@ No IPC, persistence or provider behaviour changes.
 
 - **A scene that stays in the background while the provider is selected.** Rejected by the owner: the scene appears only on the switch.
 - **Distinct full scenes per provider (sun, black hole, network…).** Previewed and replaced by the shared assembly style, which the owner preferred after seeing Pi's.
+
+## Amendment, 2026-11-10: the card flip (Sirus Native)
+
+In Sirus Native the owner replaced the centre scene (the provider's logo forming in pixels) after comparing nine previews with the real logos. Choosing a model of another provider now flips a card in the window's top right corner: the provider's tile (its colour and mark, as on the tabs) closes along its width and opens as the new provider's, rising a few pixels while it turns, and fades out after about 1.3 s. A model of the same provider plays nothing, and reduced motion skips it. The pixel masks (`provider_masks.rs`) went with the old scene. The dust effect from the same round (the old mark's particles reforming as the new one) is kept for a turn handed to another provider, not built yet.

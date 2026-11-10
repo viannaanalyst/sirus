@@ -9,6 +9,7 @@
 
 use super::*;
 use crate::motion::{Count, Spin, progress};
+use crate::pixel_bar;
 use crate::visuals::charts::area_tone;
 use crate::visuals::dither::{
     Align, Grid, Label, Scale, crosshair, hoverable, inked, pointer, readout,
@@ -2216,20 +2217,19 @@ impl Shell {
                 if grow < 1. || after < 1. {
                     *moving = true;
                 }
-                let mut bar = div().relative().h(px(6.)).rounded_full().bg(content(0.08));
-                if let Some(u) = used {
-                    bar = bar.child(
-                        div()
-                            .h_full()
-                            .rounded_full()
-                            .bg(if u >= 90. {
-                                rgb(0xe5675f).into()
-                            } else {
-                                color
-                            })
-                            .w(gpui::relative(frac(u, 100.) * grow)),
-                    );
-                }
+                let tint = match used {
+                    Some(u) if u >= 90. => rgb(0xe5675f).into(),
+                    _ => color,
+                };
+                // The marker below is a later child, so it paints over the dots.
+                let mut bar =
+                    div()
+                        .relative()
+                        .h(px(pixel_bar::HEIGHT))
+                        .child(pixel_bar::pixel_bar(
+                            used.map_or(0., |u| frac(u, 100.) * grow),
+                            tint,
+                        ));
                 let mut pace_lines: Vec<AnyElement> = Vec::new();
                 if main.as_deref() == Some(w.id.as_str())
                     && let (Some(u), Some(reset)) = (w.used, w.resets_at)
@@ -2297,20 +2297,10 @@ impl Shell {
                                     )
                                 }),
                         )
-                        .child(
-                            div()
-                                .h(px(6.))
-                                .rounded_full()
-                                .bg(content(0.08))
-                                .overflow_hidden()
-                                .child(
-                                    div()
-                                        .h_full()
-                                        .rounded_full()
-                                        .bg(if pace.over { amber } else { accent() })
-                                        .w(gpui::relative(pace.fill.min(1.) as f32 * grow)),
-                                ),
-                        );
+                        .child(pixel_bar::pixel_bar(
+                            pace.fill.min(1.) as f32 * grow,
+                            if pace.over { amber } else { accent() },
+                        ));
                     if !page.readings.has_earlier(&key, &day) {
                         today_line = today_line.child(
                             div()
@@ -2527,20 +2517,21 @@ fn segmented<T: Copy + PartialEq + 'static>(
         .max()
         .unwrap_or(1);
     let cell = (chars as f32 * 6.6 + 22.).max(48.);
+    // The track's 3 px padding and the thumb's radius (10 - 3) keep the two concentric.
     div()
         .relative()
         .flex()
         .flex_shrink_0()
-        .p(px(2.))
+        .p(px(3.))
         .gap(px(2.))
-        .rounded(px(crate::theme::RADIUS_LG))
+        .rounded(px(crate::theme::RADIUS_MD))
         .bg(content(0.06))
         .when(disabled, |d| d.opacity(0.4))
         .child(
             div()
                 .absolute()
-                .top(px(2.))
-                .left(px(2. + place * (cell + 2.)))
+                .top(px(3.))
+                .left(px(3. + place * (cell + 2.)))
                 .w(px(cell))
                 .h(px(24.))
                 .rounded(px(crate::theme::RADIUS_SM))

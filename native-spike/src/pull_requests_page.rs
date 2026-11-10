@@ -1196,7 +1196,7 @@ impl PullRequestsPage {
             .p(px(3.))
             .flex()
             .gap(px(2.))
-            .rounded(px(crate::theme::RADIUS_LG))
+            .rounded(px(RADIUS_MD))
             .border_1()
             .border_color(crate::theme::border())
             .bg(content(0.03))

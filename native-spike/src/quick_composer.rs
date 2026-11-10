@@ -1653,8 +1653,8 @@ impl QuickComposer {
                         .relative()
                         .flex_1()
                         .flex()
-                        .p(px(2.))
-                        .rounded(px(crate::theme::RADIUS_SM))
+                        .p(px(3.))
+                        .rounded(px(crate::theme::RADIUS_MD))
                         .border_1()
                         .border_color(border())
                         .child(crate::segment_pill::pill(

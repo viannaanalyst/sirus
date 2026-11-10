@@ -33,7 +33,7 @@ pub struct Key {
 }
 
 /// The 8x8 Bayer thresholds, each in (0, 1).
-fn bayer8(x: u32, y: u32) -> f32 {
+pub(crate) fn bayer8(x: u32, y: u32) -> f32 {
     // M(2n) = 4 M(n) + D, with D picked by the coarsest bit: the coarse bits weigh least.
     const D: [[u32; 2]; 2] = [[0, 2], [3, 1]];
     let v: u32 = (0..3)

@@ -64,6 +64,7 @@ mod panel_sidechat;
 mod panel_simulator;
 mod panel_terminal;
 mod panels;
+mod pixel_bar;
 mod pointer_overlay;
 mod prefs;
 mod project_actions;

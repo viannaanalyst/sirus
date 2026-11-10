@@ -2977,7 +2977,7 @@ fn segmented<V: 'static>(
         .flex()
         .flex_wrap()
         .self_start()
-        .p(px(2.))
+        .p(px(3.))
         .rounded(px(crate::theme::RADIUS_MD))
         .border_1()
         .border_color(crate::theme::border())

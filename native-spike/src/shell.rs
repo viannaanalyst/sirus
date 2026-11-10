@@ -715,8 +715,9 @@ const USAGE_ACCOUNT_ROW: f32 = 44.;
 /// One limit row: its padding, the name and percentage, the bar and the dim line.
 const USAGE_LIMIT_ROW: f32 = 66.;
 
-/// The card's height for `rows` limit rows. Each row keeps its own height instead of sharing the
-/// block, so three limits never overlap and two leave no empty stretch (ADR-198).
+/// The card's height for `rows` limit rows. The card keeps this height whatever it shows: fewer
+/// limits share the room they leave, each row growing to fill it and never going under its own
+/// height, so the list reaches the footer buttons.
 fn usage_popup_height(rows: usize, tabs: bool, account: bool) -> f32 {
     let rows = rows.max(1) as f32;
     USAGE_POPUP_CHROME
@@ -4556,8 +4557,8 @@ impl Shell {
                 }
                 let foot = foot.join(" · ");
                 div()
-                    .h(px(USAGE_LIMIT_ROW))
-                    .flex_shrink_0()
+                    .flex_1()
+                    .min_h(px(USAGE_LIMIT_ROW))
                     .px(px(14.))
                     .py(px(6.))
                     .flex()
@@ -4594,22 +4595,10 @@ impl Shell {
                             ),
                     )
                     .when_some(used, |d, used| {
-                        d.child(
-                            div()
-                                .h(px(4.))
-                                .rounded_full()
-                                .bg(content(0.1))
-                                .overflow_hidden()
-                                .child(
-                                    div()
-                                        .h_full()
-                                        .w(gpui::relative(
-                                            (used.clamp(0., 100.) as f32 / 100.).max(0.015),
-                                        ))
-                                        .rounded_full()
-                                        .bg(usage_bar_color(used)),
-                                ),
-                        )
+                        d.child(crate::pixel_bar::pixel_bar(
+                            (used.clamp(0., 100.) as f32 / 100.).max(0.015),
+                            usage_bar_color(used),
+                        ))
                     })
                     .when(!foot.is_empty(), |d| {
                         d.child(
@@ -4695,8 +4684,8 @@ impl Shell {
                             .relative()
                             .mb(px(10.))
                             .flex()
-                            .p(px(2.))
-                            .rounded(px(crate::theme::RADIUS_SM))
+                            .p(px(3.))
+                            .rounded(px(crate::theme::RADIUS_MD))
                             .border_1()
                             .border_color(crate::theme::border())
                             .child(crate::segment_pill::pill_for(
@@ -4893,7 +4882,8 @@ impl Shell {
                 .when(self.usage_accounts.is_none(), |d| {
                     d.child(
                         div()
-                            .flex_shrink_0()
+                            .flex_1()
+                            .min_h_0()
                             .mt(px(10.))
                             .flex()
                             .flex_col()
@@ -4901,7 +4891,6 @@ impl Shell {
                             .border_1()
                             .border_color(crate::theme::border())
                             .overflow_hidden()
-                            .when(empty, |d| d.flex_1().min_h_0())
                             .children(cards)
                             .when(empty, |d| {
                                 d.child(
@@ -11339,7 +11328,7 @@ impl Shell {
                         div()
                             .relative()
                             .mt(px(8.))
-                            .p(px(2.))
+                            .p(px(3.))
                             .rounded(px(crate::theme::RADIUS_MD))
                             .bg(field_fill())
                             .flex()
@@ -17722,8 +17711,8 @@ impl Shell {
             div()
                 .relative()
                 .flex()
-                .p(px(2.))
-                .rounded(px(crate::theme::RADIUS_SM))
+                .p(px(3.))
+                .rounded(px(crate::theme::RADIUS_MD))
                 .border_1()
                 .border_color(crate::theme::border())
                 .child(crate::segment_pill::pill(
@@ -20522,8 +20511,8 @@ fn segmented_icons(
     div()
         .relative()
         .flex()
-        .p(px(2.))
-        .rounded(px(crate::theme::RADIUS_SM))
+        .p(px(3.))
+        .rounded(px(crate::theme::RADIUS_MD))
         .border_1()
         .border_color(crate::theme::border())
         .child(crate::segment_pill::pill(

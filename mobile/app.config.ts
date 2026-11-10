@@ -13,7 +13,7 @@ import type { ExpoConfig } from "expo/config";
  * `RUNTIME_VERSION` whenever native code changes, so an update never runs on the wrong build.
  */
 const UPDATE_URL = process.env.SIRUS_UPDATE_URL;
-const RUNTIME_VERSION = "5";
+const RUNTIME_VERSION = "6";
 
 const config: ExpoConfig = {
   name: "Sirus",

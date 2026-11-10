@@ -4,10 +4,10 @@
 //! is the layout of its tabs, saved when leaving and restored once the arrival has loaded.
 //!
 //! Commands and events that belong to this Mac stay local through the backend's routing
-//! (`computers::runs_here`). What reads this Mac's folders or runs this Mac's `git` (Terminal,
-//! Files and Changes, attachments from disk, adding a folder, opening in an editor) is switched
-//! off on a remote computer with a short note, instead of half-working on a path that is not
-//! there. A dropped connection shows its state and retries; it never falls back to local data.
+//! (`computers::runs_here`). What reads this Mac's folders or runs this Mac's `git` (Files and
+//! Changes, attachments from disk, adding a folder, opening in an editor) is switched off on a
+//! remote computer with a short note, instead of half-working on a path that is not there.
+//! Terminals and project actions run their shells on that computer's host (ADR-204). A dropped connection shows its state and retries; it never falls back to local data.
 //! A child of `shell` (`#[path]`), so it reaches the window's private state.
 
 use super::*;
@@ -225,6 +225,7 @@ impl Shell {
         if self.term.pulls.is_some() {
             self.close_pull_requests(cx);
         }
+        self.drop_remote_title_tabs(cx);
         let title = if target.is_some() {
             tf("Conectando a {}…", &[&self.computers.name_of(id)])
         } else {

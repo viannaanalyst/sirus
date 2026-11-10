@@ -1,6 +1,7 @@
 //! Terminal side panel: a local PTY in the worktree, emulated by alacritty_terminal or, when built
 //! in and chosen, Ghostty's libghostty-vt (terminal_engine.rs, ADR-199). The grid is drawn here
-//! from the engine's snapshot, the same way for both.
+//! from the engine's snapshot, the same way for both. On a remote computer the shell runs on its
+//! host and its output streams over the connection into the same engine (remote_pty.rs, ADR-204).
 //! Ported in part from an MIT-licensed terminal (MIT).
 use crate::i18n::{t, tf};
 use crate::panels::PanelContext;
@@ -345,6 +346,27 @@ enum Pty {
     None,
     Alacritty(EventLoopSender),
     Direct(DirectPty),
+    /// The shell runs on the active remote computer (remote_pty.rs, ADR-204).
+    Remote(crate::remote_pty::RemotePty),
+}
+
+/// How the foreground poll asks what holds a terminal.
+enum Probe {
+    /// The PTY master and the shell's pid on this Mac.
+    Local(i32, i32),
+    /// The host's answer, when the shell is still there to ask about.
+    Remote(Option<async_channel::Receiver<Result<serde_json::Value, serde_json::Value>>>),
+}
+
+/// The command line a host says holds its terminal; none while the shell itself is in front, or
+/// when the host could not say (an older host has no `terminal_foreground`).
+fn remote_front(reply: Option<Result<serde_json::Value, serde_json::Value>>) -> Option<String> {
+    reply?
+        .ok()?
+        .as_str()
+        .map(str::trim)
+        .filter(|args| !args.is_empty())
+        .map(str::to_owned)
 }
 
 struct Terminal {
@@ -365,6 +387,10 @@ struct Terminal {
     starting: bool,
     held: Vec<u8>,
     exited: bool,
+    /// The shell runs on another computer, from the start (it stays so once it ends).
+    on_remote: bool,
+    /// On another computer: its host last said a command other than the shell holds it.
+    remote_busy: bool,
     selecting: bool,
     /// The pointer rests on a web address, which a click opens.
     over_link: bool,
@@ -494,18 +520,42 @@ impl Terminal {
                 cx.background_executor()
                     .timer(std::time::Duration::from_secs(1))
                     .await;
-                let Ok(Some((fd, pid))) = this.update(cx, |this, _| {
-                    (!this.exited).then_some((this.master_fd, this.shell_pid as i32))
+                let Ok(Some(probe)) = this.update(cx, |this, _| {
+                    (!this.exited).then(|| match &this.pty {
+                        Pty::Remote(remote) => Probe::Remote(remote.foreground()),
+                        _ => Probe::Local(this.master_fd, this.shell_pid as i32),
+                    })
                 }) else {
                     break;
                 };
-                let label = cx
-                    .background_executor()
-                    .spawn(async move { foreground_label(fd, pid) })
-                    .await;
+                // A shell on another computer is asked through its host (ADR-204).
+                let (remote_busy, label) = match probe {
+                    Probe::Local(fd, pid) => {
+                        let label = cx
+                            .background_executor()
+                            .spawn(async move { foreground_label(fd, pid) })
+                            .await;
+                        (None, label)
+                    }
+                    Probe::Remote(reply) => {
+                        let front = match reply {
+                            Some(reply) => remote_front(reply.recv().await.ok()),
+                            None => None,
+                        };
+                        (
+                            Some(front.is_some()),
+                            front.as_deref().and_then(command_name),
+                        )
+                    }
+                };
                 let agent = label.as_deref().and_then(agent_cli);
                 if this
-                    .update(cx, |this, cx| this.set_agent(agent, cx))
+                    .update(cx, |this, cx| {
+                        if let Some(busy) = remote_busy {
+                            this.remote_busy = busy;
+                        }
+                        this.set_agent(agent, cx)
+                    })
                     .is_err()
                 {
                     break;
@@ -535,7 +585,27 @@ impl Terminal {
             _events: events,
             agent: None,
             _poll: poll,
+            on_remote: false,
+            remote_busy: false,
         };
+        // On a remote computer the shell starts on its host, in the conversation's folder there;
+        // the host adds the project's Infisical keys itself (ADR-204).
+        let remote = keys
+            .as_ref()
+            .and_then(|source| Some((source, source.backend.active_remote()?)));
+        if let Some((source, link)) = remote {
+            this.starting = false;
+            this.on_remote = true;
+            this.pty = Pty::Remote(crate::remote_pty::RemotePty::spawn(
+                &source.backend,
+                link,
+                source.session_id.clone(),
+                (this.size.columns as u16, this.size.lines as u16),
+                this.engine.clone(),
+                this.listener.0.clone(),
+            ));
+            return this;
+        }
         match keys {
             None => this.launch(Vec::new(), cx),
             Some(source) => {
@@ -714,12 +784,17 @@ impl Terminal {
                 let _ = sender.send(Msg::Input(bytes.into()));
             }
             Pty::Direct(direct) => direct.write(bytes.into().into_owned()),
+            Pty::Remote(remote) => remote.write(bytes.into().into_owned()),
             Pty::None if self.starting => self.held.extend_from_slice(&bytes.into()),
             Pty::None => {}
         }
     }
     /// Types a command at the prompt and presses return.
     fn run(&mut self, command: &str, cx: &mut Context<Self>) {
+        // Taken until the host's next answer, so a second click opens another terminal.
+        if self.on_remote {
+            self.remote_busy = true;
+        }
         self.input(format!("{command}\n").into_bytes(), cx);
     }
     /// Typing returns a scrolled-back view to the prompt.
@@ -756,6 +831,7 @@ impl Terminal {
             Pty::Direct(direct) => {
                 direct.resize(columns as u16, lines as u16, cell_width, cell_height)
             }
+            Pty::Remote(remote) => remote.resize(columns as u16, lines as u16),
             Pty::None => {}
         }
     }
@@ -1080,6 +1156,10 @@ impl TerminalGroup {
     pub fn title(&self) -> String {
         folder_name(&self.cwd)
     }
+    /// Its shells run on a remote computer, so they end when the window leaves it.
+    pub fn remote(&self, cx: &App) -> bool {
+        self.panes.iter().any(|pane| pane.read(cx).on_remote)
+    }
     /// The conversation the group's shells belong to (its session id).
     pub fn session(&self) -> &str {
         &self.keys.session_id
@@ -1122,6 +1202,9 @@ impl Render for TerminalGroup {
 impl Terminal {
     /// Whether a command other than the shell itself holds the terminal.
     fn busy(&self) -> bool {
+        if self.on_remote {
+            return !self.exited && self.remote_busy;
+        }
         if self.exited || self.master_fd < 0 {
             return false;
         }
@@ -2082,7 +2165,9 @@ mod close_tests {
 
 #[cfg(test)]
 mod url_tests {
-    use super::{HashMap, keys_of_reply, keys_warning, merged_env, url_at};
+    use super::{
+        HashMap, command_name, keys_of_reply, keys_warning, merged_env, remote_front, url_at,
+    };
 
     #[test]
     fn a_web_address_is_found_around_the_click() {
@@ -2113,6 +2198,22 @@ mod url_tests {
         assert_eq!(merged["PWD"], "/work");
         assert!(!merged.contains_key("N"));
         assert!(keys_of_reply(&serde_json::json!({"kind": "terminalEnv", "env": {}})).is_empty());
+    }
+
+    #[test]
+    fn a_remote_shell_is_busy_only_when_its_host_names_a_command() {
+        use serde_json::json;
+        let front = remote_front(Some(Ok(json!("node /usr/bin/codex --yolo"))));
+        assert_eq!(front.as_deref(), Some("node /usr/bin/codex --yolo"));
+        assert_eq!(
+            front.as_deref().and_then(command_name).as_deref(),
+            Some("codex")
+        );
+        // The shell in front, a blank answer, an older host without the command, a lost link.
+        assert_eq!(remote_front(Some(Ok(json!(null)))), None);
+        assert_eq!(remote_front(Some(Ok(json!("  ")))), None);
+        assert_eq!(remote_front(Some(Err(json!({ "code": "remote" })))), None);
+        assert_eq!(remote_front(None), None);
     }
 
     #[test]

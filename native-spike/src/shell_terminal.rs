@@ -241,10 +241,8 @@ impl Shell {
         }
     }
 
+    /// On a remote computer the shells run on its host (remote_pty.rs, ADR-204).
     fn show_bottom(&mut self, cx: &mut Context<Self>) {
-        if self.this_mac_only(cx) {
-            return;
-        }
         self.ensure_pane_view(0, cx);
         self.term.bottom_open = true;
         cx.notify();
@@ -257,9 +255,6 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.this_mac_only(cx) {
-            return;
-        }
         let focused = self.term.active.is_some();
         match terminal_place::shortcut(self.term.placement, split, focused) {
             Action::OpenSide => self.open_pane(0, cx),
@@ -317,9 +312,6 @@ impl Shell {
     }
 
     fn new_title_terminal(&mut self, window: Option<&mut Window>, cx: &mut Context<Self>) {
-        if self.this_mac_only(cx) {
-            return;
-        }
         let conversation = &self.conversations[self.active_conversation()];
         let cwd = conversation.worktree.clone();
         let keys = crate::panel_terminal::KeySource {
@@ -510,9 +502,12 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let remote = self.on_remote();
         let idle = self.term.action_tabs.get(key).copied().filter(|id| {
-            self.term_view(*id)
-                .is_some_and(|view| view.read(cx).idle(cx))
+            self.term_view(*id).is_some_and(|view| {
+                let group = view.read(cx);
+                group.idle(cx) && group.remote(cx) == remote
+            })
         });
         let shown = self.term.active;
         let id = match idle {
@@ -798,6 +793,21 @@ impl Shell {
                 .map(|t| t.id);
         }
         cx.notify();
+    }
+
+    /// Drops the title tabs whose shells run on a remote computer, when the window leaves it: they
+    /// talk to that computer's connection only (ADR-204). This Mac's own keep running.
+    pub(super) fn drop_remote_title_tabs(&mut self, cx: &mut Context<Self>) {
+        let ids: Vec<u64> = self
+            .term
+            .tabs
+            .iter()
+            .filter(|tab| tab.view.read(cx).remote(cx))
+            .map(|tab| tab.id)
+            .collect();
+        if !ids.is_empty() {
+            self.drop_title_tabs(&ids, cx);
+        }
     }
 
     /// Drops the title tabs whose shells belong to `session`, for a settled conversation (ADR-198).

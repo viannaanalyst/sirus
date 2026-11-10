@@ -2982,6 +2982,58 @@ pub async fn stop_terminal(
     .await
 }
 
+/// What holds a terminal, unless the shell itself does (ADR-204): a Sirus window on another
+/// computer polls it for the "close it?" question, action reuse and the agent's mark.
+pub fn terminal_foreground(
+    state: State<Arc<AppState>>,
+    session_id: String,
+    terminal_id: String,
+) -> Result<Option<String>> {
+    let ptys = state.ptys.lock();
+    Ok(owned_terminal(&ptys, &session_id, &terminal_id)?.foreground())
+}
+
+/// Whether a window's terminal prefix and its current connection's are well formed: the
+/// connection's extends the window's, and the window's is long enough to be its own.
+fn valid_terminal_prefixes(prefix: &str, keep: &str) -> bool {
+    prefix.len() >= 8
+        && is_valid_terminal_id(prefix)
+        && is_valid_terminal_id(keep)
+        && keep.len() > prefix.len()
+        && keep.starts_with(prefix)
+}
+
+/// Stops the shells a Sirus window on another computer started under `prefix` in earlier
+/// connections (not under `keep`, its current one): the window asks once connected, so shells it
+/// could not close (a dropped link, a quit) do not pile up against the per-session limit
+/// (ADR-204). Returns how many were stopped.
+pub async fn stop_terminals(
+    state: State<'_, Arc<AppState>>,
+    prefix: String,
+    keep: String,
+) -> Result<usize> {
+    if !valid_terminal_prefixes(&prefix, &keep) {
+        return Err(Error::new("invalid", "invalid terminal prefix"));
+    }
+    let state = state.inner().clone();
+    native_task(move || {
+        let stale: Vec<pty_term::PtySession> = {
+            let mut ptys = state.ptys.lock();
+            let ids: Vec<String> = ptys
+                .keys()
+                .filter(|id| pty_term::stale_window_terminal(id, &prefix, &keep))
+                .cloned()
+                .collect();
+            ids.iter().filter_map(|id| ptys.remove(id)).collect()
+        };
+        if !stale.is_empty() {
+            pty_term::kill_all(&stale.iter().collect::<Vec<_>>())?;
+        }
+        Ok(stale.len())
+    })
+    .await
+}
+
 pub async fn host_info(state: State<'_, Arc<AppState>>) -> Result<HostInfo> {
     // Report the Git binary native operations actually run.
     let git_path = which::which(crate::git::git_binary())
@@ -3213,6 +3265,28 @@ pub async fn list_provider_models(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_window_cleans_up_only_under_a_prefix_of_its_own() {
+        assert!(valid_terminal_prefixes(
+            "sirus-ab12cd34-",
+            "sirus-ab12cd34-k7-"
+        ));
+        // Too short to be a window's own, or not extended by the connection's.
+        assert!(!valid_terminal_prefixes("sirus-", "sirus-k7-"));
+        assert!(!valid_terminal_prefixes(
+            "sirus-ab12cd34-",
+            "sirus-ab12cd34-"
+        ));
+        assert!(!valid_terminal_prefixes(
+            "sirus-ab12cd34-",
+            "sirus-ffff0000-k7-"
+        ));
+        assert!(!valid_terminal_prefixes(
+            "sirus-ab12cd34/",
+            "sirus-ab12cd34/k7-"
+        ));
+    }
 
     #[test]
     fn a_new_session_shares_only_an_existing_worktree_of_its_own_project() {

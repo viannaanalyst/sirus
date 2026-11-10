@@ -22,6 +22,7 @@ const PORT: u16 = 7811;
 const REMOTE_PORT: u16 = 7711;
 static HOST_PID: AtomicI32 = AtomicI32::new(0);
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 pub enum Incoming {
     /// Connected, with `load_state`'s metadata.
@@ -56,6 +57,9 @@ struct Link {
     always: Mutex<HashSet<u64>>,
     /// Another computer's link only: connected and past `hello`.
     open: AtomicBool,
+    /// Another computer's link only: which `connect_remote` made it, so the terminals started
+    /// on it carry an id of their own connection (remote_pty.rs, ADR-204).
+    generation: u64,
 }
 
 impl Link {
@@ -87,6 +91,39 @@ impl Link {
         for waiter in waiters {
             let _ = waiter.try_send(Err(lost()));
         }
+    }
+}
+
+/// One connection to another computer, held by what must keep talking to that connection only,
+/// across its reconnects: a terminal whose shell runs there (remote_pty.rs, ADR-204). Once the
+/// window switches computers it stays closed, so nothing it sends reaches the next computer.
+#[derive(Clone)]
+pub struct RemoteLink(std::sync::Arc<Link>);
+
+impl RemoteLink {
+    /// Runs a command on that connection; fails at once while it is not open.
+    pub fn request(&self, cmd: &str, args: Value) -> async_channel::Receiver<Result<Value, Value>> {
+        let (tx, rx) = async_channel::bounded(1);
+        if !self.0.open.load(Ordering::SeqCst) {
+            let _ = tx.try_send(Err(lost()));
+            return rx;
+        }
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        self.0.waiters.lock().unwrap().insert(id, tx);
+        self.0.push(Backend::frame(id, cmd, args));
+        rx
+    }
+
+    /// Sends a command whose reply nobody reads; dropped while the connection is not open.
+    pub fn send(&self, cmd: &str, args: Value) {
+        if self.0.open.load(Ordering::SeqCst) {
+            let id = self.0.quiet_id();
+            self.0.push(Backend::frame(id, cmd, args));
+        }
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.0.generation
     }
 }
 
@@ -212,15 +249,31 @@ impl Backend {
 
     /// Every payload of an event, for as long as the receiver lives.
     pub fn subscribe(&self, event: &str) -> async_channel::Receiver<Value> {
+        self.subscribe_all(&[event])
+    }
+
+    /// Every payload of several events on one receiver, in the order they arrived.
+    pub fn subscribe_all(&self, events: &[&str]) -> async_channel::Receiver<Value> {
         let (tx, rx) = async_channel::unbounded();
-        self.listeners.lock().unwrap().push((event.to_owned(), tx));
-        let listen = json!({ "type": "listen", "event": event }).to_string();
-        self.local.push(listen.clone());
         let remote = self.remote_link();
-        if remote.open.load(Ordering::SeqCst) && !crate::computers::event_is_local(event) {
-            remote.push(listen);
+        for event in events {
+            self.listeners
+                .lock()
+                .unwrap()
+                .push(((*event).to_owned(), tx.clone()));
+            let listen = json!({ "type": "listen", "event": event }).to_string();
+            self.local.push(listen.clone());
+            if remote.open.load(Ordering::SeqCst) && !crate::computers::event_is_local(event) {
+                remote.push(listen);
+            }
         }
         rx
+    }
+
+    /// The active computer's connection, while another computer is active.
+    pub fn active_remote(&self) -> Option<RemoteLink> {
+        let remote = self.active.lock().unwrap().is_some();
+        remote.then(|| RemoteLink(self.remote_link()))
     }
 
     /// Makes `id` the active computer (`None`: this Mac). Does not connect.
@@ -244,7 +297,10 @@ impl Backend {
         self.disconnect_remote();
         let stop = std::sync::Arc::new(AtomicBool::new(false));
         *self.control.lock().unwrap() = Some(Remote { stop: stop.clone() });
-        let link = std::sync::Arc::new(Link::default());
+        let link = std::sync::Arc::new(Link {
+            generation: NEXT_GENERATION.fetch_add(1, Ordering::Relaxed),
+            ..Link::default()
+        });
         *self.remote.lock().unwrap() = link.clone();
         // Pages on that computer's localhost open through tunnels (tunnel.rs).
         crate::tunnel::activate(address.clone(), token.clone());
@@ -368,6 +424,16 @@ impl Backend {
                 json!({}),
             )))
             .map_err(|_| Failure::Lost)?;
+        // Shells this window left on that computer from earlier connections (a dropped link, a
+        // quit) end now; this connection's own survive its reconnects (ADR-204).
+        let (prefix, keep) = crate::remote_pty::prefixes(link.generation);
+        socket
+            .send(Message::text(Self::frame(
+                link.quiet_id(),
+                "stop_terminals",
+                json!({ "prefix": prefix, "keep": keep }),
+            )))
+            .map_err(|_| Failure::Lost)?;
         socket
             .send(Message::text(Self::frame(STATE, "load_state", json!({}))))
             .map_err(|_| Failure::Lost)?;
@@ -476,6 +542,10 @@ impl Backend {
                     !tx.is_closed()
                 }
             });
+            // A terminal's stream is only for the terminal it names (remote_pty.rs).
+            if crate::remote_pty::stream_event(&name) {
+                return true;
+            }
         }
         let incoming = match message["type"].as_str() {
             Some("result") if message["id"] == STATE => Incoming::Ready(message["value"].take()),
@@ -991,6 +1061,40 @@ mod tests {
         backend.invoke("send_prompt", json!({}));
         assert_eq!(backend.remote_link().outgoing.lock().unwrap().len(), 1);
         assert_eq!(backend.local.outgoing.lock().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn a_remote_terminal_talks_to_its_own_connection_only() {
+        let (backend, replies) = backend();
+        assert!(backend.active_remote().is_none());
+        backend.activate(Some("pc-vps"));
+        let link = backend.active_remote().unwrap();
+        // Not open yet: the request fails at once and nothing is queued.
+        let waiting = link.request("start_terminal", json!({}));
+        assert!(matches!(waiting.try_recv(), Ok(Err(_))));
+        assert!(backend.remote_link().outgoing.lock().unwrap().is_empty());
+        backend.remote_link().open.store(true, Ordering::SeqCst);
+        let _waiting = link.request("write_terminal", json!({ "data": "ls\r" }));
+        link.send("stop_terminal", json!({}));
+        assert_eq!(backend.remote_link().outgoing.lock().unwrap().len(), 2);
+        // Leaving that computer closes the connection the terminal holds for good.
+        backend.disconnect_remote();
+        assert!(matches!(
+            link.request("write_terminal", json!({})).try_recv(),
+            Ok(Err(_))
+        ));
+
+        // Its stream reaches the terminal, never the window.
+        let stream = backend.subscribe_all(&["pty-output", "pty-exit"]);
+        let output = json!({ "type": "event", "event": "pty-output",
+            "payload": { "terminalId": "t", "data": "hi" } });
+        let exit = json!({ "type": "event", "event": "pty-exit",
+            "payload": { "terminalId": "t", "data": "" } });
+        assert!(backend.deliver(&backend.remote_link(), true, output));
+        assert!(backend.deliver(&backend.remote_link(), true, exit));
+        assert_eq!(stream.try_recv().unwrap()["data"], "hi");
+        assert_eq!(stream.try_recv().unwrap()["data"], "");
+        assert!(replies.try_recv().is_err());
     }
 
     #[test]

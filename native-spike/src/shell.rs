@@ -16140,8 +16140,9 @@ impl Shell {
     }
 
     fn open_pane(&mut self, kind: usize, cx: &mut Context<Self>) {
-        // Terminal, Files and Changes work on this Mac's folders.
-        if (kind <= 2 || kind == CHANGES_PANE) && self.this_mac_only(cx) {
+        // Files and Changes work on this Mac's folders; a terminal's shell runs on the active
+        // computer's host when it is remote (ADR-204).
+        if (kind == 1 || kind == 2 || kind == CHANGES_PANE) && self.this_mac_only(cx) {
             return;
         }
         if kind == 0 && self.term_redirect(cx) {

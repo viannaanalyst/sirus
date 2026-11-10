@@ -40,6 +40,7 @@ use serde_json::{Value, json};
 use shell_terminal::{PULLS_CARD, TASKS_CARD, TERM_CARD, pulls_tile, tasks_tile};
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet, VecDeque};
+use gpui::AnimationExt as _;
 use std::ops::Range;
 use std::rc::Rc;
 
@@ -1574,6 +1575,9 @@ pub struct Shell {
     /// never goes back to one of them while the app runs.
     limit_left: HashMap<String, Vec<&'static str>>,
     usage_refreshing: bool,
+    /// The refresh requests still out (the open provider's and the bar's), so the refresh button
+    /// keeps turning until every limit it asked for is back.
+    usage_refresh_ids: HashSet<u64>,
     usage_chip: std::rc::Rc<std::cell::Cell<Option<gpui::Bounds<Pixels>>>>,
     /// Each project keeps its own tabs; `tabs` are the current project's.
     parked: HashMap<usize, (Vec<Tab>, u64)>,
@@ -2023,6 +2027,7 @@ impl Shell {
             limit_left: HashMap::new(),
             split: Default::default(),
             usage_refreshing: false,
+            usage_refresh_ids: HashSet::new(),
             usage_chip: Default::default(),
             parked: HashMap::new(),
             current_project: None,
@@ -2154,7 +2159,12 @@ impl Shell {
                 self.computer_arrived(cx);
             }
             Incoming::Link { id, status } => self.computer_link(&id, status, cx),
-            Incoming::Reply { id, ok, value } => match self.waiting.remove(&id) {
+            Incoming::Reply { id, ok, value } => match {
+                if self.usage_refresh_ids.remove(&id) && self.usage_refresh_ids.is_empty() {
+                    self.usage_refreshing = false;
+                }
+                self.waiting.remove(&id)
+            } {
                 Some(Waiting::CliAgents) if ok => self.cli_agents_arrived(value, cx),
                 Some(Waiting::CliAgents) => self.problem = Some(error_text(&value)),
                 // The connect-time check is quiet when it fails: the card is only a convenience.
@@ -2447,10 +2457,9 @@ impl Shell {
                 Some(Waiting::Secrets) if ok => {
                     self.secrets = value["requests"].as_array().cloned().unwrap_or_default()
                 }
-                Some(Waiting::Usage) if !ok => self.usage_refreshing = false,
+                Some(Waiting::Usage) if !ok => {}
                 Some(Waiting::Usage) => {
                     self.usage_warm(cx);
-                    self.usage_refreshing = false;
                     self.usage_value = value.clone();
                     self.usage = usage_summary(&value);
                 }
@@ -4201,7 +4210,10 @@ impl Shell {
             json!({ "provider": provider, "refresh": refresh }),
         );
         self.waiting.insert(id, Waiting::Usage);
-        self.usage_refreshing = refresh;
+        if refresh {
+            self.usage_refreshing = true;
+            self.usage_refresh_ids.insert(id);
+        }
         self.request_bar_usage(refresh);
     }
 
@@ -4228,6 +4240,9 @@ impl Shell {
                 json!({ "provider": provider, "refresh": refresh }),
             );
             self.waiting.insert(id, Waiting::BarUsage(provider));
+            if refresh {
+                self.usage_refresh_ids.insert(id);
+            }
         }
     }
 
@@ -15117,7 +15132,6 @@ impl Shell {
                     .items_center()
                     .justify_center()
                     .cursor_pointer()
-                    .opacity(if self.usage_refreshing { 0.5 } else { 1. })
                     .when(!self.usage_refreshing, |d| d.hover(|s| s.bg(content(0.1))))
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -15126,7 +15140,22 @@ impl Shell {
                             cx.notify();
                         }
                     }))
-                    .child(icon("refresh", 12.)),
+                    // Turns until every limit it asked for is back.
+                    .child(if self.usage_refreshing {
+                        icon("refresh", 12.)
+                            .with_animation(
+                                "refresh-usage-spin",
+                                gpui::Animation::new(Duration::from_millis(900)).repeat(),
+                                |icon, t| {
+                                    icon.with_transformation(Transformation::rotate(gpui::radians(
+                                        t * std::f32::consts::TAU,
+                                    )))
+                                },
+                            )
+                            .into_any_element()
+                    } else {
+                        icon("refresh", 12.).into_any_element()
+                    }),
             )
             .when_some(self.computer_chip(cx), |d, chip| d.child(chip))
             .children(agents)

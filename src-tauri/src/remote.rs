@@ -122,6 +122,26 @@ struct Device {
     /// these origins may call the API cross-origin, and only with this device's token.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     origins: Vec<String>,
+    /// `desktop` for a Sirus window that paired from Settings → Conexões (ADR-201); phones and
+    /// pages leave it out. Only a desktop may run a headless host's browser or open tunnels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    kind: Option<String>,
+}
+
+impl Device {
+    /// A Sirus window on another computer. Windows paired before ADR-201 sent no kind, but they
+    /// always paired as "Sirus" from no page; the phone pairs as "iPhone · Sirus".
+    fn is_desktop(&self) -> bool {
+        desktop_kind(self.kind.as_deref(), &self.name, !self.origins.is_empty())
+    }
+}
+
+/// The pure rule behind `Device::is_desktop`.
+fn desktop_kind(kind: Option<&str>, name: &str, from_page: bool) -> bool {
+    match kind {
+        Some(kind) => kind == "desktop",
+        None => !from_page && name == "Sirus",
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -236,6 +256,25 @@ pub fn has_local_listener() -> bool {
     REMOTE
         .get()
         .is_some_and(|remote| remote.listen.lock().local_port.is_some())
+}
+
+/// A headless host (no window of its own) with a Sirus window paired: that window may attach
+/// as the browser client, so agents are offered the browser tools (ADR-201).
+pub fn desktop_client_possible() -> bool {
+    REMOTE.get().is_some_and(|remote| {
+        remote.listen.lock().local_port.is_none()
+            && remote.config.lock().devices.iter().any(Device::is_desktop)
+    })
+}
+
+/// Whether the paired device `id` is a Sirus window on another computer (ADR-201).
+fn device_is_desktop(remote: &Remote, id: &str) -> bool {
+    remote
+        .config
+        .lock()
+        .devices
+        .iter()
+        .any(|device| device.id == id && device.is_desktop())
 }
 
 static REMOTE: OnceLock<Arc<Remote>> = OnceLock::new();
@@ -684,6 +723,7 @@ fn start_kind(
                 get(app_update_file),
             )
             .route("/api/socket", get(socket))
+            .route("/api/tunnel", get(tunnel))
             .route("/api/thumbnail/{id}", get(thumbnail))
             .fallback(get(asset))
             // The bundle is several megabytes of text; compressed it is about a quarter (gzip/brotli).
@@ -1042,6 +1082,9 @@ struct PairRequest {
     code: String,
     #[serde(default)]
     name: String,
+    /// `desktop` from a Sirus window (ADR-201); the phone sends nothing.
+    #[serde(default)]
+    kind: Option<String>,
 }
 
 async fn pair(
@@ -1050,7 +1093,14 @@ async fn pair(
     Json(request): Json<PairRequest>,
 ) -> Response {
     let origin = foreign_origin(&shared.remote, &headers);
-    match redeem(&shared.remote, &request.code, &request.name, origin) {
+    let desktop = request.kind.as_deref() == Some("desktop");
+    match redeem_as(
+        &shared.remote,
+        &request.code,
+        &request.name,
+        origin,
+        desktop,
+    ) {
         Ok((device_id, token)) => {
             let _ = shared.app.emit(CHANGED, ());
             let host = host_identity(&shared.remote);
@@ -1071,6 +1121,17 @@ fn redeem(
     code: &str,
     name: &str,
     origin: Option<String>,
+) -> std::result::Result<(String, String), &'static str> {
+    redeem_as(remote, code, name, origin, false)
+}
+
+/// `redeem`, noting whether the device is a Sirus window (ADR-201).
+fn redeem_as(
+    remote: &Remote,
+    code: &str,
+    name: &str,
+    origin: Option<String>,
+    desktop: bool,
 ) -> std::result::Result<(String, String), &'static str> {
     {
         let mut pairing = remote.pairing.lock();
@@ -1102,6 +1163,7 @@ fn redeem(
         created_at: Utc::now(),
         last_seen: None,
         origins: origin.into_iter().collect(),
+        kind: desktop.then(|| "desktop".to_owned()),
     };
     let id = device.id.clone();
     {
@@ -1182,10 +1244,68 @@ async fn thumbnail(
     (parts.status, parts.headers, body).into_response()
 }
 
-/// Whether a token belongs to a paired device (no side effects).
-fn paired(remote: &Remote, token: &str) -> bool {
+#[derive(Deserialize)]
+struct TunnelQuery {
+    #[serde(default)]
+    port: String,
+}
+
+/// A TCP tunnel to this computer's loopback for a Sirus window on another computer (ADR-201,
+/// `tunnel.rs`). The device token comes as `Authorization: Bearer`, which a page cannot set on
+/// a WebSocket; the target is connected before the upgrade, so a closed port answers 502.
+async fn tunnel(
+    AxumState(shared): AxumState<Shared>,
+    headers: HeaderMap,
+    axum::extract::Query(query): axum::extract::Query<TunnelQuery>,
+    upgrade: WebSocketUpgrade,
+) -> Response {
+    // Checked without noting the device as seen: a page opens many connections.
+    let Some(device) = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .and_then(|token| paired_device(&shared.remote, token.trim()))
+    else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    if !device_is_desktop(&shared.remote, &device) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let Some(port) = crate::tunnel::valid_port(&query.port) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    let Some(permit) = crate::tunnel::Permit::take() else {
+        return StatusCode::TOO_MANY_REQUESTS.into_response();
+    };
+    let Some(target) = crate::tunnel::connect(port).await else {
+        return StatusCode::BAD_GATEWAY.into_response();
+    };
+    let mut revoked = shared.remote.revoked.subscribe();
+    let mut shutdown = shared.shutdown.clone();
+    upgrade
+        .max_message_size(MAX_MESSAGE)
+        .on_upgrade(move |socket| async move {
+            let stop = async move {
+                loop {
+                    tokio::select! {
+                        gone = revoked.recv() => match gone {
+                            Ok(id) if id == device => break,
+                            Err(broadcast::error::RecvError::Closed) => break,
+                            _ => {}
+                        },
+                        _ = shutdown.changed() => break,
+                    }
+                }
+            };
+            crate::tunnel::pipe(socket, target, stop).await;
+            drop(permit);
+        })
+}
+
+/// The device a token belongs to, without noting it as seen.
+fn paired_device(remote: &Remote, token: &str) -> Option<String> {
     if token.is_empty() || token.len() > 256 {
-        return false;
+        return None;
     }
     let hashed = hash(token);
     remote
@@ -1193,7 +1313,13 @@ fn paired(remote: &Remote, token: &str) -> bool {
         .lock()
         .devices
         .iter()
-        .any(|device| device.token_hash == hashed)
+        .find(|device| device.token_hash == hashed)
+        .map(|device| device.id.clone())
+}
+
+/// Whether a token belongs to a paired device (no side effects).
+fn paired(remote: &Remote, token: &str) -> bool {
+    paired_device(remote, token).is_some()
 }
 
 /// The device a token belongs to, noting when it was last seen.
@@ -1292,6 +1418,12 @@ async fn connection(mut socket: WebSocket, shared: Shared, origin: Option<String
     {
         return;
     }
+    // A Sirus window on another computer may run a headless host's browser (ADR-201).
+    let client = crate::browser_bridge::client_kind(
+        local,
+        device_is_desktop(&shared.remote, &device),
+        shared.remote.listen.lock().local_port.is_none(),
+    );
     let (outgoing, mut queue) = mpsc::channel::<String>(QUEUE);
     let mut revoked = shared.remote.revoked.subscribe();
     let mut shutdown = shared.shutdown.clone();
@@ -1310,7 +1442,7 @@ async fn connection(mut socket: WebSocket, shared: Shared, origin: Option<String
                         let app = shared.app.clone();
                         let outgoing = outgoing.clone();
                         crate::runtime::async_runtime::spawn(async move {
-                            let result = if local {
+                            let result = if crate::browser_bridge::command_allowed(&cmd, client) {
                                 crate::browser_bridge::run_local(&app, connection_id, &outgoing, &cmd, &args)
                                     .await
                                     .map(Reply::Json)
@@ -1858,6 +1990,30 @@ mod tests {
         assert!(!awake_wanted(&config));
         // On power only, and released when Sirus exits.
         assert_eq!(caffeinate_args(42), ["-s", "-w", "42"]);
+    }
+
+    #[test]
+    fn sirus_windows_pair_as_desktops_and_phones_do_not() {
+        assert!(desktop_kind(Some("desktop"), "anything", false));
+        assert!(!desktop_kind(Some("phone"), "Sirus", false));
+        // Windows paired before the kind existed always sent "Sirus" from no page.
+        assert!(desktop_kind(None, "Sirus", false));
+        assert!(!desktop_kind(None, "Sirus", true));
+        assert!(!desktop_kind(None, "iPhone · Sirus", false));
+        assert!(!desktop_kind(None, "Renamed", false));
+
+        let dir = tempfile::tempdir().unwrap();
+        let remote = remote(dir.path());
+        offer(&remote, "111111", Duration::from_secs(60));
+        let (window, _) = redeem_as(&remote, "111111", "Sirus", None, true).unwrap();
+        offer(&remote, "222222", Duration::from_secs(60));
+        let (phone, _) = redeem(&remote, "222222", "iPhone · Sirus", None).unwrap();
+        assert!(device_is_desktop(&remote, &window));
+        assert!(!device_is_desktop(&remote, &phone));
+        assert!(!device_is_desktop(&remote, "unknown"));
+        // The kind is saved with the device.
+        let saved = std::fs::read_to_string(&remote.path).unwrap();
+        assert!(saved.contains(r#""kind": "desktop""#) || saved.contains(r#""kind":"desktop""#));
     }
 
     #[test]

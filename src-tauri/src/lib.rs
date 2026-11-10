@@ -118,6 +118,7 @@ mod tool_output;
 mod transcript;
 mod transcript_store;
 mod transcript_view;
+mod tunnel;
 mod turn_edit;
 mod turn_review;
 mod turn_undo;

@@ -4,11 +4,14 @@
 //! shaped here, exactly as `browser_mcp.rs` does for the Mac app, but the page work is sent to
 //! the client as a `browser_tool_request` event and answered with a `browser_tool_result`
 //! command. The client is the one local connection whose token is the one in `native-token`
-//! in the data folder, never a phone, whatever address it comes from.
+//! in the data folder, never a phone, whatever address it comes from. A headless host (no window
+//! of its own, ADR-201) also accepts a Sirus window on another computer, paired as a desktop and
+//! connected over the remote socket; it may only register, unregister and answer, never run the
+//! window's other local commands.
 //!
-//! Secrets never leave the host except on that same local socket: `browser_fill_login` hands the
-//! credentials to the client as the arguments of the fixed fill script, and only the fields
-//! filled (never values) go back to the agent.
+//! Secrets never leave the host except to the registered client: `browser_fill_login` hands the
+//! credentials to it as the arguments of the fixed fill script, and only the fields filled
+//! (never values) go back to the agent.
 
 // The Mac app runs its own browser; the bridge is for hosts with a window client.
 
@@ -32,6 +35,8 @@ pub const REQUEST_EVENT: &str = "browser_tool_request";
 pub const LOCAL_EVENTS: &[&str] = &["computer-state", crate::computer_mcp::POINTER_EVENT];
 /// The error without a window client, unchanged from the Mac-app-only host.
 pub const NO_WINDOW: &str = "the embedded browser is only available in the Mac app";
+/// The error on a headless host whose paired Sirus window is not attached right now (ADR-201).
+pub const NO_CLIENT: &str = "the embedded browser needs Sirus open on a Mac with this computer selected; ask the person to switch to it";
 
 const TIMEOUT: Duration = Duration::from_secs(30);
 const RECORD_STOP_TIMEOUT: Duration = Duration::from_secs(60);
@@ -87,10 +92,55 @@ pub fn has_client() -> bool {
     CLIENT.lock().is_some()
 }
 
-/// Whether the MCP children should list the browser tools: a client is attached, or the window
-/// that started this host said it will attach.
+/// Whether the MCP children should list the browser tools: a client is attached, the window
+/// that started this host said it will attach, or this headless host has a Sirus window paired
+/// that attaches whenever it switches to this computer (ADR-201).
 pub fn window_expected() -> bool {
-    has_client() || std::env::var(CLIENT_ENV).as_deref() == Ok("1")
+    has_client()
+        || std::env::var(CLIENT_ENV).as_deref() == Ok("1")
+        || crate::remote::desktop_client_possible()
+}
+
+/// The error when no client is attached: a paired window can come back on a headless host.
+fn no_window() -> String {
+    if crate::remote::desktop_client_possible() {
+        NO_CLIENT.into()
+    } else {
+        NO_WINDOW.into()
+    }
+}
+
+/// Who a socket connection is, for the window's own commands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Client {
+    /// Sirus Native on this computer (`native-token`).
+    Window,
+    /// A Sirus window on another computer, on a host without a window of its own (ADR-201).
+    Desktop,
+    /// A phone, a page, or a desktop on a host that has its own window.
+    Device,
+}
+
+/// `local`: the connection holds `native-token`; `desktop`: its device paired as a Sirus window;
+/// `headless`: this host has no window listener of its own.
+pub fn client_kind(local: bool, desktop: bool, headless: bool) -> Client {
+    if local {
+        Client::Window
+    } else if desktop && headless {
+        Client::Desktop
+    } else {
+        Client::Device
+    }
+}
+
+/// Whether `client` may run the local-only `command`: the window all of them, a desktop only
+/// the browser client's three, a device none.
+pub fn command_allowed(command: &str, client: Client) -> bool {
+    match client {
+        Client::Window => is_local_command(command),
+        Client::Desktop => CONNECTION_COMMANDS.contains(&command),
+        Client::Device => false,
+    }
 }
 
 /// Makes `connection` the window client. A later registration replaces an earlier one, whose
@@ -169,7 +219,7 @@ pub fn call_with_timeout(
     let (reply, wait) = std::sync::mpsc::channel();
     let (connection, frames) = {
         let client = CLIENT.lock();
-        let client = client.as_ref().ok_or_else(|| NO_WINDOW.to_string())?;
+        let client = client.as_ref().ok_or_else(no_window)?;
         (client.connection, client.frames.clone())
     };
     WAITING
@@ -491,7 +541,7 @@ pub fn browser_tool(
 ) -> Result<Value, String> {
     use crate::browser_mcp::{action_value, arg_str, element_arg, valid_selector};
     if !has_client() {
-        return Err(NO_WINDOW.into());
+        return Err(no_window());
     }
     let run = |name: &str, args: Value| call(session_id, name, args);
     match tool {
@@ -961,6 +1011,33 @@ mod tests {
         }
         assert!(!is_local_command("load_state"));
         assert!(!is_local_command("browser_open"));
+    }
+
+    #[test]
+    fn a_desktop_on_a_headless_host_may_only_be_the_browser_client() {
+        assert_eq!(client_kind(true, false, false), Client::Window);
+        assert_eq!(client_kind(true, true, true), Client::Window);
+        assert_eq!(client_kind(false, true, true), Client::Desktop);
+        // A host with a window of its own keeps its browser there.
+        assert_eq!(client_kind(false, true, false), Client::Device);
+        // Phones are never the client, headless or not.
+        assert_eq!(client_kind(false, false, true), Client::Device);
+        for command in CONNECTION_COMMANDS {
+            assert!(command_allowed(command, Client::Window));
+            assert!(command_allowed(command, Client::Desktop));
+            assert!(!command_allowed(command, Client::Device));
+        }
+        for command in [
+            "login_vault_list",
+            "login_vault_autofill",
+            "computer_action",
+            "remote_action",
+        ] {
+            assert!(command_allowed(command, Client::Window), "{command}");
+            assert!(!command_allowed(command, Client::Desktop), "{command}");
+            assert!(!command_allowed(command, Client::Device), "{command}");
+        }
+        assert!(!command_allowed("load_state", Client::Window));
     }
 
     #[test]

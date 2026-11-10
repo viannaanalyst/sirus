@@ -636,6 +636,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Ainda não verificado no GitHub",
         "Not checked on GitHub yet",
     ),
+    ("Ajuda", "Help"),
     (
         "Ajusta o espaçamento sem mudar o tamanho do texto.",
         "Adjusts spacing without changing the text size.",
@@ -714,6 +715,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Armazenamento da conta indisponível",
         "Account storage unavailable",
     ),
+    ("Arquivo", "File"),
     (
         "Arquivo binário: não dá para mostrar o conteúdo aqui.",
         "Binary file: its content cannot be shown here.",
@@ -951,6 +953,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Search conversations, files and projects",
     ),
     ("Buscar em todas as conversas", "Search all conversations"),
+    ("Buscar em tudo", "Search Everything"),
     ("Buscar modelos...", "Search models..."),
     ("Buscar nesta conversa", "Find in conversation"),
     ("Buscar ou criar worktree…", "Search or create worktree…"),
@@ -1198,6 +1201,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Conexões", "Connections"),
     ("Configurações", "Settings"),
     ("Configurações do projeto", "Project settings"),
+    ("Configurações…", "Settings…"),
     (
         "Configure o endereço público deste Mac para conectar aparelhos.",
         "Set up this Mac's public address to connect devices.",
@@ -2394,6 +2398,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Invalid workspace entry.",
     ),
     ("Janeiro", "January"),
+    ("Janela", "Window"),
     ("Janela flutuante", "Floating window"),
     ("Janelas do app", "App windows"),
     ("Julho", "July"),
@@ -2595,6 +2600,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Move the mouse and click the background",
     ),
     ("Minhas tarefas", "My tasks"),
+    ("Minimizar", "Minimize"),
     ("Mission Control", "Mission Control (macOS)"),
     ("Modelo", "Model"),
     ("Modelos do Cursor", "Cursor models"),
@@ -2642,6 +2648,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Mostrar sessões trabalhando", "Show working sessions"),
     ("Mostrar teclas", "Show key presses"),
     ("Mostrar terminal ao rodar", "Show terminal when running"),
+    ("Mostrar tudo", "Show All"),
     ("Mostrar {} anteriores", "Show {} earlier"),
     ("Mostrar/ocultar Ambiente", "Toggle Environment"),
     (
@@ -3902,6 +3909,8 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Objetivo inválido.", "Invalid goal."),
     ("Observou", "Read"),
     ("Oceano", "Ocean"),
+    ("Ocultar Sirus", "Hide Sirus"),
+    ("Ocultar outros", "Hide Others"),
     ("Ocultar saída", "Hide output"),
     ("Olhos", "Eyes"),
     (
@@ -4552,6 +4561,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Rápido", "Fast"),
     ("Rótulo da conta", "Account label"),
     ("Sair", "Sign out"),
+    ("Sair do Sirus", "Quit Sirus"),
     (
         "Salva contagens limitadas do ciclo de execução localmente. Prompts, output, paths e credenciais são excluídos.",
         "Stores bounded lifecycle counts locally. Prompts, output, paths and credentials are excluded.",
@@ -4699,6 +4709,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Sistema", "System"),
     ("Sistema segue o macOS.", "System follows macOS."),
+    ("Site do Sirus", "Sirus Website"),
     ("Sites, lojas e agendamentos", "Sites, stores and bookings"),
     ("Sites, páginas e CMS", "Sites, pages and CMS"),
     ("Skills compartilhadas", "Shared skills"),
@@ -5178,6 +5189,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Vidro fumê", "Smoked glass"),
     ("Visibilidade na sessão", "Session visibility"),
     ("Visibilidade no chat vazio", "Empty chat visibility"),
+    ("Visualizar", "View"),
     ("Visualização", "View"),
     ("Você", "You"),
     (

@@ -3,6 +3,7 @@
 //! a few presentation files are ported from an MIT-licensed project (MIT, LICENSE-THIRD-PARTY-MIT).
 mod agent_pointer;
 mod app_icon;
+mod app_menu;
 mod app_update;
 mod attachment_doc;
 mod attachment_html;
@@ -69,6 +70,7 @@ mod project_avatar;
 mod project_files;
 mod project_scripts;
 mod project_scripts_view;
+mod project_wallpaper;
 mod provider_masks;
 mod pull_requests_page;
 mod quick_composer;
@@ -281,6 +283,7 @@ fn main() {
         })
         .detach();
         freeze_watch::start(cx);
+        app_menu::install(cx);
         let bounds = window_place::opening(cx);
         // The backdrop the saved look and the system appearance call for from the first frame.
         let system_dark = matches!(

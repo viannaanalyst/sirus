@@ -252,6 +252,11 @@ fn hash_name(name: &str) -> u32 {
 }
 
 /// The saved choices over the name's defaults; unknown values fall back to them.
+/// The project's colour as a hex value: the one chosen in its appearance, or its name's swatch.
+pub fn project_color(name: &str, appearance: &Value) -> u32 {
+    resolve_look(name, appearance).color
+}
+
 fn resolve_look(name: &str, appearance: &Value) -> Look {
     let h = hash_name(name);
     let color = appearance

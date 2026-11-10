@@ -20386,7 +20386,23 @@ impl Render for Shell {
         let empty_chat = self.conversations[self.active_conversation()]
             .turns
             .is_empty();
-        let chat_background = crate::chat_background::layer(&self.settings, empty_chat, window, cx);
+        // A chosen picture wins; otherwise the project's dithered glow, in its colour.
+        let chat_background = crate::chat_background::layer(&self.settings, empty_chat, window, cx)
+            .or_else(|| {
+                // A dark-theme look: light ink means a dark window.
+                if crate::theme::content(1.).l < 0.5 {
+                    return None;
+                }
+                let project = &self.projects[self.current_project?];
+                let card = self.card_bounds.get()?;
+                crate::project_wallpaper::layer(
+                    crate::project_avatar::project_color(&project.name, &project.appearance),
+                    crate::project_wallpaper::seed_of(&project.name),
+                    (f32::from(card.size.width), f32::from(card.size.height)),
+                    window,
+                    cx,
+                )
+            });
         let menu = self.menu_view(now, &mut moving, cx);
         let open = self.sidebar.at(now);
         let peeking = self.peek.is_some() && !docked;
@@ -20603,6 +20619,16 @@ impl Render for Shell {
             .text_color(content(0.9))
             .on_drop(cx.listener(|this, paths: &gpui::ExternalPaths, _, cx| this.attach_paths(paths.paths().to_vec(), cx)))
             .on_key_down(cx.listener(Self::key))
+            // The menu bar's items (app_menu.rs) run what the keys run.
+            .on_action(cx.listener(|this, _: &crate::app_menu::OpenSettings, _, cx| this.toggle_appearance(cx)))
+            .on_action(cx.listener(|this, _: &crate::app_menu::NewConversation, _, cx| this.new_conversation(None, cx)))
+            .on_action(cx.listener(|this, _: &crate::app_menu::CloseTab, _, cx| this.close(this.active, cx)))
+            .on_action(cx.listener(|this, _: &crate::app_menu::ToggleSidebar, _, cx| this.toggle_sidebar(cx)))
+            .on_action(cx.listener(|this, _: &crate::app_menu::ToggleDock, _, cx| this.toggle_dock(cx)))
+            .on_action(cx.listener(|this, _: &crate::app_menu::OpenPalette, _, cx| this.toggle_palette(false, cx)))
+            .on_action(cx.listener(|this, _: &crate::app_menu::SearchEverything, _, cx| this.toggle_global_search(cx)))
+            .on_action(|_: &crate::app_menu::Minimize, window, _| window.minimize_window())
+            .on_action(|_: &crate::app_menu::Zoom, window, _| window.zoom_window())
             .on_modifiers_changed(cx.listener(|this, event: &gpui::ModifiersChangedEvent, _, cx| {
                 if !event.modifiers.alt {
                     this.finish_project_switch(cx);
@@ -21572,12 +21598,42 @@ fn chrome_wash_outside(card: Rc<Cell<Option<Bounds<Pixels>>>>) -> impl IntoEleme
             for band in wash_bands(bounds, c) {
                 window.paint_quad(gpui::fill(band, wash));
             }
+            // The card's corners are round: the wash also fills each corner square outside the
+            // curve. A ring whose inner edge is the card's outline, clipped to the corner, paints
+            // just that sliver (the inner radius is the outer one less the border width).
+            let r = px(crate::theme::RADIUS_LG)
+                .min(c.size.width / 2.)
+                .min(c.size.height / 2.);
+            let ring = gpui::quad(
+                c.dilate(r),
+                r * 2.,
+                gpui::transparent_black(),
+                r,
+                wash,
+                gpui::BorderStyle::Solid,
+            );
+            for square in corner_squares(c, r) {
+                window.with_content_mask(Some(gpui::ContentMask { bounds: square }), |window| {
+                    window.paint_quad(ring.clone());
+                });
+            }
         },
     )
     .absolute()
     .top_0()
     .left_0()
     .size_full()
+}
+
+/// The four `r` by `r` squares in the corners of `card`.
+fn corner_squares(card: Bounds<Pixels>, r: Pixels) -> [Bounds<Pixels>; 4] {
+    let size = gpui::size(r, r);
+    [
+        Bounds::new(card.origin, size),
+        Bounds::new(gpui::point(card.right() - r, card.top()), size),
+        Bounds::new(gpui::point(card.left(), card.bottom() - r), size),
+        Bounds::new(gpui::point(card.right() - r, card.bottom() - r), size),
+    ]
 }
 
 /// The parts of `outer` not covered by `hole`, as up to four rectangles.
@@ -21608,6 +21664,15 @@ mod wash_band_tests {
 
     fn rect(l: f32, t: f32, r: f32, b: f32) -> Bounds<Pixels> {
         Bounds::from_corners(gpui::point(px(l), px(t)), gpui::point(px(r), px(b)))
+    }
+
+    #[test]
+    fn the_corner_squares_sit_inside_the_card_corners() {
+        let squares = corner_squares(rect(20., 30., 90., 95.), px(12.));
+        assert_eq!(squares[0], rect(20., 30., 32., 42.));
+        assert_eq!(squares[1], rect(78., 30., 90., 42.));
+        assert_eq!(squares[2], rect(20., 83., 32., 95.));
+        assert_eq!(squares[3], rect(78., 83., 90., 95.));
     }
 
     #[test]

@@ -4,7 +4,9 @@
 //! and sends it here as a `browser_tool_request` event (only to this app, which registered with
 //! `register_browser_client` on connect). The request runs on the conversation's `Browser`
 //! (panel_browser.rs) and the answer goes back with the `browser_tool_result` command. The host
-//! shapes results, so the refs and shapes are Sirus's.
+//! shapes results, so the refs and shapes are Sirus's. A paired headless host (a Linux server)
+//! sends its requests the same way while it is the active computer (ADR-201); the answer goes
+//! back on the connection the request came from.
 //!
 //! Also here: the host's login prompts (`login-vault-state`: "save this login?" offers for the
 //! panel, "let the agent sign in?" approvals) and computer-use requests (`computer-state`),
@@ -110,7 +112,17 @@ async fn answer(request: Value, backend: Backend, cx: &mut AsyncApp) {
         on_window(cx, panel_browser::reclaim_keyboard);
     }
     let _ = cx.update(|cx| cx.refresh_windows());
-    backend.invoke("browser_tool_result", result_args(&id, result));
+    if from_remote(&request) {
+        backend.invoke_remote("browser_tool_result", result_args(&id, result));
+    } else {
+        backend.invoke("browser_tool_result", result_args(&id, result));
+    }
+}
+
+/// Whether a request came from the active computer's host rather than this Mac's (backend.rs
+/// notes it as `via`).
+pub fn from_remote(request: &Value) -> bool {
+    request["via"] == "remote"
 }
 
 /// Reads or acts on the app's window, when it has one.
@@ -446,6 +458,13 @@ mod tests {
         assert_eq!(err["ok"], false);
         assert_eq!(err["error"], "No browser tab is open.");
         assert!(err.get("value").is_none());
+    }
+
+    #[test]
+    fn answers_go_back_where_the_request_came_from() {
+        assert!(from_remote(&json!({ "id": "a", "via": "remote" })));
+        assert!(!from_remote(&json!({ "id": "a", "via": "local" })));
+        assert!(!from_remote(&json!({ "id": "a" })));
     }
 
     #[test]

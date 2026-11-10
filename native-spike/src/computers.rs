@@ -128,7 +128,8 @@ pub fn pair(
     tokens: &dyn Tokens,
 ) -> Result<Computer, String> {
     let code = normalize_code(code).ok_or(t("O código tem seis dígitos."))?;
-    let body = json!({ "code": code, "name": "Sirus" }).to_string();
+    // `desktop`: the host lets this window run its browser and open tunnels (ADR-201).
+    let body = json!({ "code": code, "name": "Sirus", "kind": "desktop" }).to_string();
     let (status, reply) = crate::remote_tls::post_json(address, "/api/pair", &body)?;
     let value: Value = serde_json::from_str(&reply).unwrap_or(Value::Null);
     let token = match value["token"].as_str() {

@@ -103,6 +103,27 @@ pub fn open_socket(address: &Address) -> Result<tungstenite::WebSocket<TlsStream
     Ok(socket)
 }
 
+/// Opens `wss://host/api/tunnel?port=N` (ADR-201) with the device token as a bearer header;
+/// the host connects its loopback port first, so a closed port fails the handshake.
+pub fn open_tunnel(
+    address: &Address,
+    token: &str,
+    port: u16,
+) -> Result<tungstenite::WebSocket<TlsStream>, String> {
+    use tungstenite::client::IntoClientRequest;
+    let stream = connect(address, Duration::from_secs(10))?;
+    let mut request = format!("wss://{}/api/tunnel?port={port}", host_header(address))
+        .into_client_request()
+        .map_err(|e| e.to_string())?;
+    let bearer = tungstenite::http::HeaderValue::from_str(&format!("Bearer {token}"))
+        .map_err(|e| e.to_string())?;
+    request
+        .headers_mut()
+        .insert(tungstenite::http::header::AUTHORIZATION, bearer);
+    let (socket, _) = tungstenite::client(request, stream).map_err(|e| e.to_string())?;
+    Ok(socket)
+}
+
 fn host_header(address: &Address) -> String {
     if address.port == 443 {
         address.host.clone()

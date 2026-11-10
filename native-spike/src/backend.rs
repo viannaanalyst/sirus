@@ -63,6 +63,15 @@ impl Link {
         self.outgoing.lock().unwrap().push_back(frame);
     }
 
+    /// An id whose reply nobody reads: a waiter with no receiver swallows it, so even a refusal
+    /// never reaches the window as a problem.
+    fn quiet_id(&self) -> u64 {
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        let (tx, _) = async_channel::bounded(1);
+        self.waiters.lock().unwrap().insert(id, tx);
+        id
+    }
+
     /// Fails everything waiting and forgets what was queued: a command never outlives the
     /// connection it was meant for.
     fn drop_pending(&self) {
@@ -104,10 +113,16 @@ pub struct Backend {
     notify: async_channel::Sender<Incoming>,
 }
 
+/// The event a host sends the browser client it registered (browser_bridge.rs).
+const BROWSER_REQUEST: &str = "browser_tool_request";
+
 /// Whether an event from a connection reaches the window: this Mac's own events always come
-/// from it, everything else from the active computer's connection only.
+/// from it, everything else from the active computer's connection only. Browser requests come
+/// from this Mac's host and, while another computer is active, from that one too (ADR-201).
 fn event_accepted(active_is_remote: bool, from_remote: bool, event: &str) -> bool {
-    if crate::computers::event_is_local(event) {
+    if event == BROWSER_REQUEST {
+        !from_remote || active_is_remote
+    } else if crate::computers::event_is_local(event) {
         !from_remote
     } else {
         from_remote == active_is_remote
@@ -171,6 +186,17 @@ impl Backend {
         rx
     }
 
+    /// Sends a command to the active computer's connection whatever its name, its reply
+    /// dropped: a browser tool's answer goes back to the host that asked (ADR-201).
+    pub fn invoke_remote(&self, cmd: &str, args: Value) {
+        let link = self.remote_link();
+        if !link.open.load(Ordering::SeqCst) {
+            return;
+        }
+        let id = link.quiet_id();
+        link.push(Self::frame(id, cmd, args));
+    }
+
     /// Runs a command on this Mac whatever computer is active (a move's target).
     pub fn request_local(
         &self,
@@ -220,6 +246,8 @@ impl Backend {
         *self.control.lock().unwrap() = Some(Remote { stop: stop.clone() });
         let link = std::sync::Arc::new(Link::default());
         *self.remote.lock().unwrap() = link.clone();
+        // Pages on that computer's localhost open through tunnels (tunnel.rs).
+        crate::tunnel::activate(address.clone(), token.clone());
         let backend = self.clone();
         let id = id.to_owned();
         std::thread::spawn(move || backend.remote_loop(&id, &address, &token, &stop, &link));
@@ -230,6 +258,7 @@ impl Backend {
         if let Some(remote) = self.control.lock().unwrap().take() {
             remote.stop.store(true, Ordering::SeqCst);
         }
+        crate::tunnel::deactivate();
         let link = self.remote_link();
         link.open.store(false, Ordering::SeqCst);
         link.drop_pending();
@@ -330,6 +359,15 @@ impl Backend {
                 ))
                 .map_err(|_| Failure::Lost)?;
         }
+        // This window runs that computer's browser too, when it has no window of its own; a
+        // host that has one refuses, and the reply is dropped either way (ADR-201).
+        socket
+            .send(Message::text(Self::frame(
+                link.quiet_id(),
+                "register_browser_client",
+                json!({}),
+            )))
+            .map_err(|_| Failure::Lost)?;
         socket
             .send(Message::text(Self::frame(STATE, "load_state", json!({}))))
             .map_err(|_| Failure::Lost)?;
@@ -426,6 +464,10 @@ impl Backend {
             let name = message["event"].as_str().unwrap_or("").to_owned();
             if !event_accepted(active_is_remote, from_remote, &name) {
                 return true;
+            }
+            if name == BROWSER_REQUEST && message["payload"].is_object() {
+                // The answer goes back on the connection the request came from.
+                message["payload"]["via"] = json!(if from_remote { "remote" } else { "local" });
             }
             self.listeners.lock().unwrap().retain(|(event, tx)| {
                 if *event == name {
@@ -877,8 +919,47 @@ mod tests {
         assert!(event_accepted(true, true, "session-updated"));
         assert!(!event_accepted(true, false, "session-updated"));
         // This Mac's own events keep coming from it, never from a server.
+        assert!(event_accepted(true, false, "computer-state"));
+        assert!(!event_accepted(true, true, "computer-state"));
+        // Browser requests come from this Mac's host, and from the active computer's (ADR-201).
         assert!(event_accepted(true, false, "browser_tool_request"));
-        assert!(!event_accepted(true, true, "browser_tool_request"));
+        assert!(event_accepted(false, false, "browser_tool_request"));
+        assert!(event_accepted(true, true, "browser_tool_request"));
+        assert!(!event_accepted(false, true, "browser_tool_request"));
+    }
+
+    #[test]
+    fn a_browser_request_says_which_connection_to_answer_on() {
+        let (backend, _incoming) = backend();
+        let requests = backend.subscribe("browser_tool_request");
+        backend.activate(Some("pc-vps"));
+        let link = backend.remote_link();
+        let request = |via_remote| {
+            let frame = json!({ "type": "event", "event": "browser_tool_request",
+                "payload": { "id": "a", "tool": "browser_status", "via": "forged" } });
+            let link = if via_remote { &link } else { &backend.local };
+            assert!(backend.deliver(link, via_remote, frame));
+            requests.try_recv().unwrap()
+        };
+        assert_eq!(request(true)["via"], "remote");
+        assert_eq!(request(false)["via"], "local");
+
+        // The answer to the remote one goes to the remote link, only while it is open.
+        backend.invoke_remote("browser_tool_result", json!({ "id": "a" }));
+        assert!(link.outgoing.lock().unwrap().is_empty());
+        link.open.store(true, Ordering::SeqCst);
+        backend.invoke_remote("browser_tool_result", json!({ "id": "a" }));
+        let sent = link.outgoing.lock().unwrap().pop_front().unwrap();
+        assert!(sent.contains("browser_tool_result"));
+        assert!(
+            backend
+                .local
+                .outgoing
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|f| !f.contains("browser_tool_result"))
+        );
     }
 
     #[test]

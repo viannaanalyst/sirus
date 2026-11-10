@@ -564,7 +564,9 @@ pub fn create(
 }
 
 pub fn load(web: &WKWebView, url: &str) {
-    if let Some(url) = NSURL::URLWithString(&NSString::from_str(url)) {
+    // On another computer, its localhost pages open through a tunnel (ADR-201).
+    let url = crate::tunnel::route(url);
+    if let Some(url) = NSURL::URLWithString(&NSString::from_str(&url)) {
         unsafe { web.loadRequest(&NSURLRequest::requestWithURL(&url)) };
     }
 }

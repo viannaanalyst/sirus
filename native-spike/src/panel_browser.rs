@@ -835,10 +835,11 @@ impl Browser {
         for tab in &mut self.tabs {
             let (url, title, loading, back, forward) = unsafe {
                 (
+                    // A tunnel's rewritten port reads as the host's (ADR-201).
                     tab.web
                         .URL()
                         .and_then(|u| u.absoluteString())
-                        .map(|s| s.to_string())
+                        .map(|s| crate::tunnel::shown(&s.to_string()))
                         .unwrap_or_default(),
                     tab.web.title().map(|s| s.to_string()).unwrap_or_default(),
                     tab.web.isLoading(),

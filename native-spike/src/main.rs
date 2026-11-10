@@ -282,13 +282,19 @@ fn main() {
         .detach();
         freeze_watch::start(cx);
         let bounds = window_place::opening(cx);
+        // The backdrop the saved look and the system appearance call for from the first frame.
+        let system_dark = matches!(
+            cx.window_appearance(),
+            gpui::WindowAppearance::Dark | gpui::WindowAppearance::VibrantDark
+        );
+        let backdrop = theme::window_backdrop(&shell::load_look(), system_dark);
         let window = cx
             .open_window(
                 WindowOptions {
                     window_bounds: Some(bounds),
                     window_min_size: Some(size(px(window_place::MIN.0), px(window_place::MIN.1))),
                     app_id: Some("com.siruscode.native".into()),
-                    window_background: gpui::WindowBackgroundAppearance::Blurred,
+                    window_background: backdrop,
                     app_owns_titlebar_drag: true,
                     titlebar: Some(TitlebarOptions {
                         title: Some("Sirus".into()),

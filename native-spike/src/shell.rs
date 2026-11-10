@@ -1236,7 +1236,7 @@ fn look_file() -> std::path::PathBuf {
     crate::backend::data_dir().join("native-look.json")
 }
 /// Aparência from disk; without a saved one, the default.
-fn load_look() -> Look {
+pub(crate) fn load_look() -> Look {
     std::fs::read(look_file())
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
@@ -1663,6 +1663,8 @@ pub struct Shell {
     context_mute_row: Rc<Cell<Option<Bounds<Pixels>>>>,
     context_mute_sub: Rc<Cell<Option<Bounds<Pixels>>>>,
     system_dark: bool,
+    /// The window's backdrop as last set, so it changes only when the look does.
+    window_backdrop: Option<gpui::WindowBackgroundAppearance>,
     theme_menu: Option<PaletteState>,
     settings_page: &'static str,
     settings_since: Instant,
@@ -2087,6 +2089,7 @@ impl Shell {
             context_mute_row: Default::default(),
             context_mute_sub: Default::default(),
             system_dark: true,
+            window_backdrop: None,
             theme_menu: None,
             settings_page: APPEARANCE,
             settings_since: now,
@@ -19701,6 +19704,12 @@ impl Render for Shell {
             window.appearance(),
             gpui::WindowAppearance::Dark | gpui::WindowAppearance::VibrantDark
         );
+        // The backdrop follows the look: blur under dark glass, opaque otherwise.
+        let backdrop = crate::theme::window_backdrop(&self.look, self.system_dark);
+        if self.window_backdrop != Some(backdrop) {
+            self.window_backdrop = Some(backdrop);
+            window.set_background_appearance(backdrop);
+        }
         crate::theme::apply(mix(
             self.palette_from,
             palette(&self.look, self.system_dark),

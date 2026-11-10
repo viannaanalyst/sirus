@@ -174,8 +174,8 @@ pub const PRESETS: &[Preset] = &[
         hue: 0.,
         saturation: 0.,
         accent: 0x7aa7ff,
-        dark_lightness: 0.,
-        dark_ink: 0xf5f5f5,
+        dark_lightness: 0.09,
+        dark_ink: 0xebebeb,
     },
 ];
 
@@ -193,26 +193,40 @@ pub const ACCENTS: &[(&str, u32)] = &[
     ("Ciano", 0x4fc3cf),
 ];
 
-/// The `sidebar_opacity` as the owner has it: how much of the desktop the tint hides.
-const SHELL_ALPHA: f32 = 0.81;
+/// The `sidebar_opacity` as Monocode's default has it: how much of the desktop the tint hides.
+const SHELL_ALPHA: f32 = 0.85;
+/// The composer's raised card and the popovers keep the lightness they had over the old black
+/// base (#1c1c1c), whatever the base's own lightness is.
+const DARK_FIELD: f32 = 0.11;
+const DARK_FLOATING: f32 = 0.11;
+
+/// Whether the window paints dark: the look's choice, or the system's when it follows it.
+fn is_dark(look: &Look, system_dark: bool) -> bool {
+    match look.mode {
+        1 => true,
+        2 => false,
+        _ => system_dark,
+    }
+}
+
+/// What the compositor puts behind the window: the desktop's blur under the dark glass, and an
+/// opaque window otherwise, as Monocode's `window_backdrop` does.
+pub fn window_backdrop(look: &Look, system_dark: bool) -> gpui::WindowBackgroundAppearance {
+    if look.glass && is_dark(look, system_dark) {
+        gpui::WindowBackgroundAppearance::Blurred
+    } else {
+        gpui::WindowBackgroundAppearance::Opaque
+    }
+}
 
 pub fn palette(look: &Look, system_dark: bool) -> Palette {
     let p = &PRESETS[look.preset];
     let hue = look.hue.unwrap_or(p.hue) / 360.;
     let saturation = look.saturation.unwrap_or(p.saturation);
-    let dark = match look.mode {
-        1 => true,
-        2 => false,
-        _ => system_dark,
-    };
+    let dark = is_dark(look, system_dark);
+    // Glass is a dark-theme look: the light window is opaque, so its surfaces are too.
+    let glass = look.glass && dark;
     let tint = |s: f32, lightness: f32, alpha: f32| hsla(hue, s, lightness, alpha);
-    // Dark glass (#060606 at 40% over the window's tint): the conversation sits a step
-    // darker than the chrome around it.
-    let pane_alpha = match (look.glass, dark) {
-        (true, true) => 0.4,
-        (true, false) => 0.9,
-        (false, _) => 1.,
-    };
     let accent: Hsla = match look.custom {
         Some((hue, light)) => hsla(hue / 360., 0.75, light, 1.),
         None => rgb(look.accent.map_or(p.accent, |a| ACCENTS[a].1)).into(),
@@ -222,18 +236,24 @@ pub fn palette(look: &Look, system_dark: bool) -> Palette {
             shell: tint(
                 saturation * 0.7,
                 p.dark_lightness,
-                if look.glass { SHELL_ALPHA } else { 1. },
+                if glass { SHELL_ALPHA } else { 1. },
             ),
-            pane: tint(saturation, p.dark_lightness * 0.4, pane_alpha),
-            field: tint(saturation * 0.8, (p.dark_lightness + 0.075).max(0.11), 1.),
-            floating: tint(saturation * 0.7, (p.dark_lightness + 0.08).max(0.11), 1.),
+            // The conversation card is clear over the glass, as Monocode's: the window's tint
+            // shows through it.
+            pane: tint(
+                saturation,
+                p.dark_lightness * 0.4,
+                if glass { 0. } else { 1. },
+            ),
+            field: tint(saturation * 0.8, DARK_FIELD, 1.),
+            floating: tint(saturation * 0.7, DARK_FLOATING, 1.),
             accent,
             ink: rgb(p.dark_ink).into(),
         }
     } else {
         Palette {
-            shell: tint(saturation * 0.5, 0.92, if look.glass { 0.86 } else { 1. }),
-            pane: tint(saturation * 0.4, 0.985, pane_alpha),
+            shell: tint(saturation * 0.5, 0.92, 1.),
+            pane: tint(saturation * 0.4, 0.985, 1.),
             field: tint(saturation * 0.3, 1., 1.),
             floating: tint(saturation * 0.3, 0.99, 1.),
             accent,
@@ -570,9 +590,28 @@ mod look_tests {
         assert_eq!(PRESETS[look.preset].name, "Tinta");
         assert_eq!(ACCENTS[look.accent.unwrap()].1, 0xec4899);
         let dark = palette(&look, true);
-        assert_eq!(dark.pane.a, 0.4);
+        assert_eq!(dark.pane.a, 0.);
         assert_eq!(dark.shell.a, SHELL_ALPHA);
-        assert_eq!(dark.shell.l, 0.);
+        assert_eq!(dark.shell.l, 0.09);
+        assert_eq!(dark.field.l, DARK_FIELD);
+        assert_eq!(dark.floating.l, DARK_FLOATING);
+    }
+
+    #[test]
+    fn the_window_blurs_only_under_dark_glass() {
+        let look = Look {
+            mode: 1,
+            ..Look::default()
+        };
+        assert!(window_backdrop(&look, false) == gpui::WindowBackgroundAppearance::Blurred);
+        // Light is opaque, and so are its surfaces: no glass to show through.
+        let light = Look {
+            mode: 2,
+            ..Look::default()
+        };
+        assert!(window_backdrop(&light, true) == gpui::WindowBackgroundAppearance::Opaque);
+        assert_eq!(palette(&light, true).shell.a, 1.);
+        assert_eq!(palette(&light, true).pane.a, 1.);
     }
 
     #[test]

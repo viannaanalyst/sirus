@@ -171,6 +171,41 @@ impl PtySession {
     pub fn kill(&self) -> Result<()> {
         kill_all(&[self])
     }
+
+    /// The command line of what holds the terminal, unless it is the shell itself: a window on
+    /// another computer asks it to know whether closing interrupts something and which agent
+    /// CLI runs there (ADR-204).
+    pub fn foreground(&self) -> Option<String> {
+        #[cfg(unix)]
+        {
+            let front = self.master.lock().process_group_leader()?;
+            let shell = self.pid? as libc::pid_t;
+            if !foreground_busy(front, shell) {
+                return None;
+            }
+            let output = std::process::Command::new("ps")
+                .args(["-p", &front.to_string(), "-o", "args="])
+                .output()
+                .ok()?;
+            let args = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+            (output.status.success() && !args.is_empty()).then_some(args)
+        }
+        #[cfg(not(unix))]
+        None
+    }
+}
+
+/// A shell leads its process group, so while that group is in front the terminal is idle; any
+/// other group in front is a running command. An unreadable group (<= 0) counts as idle.
+#[cfg(unix)]
+fn foreground_busy(front: libc::pid_t, shell: libc::pid_t) -> bool {
+    front > 0 && shell > 0 && front != shell
+}
+
+/// Whether `stop_terminals` takes terminal `id`: one a window started under `prefix` (its own,
+/// on this host) that is not of its current connection (`keep`).
+pub fn stale_window_terminal(id: &str, prefix: &str, keep: &str) -> bool {
+    id.starts_with(prefix) && !id.starts_with(keep)
 }
 
 pub fn start(
@@ -385,6 +420,25 @@ mod tests {
             ("API_KEY".into(), "abc".into()),
         ]);
         assert_eq!(kept, vec![("API_KEY".to_owned(), "abc".to_owned())]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn only_another_process_group_in_front_is_busy() {
+        assert!(!foreground_busy(10, 10));
+        assert!(foreground_busy(11, 10));
+        assert!(!foreground_busy(0, 10));
+        assert!(!foreground_busy(-1, 10));
+        assert!(!foreground_busy(11, 0));
+    }
+
+    #[test]
+    fn a_window_stops_only_its_own_terminals_of_earlier_connections() {
+        let (prefix, keep) = ("sirus-ab12cd34-", "sirus-ab12cd34-k7-");
+        assert!(stale_window_terminal("sirus-ab12cd34-k3-1", prefix, keep));
+        assert!(!stale_window_terminal("sirus-ab12cd34-k7-1", prefix, keep));
+        assert!(!stale_window_terminal("sirus-ffff0000-k3-1", prefix, keep));
+        assert!(!stale_window_terminal("phone-terminal-1", prefix, keep));
     }
 
     #[test]

@@ -499,6 +499,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Abra um app ou qualquer site.", "Open an app or any site."),
     ("Abra um projeto", "Open a project"),
     (
+        "Abra uma conversa para usar o terminal neste computador.",
+        "Open a conversation to use the terminal on this computer.",
+    ),
+    (
         "Abra {} e digite o código. Esta tela termina quando o GitHub confirmar.",
         "Open {} and enter the code. This screen finishes when GitHub confirms.",
     ),

@@ -58,11 +58,9 @@ impl Shell {
         cx.notify();
     }
 
-    /// Runs an action in a terminal of its own, reused while it sits idle at a prompt.
+    /// Runs an action in a terminal of its own, reused while it sits idle at a prompt. On a remote
+    /// computer that terminal's shell runs on its host (ADR-204).
     fn run_project_action(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
-        if self.this_mac_only(cx) {
-            return;
-        }
         let Some(project) = self.actions_project() else {
             return;
         };

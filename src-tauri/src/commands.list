@@ -125,6 +125,8 @@ commands::start_terminal
 commands::write_terminal
 commands::resize_terminal
 commands::stop_terminal
+commands::stop_terminals
+commands::terminal_foreground
 commands::host_info
 commands::probe_provider
 commands::list_provider_models

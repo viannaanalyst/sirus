@@ -16170,10 +16170,8 @@ impl Shell {
     }
 
     fn open_pane(&mut self, kind: usize, cx: &mut Context<Self>) {
-        // Files and Changes ask the host; the terminal still runs on this Mac.
-        if kind == 0 && self.this_mac_only(cx) {
-            return;
-        }
+        // Terminal, Files and Changes all work on a remote computer: the panes ask its host
+        // (ADR-202) and a terminal's shell runs there (ADR-204).
         if kind == 0 && self.term_redirect(cx) {
             return;
         }

@@ -17,7 +17,7 @@ use std::{
     rc::Rc,
 };
 
-mod charts;
+pub(crate) mod charts;
 pub(crate) mod dither;
 mod input;
 mod program;

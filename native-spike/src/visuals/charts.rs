@@ -43,6 +43,22 @@ const AREA_BANDS: [(f32, f32); 5] = [
 ];
 const AREA_REST: f32 = 0.2;
 
+/// The dither tone of an area `depth` (a share of the plot height) below its
+/// top edge, in a plot `plot_h` px tall: solid-looking at the edge, thinning
+/// toward the axis in steps of 1/16.
+pub(crate) fn area_tone(depth: f32, plot_h: f32) -> f32 {
+    let lead = (2. * CELL / plot_h.max(1.)).max(AREA_BANDS[0].0);
+    let share = if depth < lead {
+        1.
+    } else {
+        AREA_BANDS
+            .iter()
+            .find(|(d, _)| depth < *d)
+            .map_or(AREA_REST, |(_, s)| *s)
+    };
+    (AREA_LEVEL * share * 16.).round() / 16.
+}
+
 /// A value for a readout: compact, to two decimals at most.
 fn reading(value: f64) -> String {
     compact(value, 0.01)
@@ -295,17 +311,7 @@ fn cartesian(
                 .enumerate()
                 .rev()
                 .find(|(_, c)| x >= c.first_x() && x <= c.last_x() && y >= c.at(x))?;
-            let depth = (y - curve.at(x)) / plot_h.max(1.);
-            let lead = (2. * CELL / plot_h.max(1.)).max(AREA_BANDS[0].0);
-            let share = if depth < lead {
-                1.
-            } else {
-                AREA_BANDS
-                    .iter()
-                    .find(|(d, _)| depth < *d)
-                    .map_or(AREA_REST, |(_, s)| *s)
-            };
-            let tone = (AREA_LEVEL * share * 16.).round() / 16.;
+            let tone = area_tone((y - curve.at(x)) / plot_h.max(1.), plot_h);
             inked(col, row, tone).then_some(colors[index])
         });
     }
@@ -1038,4 +1044,25 @@ pub(super) fn progress(
         .child(bar)
         .children(detail.map(|d| div().text_size(px(12.)).text_color(content(0.55)).child(d)))
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::area_tone;
+
+    #[test]
+    fn an_area_is_densest_at_its_edge_and_thins_toward_the_axis() {
+        let plot_h = 200.;
+        // Full strength at the edge, quantized to sixteenths, never denser lower down.
+        assert_eq!(area_tone(0., plot_h), 10. / 16.);
+        let depths = [0., 0.02, 0.1, 0.2, 0.3, 0.5, 0.9];
+        let tones: Vec<f32> = depths.iter().map(|d| area_tone(*d, plot_h)).collect();
+        assert!(tones.windows(2).all(|w| w[1] <= w[0]), "{tones:?}");
+        assert_eq!(*tones.last().unwrap(), 2. / 16.);
+        assert!(
+            tones
+                .iter()
+                .all(|t| (t * 16. - (t * 16.).round()).abs() < 1e-6)
+        );
+    }
 }

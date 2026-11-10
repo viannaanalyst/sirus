@@ -7,13 +7,13 @@
 
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
-use std::sync::{mpsc, Arc, OnceLock};
+use std::sync::{Arc, OnceLock, mpsc};
 use std::time::Duration;
 
 use crate::runtime::{AppHandle, Emitter, Manager, State};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::commands::AppState;
 use crate::error::{Error, Result as IpcResult};
@@ -426,7 +426,7 @@ fn write_file(
     let content = match std::fs::symlink_metadata(&target) {
         Ok(meta) if !meta.is_file() => return Err("the path is not a regular file".into()),
         Ok(meta) if meta.len() > 1024 * 1024 => {
-            return Err("the file is too large to update".into())
+            return Err("the file is too large to update".into());
         }
         Ok(_) => {
             let mut file = crate::paths::open_regular_for_write_within(root, &target)
@@ -559,6 +559,57 @@ pub fn tool_definitions() -> Vec<Value> {
     ]
 }
 
+/// One place the typed value is saved to (ADR-198). No target at all keeps it for this
+/// conversation only.
+#[derive(Deserialize, Clone, PartialEq, Debug)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum SaveTarget {
+    /// An environment of the linked Infisical project.
+    Infisical { env: String },
+    /// `.env.local` in the conversation's workspace.
+    #[serde(rename = "dotenv")]
+    DotEnv,
+}
+
+impl SaveTarget {
+    /// How a failure names the target; the window shows it in the person's language.
+    fn label(&self) -> String {
+        match self {
+            SaveTarget::Infisical { env } => format!("Infisical ({env})"),
+            SaveTarget::DotEnv => ".env.local".to_owned(),
+        }
+    }
+}
+
+/// The list of targets from an answer: the new `targets` list, plus the old single-target fields
+/// (`infisicalEnv`, `dotenv`) when an older window sends them. Each target appears once.
+fn merge_targets(
+    targets: Vec<SaveTarget>,
+    infisical_env: Option<String>,
+    dotenv: bool,
+) -> Vec<SaveTarget> {
+    let mut merged: Vec<SaveTarget> = Vec::new();
+    let legacy = infisical_env
+        .map(|env| SaveTarget::Infisical { env })
+        .into_iter()
+        .chain(dotenv.then_some(SaveTarget::DotEnv));
+    for target in targets.into_iter().chain(legacy) {
+        if !merged.contains(&target) {
+            merged.push(target);
+        }
+    }
+    merged
+}
+
+/// What the answer says about each failed target, one line each, without the value.
+fn failure_message(failures: &[(SaveTarget, String)]) -> String {
+    failures
+        .iter()
+        .map(|(target, reason)| format!("Could not save to {}: {reason}", target.label()))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum Action {
@@ -568,10 +619,13 @@ pub enum Action {
         request_id: String,
         /// `None` declines.
         value: Option<String>,
-        /// Also save the value in the linked Infisical project, in this environment (ADR-198).
+        /// Every place to save the value before the agent is answered.
+        #[serde(default)]
+        targets: Vec<SaveTarget>,
+        /// Older form: also save in this Infisical environment.
         #[serde(default)]
         infisical_env: Option<String>,
-        /// Also write it to `.env.local` in the conversation's workspace, under the requested name.
+        /// Older form: also write it to `.env.local`.
         #[serde(default)]
         dotenv: bool,
     },
@@ -583,39 +637,55 @@ pub async fn secret_action(state: State<'_, Arc<AppState>>, action: Action) -> I
     if let Action::Respond {
         request_id,
         value,
+        targets,
         infisical_env,
         dotenv,
     } = action
     {
-        // Saved first, from the value still in hand; the agent is answered only once the save
-        // worked, so a failed save leaves the request waiting for a retry.
+        // Saved first, from the value still in hand, to every target; the agent is answered only
+        // once all of them worked, so a failed save leaves the request waiting for a retry (a
+        // retry writes the same value again, which is harmless).
         let mut saved = Ok(());
-        if let (Some(environment), Some(typed)) = (infisical_env.as_deref(), value.as_deref()) {
-            let asked = snapshot()
-                .requests
-                .into_iter()
-                .find(|request| request.id == request_id);
-            if let Some(request) = asked {
-                let key = request
-                    .env_name
-                    .clone()
-                    .unwrap_or_else(|| request.label.clone());
-                saved = crate::infisical::save_for_session(
-                    state.inner(),
-                    &request.session_id,
-                    environment,
-                    &key,
-                    typed,
-                )
-                .await;
+        if let Some(typed) = value.as_deref() {
+            let mut failures: Vec<(SaveTarget, String)> = Vec::new();
+            for target in merge_targets(targets, infisical_env, dotenv) {
+                let outcome = match &target {
+                    SaveTarget::Infisical { env } => {
+                        save_infisical(state.inner(), &request_id, env, typed).await
+                    }
+                    SaveTarget::DotEnv => save_dotenv(state.inner(), &request_id, typed),
+                };
+                if let Err(error) = outcome {
+                    failures.push((target, error.to_string()));
+                }
             }
-        }
-        if let (true, Some(typed)) = (dotenv, value.as_deref()) {
-            saved = save_dotenv(state.inner(), &request_id, typed);
+            if !failures.is_empty() {
+                saved = Err(Error::agent(failure_message(&failures)));
+            }
         }
         respond_if_saved(saved, || respond(&request_id, value))?;
     }
     Ok(snapshot())
+}
+
+/// The card's Infisical targets: the value goes to the linked project's environment, under the
+/// requested variable name (or the label).
+async fn save_infisical(
+    state: &AppState,
+    request_id: &str,
+    environment: &str,
+    value: &str,
+) -> IpcResult<()> {
+    let request = snapshot()
+        .requests
+        .into_iter()
+        .find(|request| request.id == request_id)
+        .ok_or_else(|| Error::agent("That request is no longer waiting."))?;
+    let key = request
+        .env_name
+        .clone()
+        .unwrap_or_else(|| request.label.clone());
+    crate::infisical::save_for_session(state, &request.session_id, environment, &key, value).await
 }
 
 /// The agent hears back only after the save: a failed one is returned and nothing is answered.
@@ -682,6 +752,72 @@ pub(crate) fn respond(request_id: &str, value: Option<String>) -> IpcResult<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn targets_merge_the_list_with_the_old_single_form() {
+        let dev = SaveTarget::Infisical { env: "dev".into() };
+        let prod = SaveTarget::Infisical { env: "prod".into() };
+        assert!(merge_targets(vec![], None, false).is_empty());
+        assert_eq!(
+            merge_targets(vec![], Some("dev".into()), true),
+            vec![dev.clone(), SaveTarget::DotEnv]
+        );
+        assert_eq!(
+            merge_targets(vec![dev.clone(), prod.clone()], Some("dev".into()), false),
+            vec![dev, prod]
+        );
+        let parsed: Action = serde_json::from_str(
+            r#"{"type":"respond","requestId":"r","value":"v","targets":[{"kind":"infisical","env":"prod"},{"kind":"dotenv"}]}"#,
+        )
+        .unwrap();
+        match parsed {
+            Action::Respond { targets, .. } => assert_eq!(
+                targets,
+                vec![
+                    SaveTarget::Infisical { env: "prod".into() },
+                    SaveTarget::DotEnv
+                ]
+            ),
+            Action::Status => panic!("wrong action"),
+        }
+        let old: Action = serde_json::from_str(
+            r#"{"type":"respond","requestId":"r","value":"v","infisicalEnv":"dev","dotenv":true}"#,
+        )
+        .unwrap();
+        match old {
+            Action::Respond {
+                targets,
+                infisical_env,
+                dotenv,
+                ..
+            } => assert_eq!(
+                merge_targets(targets, infisical_env, dotenv),
+                vec![
+                    SaveTarget::Infisical { env: "dev".into() },
+                    SaveTarget::DotEnv
+                ]
+            ),
+            Action::Status => panic!("wrong action"),
+        }
+    }
+
+    #[test]
+    fn a_failure_names_its_target_and_never_the_value() {
+        let text = failure_message(&[
+            (
+                SaveTarget::Infisical { env: "prod".into() },
+                "Infisical could not be reached.".into(),
+            ),
+            (
+                SaveTarget::DotEnv,
+                "The .env.local file could not be written.".into(),
+            ),
+        ]);
+        assert_eq!(
+            text,
+            "Could not save to Infisical (prod): Infisical could not be reached.\nCould not save to .env.local: The .env.local file could not be written."
+        );
+    }
 
     #[test]
     fn a_failed_save_does_not_answer_the_agent() {
@@ -797,8 +933,10 @@ mod tests {
         }
         assert!(write_file(&root, "missing/dir.txt", None, "x").is_err());
         let tools = tool_definitions();
-        assert!(tools
-            .iter()
-            .all(|tool| tool["inputSchema"]["type"] == "object"));
+        assert!(
+            tools
+                .iter()
+                .all(|tool| tool["inputSchema"]["type"] == "object")
+        );
     }
 }

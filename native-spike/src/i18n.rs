@@ -502,10 +502,6 @@ const ENTRIES: &[(&str, &str)] = &[
         "Abra {} e digite o código. Esta tela termina quando o GitHub confirmar.",
         "Open {} and enter the code. This screen finishes when GitHub confirms.",
     ),
-    (
-        "Abre o painel Ambiente automaticamente. Quando desativado, ele fica fechado até você abrir. A última ação de abrir/fechar também atualiza esta preferência.",
-        "Open the chat Environment panel automatically on normal threads. When off, the panel stays closed until you open it. Your last open/close also updates this preference.",
-    ),
     ("Abril", "April"),
     ("Abrindo documento…", "Opening document…"),
     ("Abrindo o chat lateral…", "Opening the side chat…"),
@@ -1659,8 +1655,8 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Escolha os dias", "Choose the days"),
     (
-        "Escolha os padrões para novas sessões, navegação e o painel Ambiente.",
-        "Choose defaults for new sessions, navigation and the Environment panel.",
+        "Escolha os padrões para novas sessões e para a navegação.",
+        "Choose defaults for new sessions and for navigation.",
     ),
     (
         "Escolha pelo menos um domínio para importar.",
@@ -2112,14 +2108,6 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Executou {} às {}", "Ran {} at {}"),
     ("Executável", "Executable"),
     ("Execução", "Run"),
-    (
-        "Exiba as ações do editor no painel Ambiente.",
-        "Show the editor actions in the Environment panel.",
-    ),
-    (
-        "Exiba o link do repositório no painel Ambiente.",
-        "Show the repository link in the Environment panel.",
-    ),
     ("Exibição", "Display"),
     ("Exibição da resposta", "Response streaming"),
     ("Expandir painel", "Expand panel"),
@@ -2851,7 +2839,6 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Nome da pasta", "Folder name"),
     ("Nome de anexo inválido.", "Invalid attachment name."),
-    ("Nome de branch inválido", "Invalid branch name"),
     ("Nome do arquivo", "File name"),
     ("Nome do perfil", "Profile name"),
     (
@@ -4062,7 +4049,6 @@ const ENTRIES: &[(&str, &str)] = &[
         "Pagamentos, catálogo e pedidos",
         "Payments, catalog and orders",
     ),
-    ("Painel Ambiente", "Environment panel"),
     ("Painel lateral", "Side panel"),
     (
         "Painéis, menus e listas mudam sem deslizar, e o robô do composer para. Também vale quando Reduzir movimento está ligado nos Ajustes de Acessibilidade do Mac.",
@@ -5049,8 +5035,8 @@ const ENTRIES: &[(&str, &str)] = &[
         "A page an agent opens or navigates appears in a small player over the conversation. It stays hidden while the browser panel shows that session.",
     ),
     (
-        "Uma sessão que acompanha o PR (pelo cartão Ambiente ou quando você pede ao agente) recebe um turno automático, quando está ociosa, se um check falhar, alguém revisar ou comentar o código ou o branch tiver conflitos com a base. O GitHub é lido no máximo uma vez por minuto por PR; o acompanhamento para após 5 atualizações sem um novo commit.",
-        "A session that watches its PR (from the Environment card or when you ask its agent) gets an automatic turn, while idle, when a check fails, someone reviews or comments on the code, or the branch conflicts with its base. GitHub is read at most once a minute per PR; watching stops after 5 updates without a new commit.",
+        "Uma sessão que acompanha o PR (quando você pede ao agente) recebe um turno automático, quando está ociosa, se um check falhar, alguém revisar ou comentar o código ou o branch tiver conflitos com a base. O GitHub é lido no máximo uma vez por minuto por PR; o acompanhamento para após 5 atualizações sem um novo commit.",
+        "A session that watches its PR (when you ask its agent) gets an automatic turn, while idle, when a check fails, someone reviews or comments on the code, or the branch conflicts with its base. GitHub is read at most once a minute per PR; watching stops after 5 updates without a new commit.",
     ),
     (
         "Uma vez, na primeira abertura de cada versão.",

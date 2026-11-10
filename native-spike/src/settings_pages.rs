@@ -412,7 +412,7 @@ fn build(page: &str, s: &Value, d: &HashMap<&'static str, Value>) -> Page {
     match page {
         "Geral" => page_of(
             t("Geral"),
-            t("Escolha os padrões para novas sessões, navegação e o painel Ambiente."),
+            t("Escolha os padrões para novas sessões e para a navegação."),
             general(s, d),
         ),
         "Comportamento do chat" => page_of(
@@ -2208,7 +2208,7 @@ fn git(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
                     s,
                     t("Permitir que sessões acompanhem o pull request"),
                     t(
-                        "Uma sessão que acompanha o PR (pelo cartão Ambiente ou quando você pede ao agente) recebe um turno automático, quando está ociosa, se um check falhar, alguém revisar ou comentar o código ou o branch tiver conflitos com a base. O GitHub é lido no máximo uma vez por minuto por PR; o acompanhamento para após 5 atualizações sem um novo commit.",
+                        "Uma sessão que acompanha o PR (quando você pede ao agente) recebe um turno automático, quando está ociosa, se um check falhar, alguém revisar ou comentar o código ou o branch tiver conflitos com a base. O GitHub é lido no máximo uma vez por minuto por PR; o acompanhamento para após 5 atualizações sem um novo commit.",
                     ),
                     top("prWatch"),
                 ),

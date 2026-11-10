@@ -96,6 +96,8 @@ enum Ctl {
     Switch { on: bool, change: Option<Act> },
     /// A segmented control over a short enum (two-way booleans use "true" and "false").
     Pick(Vec<Opt>),
+    /// A row of colour dots, each an option with its colour as `0xrrggbb`.
+    Swatches(Vec<(u32, Opt)>),
     /// Read-only text: a value the React page edits with a richer widget, or a hint.
     Read(String),
     /// A button; dimmed and inert when `enabled` is false.
@@ -299,6 +301,7 @@ fn restorable_keys(page: &str, shown: &Page) -> Vec<&'static str> {
                         change: Some(act), ..
                     } => vec![act],
                     Ctl::Pick(options) => options.iter().map(|o| &o.change).collect(),
+                    Ctl::Swatches(options) => options.iter().map(|(_, o)| &o.change).collect(),
                     _ => Vec::new(),
                 };
                 for act in acts {
@@ -641,6 +644,25 @@ fn pick(settings: &Value, field: Field, options: &[(&'static str, &'static str)]
                 label,
                 chosen: now == value,
                 change: change(settings, field, json_of(value)),
+            })
+            .collect(),
+    )
+}
+
+/// `pick` as colour dots: `options` are (`#rrggbb` value, its name).
+fn swatches(settings: &Value, field: Field, options: &[(&'static str, &'static str)]) -> Ctl {
+    let now = current(settings, field);
+    Ctl::Swatches(
+        options
+            .iter()
+            .map(|&(value, label)| {
+                let color = u32::from_str_radix(value.trim_start_matches('#'), 16).unwrap_or(0);
+                let opt = Opt {
+                    label,
+                    chosen: now == value,
+                    change: change(settings, field, json_of(value)),
+                };
+                (color, opt)
             })
             .collect(),
     )
@@ -1416,6 +1438,43 @@ fn control_view<V: 'static>(ctl: Ctl, ui: &mut Ui<'_, V>, cx: &mut Context<V>) -
                 .border_1()
                 .border_color(crate::theme::border())
                 .children(items)
+                .into_any_element()
+        }
+        Ctl::Swatches(options) => {
+            let mut dots = Vec::new();
+            for (color, opt) in options {
+                let Opt {
+                    chosen,
+                    change: act,
+                    ..
+                } = opt;
+                // The chosen colour wears a ring with a gap, as macOS's own accent picker.
+                dots.push(
+                    div()
+                        .id(("setting", next_id(&mut ui.ids)))
+                        .size(px(24.))
+                        .rounded_full()
+                        .p(px(3.))
+                        .border_2()
+                        .border_color(if chosen {
+                            content(0.85)
+                        } else {
+                            gpui::transparent_black()
+                        })
+                        .when(!chosen, |d| d.hover(|s| s.border_color(content(0.3))))
+                        .cursor_pointer()
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| fire(this, &act, save, run, cx)),
+                        )
+                        .child(div().size_full().rounded_full().bg(gpui::rgb(color)))
+                        .into_any_element(),
+                );
+            }
+            div()
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .children(dots)
                 .into_any_element()
         }
     }
@@ -3896,7 +3955,7 @@ fn appearance_data_groups(settings: &Value) -> Vec<Group> {
         wallpaper_rows.push(row(
             t("Cor padrão"),
             t("A cor do papel de parede em todos os projetos."),
-            vec![pick(
+            vec![swatches(
                 s,
                 top("projectWallpaperColor"),
                 &[

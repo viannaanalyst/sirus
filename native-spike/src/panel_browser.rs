@@ -12,6 +12,7 @@ use crate::backend::Backend;
 use crate::browser_address::{self, LocalServer, Suggestion};
 use crate::browser_crop;
 use crate::browser_device::{self, Edge};
+use crate::browser_holes;
 use crate::browser_js;
 use crate::browser_pip::Pip;
 use crate::browser_profiles::{self, Profile};
@@ -102,6 +103,8 @@ thread_local! {
     static COVERED: Cell<bool> = const { Cell::new(false) };
     static GRIP_SHARE: Cell<f64> = const { Cell::new(1.) };
     static BOTTOM_ROOM: Cell<f64> = const { Cell::new(0.) };
+    /// The floating cards over the window this frame, cut out of the pages (browser_holes.rs).
+    static HOLES: RefCell<Vec<browser_holes::Rect>> = const { RefCell::new(Vec::new()) };
     static LIVE: RefCell<Vec<Weak<Shared>>> = const { RefCell::new(Vec::new()) };
     static SESSIONS: RefCell<HashMap<String, Entity<Browser>>> = RefCell::new(HashMap::new());
     /// The custom profiles and the profile new tabs open in, from the settings.
@@ -214,6 +217,8 @@ struct Shared {
     applied_zoom: Cell<f64>,
     /// Where the device frame was painted, for the rails around it.
     geometry: Cell<Option<Geometry>>,
+    /// Where the page was placed, in window points from the top-left, for its holes.
+    frame: Cell<Option<browser_holes::Rect>>,
 }
 
 /// A device frame as painted, in window points (`zoom` converts them to GPUI pixels).
@@ -245,6 +250,9 @@ impl Shared {
                 window.makeFirstResponder(Some(parent));
             }
             web.setHidden(hidden);
+            if !hidden && let Some(frame) = self.frame.get() {
+                HOLES.with(|holes| browser_holes::apply(web, frame, &holes.borrow()));
+            }
         }
     }
 }
@@ -256,8 +264,19 @@ pub fn frame_end() -> impl IntoElement {
     canvas(
         |_, _, _| {},
         |_, _, _, _| {
+            // The cards report themselves while the frame is laid out; a frame without them
+            // clears the holes.
+            let reported = browser_holes::take_reported();
+            let changed = HOLES.with(|holes| {
+                let changed = *holes.borrow() != reported;
+                *holes.borrow_mut() = reported;
+                changed
+            });
             LIVE.with(|live| {
                 for shared in live.borrow().iter().filter_map(Weak::upgrade) {
+                    if changed && shared.visible.get() {
+                        shared.apply();
+                    }
                     if shared.painted.replace(false) {
                         continue;
                     }
@@ -515,6 +534,7 @@ impl Browser {
             }),
             applied_zoom: Cell::new(f64::NAN),
             geometry: Cell::new(None),
+            frame: Cell::new(None),
         });
         LIVE.with(|live| live.borrow_mut().push(Rc::downgrade(&shared)));
         let (events, woken) = Queue::new();
@@ -4471,6 +4491,7 @@ fn paint_web(shared: &Rc<Shared>, bounds: Bounds<Pixels>, window: &mut Window) {
         }
         None => (x + grip, y, (w - grip).max(1.), h, layout.user_zoom),
     };
+    let fy_top = fy;
     let fy = if parent.isFlipped() {
         fy
     } else {
@@ -4502,6 +4523,10 @@ fn paint_web(shared: &Rc<Shared>, bounds: Bounds<Pixels>, window: &mut Window) {
             parent.addSubview_positioned_relativeTo(view, NSWindowOrderingMode::Above, None);
         }
         web.setFrame(rect);
+        let frame = (fx, fy_top, fw, fh);
+        if shared.frame.replace(Some(frame)) != Some(frame) {
+            HOLES.with(|holes| browser_holes::apply(web, frame, &holes.borrow()));
+        }
         if shared.applied_zoom.get() != page_zoom {
             unsafe { web.setPageZoom(page_zoom) };
             shared.applied_zoom.set(page_zoom);

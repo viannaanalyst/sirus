@@ -1290,9 +1290,9 @@ const SELECTED_MIN: f32 = 112.;
 const SIDEBAR_MIN: f32 = 196.;
 const SIDEBAR_MAX: f32 = 420.;
 const CONV_ROW: f32 = 29.;
-/// The sidebar's hover pill and its open conversation: faint, so the rows' dots show through.
-const SIDEBAR_HOVER: f32 = 0.04;
-const SIDEBAR_SELECTED: f32 = 0.07;
+/// The sidebar has no hover pill: the open conversation is marked by its bar alone, so the rows'
+/// dots stay whole.
+const SIDEBAR_HOVER: f32 = 0.;
 const STEP_ROW: f32 = 28.;
 
 struct Tab {
@@ -12279,9 +12279,9 @@ impl Shell {
             .flex()
             .items_center()
             .gap(px(8.))
-            // The open conversation: a faint wash and a short bar in the project's colour.
+            // The open conversation: a short bar in the project's colour, no wash.
             .when(active, |d| {
-                d.bg(content(SIDEBAR_SELECTED)).child(
+                d.child(
                     div()
                         .absolute()
                         .left_0()
@@ -20445,7 +20445,6 @@ impl Render for Shell {
                 || self.actions.covers_pages()
                 || self.first_run.active()
                 || self.viewer.visible()
-                || self.cards_visible()
                 || self.balloon_covers_page(now),
         );
         if std::mem::take(&mut self.refocus) {

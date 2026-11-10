@@ -225,6 +225,7 @@ impl State {
         self.cards.retain(|c| c.event.id != id);
     }
 
+    #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
         self.cards.is_empty()
     }
@@ -393,10 +394,6 @@ impl Shell {
         }
     }
 
-    pub(super) fn cards_visible(&self) -> bool {
-        !self.cards.is_empty()
-    }
-
     fn card_conversation(&self, session: &str) -> Option<usize> {
         self.conversations
             .iter()
@@ -542,7 +539,28 @@ impl Shell {
             .w(px(WIDTH))
             .flex()
             .flex_col()
-            .gap(px(8.));
+            .gap(px(8.))
+            // The browser's page is a native view over everything: it cuts this stack out of
+            // itself (browser_holes.rs) rather than hiding.
+            .child(
+                gpui::canvas(
+                    |bounds, window, _| {
+                        let zoom = f64::from(window.content_zoom());
+                        let b = bounds.map(|v| f64::from(f32::from(v)) * zoom);
+                        crate::browser_holes::report((
+                            b.origin.x,
+                            b.origin.y,
+                            b.size.width,
+                            b.size.height,
+                        ));
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full(),
+            );
         for card in shown {
             if let Some(view) = self.card_view(card, reduced, cx) {
                 stack = stack.child(view);

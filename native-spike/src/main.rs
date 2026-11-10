@@ -16,6 +16,7 @@ mod browser_bridge;
 mod browser_crop;
 mod browser_data;
 mod browser_device;
+mod browser_holes;
 mod browser_js;
 mod browser_pip;
 mod browser_profiles;

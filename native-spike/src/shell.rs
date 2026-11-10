@@ -28,6 +28,7 @@ use crate::theme::{
     pane_fill, pane_opaque, provider_glyph, shell_fill,
 };
 use chrono::Utc;
+use gpui::AnimationExt as _;
 use gpui::transparent_black as transparent;
 use gpui::{
     AnyElement, Context, Div, FocusHandle, FontWeight, KeyDownEvent, MouseButton, MouseDownEvent,
@@ -40,7 +41,6 @@ use serde_json::{Value, json};
 use shell_terminal::{PULLS_CARD, TASKS_CARD, TERM_CARD, pulls_tile, tasks_tile};
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet, VecDeque};
-use gpui::AnimationExt as _;
 use std::ops::Range;
 use std::rc::Rc;
 
@@ -15157,11 +15157,11 @@ impl Shell {
                         icon("refresh", 12.).into_any_element()
                     }),
             )
-            .when_some(self.computer_chip(cx), |d, chip| d.child(chip))
             .children(agents)
             .child(div().flex_1())
             .when_some(self.update_notice(cx), |d, notice| d.child(notice))
             .when_some(self.resources_gauge(cx), |d, gauge| d.child(gauge))
+            .children(self.computer_chip(cx))
             .children(self.actions_button(cx))
             .child(self.usage_button(cx))
             .child(self.settings_button(cx))

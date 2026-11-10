@@ -366,49 +366,61 @@ impl Shell {
 
     /// The footer's chip for another computer: its name and where the connection is, and a way
     /// back to this Mac that works even when the computer has no project to switch from.
+    /// The bottom bar's switch beside Ações: the computer the window shows now, as an icon and
+    /// "Mac" or "VPS", with a status dot while it is a remote one; a click goes to the other.
+    /// Shown once another computer is paired.
     pub(super) fn computer_chip(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !self.on_remote() {
-            return None;
-        }
+        let other = self.computers.list.first()?.id.clone();
+        let remote = self.on_remote();
         let name = self.computers.active_name();
-        let (text, color) = match self.computers.status {
-            Status::Open => (name, 0x8fbf9f),
-            Status::Connecting => (tf("Conectando a {}…", &[&name]), 0xd8b36a),
+        let (dot, tip) = match self.computers.status {
+            Status::Open => (0x7fd19b, name.clone()),
+            Status::Connecting => (0xd8b36a, tf("Conectando a {}…", &[&name])),
             Status::Lost => (
-                tf("Sem conexão com {}. Tentando de novo…", &[&name]),
                 0xe08a8a,
+                tf("Sem conexão com {}. Tentando de novo…", &[&name]),
             ),
             Status::Unauthorized => (
+                0xe08a8a,
                 tf(
                     "{} não reconhece mais este Mac. Pareie de novo em Configurações → Conexões.",
                     &[&name],
                 ),
-                0xe08a8a,
             ),
+        };
+        let tip = if remote {
+            format!("{tip} · {}", t("clique para usar este Mac"))
+        } else {
+            t("Este Mac · clique para usar a VPS").to_owned()
         };
         Some(
             div()
+                .id("computer-switch")
+                .h(px(24.))
+                .px(px(6.))
+                .flex_shrink_0()
+                .rounded(px(crate::theme::RADIUS_SM))
                 .flex()
                 .items_center()
-                .gap(px(8.))
-                .min_w_0()
-                .child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .text_color(rgb(color))
-                        .child(text),
-                )
-                .child(
-                    div()
-                        .id("computer-back")
-                        .flex_shrink_0()
-                        .cursor_pointer()
-                        .text_color(content(0.55))
-                        .hover(|s| s.text_color(content(0.9)))
-                        .on_click(cx.listener(|this, _, _, cx| this.switch_computer(HOME, cx)))
-                        .child(t("Usar Este Mac")),
-                )
+                .gap(px(6.))
+                .cursor_pointer()
+                .text_size(px(12.))
+                .text_color(content(0.75))
+                .hover(|s| s.bg(content(0.08)).text_color(content(0.95)))
+                .tooltip(crate::shell::message_actions::text_tip(tip))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if this.on_remote() {
+                        this.switch_computer(HOME, cx)
+                    } else {
+                        this.switch_computer(&other, cx)
+                    }
+                }))
+                .when(remote, |d| {
+                    d.child(div().size(px(6.)).rounded_full().bg(rgb(dot)))
+                })
+                .child(icon(if remote { "server" } else { "laptop" }, 14.).text_color(content(0.7)))
+                .child(if remote { "VPS" } else { "Mac" })
                 .into_any_element(),
         )
     }

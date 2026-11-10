@@ -1946,6 +1946,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Estado atualizado.", "Status updated."),
     ("Este Mac", "This Mac"),
     (
+        "Este Mac · clique para usar a VPS",
+        "This Mac · click to use the VPS",
+    ),
+    (
         "Este PDF excede os limites de páginas ou imagens do leitor.",
         "This PDF exceeds the reader's page or image limits.",
     ),
@@ -5322,6 +5326,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "clientRequestId deve ser um UUID com hífens",
         "clientRequestId must be a hyphenated UUID",
     ),
+    ("clique para usar este Mac", "click to use this Mac"),
     ("comando", "command"),
     ("comandos", "commands"),
     (

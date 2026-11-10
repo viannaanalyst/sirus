@@ -335,7 +335,8 @@ impl Shell {
         if open > 0.001 {
             let runs = team::phases(members);
             let headed = runs.len() > 1;
-            natural += 6.;
+            // 4px above the rows and 4px below them, so a lone row sits centred in the card.
+            natural += 4.;
             let wall = now_ms();
             let controls = turn.live && provider == "claude";
             for run in runs {
@@ -396,7 +397,7 @@ impl Shell {
                         .flex()
                         .flex_col()
                         .px(px(4.))
-                        .pt(px(2.))
+                        .pt(px(4.))
                         .children(body),
                 )
                 .into_any_element(),

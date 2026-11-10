@@ -1317,8 +1317,6 @@ const SELECTED_MIN: f32 = 112.;
 const SIDEBAR_MIN: f32 = 196.;
 const SIDEBAR_MAX: f32 = 420.;
 const CONV_ROW: f32 = 29.;
-/// The "N tarefas" row under a conversation that delegated (delegated_tasks.rs).
-const TASKS_ROW: f32 = 24.;
 const STEP_ROW: f32 = 28.;
 
 struct Tab {
@@ -1359,8 +1357,6 @@ enum Row {
     Conversation(usize),
     /// The docked "N conversas paradas" row under the list (ADR-198).
     Settled,
-    /// "N tarefas" under a conversation that delegated: opens the nested list of its tasks (ADR-111).
-    Tasks(usize),
 }
 
 struct RowMotion {
@@ -8448,7 +8444,6 @@ impl Shell {
                     self.conversation_row(index, y, alpha, index == active, now, cx)
                 }
                 Row::Settled => self.settled_row(y, alpha, cx),
-                Row::Tasks(parent) => self.tasks_row(parent, y, alpha, cx),
             });
         }
         let contents = |id: &'static str,
@@ -12198,11 +12193,18 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let conversation = &self.conversations[index];
-        // A delegated task sits indented under the conversation that delegated it.
+        // A delegated task sits indented under the conversation that delegated it, drawn as a
+        // branch of the activity tree (delegated_tasks.rs).
         let nested = conversation.delegated_notify
             && self
                 .project_of(index)
                 .is_some_and(|project| self.nested_parent(project, index).is_some());
+        if nested {
+            return self.task_row(index, y, alpha, active, now, cx);
+        }
+        // A parent shows its tasks as a stack of provider tiles before its age.
+        let tasks = self.tasks_of(index);
+        let stack = (!tasks.is_empty()).then(|| self.task_stack_view(index, &tasks, cx));
         // Settling fades a row toward its limit and fills the bar under it (ADR-198).
         let shell_settle::Fade {
             opacity: fade,
@@ -12302,7 +12304,7 @@ impl Shell {
                     .into_any_element(),
             })
             .when(!editing, |d| {
-                d.child(
+                d.when_some(stack, |d, stack| d.child(stack)).child(
                     div()
                         .flex_shrink_0()
                         .text_size(px(11.))

@@ -18,7 +18,7 @@ pub const TRACK_ALPHA: f32 = 0.08;
 
 /// Every row has the texture: its dots go from the first opacity on a fresh row to the second at
 /// the limit, `TEXTURE_GAP` px apart, rising a little faster early on (`TEXTURE_CURVE`).
-pub const TEXTURE_ALPHA: (f32, f32) = (0.05, 0.24);
+pub const TEXTURE_ALPHA: (f32, f32) = (0.09, 0.24);
 pub const TEXTURE_CURVE: f64 = 0.8;
 pub const TEXTURE_GAP: f32 = 6.;
 
@@ -147,8 +147,8 @@ mod tests {
 
     #[test]
     fn every_row_has_a_faint_texture_that_grows_with_the_age() {
-        assert!(close(texture(Duration::zero(), week()), 0.05));
-        assert!(texture(Duration::hours(12), week()) > 0.05);
+        assert!(close(texture(Duration::zero(), week()), 0.09));
+        assert!(texture(Duration::hours(12), week()) > 0.09);
         assert!(texture(Duration::days(1), week()) < texture(Duration::days(4), week()));
         assert!(close(texture(week(), week()), 0.24));
         assert!(close(texture(Duration::days(30), week()), 0.24));
@@ -164,7 +164,7 @@ mod tests {
         let row_fade = opacity(age, limit);
         let shown = lifted(texture(age, limit), row_fade) * row_fade;
         assert!(shown >= 0.12, "effective texture alpha {shown}");
-        assert!(close(shown, 0.14647));
+        assert!(close(shown, 0.16616));
         // At the limit the lifted value still reaches the full texture alpha.
         let row_fade = opacity(week(), limit);
         assert!(close(lifted(TEXTURE_ALPHA.1, row_fade) * row_fade, 0.24));

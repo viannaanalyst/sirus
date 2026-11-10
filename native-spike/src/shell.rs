@@ -1096,6 +1096,9 @@ enum Waiting {
     AccountLogin(&'static str, String),
     /// `move_session_account` of a failed conversation: its session and approval, to continue after.
     AccountMoved(String, String),
+    /// `move_session_account` from the usage popup's account list: the session and the account
+    /// its conversation now uses, with nothing sent after.
+    AccountSwitched(String, String),
     /// `send_prompt` that carries on after a failure.
     FailureContinue,
     /// `provider_updates` on connect: the offers it lists.
@@ -2412,6 +2415,17 @@ impl Shell {
                 Some(Waiting::LimitFallback(session, approval)) if ok => {
                     self.account_moved(&session, &approval)
                 }
+                Some(Waiting::AccountSwitched(session, account)) if ok => {
+                    if let Some(conversation) = self
+                        .conversations
+                        .iter_mut()
+                        .find(|c| c.session_id == session)
+                    {
+                        conversation.account = account;
+                    }
+                    cx.notify();
+                }
+                Some(Waiting::AccountSwitched(..)) => self.problem = Some(error_text(&value)),
                 Some(
                     Waiting::AccountMoved(..)
                     | Waiting::FailureContinue
@@ -3912,6 +3926,7 @@ impl Shell {
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if !current {
                             this.select_account(provider, target.clone());
+                            this.switch_conversation_account(provider, target.clone());
                             this.refresh_usage_for_account(provider, target.clone(), cx);
                         }
                         this.usage_picker = None;

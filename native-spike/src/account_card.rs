@@ -266,6 +266,31 @@ impl Shell {
         self.waiting.insert(call, Waiting::FailureContinue);
     }
 
+    /// Picking an account in the usage popup also moves the open conversation onto it, so a
+    /// conversation stopped by one account's limit carries on with the one just picked. Only
+    /// Claude and Codex have per-account conversations, and a working one is left as it is.
+    pub(super) fn switch_conversation_account(&mut self, provider: &'static str, account: String) {
+        let ix = self.active_conversation();
+        let Some(conversation) = self.conversations.get(ix) else {
+            return;
+        };
+        if conversation.provider != provider
+            || !matches!(provider, "claude" | "codex")
+            || conversation.working()
+            || conversation.account == account
+            || conversation.turns.is_empty()
+        {
+            return;
+        }
+        let session = conversation.session_id.clone();
+        let call = self.backend.invoke(
+            "move_session_account",
+            json!({ "request": { "sessionId": session, "accountId": account } }),
+        );
+        self.waiting
+            .insert(call, Waiting::AccountSwitched(session, account));
+    }
+
     fn move_after_failure(&mut self, session: &str, account: &str, approval: &str) {
         let call = self.backend.invoke(
             "move_session_account",

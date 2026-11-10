@@ -21622,7 +21622,9 @@ fn chrome_wash_outside(card: Rc<Cell<Option<Bounds<Pixels>>>>) -> impl IntoEleme
         |_, _, _| {},
         move |bounds, _, window, _| {
             let wash = chrome_wash();
-            let Some(c) = card.get().filter(|c| c.size.width > px(0.) && c.size.height > px(0.))
+            let Some(c) = card
+                .get()
+                .filter(|c| c.size.width > px(0.) && c.size.height > px(0.))
             else {
                 window.paint_quad(gpui::fill(bounds, wash));
                 return;
@@ -21678,7 +21680,12 @@ mod wash_band_tests {
             .sum();
         assert_eq!(area, 100. * 100. - 70. * 65.);
         for b in &bands {
-            assert!(b.right() <= px(20.) || b.left() >= px(90.) || b.bottom() <= px(30.) || b.top() >= px(95.));
+            assert!(
+                b.right() <= px(20.)
+                    || b.left() >= px(90.)
+                    || b.bottom() <= px(30.)
+                    || b.top() >= px(95.)
+            );
         }
     }
 }

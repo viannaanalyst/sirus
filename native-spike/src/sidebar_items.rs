@@ -93,7 +93,13 @@ pub fn place(
     visible.insert(to.min(visible.len()), moved);
     let mut next = visible.into_iter();
     full.iter()
-        .map(|i| if shown(i) { next.next().unwrap_or(*i) } else { *i })
+        .map(|i| {
+            if shown(i) {
+                next.next().unwrap_or(*i)
+            } else {
+                *i
+            }
+        })
         .collect()
 }
 
@@ -221,7 +227,10 @@ mod tests {
     #[test]
     fn moving_a_row_keeps_hidden_entries_in_place() {
         let full = ["new", "pulls", "tasks"];
-        assert_eq!(place(&full, "tasks", 0, |_| true), ["tasks", "new", "pulls"]);
+        assert_eq!(
+            place(&full, "tasks", 0, |_| true),
+            ["tasks", "new", "pulls"]
+        );
         assert_eq!(place(&full, "new", 2, |_| true), ["pulls", "tasks", "new"]);
         // "pulls" is hidden: tasks moves before new, and pulls stays in the middle.
         assert_eq!(

@@ -102,8 +102,8 @@ pub(crate) fn group_summary(total: usize, done: usize) -> String {
     format!("{} · {finished}", tf("{} tarefas delegadas", &[&total]))
 }
 
-/// The provider stack a parent conversation shows for its delegated tasks: each provider once, the
-/// most recent task first, three tiles at most, with the total and whether any waits on the person.
+/// The provider stack a parent conversation shows for its delegated tasks: one tile per task, the
+/// most recent first, three at most and no number, with the total and whether any waits on the person.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TaskStack {
     pub providers: Vec<String>,
@@ -113,15 +113,12 @@ pub(crate) struct TaskStack {
 
 /// Composes a parent row's stack from its children, given oldest first as `nest` returns them.
 pub(crate) fn task_stack(children: &[(String, bool)]) -> TaskStack {
-    let mut providers = Vec::new();
-    for (provider, _) in children.iter().rev() {
-        if providers.len() >= 3 {
-            break;
-        }
-        if !providers.iter().any(|seen| seen == provider) {
-            providers.push(provider.clone());
-        }
-    }
+    let providers = children
+        .iter()
+        .rev()
+        .take(3)
+        .map(|(provider, _)| provider.clone())
+        .collect();
     TaskStack {
         providers,
         count: children.len(),
@@ -290,13 +287,6 @@ impl Shell {
                         provider_glyph(provider, 9.),
                     ))
             }))
-            .child(
-                div()
-                    .ml(px(5.))
-                    .text_size(px(11.))
-                    .text_color(content(0.55))
-                    .child(stack.count.to_string()),
-            )
             .when(stack.waiting, |d| {
                 d.child(
                     div()
@@ -725,7 +715,7 @@ mod tests {
     }
 
     #[test]
-    fn the_stack_keeps_unique_providers_newest_first_and_counts_every_task() {
+    fn the_stack_shows_one_tile_per_task_newest_first_and_counts_every_task() {
         let children = vec![
             ("claude".to_owned(), false),
             ("codex".to_owned(), true),
@@ -735,6 +725,9 @@ mod tests {
         ];
         let stack = task_stack(&children);
         assert_eq!(stack.providers, ["claude", "deepseek", "codex"]);
+        let same = vec![("codex".to_owned(), false); 10];
+        assert_eq!(task_stack(&same).providers, ["codex", "codex", "codex"]);
+        assert_eq!(task_stack(&same[..2]).providers, ["codex", "codex"]);
         assert_eq!(stack.count, 5);
         assert!(stack.waiting);
     }

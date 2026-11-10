@@ -770,6 +770,15 @@ impl Shell {
                     s.bg(content(0.08))
                 }
             })
+            // The main button wears the same pixel weave as the question card's Enviar.
+            .when(primary, |d| {
+                d.relative()
+                    .overflow_hidden()
+                    .child(super::pixel_stripes(Hsla {
+                        a: 0.18,
+                        ..gpui::white()
+                    }))
+            })
             .child(label.to_owned())
             .children(hint.map(|hint| {
                 div()
@@ -924,14 +933,17 @@ impl Shell {
             .pl(px(12.))
             .pr(px(4.))
             .gap(px(2.))
+            .relative()
             .rounded(px(crate::theme::RADIUS_MD))
-            .border_1()
-            .border_color(if focused {
-                accent_wash(0.55)
-            } else {
-                crate::theme::border()
-            })
-            .bg(content(0.03))
+            .bg(crate::theme::black(0.35))
+            .child(super::dashed_frame(
+                crate::theme::RADIUS_MD,
+                if focused {
+                    accent_wash(0.8)
+                } else {
+                    content(0.2)
+                },
+            ))
             .font_family("Menlo")
             .text_size(px(13.5))
             .cursor_text()
@@ -1007,13 +1019,6 @@ impl Shell {
             ])
             .collect();
         let where_label = dest_summary(&dests, &project);
-        let where_icon = if dests.contains(&Dest::Conversation) {
-            "message-square"
-        } else if dests.iter().any(|d| matches!(d, Dest::Infisical(_))) {
-            "key"
-        } else {
-            "file-text"
-        };
         let where_button = div()
             .id("secret-where")
             .flex()
@@ -1032,7 +1037,7 @@ impl Shell {
                 }
                 cx.notify();
             }))
-            .child(icon(where_icon, 13.).text_color(content(0.6)))
+            .child(super::question_marker(true, accent()))
             .child(where_label)
             .child(icon("chevron-down", 12.).text_color(content(0.5)));
         let where_menu = (menu == Some(CardMenu::Where)).then(|| {
@@ -1157,12 +1162,11 @@ impl Shell {
             .flex()
             .items_center()
             .gap(px(8.))
+            .relative()
             .px(px(12.))
             .py(px(10.))
-            .border_t_1()
-            .border_color(crate::theme::border())
-            .bg(content(0.02))
             .rounded_b(px(crate::theme::RADIUS_LG))
+            .child(dotted_rule())
             .children(link.is_some().then(|| {
                 div()
                     .relative()
@@ -1197,12 +1201,16 @@ impl Shell {
 
         div()
             .mb(px(8.))
+            .relative()
+            .overflow_hidden()
             .rounded(px(crate::theme::RADIUS_LG))
             .border_1()
             .border_color(crate::theme::border())
             .bg(field_fill())
             .flex()
             .flex_col()
+            // The approved "A+" look, as the question card: a pixel glow at the card's foot.
+            .child(super::question_dither(accent(), 0.22, false))
             .child(
                 div()
                     .flex()
@@ -1214,13 +1222,16 @@ impl Shell {
                         div()
                             .size(px(34.))
                             .flex_shrink_0()
+                            .relative()
+                            .overflow_hidden()
                             .rounded(px(9.))
                             .border_1()
-                            .border_color(amber(0.25))
-                            .bg(amber(0.11))
+                            .border_color(amber(0.35))
+                            .bg(amber(0.1))
                             .flex()
                             .items_center()
                             .justify_center()
+                            .child(super::question_dither(amber(1.), 0.3, true))
                             .child(icon("lock", 17.).text_color(amber(1.))),
                     )
                     .child(
@@ -1294,7 +1305,14 @@ impl Shell {
                             .mx(px(2.))
                             .text_size(px(11.5))
                             .text_color(content(0.42))
-                            .child(count_text(chars))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(8.))
+                                    .child(pixel_meter(chars, accent()))
+                                    .child(count_text(chars)),
+                            )
                             .child(div().relative().child(where_button).children(where_menu)),
                     ),
             )
@@ -1321,6 +1339,44 @@ impl Shell {
             .child(div().flex_1().min_w_0().child(line.to_owned()))
             .into_any_element()
     }
+}
+
+/// How long the value is, as a short pixel bar: dithered cells fill a share of it (a typical
+/// key is about `FULL` characters) and a dotted track shows the rest.
+fn pixel_meter(chars: usize, tone: Hsla) -> impl IntoElement {
+    const FULL: f32 = 92.;
+    let share = (chars as f32 / FULL).min(1.);
+    gpui::canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            const CELL: f32 = 2.;
+            let w = f32::from(bounds.size.width);
+            let cols = (w / CELL) as u32;
+            for x in 0..cols {
+                let u = x as f32 / cols.max(1) as f32;
+                for y in 0..2u32 {
+                    let on = if u < share {
+                        0.55 + 0.45 * u > crate::project_wallpaper::bayer8(x, y)
+                    } else {
+                        x % 3 == 0 && y == 0
+                    };
+                    if on {
+                        let color = if u < share { tone } else { content(0.2) };
+                        window.paint_quad(gpui::fill(
+                            gpui::Bounds::new(
+                                bounds.origin
+                                    + gpui::point(px(x as f32 * CELL), px(y as f32 * CELL)),
+                                gpui::size(px(CELL - 0.4), px(CELL - 0.4)),
+                            ),
+                            color,
+                        ));
+                    }
+                }
+            }
+        },
+    )
+    .w(px(60.))
+    .h(px(4.))
 }
 
 #[cfg(test)]

@@ -1364,6 +1364,12 @@ pub struct Shell {
     add_query: String,
     goal_input: Option<String>,
     visual_views: std::cell::RefCell<HashMap<String, gpui::AnyView>>,
+    /// The option picked on each waiting question, by request id; a second click unpicks it.
+    question_picks: HashMap<String, usize>,
+    /// The "Ou digite outra resposta…" field of each waiting question, by request id.
+    question_fields: std::cell::RefCell<
+        HashMap<String, (Entity<crate::panel_files::TextField>, gpui::Subscription)>,
+    >,
     native_tx: async_channel::Sender<(&'static str, Value)>,
     agent_versions: HashMap<&'static str, String>,
     /// The header's Puxar button and its popover (git_sync.rs).
@@ -1895,6 +1901,8 @@ impl Shell {
             add_query: String::new(),
             goal_input: None,
             visual_views: Default::default(),
+            question_picks: HashMap::new(),
+            question_fields: Default::default(),
             native_tx,
             agent_versions: HashMap::new(),
             incoming: IncomingState::default(),
@@ -5129,103 +5137,373 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let kind = &request["kind"];
-        let question = kind["type"] == "userInput";
-        let asked = &kind["questions"][0];
+        if kind["type"] == "userInput" {
+            return self.question_card(ix, request, cx);
+        }
+        let what = match kind["type"].as_str() {
+            Some("command") => kind["command"].as_str().unwrap_or("").to_owned(),
+            Some("fileChange") => t("Alterar arquivos").to_owned(),
+            Some("tool") => tf(
+                "Usar a ferramenta {}",
+                &[&kind["name"].as_str().unwrap_or("")],
+            ),
+            _ => t("O agente pede permissão.").to_owned(),
+        };
+        let command = kind["type"] == "command";
+        let reason = kind["reason"].as_str().map(str::to_owned);
+        let (accept, decline) = (request.clone(), request.clone());
+        // The approved "A+" look, as the question card: a pixel glow at the card's foot, the
+        // command in a dashed box, Recusar and Aprovar at the right.
+        div()
+            .relative()
+            .overflow_hidden()
+            .p(px(14.))
+            .rounded(px(crate::theme::RADIUS_LG))
+            .border_1()
+            .border_color(content(0.1))
+            .bg(field_fill())
+            .flex()
+            .flex_col()
+            .child(question_dither(accent(), 0.22, false))
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(content(0.5))
+                    .mb(px(8.))
+                    .child(t("O agente pede permissão")),
+            )
+            .child(
+                div()
+                    .relative()
+                    .px(px(11.))
+                    .py(px(9.))
+                    .rounded(px(crate::theme::RADIUS_MD))
+                    .bg(crate::theme::black(0.35))
+                    .child(dashed_frame(crate::theme::RADIUS_MD, content(0.18)))
+                    .child(
+                        div()
+                            .relative()
+                            .text_size(px(if command { 12.5 } else { 13.5 }))
+                            .when(command, |d| d.font_family("Menlo"))
+                            .line_height(px(19.))
+                            .text_color(content(0.92))
+                            .child(what),
+                    ),
+            )
+            .children(reason.map(|reason| {
+                div()
+                    .mt(px(8.))
+                    .text_size(px(12.))
+                    .line_height(px(17.))
+                    .text_color(content(0.55))
+                    .child(reason)
+            }))
+            .child(
+                div()
+                    .mt(px(12.))
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .gap(px(8.))
+                    .child(
+                        div()
+                            .id(("deny", ix))
+                            .h(px(28.))
+                            .px(px(13.))
+                            .rounded(px(crate::theme::RADIUS_MD))
+                            .border_1()
+                            .border_color(content(0.1))
+                            .bg(content(0.06))
+                            .hover(|s| s.bg(content(0.1)))
+                            .flex()
+                            .items_center()
+                            .cursor_pointer()
+                            .text_size(px(12.5))
+                            .text_color(content(0.85))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.respond(ix, &decline, "decline");
+                                cx.notify();
+                            }))
+                            .child(t("Recusar")),
+                    )
+                    .child(
+                        div()
+                            .id(("allow", ix))
+                            .relative()
+                            .overflow_hidden()
+                            .h(px(28.))
+                            .px(px(13.))
+                            .rounded(px(crate::theme::RADIUS_MD))
+                            .bg(accent())
+                            .flex()
+                            .items_center()
+                            .cursor_pointer()
+                            .hover(|s| s.opacity(0.9))
+                            .text_size(px(12.5))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(on_accent())
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.respond(ix, &accept, "accept");
+                                cx.notify();
+                            }))
+                            .child(pixel_stripes(gpui::Hsla {
+                                a: 0.18,
+                                ..gpui::white()
+                            }))
+                            .child(div().relative().child(t("Aprovar"))),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    /// A question from the agent (the approved "A+" card): its options as rows, a click picking
+    /// one and a second click unpicking it, a field for another answer, then Cancelar and
+    /// Enviar at the right. The card wears the app's pixels: a dithered glow at its foot, the
+    /// picked row filled with dither, square markers and a dashed field.
+    fn question_card(&self, ix: usize, request: &Value, cx: &mut Context<Self>) -> AnyElement {
+        use crate::panel_files::{TextField, TextFieldEvent};
+        let asked = &request["kind"]["questions"][0];
+        let request_id = request["requestId"].as_str().unwrap_or("").to_owned();
         let question_id = asked["id"].as_str().unwrap_or("").to_owned();
+        let text = asked["question"]
+            .as_str()
+            .unwrap_or(t("O agente fez uma pergunta."))
+            .to_owned();
         let options: Vec<String> = asked["options"]
             .as_array()
             .into_iter()
             .flatten()
             .filter_map(|o| o["label"].as_str().map(str::to_owned))
             .collect();
-        let what = match kind["type"].as_str() {
-            Some("command") => tf("Executar: {}", &[&kind["command"].as_str().unwrap_or("")]),
-            Some("fileChange") => t("Alterar arquivos").to_owned(),
-            Some("tool") => tf(
-                "Usar a ferramenta {}",
-                &[&kind["name"].as_str().unwrap_or("")],
-            ),
-            _ => asked["question"]
-                .as_str()
-                .unwrap_or(t("O agente fez uma pergunta."))
-                .to_owned(),
+        let picked = self.question_picks.get(&request_id).copied();
+        let field = {
+            let mut fields = self.question_fields.borrow_mut();
+            fields
+                .entry(request_id.clone())
+                .or_insert_with(|| {
+                    let field = cx.new(|cx| TextField::new(t("Ou digite outra resposta…"), cx));
+                    let (request, question_id) = (request.clone(), question_id.clone());
+                    let subscription = cx.subscribe(
+                        &field,
+                        move |this, _, event: &TextFieldEvent, cx| match event {
+                            TextFieldEvent::Submit => {
+                                this.send_question(ix, &request, &question_id, cx)
+                            }
+                            TextFieldEvent::Cancel => this.cancel_question(ix, &request, cx),
+                            TextFieldEvent::Changed => cx.notify(),
+                        },
+                    );
+                    (field, subscription)
+                })
+                .0
+                .clone()
         };
-        let (accept, decline, asked_request) = (request.clone(), request.clone(), request.clone());
-        let button = |id: &'static str, label: &'static str, main: bool| {
+        let typed = !field.read(cx).text().trim().is_empty();
+        let ready = typed || picked.is_some();
+        let tone = accent();
+        let rows = options.iter().enumerate().map(|(i, label)| {
+            let on = picked == Some(i);
+            let key = request_id.clone();
             div()
-                .id((id, ix))
-                .h(px(26.))
+                .id(("question-option", ix * 64 + i))
+                .relative()
+                .overflow_hidden()
+                .h(px(34.))
                 .px(px(10.))
                 .rounded(px(crate::theme::RADIUS_MD))
+                .border_1()
+                .border_color(if on {
+                    gpui::Hsla { a: 0.7, ..tone }
+                } else {
+                    content(0.06)
+                })
+                .bg(if on {
+                    gpui::transparent_black()
+                } else {
+                    content(0.02)
+                })
+                .when(!on, |d| d.hover(|s| s.bg(content(0.06))))
                 .flex()
                 .items_center()
-                .text_size(px(12.5))
+                .gap(px(10.))
                 .cursor_pointer()
-                .text_color(if main { on_accent() } else { content(0.85) })
-                .bg(if main { accent() } else { content(0.08) })
-                .hover(|s| s.opacity(0.88))
-                .child(label)
+                .text_size(px(13.))
+                .text_color(if on { content(1.) } else { content(0.85) })
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if this.question_picks.get(&key) == Some(&i) {
+                        this.question_picks.remove(&key);
+                    } else {
+                        this.question_picks.insert(key.clone(), i);
+                    }
+                    cx.notify();
+                }))
+                .when(on, |d| d.child(question_dither(tone, 0.38, true)))
+                .child(
+                    div()
+                        .w(px(14.))
+                        .text_size(px(11.))
+                        .font_family("Menlo")
+                        .text_color(content(0.45))
+                        .child((i + 1).to_string()),
+                )
+                .child(div().flex_1().min_w_0().truncate().child(label.clone()))
+                .child(question_marker(on, tone))
+        });
+        let hint = match picked.and_then(|i| options.get(i)) {
+            _ if typed => t("Resposta digitada").to_owned(),
+            Some(label) => tf("Escolhido: {}", &[label]),
+            None => t("Escolha ou digite").to_owned(),
         };
+        let (send_request, send_question) = (request.clone(), question_id.clone());
+        let cancel_request = request.clone();
         div()
+            .relative()
+            .overflow_hidden()
+            .p(px(14.))
+            .rounded(px(crate::theme::RADIUS_LG))
+            .border_1()
+            .border_color(content(0.1))
+            .bg(field_fill())
+            .flex()
+            .flex_col()
+            .child(question_dither(tone, 0.22, false))
             .child(
                 div()
-                    .p(px(10.))
-                    .rounded(px(crate::theme::RADIUS_LG))
-                    .border_1()
-                    .border_color(accent_wash(0.4))
-                    .bg(field_fill())
+                    .text_size(px(11.))
+                    .text_color(content(0.5))
+                    .mb(px(6.))
+                    .child(t("Pergunta do agente")),
+            )
+            .child(
+                div()
+                    .text_size(px(13.5))
+                    .line_height(px(20.))
+                    .text_color(content(0.95))
+                    .mb(px(12.))
+                    .child(text),
+            )
+            .child(div().flex().flex_col().gap(px(6.)).children(rows))
+            .child(
+                div()
+                    .relative()
+                    .mt(px(10.))
+                    .h(px(36.))
+                    .px(px(11.))
+                    .rounded(px(crate::theme::RADIUS_MD))
+                    .bg(crate::theme::black(0.35))
                     .flex()
                     .items_center()
-                    .gap(px(10.))
+                    .child(dashed_frame(crate::theme::RADIUS_MD, content(0.18)))
+                    .child(div().flex_1().min_w_0().child(field)),
+            )
+            .child(
+                div()
+                    .mt(px(12.))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
-                            .text_size(px(13.))
-                            .text_color(content(0.9))
-                            .child(what),
+                            .truncate()
+                            .text_size(px(11.))
+                            .text_color(content(0.45))
+                            .child(hint),
                     )
-                    .when(question, |d| {
-                        d.children(options.into_iter().enumerate().map(|(i, label)| {
-                            let (request, question_id, answer) =
-                                (asked_request.clone(), question_id.clone(), label.clone());
-                            div()
-                                .id(("answer", ix * 64 + i))
-                                .h(px(26.))
-                                .px(px(10.))
-                                .rounded(px(crate::theme::RADIUS_MD))
-                                .flex()
-                                .items_center()
-                                .text_size(px(12.5))
-                                .cursor_pointer()
-                                .text_color(content(0.9))
-                                .bg(content(0.08))
-                                .hover(|s| s.bg(content(0.14)))
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.answer(ix, &request, &question_id, &answer);
-                                    cx.notify();
-                                }))
-                                .child(label)
-                        }))
-                    })
-                    .when(!question, |d| {
-                        d.child(button("deny", t("Recusar"), false).on_click(cx.listener(
-                            move |this, _, _, cx| {
-                                this.respond(ix, &decline, "decline");
-                                cx.notify();
-                            },
-                        )))
-                        .child(
-                            button("allow", t("Aprovar"), true).on_click(cx.listener(
-                                move |this, _, _, cx| {
-                                    this.respond(ix, &accept, "accept");
-                                    cx.notify();
-                                },
-                            )),
-                        )
-                    }),
+                    .child(
+                        div()
+                            .id(("question-cancel", ix))
+                            .h(px(28.))
+                            .px(px(13.))
+                            .rounded(px(crate::theme::RADIUS_MD))
+                            .border_1()
+                            .border_color(content(0.1))
+                            .bg(content(0.06))
+                            .hover(|s| s.bg(content(0.1)))
+                            .flex()
+                            .items_center()
+                            .cursor_pointer()
+                            .text_size(px(12.5))
+                            .text_color(content(0.85))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.cancel_question(ix, &cancel_request, cx)
+                            }))
+                            .child(t("Cancelar")),
+                    )
+                    .child(
+                        div()
+                            .id(("question-send", ix))
+                            .relative()
+                            .overflow_hidden()
+                            .h(px(28.))
+                            .px(px(13.))
+                            .rounded(px(crate::theme::RADIUS_MD))
+                            .bg(tone)
+                            .flex()
+                            .items_center()
+                            .text_size(px(12.5))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(on_accent())
+                            .when(!ready, |d| d.opacity(0.35))
+                            .when(ready, |d| {
+                                d.cursor_pointer()
+                                    .hover(|s| s.opacity(0.9))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.send_question(ix, &send_request, &send_question, cx)
+                                    }))
+                            })
+                            .child(pixel_stripes(gpui::Hsla {
+                                a: 0.18,
+                                ..gpui::white()
+                            }))
+                            .child(div().relative().child(t("Enviar"))),
+                    ),
             )
             .into_any_element()
+    }
+
+    /// Sends the typed answer, or the picked option when nothing is typed.
+    fn send_question(
+        &mut self,
+        ix: usize,
+        request: &Value,
+        question_id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let key = request["requestId"].as_str().unwrap_or("").to_owned();
+        let typed = self
+            .question_fields
+            .borrow()
+            .get(&key)
+            .map(|(field, _)| field.read(cx).text().trim().to_owned())
+            .unwrap_or_default();
+        let answer = if typed.is_empty() {
+            let Some(i) = self.question_picks.get(&key).copied() else {
+                return;
+            };
+            match request["kind"]["questions"][0]["options"][i]["label"].as_str() {
+                Some(label) => label.to_owned(),
+                None => return,
+            }
+        } else {
+            typed
+        };
+        self.answer(ix, request, question_id, &answer);
+        self.forget_question(&key);
+        cx.notify();
+    }
+
+    /// Cancelar: the agent hears that the person declined to answer.
+    fn cancel_question(&mut self, ix: usize, request: &Value, cx: &mut Context<Self>) {
+        self.respond(ix, request, "decline");
+        self.forget_question(request["requestId"].as_str().unwrap_or(""));
+        cx.notify();
+    }
+
+    fn forget_question(&mut self, key: &str) {
+        self.question_picks.remove(key);
+        self.question_fields.borrow_mut().remove(key);
     }
 
     fn respond(&mut self, ix: usize, request: &Value, decision: &str) {
@@ -8889,67 +9167,87 @@ impl Shell {
                     div()
                         .id("confirm-card")
                         .relative()
+                        .overflow_hidden()
                         .top(px((1. - shown) * 6.))
-                        .w(px(300.))
-                        .p(px(18.))
+                        .w(px(400.))
+                        .p(px(14.))
                         .flex()
                         .flex_col()
-                        .items_center()
                         .opacity(shown)
                         .rounded(px(crate::theme::RADIUS_LG))
                         .border_1()
                         .border_color(crate::theme::border())
                         .child(crate::theme::floating_surface(crate::theme::RADIUS_LG))
+                        // The approved look: a pixel glow at the foot, red for a destructive ask.
+                        .child(question_dither(danger, 0.22, false))
                         .shadow_lg()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(
                             div()
-                                .size(px(38.))
-                                .mb(px(10.))
-                                .rounded_full()
-                                .bg(gpui::Hsla { a: 0.12, ..danger })
+                                .flex()
+                                .gap(px(12.))
+                                .items_start()
+                                .child(
+                                    div()
+                                        .relative()
+                                        .overflow_hidden()
+                                        .size(px(30.))
+                                        .flex_shrink_0()
+                                        .rounded(px(9.))
+                                        .border_1()
+                                        .border_color(gpui::Hsla { a: 0.4, ..danger })
+                                        .bg(gpui::Hsla { a: 0.1, ..danger })
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .child(question_dither(danger, 0.3, true))
+                                        .child(icon("trash", 15.).text_color(danger)),
+                                )
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .flex()
+                                        .flex_col()
+                                        .gap(px(3.))
+                                        .child(
+                                            div()
+                                                .text_size(px(14.))
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .text_color(content(0.97))
+                                                .child(dialog.title.clone()),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(12.5))
+                                                .line_height(px(18.))
+                                                .text_color(content(0.6))
+                                                .child(dialog.message.clone()),
+                                        ),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .mt(px(14.))
                                 .flex()
                                 .items_center()
-                                .justify_center()
-                                .child(icon("trash", 18.).text_color(danger)),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(15.))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(content(0.97))
-                                .child(dialog.title.clone()),
-                        )
-                        .child(
-                            div()
-                                .mt(px(6.))
-                                .text_center()
-                                .text_size(px(12.5))
-                                .line_height(px(18.))
-                                .text_color(content(0.6))
-                                .child(dialog.message.clone()),
-                        )
-                        .child(
-                            div()
-                                .mt(px(16.))
-                                .w_full()
-                                .flex()
+                                .justify_end()
                                 .gap(px(8.))
                                 .child(
                                     div()
                                         .id("confirm-cancel")
-                                        .flex_1()
-                                        .h(px(30.))
+                                        .h(px(28.))
+                                        .px(px(13.))
                                         .rounded(px(crate::theme::RADIUS_MD))
+                                        .border_1()
+                                        .border_color(content(0.1))
                                         .bg(content(0.06))
                                         .flex()
                                         .items_center()
-                                        .justify_center()
                                         .text_size(px(12.5))
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .text_color(content(0.8))
+                                        .text_color(content(0.85))
                                         .cursor_pointer()
-                                        .hover(|s| s.bg(content(0.07)))
+                                        .hover(|s| s.bg(content(0.1)))
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.answer_confirm(false, cx)
                                         }))
@@ -8958,22 +9256,27 @@ impl Shell {
                                 .child(
                                     div()
                                         .id("confirm-yes")
-                                        .flex_1()
-                                        .h(px(30.))
+                                        .relative()
+                                        .overflow_hidden()
+                                        .h(px(28.))
+                                        .px(px(13.))
                                         .rounded(px(crate::theme::RADIUS_MD))
                                         .bg(rgb(0xc9504a))
                                         .flex()
                                         .items_center()
-                                        .justify_center()
                                         .text_size(px(12.5))
-                                        .font_weight(FontWeight::MEDIUM)
+                                        .font_weight(FontWeight::SEMIBOLD)
                                         .text_color(gpui::white())
                                         .cursor_pointer()
-                                        .hover(|s| s.bg(rgb(0xd5605a)))
+                                        .hover(|s| s.opacity(0.9))
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.answer_confirm(true, cx)
                                         }))
-                                        .child(dialog.action_label.clone()),
+                                        .child(pixel_stripes(gpui::Hsla {
+                                            a: 0.18,
+                                            ..gpui::white()
+                                        }))
+                                        .child(div().relative().child(dialog.action_label.clone())),
                                 ),
                         ),
                 )
@@ -19473,6 +19776,200 @@ fn toggled(button: Stateful<Div>, on: bool) -> Stateful<Div> {
 
 /// Rounds what a card paints at its corners: GPUI clips to rectangles, so the renderer masks
 /// them, and the chrome's wash fills outside the curve.
+/// The question card's dither: a glow at the foot of the card (`row` false) or a fill that
+/// thickens to the right inside the picked row (`row` true), 2 px cells in `tone` at `alpha`.
+pub(crate) fn question_dither(tone: gpui::Hsla, alpha: f32, row: bool) -> impl IntoElement {
+    let color = gpui::Hsla { a: alpha, ..tone };
+    gpui::canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            const CELL: f32 = 2.;
+            let (w, h) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
+            let (cols, rows) = ((w / CELL) as u32, (h / CELL) as u32);
+            for y in 0..rows {
+                for x in 0..cols {
+                    let (u, v) = (x as f32 / cols.max(1) as f32, y as f32 / rows.max(1) as f32);
+                    let level = if row {
+                        0.18 + 0.5 * u.powf(1.6)
+                    } else {
+                        let d = (((u - 0.5) / 0.75).powi(2) + ((v - 1.1) / 0.55).powi(2)).sqrt();
+                        (1. - d).max(0.) * 0.42
+                    };
+                    if level > crate::project_wallpaper::bayer8(x, y) {
+                        window.paint_quad(gpui::fill(
+                            Bounds::new(
+                                bounds.origin
+                                    + gpui::point(px(x as f32 * CELL), px(y as f32 * CELL)),
+                                gpui::size(px(CELL - 0.4), px(CELL - 0.4)),
+                            ),
+                            color,
+                        ));
+                    }
+                }
+            }
+        },
+    )
+    .absolute()
+    .top_0()
+    .left_0()
+    .size_full()
+}
+
+/// A question option's marker: a checker of pixels, or a filled square ringed in `tone` once
+/// picked.
+pub(crate) fn question_marker(on: bool, tone: gpui::Hsla) -> impl IntoElement {
+    let off = content(0.35);
+    div()
+        .flex_shrink_0()
+        .size(px(14.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            gpui::canvas(
+                |_, _, _| {},
+                move |bounds, _, window, _| {
+                    let o = bounds.origin;
+                    if on {
+                        window.paint_quad(gpui::quad(
+                            bounds,
+                            px(2.),
+                            gpui::transparent_black(),
+                            px(1.),
+                            tone,
+                            gpui::BorderStyle::Solid,
+                        ));
+                        window.paint_quad(gpui::fill(
+                            Bounds::new(
+                                o + gpui::point(px(3.), px(3.)),
+                                gpui::size(px(8.), px(8.)),
+                            ),
+                            tone,
+                        ));
+                    } else {
+                        for y in 0..5u32 {
+                            for x in 0..5u32 {
+                                if (x + y) % 2 == 0 {
+                                    window.paint_quad(gpui::fill(
+                                        Bounds::new(
+                                            o + gpui::point(
+                                                px(2. + x as f32 * 2.),
+                                                px(2. + y as f32 * 2.),
+                                            ),
+                                            gpui::size(px(2.), px(2.)),
+                                        ),
+                                        off,
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                },
+            )
+            .size(px(14.)),
+        )
+}
+
+/// A dashed outline over a box, `radius` round.
+pub(crate) fn dashed_frame(radius: f32, color: gpui::Hsla) -> impl IntoElement {
+    gpui::canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            window.paint_quad(gpui::quad(
+                bounds,
+                px(radius),
+                gpui::transparent_black(),
+                px(1.),
+                color,
+                gpui::BorderStyle::Dashed,
+            ));
+        },
+    )
+    .absolute()
+    .top_0()
+    .left_0()
+    .size_full()
+}
+
+/// A dotted rule along the top of the card's button bar.
+pub(crate) fn dotted_rule() -> impl IntoElement {
+    gpui::canvas(
+        |_, _, _| {},
+        |bounds, _, window, _| {
+            let w = f32::from(bounds.size.width);
+            let mut x = 0.;
+            while x < w {
+                window.paint_quad(gpui::fill(
+                    gpui::Bounds::new(
+                        bounds.origin + gpui::point(px(x), px(0.)),
+                        gpui::size(px(2.), px(1.)),
+                    ),
+                    content(0.14),
+                ));
+                x += 5.;
+            }
+        },
+    )
+    .absolute()
+    .top_0()
+    .left_0()
+    .right_0()
+    .h(px(1.))
+}
+
+/// The time left on a toast as a row of 2 px cells along its foot, one in four left out, `share`
+/// of the width still lit.
+pub(crate) fn pixel_timer(share: f32) -> impl IntoElement {
+    gpui::canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            let cols = (f32::from(bounds.size.width) / 2.).floor() as u32;
+            let lit = (cols as f32 * share.clamp(0., 1.)).round() as u32;
+            for x in 0..lit {
+                if (x + 1) % 4 != 0 {
+                    window.paint_quad(gpui::fill(
+                        Bounds::new(
+                            bounds.origin + gpui::point(px(x as f32 * 2.), px(0.)),
+                            gpui::size(px(2.), px(2.)),
+                        ),
+                        content(0.5),
+                    ));
+                }
+            }
+        },
+    )
+    .absolute()
+    .bottom_0()
+    .left_0()
+    .right_0()
+    .h(px(2.))
+}
+
+/// Thin vertical stripes every 2 px, a pixel weave over a button.
+pub(crate) fn pixel_stripes(color: gpui::Hsla) -> impl IntoElement {
+    gpui::canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            let w = f32::from(bounds.size.width);
+            let mut x = 0.;
+            while x < w {
+                window.paint_quad(gpui::fill(
+                    Bounds::new(
+                        bounds.origin + gpui::point(px(x), px(0.)),
+                        gpui::size(px(1.), bounds.size.height),
+                    ),
+                    color,
+                ));
+                x += 2.;
+            }
+        },
+    )
+    .absolute()
+    .top_0()
+    .left_0()
+    .size_full()
+}
+
 fn card_corner_mask(begin: bool) -> impl IntoElement {
     const RADIUS: f32 = crate::theme::RADIUS_LG;
     gpui::canvas(

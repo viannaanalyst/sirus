@@ -1662,6 +1662,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Escolha os padrões para novas sessões e para a navegação.",
         "Choose defaults for new sessions and for navigation.",
     ),
+    ("Escolha ou digite", "Pick or type"),
     (
         "Escolha pelo menos um domínio para importar.",
         "Pick at least one domain to import.",
@@ -1719,6 +1720,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Escolher projeto", "Choose a project"),
     ("Escolher uma imagem", "Choose an image"),
     ("Escolher uma pasta…", "Choose a folder…"),
+    ("Escolhido: {}", "Picked: {}"),
     ("Esconder arquivos ignorados", "Hide ignored files"),
     (
         "Escreva a meta e aperte Enter",
@@ -3409,6 +3411,8 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("O agente está trabalhando…", "The agent is working…"),
     ("O agente fez uma pergunta.", "The agent asked a question."),
+    ("O agente pede permissão", "The agent asks for permission"),
+    ("O agente pede permissão.", "The agent asks for permission."),
     (
         "O agente quer entrar em {} como {}",
         "The agent wants to sign in to {} as {}",
@@ -4023,6 +4027,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Or tell the agent what to do instead (declines the approval)…",
     ),
     ("Ou digite no app", "Or type in the app"),
+    ("Ou digite outra resposta…", "Or type another answer…"),
     (
         "Outra conta não é compatível com este provedor, ou o limite de perfis foi atingido.",
         "Another account is not supported for this provider or the profile limit was reached.",
@@ -4128,6 +4133,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Pergunta antes de fechar uma aba do terminal; o shell e o histórico dela terminam.",
         "Ask before closing a terminal tab; its shell and history end.",
     ),
+    ("Pergunta do agente", "The agent asks"),
     ("Perguntar", "Ask"),
     ("Perguntar sempre", "Ask every time"),
     ("Perguntas do agente", "Questions from the agent"),
@@ -4431,6 +4437,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Answer every native question exactly once",
     ),
     ("Responder", "Reply"),
+    ("Resposta digitada", "Typed answer"),
     ("Resposta do", "Reply from"),
     (
         "Resposta do Codex desatualizada ou de outra conversa",

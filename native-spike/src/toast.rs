@@ -14,7 +14,9 @@ use std::time::Duration;
 const SHOWN_FOR: Duration = Duration::from_secs(8);
 /// How often the clock looks; a hovered or running card holds it still.
 const TICK: Duration = Duration::from_millis(200);
-const WIDTH: f32 = 480.;
+const WIDTH: f32 = 330.;
+/// The hover group that shows a toast's ✕.
+const GROUP: &str = "toast-frame";
 /// A card comes down this far while it fades in.
 const SLIDE: f32 = 14.;
 const SLIDE_TIME: f32 = 0.26;
@@ -259,13 +261,26 @@ impl Shell {
                     .on_click(cx.listener(|this, _, _, cx| this.resolve_conflict_with_agent(cx))),
                 );
         }
+        // A conflict's three actions don't fit beside the words in a compact toast: they go to a
+        // row of their own under it.
+        let actions = if conflict {
+            actions.w_full().justify_end()
+        } else {
+            actions
+        };
         let card = frame(format!("problem-toast-{serial}"))
+            .when(conflict, |d| d.flex_wrap().gap_y(px(8.)))
             .on_hover(cx.listener(|this, hovered: &bool, _, _| {
                 this.toasts.problem_hovered = *hovered;
             }))
             .child(badge(mark, color))
             .child(words(title, detail, content(0.55)))
             .child(actions)
+            .when(!conflict, |d| {
+                d.child(super::pixel_timer(
+                    1. - self.toasts.problem_up.as_secs_f32() / SHOWN_FOR.as_secs_f32(),
+                ))
+            })
             .child(
                 close_button("problem-toast-close").on_click(cx.listener(|this, _, _, cx| {
                     this.problem = None;
@@ -284,10 +299,7 @@ impl Shell {
                 let detail = if offer.progress == Progress::Running {
                     t("Atualizando…").to_owned()
                 } else if offer.command {
-                    tf(
-                        "Você está na {}. Atualizar não interrompe o que está rodando.",
-                        &[&offer.installed],
-                    )
+                    format!("{} → {}", offer.installed, offer.latest)
                 } else {
                     crate::i18n::from_host(&offer.notice)
                 };
@@ -333,6 +345,11 @@ impl Shell {
             .child(mark)
             .child(words(title, detail, detail_color))
             .child(actions)
+            .when(offer.progress != Progress::Running, |d| {
+                d.child(super::pixel_timer(
+                    1. - offer.shown.as_secs_f32() / SHOWN_FOR.as_secs_f32(),
+                ))
+            })
             .child(
                 close_button(format!("offer-close-{serial}")).on_click(cx.listener(
                     move |this, _, _, cx| {
@@ -669,17 +686,22 @@ impl Shell {
 fn frame(id: String) -> gpui::Stateful<gpui::Div> {
     div()
         .id(gpui::SharedString::from(id))
+        .group(GROUP)
         .relative()
+        .overflow_hidden()
         .w(px(WIDTH))
         .rounded(px(crate::theme::RADIUS_LG))
         .border_1()
         .border_color(crate::theme::border())
         .shadow_lg()
-        .p(px(12.))
+        .px(px(10.))
+        .py(px(9.))
         .flex()
         .items_center()
-        .gap(px(12.))
+        .gap(px(9.))
         .child(crate::theme::floating_surface(crate::theme::RADIUS_LG))
+        // The approved look: a pixel glow at the foot, like the question and secret cards.
+        .child(super::question_dither(crate::theme::accent(), 0.2, false))
         .occlude()
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
 }
@@ -703,7 +725,7 @@ fn badge(glyph: &'static str, color: u32) -> gpui::Div {
     let base: gpui::Hsla = rgb(color).into();
     square(base).child(
         div()
-            .text_size(px(14.))
+            .text_size(px(13.))
             .font_weight(FontWeight::BOLD)
             .text_color(base)
             .child(glyph),
@@ -712,14 +734,14 @@ fn badge(glyph: &'static str, color: u32) -> gpui::Div {
 
 /// The provider's own mark on a tinted square of its brand colour.
 fn provider_mark_badge(provider: &str) -> gpui::Div {
-    square(rgb(provider_brand(provider)).into()).child(crate::shell::provider_mark(provider, 16.))
+    square(rgb(provider_brand(provider)).into()).child(crate::shell::provider_mark(provider, 14.))
 }
 
 fn square(base: gpui::Hsla) -> gpui::Div {
     div()
         .flex_shrink_0()
-        .size(px(28.))
-        .rounded(px(crate::theme::RADIUS_SM))
+        .size(px(24.))
+        .rounded(px(6.))
         .bg(gpui::Hsla { a: 0.16, ..base })
         .flex()
         .items_center()
@@ -733,22 +755,22 @@ fn words(title: String, detail: Option<String>, detail_color: gpui::Hsla) -> gpu
         .min_w_0()
         .flex()
         .flex_col()
-        .gap(px(2.))
+        .gap(px(1.))
         .child(
             div()
+                .truncate()
                 .text_size(px(13.))
-                .line_height(px(18.))
+                .line_height(px(17.))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(content(0.92))
-                .line_clamp(3)
                 .child(title),
         );
     match detail {
         Some(detail) => block.child(
             div()
-                .text_size(px(12.))
-                .line_height(px(16.))
-                .line_clamp(2)
+                .truncate()
+                .text_size(px(11.5))
+                .line_height(px(15.))
                 .text_color(detail_color)
                 .child(detail),
         ),
@@ -765,8 +787,10 @@ fn action(id: String, label: &'static str, primary: bool) -> gpui::Stateful<gpui
     };
     div()
         .id(gpui::SharedString::from(id))
-        .h(px(26.))
-        .px(px(10.))
+        .relative()
+        .overflow_hidden()
+        .h(px(24.))
+        .px(px(11.))
         .rounded(px(crate::theme::RADIUS_SM))
         .flex()
         .items_center()
@@ -781,14 +805,26 @@ fn action(id: String, label: &'static str, primary: bool) -> gpui::Stateful<gpui
         .bg(fill)
         .cursor_pointer()
         .hover(|s| s.opacity(0.85))
-        .child(label)
+        // The main action wears the pixel weave of the question card's Enviar.
+        .when(primary, |d| {
+            d.child(super::pixel_stripes(gpui::Hsla {
+                a: 0.18,
+                ..gpui::white()
+            }))
+        })
+        .child(div().relative().child(label))
 }
 
 fn close_button(id: impl Into<gpui::ElementId>) -> gpui::Stateful<gpui::Div> {
+    // Out of the way until the pointer is over the toast, in its top right corner.
     div()
         .id(id)
-        .flex_shrink_0()
-        .size(px(20.))
+        .absolute()
+        .top(px(3.))
+        .right(px(3.))
+        .size(px(16.))
+        .opacity(0.)
+        .group_hover(GROUP, |s| s.opacity(1.))
         .rounded_full()
         .flex()
         .items_center()

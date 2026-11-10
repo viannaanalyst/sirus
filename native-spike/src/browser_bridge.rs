@@ -439,73 +439,108 @@ fn card(
     on_deny: impl Fn(&mut App) + 'static,
 ) -> AnyElement {
     let button = |key: &'static str, label: &'static str, main: bool| {
-        div()
+        let base = div()
             .id((key, id.1))
-            .h(px(26.))
-            .px(px(10.))
+            .relative()
+            .overflow_hidden()
+            .h(px(28.))
+            .px(px(13.))
             .rounded(px(crate::theme::RADIUS_MD))
             .flex()
             .items_center()
             .cursor_pointer()
             .text_size(px(12.5))
-            .text_color(if main {
-                theme::on_accent()
-            } else {
-                theme::content(0.85)
-            })
-            .bg(if main {
-                theme::accent()
-            } else {
-                theme::content(0.08)
-            })
-            .hover(|s| s.opacity(0.88))
-            .child(label)
+            .hover(|s| s.opacity(0.9));
+        if main {
+            base.font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(theme::on_accent())
+                .bg(theme::accent())
+                .child(crate::shell::pixel_stripes(gpui::Hsla {
+                    a: 0.18,
+                    ..gpui::white()
+                }))
+                .child(div().relative().child(label))
+        } else {
+            base.text_color(theme::content(0.85))
+                .border_1()
+                .border_color(theme::content(0.1))
+                .bg(theme::content(0.06))
+                .child(label)
+        }
     };
+    let amber: gpui::Hsla = gpui::rgb(0xe8b05c).into();
     div()
         .id(id)
         .mb(px(8.))
-        .p(px(10.))
+        .p(px(14.))
         .rounded(px(crate::theme::RADIUS_LG))
         .border_1()
         .border_color(theme::accent_wash(0.4))
         .relative()
+        .overflow_hidden()
         // The composer's own glass, so the card reads as part of it, not a dark plate above it.
         .child(theme::composer_surface(crate::theme::RADIUS_LG - 1.))
+        // The approved look: a pixel glow at the foot and a textured icon, as the secret card.
+        .child(crate::shell::question_dither(theme::accent(), 0.22, false))
         .flex()
-        .items_start()
-        .gap(px(10.))
-        .child(
-            theme::icon(glyph, 15.)
-                .text_color(theme::accent())
-                .mt(px(1.)),
-        )
+        .flex_col()
         .child(
             div()
-                .flex_1()
-                .min_w_0()
                 .flex()
-                .flex_col()
-                .gap(px(3.))
+                .items_start()
+                .gap(px(12.))
                 .child(
                     div()
-                        .text_size(px(13.))
-                        .text_color(theme::content(0.95))
-                        .child(title),
-                )
-                .child(
-                    div()
-                        .text_size(px(11.5))
-                        .text_color(theme::content(0.5))
-                        .child(body),
-                )
-                .child(
-                    div()
-                        .mt(px(6.))
+                        .relative()
+                        .overflow_hidden()
+                        .size(px(30.))
+                        .flex_shrink_0()
+                        .rounded(px(9.))
+                        .border_1()
+                        .border_color(gpui::Hsla { a: 0.4, ..amber })
+                        .bg(gpui::Hsla { a: 0.1, ..amber })
                         .flex()
-                        .gap(px(6.))
-                        .child(button("allow", allow, true).on_click(move |_, _, cx| on_allow(cx)))
-                        .child(button("deny", deny, false).on_click(move |_, _, cx| on_deny(cx))),
+                        .items_center()
+                        .justify_center()
+                        .child(crate::shell::question_dither(amber, 0.3, true))
+                        .child(theme::icon(glyph, 15.).text_color(amber)),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .gap(px(3.))
+                        .child(
+                            div()
+                                .text_size(px(14.))
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .text_color(theme::content(0.95))
+                                .child(title),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(12.5))
+                                .line_height(px(18.))
+                                .text_color(theme::content(0.55))
+                                .child(body),
+                        ),
                 ),
+        )
+        // The main action at the far right, a dotted rule above the row.
+        .child(
+            div()
+                .relative()
+                .mt(px(12.))
+                .pt(px(12.))
+                .flex()
+                .items_center()
+                .justify_end()
+                .gap(px(8.))
+                .child(crate::shell::dotted_rule())
+                .child(button("deny", deny, false).on_click(move |_, _, cx| on_deny(cx)))
+                .child(button("allow", allow, true).on_click(move |_, _, cx| on_allow(cx))),
         )
         .into_any_element()
 }

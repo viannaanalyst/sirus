@@ -740,7 +740,7 @@ const USAGE_TABS_ROW: f32 = 38.;
 /// The account row above the limits block, drawn only when the provider reports an account.
 const USAGE_ACCOUNT_ROW: f32 = 44.;
 /// One limit row: its padding, the name and percentage, the bar and the dim line.
-const USAGE_LIMIT_ROW: f32 = 62.;
+const USAGE_LIMIT_ROW: f32 = 66.;
 
 /// The card's height for `rows` limit rows. Each row keeps its own height instead of sharing the
 /// block, so three limits never overlap and two leave no empty stretch (ADR-198).
@@ -4595,7 +4595,9 @@ impl Shell {
                 .as_str()
                 .is_some_and(|id| id.starts_with("base_model_inference/"))
         });
-        let height = usage_popup_height(windows.len(), tabs.len() > 1, account.is_some());
+        // One fixed size for every provider: the tallest case (three limits, tabs, an account), so
+        // switching providers never resizes the card.
+        let height = usage_popup_height(3, true, true);
         let cards: Vec<AnyElement> = windows
             .iter()
             .enumerate()
@@ -4616,7 +4618,7 @@ impl Shell {
                 if let Some(used) = used {
                     foot.push(tf(
                         "{}% restante",
-                        &[&format!("{:.0}%", (100. - used).max(0.))],
+                        &[&format!("{:.0}", (100. - used).max(0.))],
                     ));
                 }
                 if let Some(reset) = reset {
@@ -20807,7 +20809,7 @@ mod tests {
     #[test]
     fn usage_popup_fits_its_limit_rows_without_stretching() {
         // Three limits are the tallest case and the design's 392 px card.
-        assert_eq!(usage_popup_height(3, true, true), 392.);
+        assert_eq!(usage_popup_height(3, true, true), 404.);
         // Each row keeps its own height, so two limits free exactly two rows and no stretch is
         // left over for them to share.
         let two = usage_popup_height(2, true, true);

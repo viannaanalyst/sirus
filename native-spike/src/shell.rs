@@ -594,6 +594,14 @@ impl Execution {
     }
 }
 
+/// What the model catalog popover chooses for: the composer's conversation, or the New Task
+/// modal's draft (tasks_page.rs). Favourites and the search are shared.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum ModelTarget {
+    Composer,
+    Task,
+}
+
 struct ModelRow {
     provider: &'static str,
     id: String,
@@ -5438,6 +5446,10 @@ impl Shell {
             return Some(&mut self.ignored_text);
         }
         if self.term.tasks_active {
+            // The model list's search takes the typing while it is open over the modal.
+            if self.tasks_page.model_open() {
+                return Some(&mut self.model_query);
+            }
             return Some(self.tasks_page.text_target(&mut self.ignored_text));
         }
         if self.appearance.is_some() {
@@ -13001,7 +13013,24 @@ impl Shell {
     /// The rows for a scope, as Sirus's `pickerModelChoices`: the newest of each model line,
     /// keeping anything favorited, selected or found by a search.
     fn model_rows(&self) -> Vec<ModelRow> {
-        let conversation = &self.conversations[self.active_conversation()];
+        self.model_rows_for(ModelTarget::Composer)
+    }
+
+    /// The provider and model the catalog marks as selected for `target`.
+    fn model_current(&self, target: ModelTarget) -> (&'static str, Option<String>) {
+        match (target, self.tasks_page.sheet.as_ref()) {
+            (ModelTarget::Task, Some(sheet)) => {
+                (sheet.provider(), sheet.model().map(str::to_owned))
+            }
+            _ => {
+                let conversation = &self.conversations[self.active_conversation()];
+                (conversation.provider, conversation.model.clone())
+            }
+        }
+    }
+
+    fn model_rows_for(&self, target: ModelTarget) -> Vec<ModelRow> {
+        let (current_provider, current_model) = self.model_current(target);
         let favorites = self.favorite_models();
         let needle = self.model_query.trim().to_lowercase();
         let providers = if self.model_scope == "favorites" {
@@ -13012,7 +13041,7 @@ impl Shell {
                 .filter(|p| *p == self.model_scope)
                 .collect()
         };
-        let current = (conversation.provider, conversation.model.as_deref());
+        let current = (current_provider, current_model.as_deref());
         let mut rows = Vec::new();
         for provider in providers {
             rows.extend(self.provider_model_rows(provider, current, &needle, &favorites));
@@ -13114,6 +13143,20 @@ impl Shell {
         cx.notify();
     }
 
+    /// A pick in the catalog: the conversation's model, or the task draft's.
+    fn pick_model_for(
+        &mut self,
+        target: ModelTarget,
+        provider: &'static str,
+        id: String,
+        cx: &mut Context<Self>,
+    ) {
+        match target {
+            ModelTarget::Composer => self.pick_model(provider, id, cx),
+            ModelTarget::Task => self.tasks_choose_model(provider, id, cx),
+        }
+    }
+
     fn pick_model(&mut self, provider: &'static str, id: String, cx: &mut Context<Self>) {
         let ix = self.active_conversation();
         let session = self.conversations[ix].session_id.clone();
@@ -13147,6 +13190,20 @@ impl Shell {
         self.backend
             .invoke("save_settings", json!({ "settings": self.settings }));
         cx.notify();
+    }
+
+    /// The catalog starts on `provider`'s tab, with no search.
+    fn reset_catalog(&mut self, provider: &str) {
+        self.model_scope = provider.to_owned();
+        self.model_query.clear();
+        self.model_selected = None;
+        let at = self
+            .enabled_providers()
+            .iter()
+            .position(|p| *p == provider)
+            .map_or(0, |i| i + 1);
+        self.model_glide = Tween::still(at as f32, Instant::now());
+        self.model_list_at = Instant::now();
     }
 
     fn set_model_page(&mut self, page: ComposerMenu, cx: &mut Context<Self>) {
@@ -13463,7 +13520,13 @@ impl Shell {
     }
 
     /// Sirus's catalog page: 288 wide, provider tabs with a gliding mark, search and rows.
-    fn catalog_page(&self, now: Instant, moving: &mut bool, cx: &mut Context<Self>) -> AnyElement {
+    fn catalog_page(
+        &self,
+        target: ModelTarget,
+        now: Instant,
+        moving: &mut bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let tabs = self.enabled_providers();
         let tab_count = tabs.len() + 1;
         let rail = 288. - 2. - 12. - 2. - 6.;
@@ -13481,11 +13544,11 @@ impl Shell {
         }
         let scope = self.model_scope.clone();
         let favorites_scope = scope == "favorites";
-        let rows = self.model_rows();
+        let rows = self.model_rows_for(target);
         let loading = !favorites_scope && !self.models.contains_key(scope.as_str());
         let selected_row = self.model_selected;
-        let conversation = &self.conversations[self.active_conversation()];
-        let has_model = conversation.model.is_some();
+        // The modal's own Esforço controls sit beside the popover, so its header always shows.
+        let has_model = target == ModelTarget::Task || self.model_current(target).1.is_some();
         let tab = |id: usize,
                    active: bool,
                    content_element: AnyElement,
@@ -13559,7 +13622,7 @@ impl Shell {
                                         .gap(px(8.))
                                         .cursor_pointer()
                                         .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.pick_model(provider, id.clone(), cx)
+                                            this.pick_model_for(target, provider, id.clone(), cx)
                                         }))
                                         .child(provider_mark(provider, 16.))
                                         .child(
@@ -13655,8 +13718,9 @@ impl Shell {
                         .text_color(content(0.65))
                         .cursor_pointer()
                         .hover(|s| s.bg(content(0.07)))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.set_model_page(ComposerMenu::Effort, cx)
+                        .on_click(cx.listener(move |this, _, _, cx| match target {
+                            ModelTarget::Composer => this.set_model_page(ComposerMenu::Effort, cx),
+                            ModelTarget::Task => this.tasks_close_model(cx),
                         }))
                         .child(icon("chevron-left", 14.).text_color(content(0.65)))
                         .child(t("Esforço e velocidade")),
@@ -13787,7 +13851,10 @@ impl Shell {
         let (body, width): (Vec<AnyElement>, f32) = match which {
             ComposerMenu::Access => (self.access_rows(cx), 320.),
             ComposerMenu::Effort => (vec![self.effort_page(now, moving, reduce, cx)], 280.),
-            ComposerMenu::Catalog => (vec![self.catalog_page(now, moving, cx)], 288.),
+            ComposerMenu::Catalog => (
+                vec![self.catalog_page(ModelTarget::Composer, now, moving, cx)],
+                288.,
+            ),
             ComposerMenu::Workspace => (self.workspace_rows(cx), 240.),
         };
         if which == ComposerMenu::Workspace {

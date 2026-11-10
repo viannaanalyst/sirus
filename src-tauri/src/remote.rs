@@ -1443,7 +1443,7 @@ async fn connection(mut socket: WebSocket, shared: Shared, origin: Option<String
                         let outgoing = outgoing.clone();
                         crate::runtime::async_runtime::spawn(async move {
                             let result = if crate::browser_bridge::command_allowed(&cmd, client) {
-                                crate::browser_bridge::run_local(&app, connection_id, &outgoing, &cmd, &args)
+                                crate::browser_bridge::run_local(&app, connection_id, client, &outgoing, &cmd, &args)
                                     .await
                                     .map(Reply::Json)
                             } else {

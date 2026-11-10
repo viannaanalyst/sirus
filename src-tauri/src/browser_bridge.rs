@@ -39,6 +39,8 @@ pub const NO_WINDOW: &str = "the embedded browser is only available in the Mac a
 pub const NO_CLIENT: &str = "the embedded browser needs Sirus open on a Mac with this computer selected; ask the person to switch to it";
 
 const TIMEOUT: Duration = Duration::from_secs(30);
+/// A computer-use call may wait for the person's approval card (two minutes) and then act.
+const COMPUTER_TIMEOUT: Duration = Duration::from_secs(180);
 const RECORD_STOP_TIMEOUT: Duration = Duration::from_secs(60);
 const CONNECTION_COMMANDS: &[&str] = &[
     "register_browser_client",
@@ -56,7 +58,9 @@ const VAULT_COMMANDS: &[&str] = &[
     "login_vault_answer_approval",
     "login_vault_note_submission",
     "login_vault_autofill",
+    "login_vault_agent_fill",
     "computer_action",
+    "computer_remote_execute",
     "remote_action",
     "remote_pair",
     "dictation_status",
@@ -71,6 +75,9 @@ type Reply = Result<Value, String>;
 struct Registered {
     connection: u64,
     frames: Frames,
+    /// A Sirus window on another computer (ADR-201), not this computer's own window. Saved
+    /// logins and computer use then belong to that Mac, not to this host (ADR-201 addendum).
+    remote: bool,
 }
 
 struct Waiting {
@@ -90,6 +97,12 @@ pub fn next_connection() -> u64 {
 /// Whether a window client is attached right now.
 pub fn has_client() -> bool {
     CLIENT.lock().is_some()
+}
+
+/// Whether the attached client is a Sirus window on another computer: its Mac holds the saved
+/// logins and runs computer use, so those requests go to it whole (ADR-201 addendum).
+pub fn client_is_remote() -> bool {
+    CLIENT.lock().as_ref().is_some_and(|client| client.remote)
 }
 
 /// Whether the MCP children should list the browser tools: a client is attached, the window
@@ -146,7 +159,16 @@ pub fn command_allowed(command: &str, client: Client) -> bool {
 /// Makes `connection` the window client. A later registration replaces an earlier one, whose
 /// pending calls fail at once.
 pub fn register(connection: u64, frames: Frames) {
-    let replaced = CLIENT.lock().replace(Registered { connection, frames });
+    register_as(connection, frames, false);
+}
+
+/// `register`, saying whether the client is a window on another computer.
+pub fn register_as(connection: u64, frames: Frames, remote: bool) {
+    let replaced = CLIENT.lock().replace(Registered {
+        connection,
+        frames,
+        remote,
+    });
     if let Some(old) = replaced {
         if old.connection != connection {
             fail_pending(old.connection, "the Sirus window was replaced");
@@ -277,13 +299,14 @@ fn refuse(message: &str) -> Value {
 pub async fn run_local(
     app: &AppHandle,
     connection: u64,
+    client: Client,
     frames: &Frames,
     command: &str,
     args: &Value,
 ) -> Result<String, Value> {
     match command {
         "register_browser_client" => {
-            register(connection, frames.clone());
+            register_as(connection, frames.clone(), client == Client::Desktop);
             return Ok(json!({ "registered": true }).to_string());
         }
         "unregister_browser_client" => {
@@ -386,6 +409,37 @@ async fn vault_command(app: &AppHandle, command: &str, args: &Value) -> Result<S
             .await
             .unwrap_or_else(|_| Err("the sign-in did not complete".into()));
             reply(done.map_err(|error| crate::error::Error::new("login-vault", error)))
+        }
+        // A remote host's `browser_fill_login`, run on this Mac with its own vault: the
+        // approval card shows here and only the filled fields are answered (ADR-201 addendum).
+        "login_vault_agent_fill" => {
+            let (app, session, input) = (
+                app.clone(),
+                text(args, "sessionId")?,
+                fill_input(args).map_err(|error| refuse(&error))?,
+            );
+            let done = crate::runtime::async_runtime::spawn_blocking(move || {
+                agent_fill(&app, &session, &input)
+            })
+            .await
+            .unwrap_or_else(|_| Err("the sign-in did not complete".into()));
+            reply(done.map_err(|error| crate::error::Error::new("login-vault", error)))
+        }
+        // A remote host's computer-use call, run on this Mac's screen (ADR-201 addendum).
+        "computer_remote_execute" => {
+            let (app, session, tool, arguments, context) = (
+                app.clone(),
+                text(args, "sessionId")?,
+                text(args, "tool")?,
+                args.get("arguments").cloned().unwrap_or(Value::Null),
+                args.get("context").cloned().unwrap_or(Value::Null),
+            );
+            let done = crate::runtime::async_runtime::spawn_blocking(move || {
+                crate::computer_mcp::execute_remote(&app, &session, &tool, &arguments, &context)
+            })
+            .await
+            .unwrap_or_else(|_| Err("the computer action did not complete".into()));
+            reply(done.map_err(|error| crate::error::Error::new("computer", error)))
         }
         "computer_action" => {
             let action: crate::computer_mcp::Action =
@@ -490,8 +544,8 @@ fn fill(
     crate::browser_login::parse_fill_result(&raw, origin)
 }
 
-/// `browser_fill_login`: the model names at most a username; the values never pass through it.
-fn agent_fill(app: &AppHandle, session_id: &str, args: &Value) -> Result<Value, String> {
+/// What `browser_fill_login` asked: the part to fill and, at most, a username.
+fn fill_choice(args: &Value) -> Result<(&'static str, Option<&str>), String> {
     let part = match args.get("part").and_then(Value::as_str) {
         None | Some("login") => "login",
         Some("totp") => "totp",
@@ -502,6 +556,53 @@ fn agent_fill(app: &AppHandle, session_id: &str, args: &Value) -> Result<Value, 
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|name| !name.is_empty() && name.len() <= 256);
+    Ok((part, username))
+}
+
+/// The request a remote host sends this Mac for `browser_fill_login`: only the part and the
+/// username the model named, never a value.
+fn fill_input(args: &Value) -> Result<Value, String> {
+    let (part, username) = fill_choice(args)?;
+    Ok(json!({ "part": part, "username": username }))
+}
+
+/// `browser_fill_login` on a host whose browser client is a Sirus window on another computer:
+/// the saved logins are that Mac's (ADR-186), so the whole sign-in runs there (the match, the
+/// approval card in its window, the fill from its vault) and only the fields filled come back.
+/// No credential is ever sent to this host.
+fn delegated_fill(session_id: &str, args: &Value) -> Result<Value, String> {
+    let input = fill_input(args)?;
+    call_with_timeout(
+        session_id,
+        "browser_fill_login",
+        input,
+        crate::login_vault::APPROVAL_TIMEOUT + TIMEOUT,
+    )
+}
+
+/// One `computer_*` call for the Sirus window on another computer to run on its own screen,
+/// with the context its approval card and pointer need (ADR-201 addendum). It waits as long as the
+/// person may take to answer the card.
+pub fn call_computer(
+    session_id: &str,
+    tool: &str,
+    args: Value,
+    context: Value,
+) -> Result<Value, String> {
+    if !client_is_remote() {
+        return Err(no_window());
+    }
+    call_with_timeout(
+        session_id,
+        tool,
+        json!({ "arguments": args, "context": context }),
+        COMPUTER_TIMEOUT,
+    )
+}
+
+/// `browser_fill_login`: the model names at most a username; the values never pass through it.
+fn agent_fill(app: &AppHandle, session_id: &str, args: &Value) -> Result<Value, String> {
+    let (part, username) = fill_choice(args)?;
     let (tab_id, url) = active_page(session_id)?;
     let (summary, _) = crate::login_vault::agent_credentials(&url, username)?;
     crate::login_vault::require_approval(app, session_id, &summary.origin, &summary.username)?;
@@ -563,6 +664,7 @@ pub fn browser_tool(
                 .ok_or_else(|| "only http(s) URLs can be opened".to_string())?;
             run(tool, json!({ "url": url }))
         }
+        "browser_fill_login" if client_is_remote() => delegated_fill(session_id, &args),
         "browser_fill_login" => agent_fill(app, session_id, &args),
         "browser_back" | "browser_forward" | "browser_reload" => run(tool, json!({})),
         "browser_device" => {
@@ -1013,6 +1115,100 @@ mod tests {
         assert!(!is_local_command("browser_open"));
     }
 
+    /// `window`, saying whether it is a Sirus window on another computer.
+    fn window_as(
+        connection: u64,
+        remote: bool,
+        answer: impl Fn(&Value) -> Option<(bool, Value)> + Send + 'static,
+    ) -> std::thread::JoinHandle<()> {
+        let (frames, mut inbox) = tokio::sync::mpsc::channel::<String>(8);
+        register_as(connection, frames, remote);
+        std::thread::spawn(move || {
+            while let Some(frame) = inbox.blocking_recv() {
+                let frame: Value = serde_json::from_str(&frame).unwrap();
+                let payload = &frame["payload"];
+                if let Some((ok, value)) = answer(payload) {
+                    let id = payload["id"].as_str().unwrap();
+                    let result = if ok {
+                        Ok(value)
+                    } else {
+                        Err(value.as_str().unwrap().to_string())
+                    };
+                    deliver(connection, id, result);
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn a_remote_window_signs_in_from_its_own_vault_and_only_field_names_come_back() {
+        let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+        clear();
+        let dir = tempfile::tempdir().unwrap();
+        let app = AppHandle::new(dir.path().to_path_buf());
+        let seen = std::sync::Arc::new(Mutex::new(Vec::<Value>::new()));
+        let log = seen.clone();
+        let _window = window_as(21, true, move |request| {
+            log.lock().push(request.clone());
+            Some((true, json!({ "filled": ["username", "password"] })))
+        });
+        assert!(client_is_remote());
+        let answer = browser_tool(
+            &app,
+            "s",
+            "browser_fill_login",
+            json!({ "username": " me@example.com ", "password": "hunter2", "part": "login" }),
+        )
+        .unwrap();
+        assert_eq!(answer, json!({ "filled": ["username", "password"] }));
+        // One request, asking for the whole sign-in, with no value in it.
+        assert_eq!(seen.lock().len(), 1);
+        assert_eq!(seen.lock()[0]["tool"], "browser_fill_login");
+        assert_eq!(
+            seen.lock()[0]["args"],
+            json!({ "part": "login", "username": "me@example.com" })
+        );
+        assert!(!seen.lock()[0].to_string().contains("hunter2"));
+        // A bad part never reaches the window.
+        assert!(browser_tool(&app, "s", "browser_fill_login", json!({ "part": "pin" })).is_err());
+        assert_eq!(seen.lock().len(), 1);
+        unregister(21);
+    }
+
+    #[test]
+    fn computer_calls_go_to_a_remote_window_only_with_their_context() {
+        let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+        clear();
+        // No window, or this computer's own window: this host does not run them.
+        assert!(call_computer("s", "computer_apps", json!({}), json!({})).is_err());
+        let _own = window_as(22, false, |_| panic!("not for this window"));
+        assert!(!client_is_remote());
+        assert!(call_computer("s", "computer_apps", json!({}), json!({})).is_err());
+        unregister(22);
+        let seen = std::sync::Arc::new(Mutex::new(Vec::<Value>::new()));
+        let log = seen.clone();
+        let _remote = window_as(23, true, move |request| {
+            log.lock().push(request.clone());
+            Some((true, json!({ "apps": [] })))
+        });
+        let context = json!({ "provider": "Codex", "key": "codex", "planning": false });
+        let answer = call_computer(
+            "s",
+            "computer_click",
+            json!({ "app": "Notes" }),
+            context.clone(),
+        )
+        .unwrap();
+        assert_eq!(answer, json!({ "apps": [] }));
+        assert_eq!(seen.lock()[0]["tool"], "computer_click");
+        assert_eq!(
+            seen.lock()[0]["args"]["arguments"],
+            json!({ "app": "Notes" })
+        );
+        assert_eq!(seen.lock()[0]["args"]["context"], context);
+        unregister(23);
+    }
+
     #[test]
     fn a_desktop_on_a_headless_host_may_only_be_the_browser_client() {
         assert_eq!(client_kind(true, false, false), Client::Window);
@@ -1030,7 +1226,9 @@ mod tests {
         for command in [
             "login_vault_list",
             "login_vault_autofill",
+            "login_vault_agent_fill",
             "computer_action",
+            "computer_remote_execute",
             "remote_action",
         ] {
             assert!(command_allowed(command, Client::Window), "{command}");

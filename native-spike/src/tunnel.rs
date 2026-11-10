@@ -7,16 +7,20 @@
 //! cookies, absolute URLs and HMR sockets as the server wrote them; when the port is taken here,
 //! another one is used and the address is rewritten, and shown back with the host's port.
 //!
+//! Ports are also opened ahead of use (`sync`): the browser panel asks the host for its local
+//! servers (`local_servers_list`) as the computer connects and every few seconds, so a link or a
+//! `fetch` inside a tunnelled page to another dev-server port finds its listener already there.
+//!
 //! The listeners belong to the active computer: switching computers or back to this Mac closes
 //! them and every tunnel through them. The token stays in this process's memory.
 use crate::remote_tls::Address;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{ErrorKind, Read, Write};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, TcpStream};
 use std::os::fd::{AsRawFd, RawFd};
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tungstenite::Message;
 
@@ -26,28 +30,45 @@ const MIN_PORT: u16 = 1024;
 const CHUNK: usize = 64 * 1024;
 /// A quiet tunnel pings this often, so proxies on the way keep an idle HMR socket open.
 const KEEPALIVE: Duration = Duration::from_secs(30);
+/// How often the browser panel asks the host which servers listen, while it is visible.
+pub const SYNC_EVERY: Duration = Duration::from_secs(5);
+/// The most ports opened ahead of use.
+const MAX_SYNCED: usize = 16;
+
+/// A listener here for one of the host's ports.
+struct Opened {
+    local: u16,
+    /// Ends this port's accept loops and the tunnels through them.
+    stop: Arc<AtomicBool>,
+    /// Where it can be reached, to wake its accept loops when closing.
+    bound: Vec<SocketAddr>,
+    /// Opened ahead of use from the host's list of local servers, so closed again when the
+    /// server goes; a port a page asked for stays until the computer changes.
+    synced: bool,
+}
 
 struct Active {
     address: Address,
     token: String,
-    stop: Arc<AtomicBool>,
-    /// The host's port → the port listening here.
-    ports: HashMap<u16, u16>,
-    /// Where each listener can be reached, to wake its accept loop when closing.
-    bound: Vec<SocketAddr>,
+    /// The host's port, and what listens for it here.
+    opened: HashMap<u16, Opened>,
+    /// The host ports each conversation's browser last saw listening.
+    wanted: HashMap<String, HashSet<u16>>,
 }
 
 static ACTIVE: Mutex<Option<Active>> = Mutex::new(None);
+/// Counts activations, so the browser panel can sync again as soon as a computer connects.
+static GENERATION: AtomicU64 = AtomicU64::new(0);
 
 /// The window now shows the computer at `address`: loopback pages go through it.
 pub fn activate(address: Address, token: String) {
     deactivate();
+    GENERATION.fetch_add(1, Ordering::SeqCst);
     *ACTIVE.lock().unwrap() = Some(Active {
         address,
         token,
-        stop: Arc::new(AtomicBool::new(false)),
-        ports: HashMap::new(),
-        bound: Vec::new(),
+        opened: HashMap::new(),
+        wanted: HashMap::new(),
     });
 }
 
@@ -56,11 +77,26 @@ pub fn deactivate() {
     let Some(active) = ACTIVE.lock().unwrap().take() else {
         return;
     };
-    active.stop.store(true, Ordering::SeqCst);
-    for address in active.bound {
+    for opened in active.opened.into_values() {
+        shut(opened);
+    }
+}
+
+fn shut(opened: Opened) {
+    opened.stop.store(true, Ordering::SeqCst);
+    for address in opened.bound {
         // The accept loops sleep in `accept`; a connection wakes them to see the stop.
         let _ = TcpStream::connect_timeout(&address, Duration::from_millis(200));
     }
+}
+
+/// The current activation, or `None` while this Mac itself is shown.
+pub fn generation() -> Option<u64> {
+    ACTIVE
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|_| GENERATION.load(Ordering::SeqCst))
 }
 
 /// The address a page loads: on a remote computer, a loopback address with a port goes through
@@ -73,9 +109,9 @@ pub fn route(url: &str) -> String {
     let Some(active) = guard.as_mut() else {
         return url.to_owned();
     };
-    let local = match active.ports.get(&port) {
-        Some(local) => *local,
-        None => match listen(active, port) {
+    let local = match active.opened.get(&port) {
+        Some(opened) => opened.local,
+        None => match listen(active, port, false) {
             Some(local) => local,
             None => return url.to_owned(),
         },
@@ -83,11 +119,90 @@ pub fn route(url: &str) -> String {
     with_port(url, span, local)
 }
 
+/// The ports of `local_servers_list`'s answer worth a tunnel: 1024 and up, once each, at most
+/// `MAX_SYNCED`.
+pub fn ports_of(list: &serde_json::Value) -> Vec<u16> {
+    let mut ports: Vec<u16> = Vec::new();
+    for item in list.as_array().into_iter().flatten() {
+        let port = item["port"]
+            .as_u64()
+            .and_then(|port| u16::try_from(port).ok())
+            .filter(|port| *port >= MIN_PORT);
+        if let Some(port) = port
+            && !ports.contains(&port)
+            && ports.len() < MAX_SYNCED
+        {
+            ports.push(port);
+        }
+    }
+    ports
+}
+
+/// What to open and what to close, given what is open (all of it, and the part opened ahead of
+/// use) and what the host's conversations want. Both lists come sorted.
+pub fn plan(
+    opened: &HashSet<u16>,
+    synced: &HashSet<u16>,
+    wanted: &HashSet<u16>,
+) -> (Vec<u16>, Vec<u16>) {
+    let mut open: Vec<u16> = wanted.difference(opened).copied().collect();
+    let mut close: Vec<u16> = synced.difference(wanted).copied().collect();
+    open.sort_unstable();
+    close.sort_unstable();
+    (open, close)
+}
+
+/// The host's conversation `session` shows these ports listening: opens listeners for new ones
+/// (the same port here when free) and closes those no conversation lists any more. Only what
+/// was opened ahead of use is ever closed.
+pub fn sync(session: &str, ports: &[u16]) {
+    let mut guard = ACTIVE.lock().unwrap();
+    let Some(active) = guard.as_mut() else {
+        return;
+    };
+    let ports: HashSet<u16> = ports.iter().copied().filter(|p| *p >= MIN_PORT).collect();
+    if ports.is_empty() {
+        active.wanted.remove(session);
+    } else {
+        active.wanted.insert(session.to_owned(), ports);
+    }
+    let wanted: HashSet<u16> = active.wanted.values().flatten().copied().collect();
+    let opened: HashSet<u16> = active.opened.keys().copied().collect();
+    let synced: HashSet<u16> = active
+        .opened
+        .iter()
+        .filter(|(_, opened)| opened.synced)
+        .map(|(port, _)| *port)
+        .collect();
+    let (open, close) = plan(&opened, &synced, &wanted);
+    for port in close {
+        if let Some(opened) = active.opened.remove(&port) {
+            shut(opened);
+        }
+    }
+    for port in open {
+        listen(active, port, true);
+    }
+}
+
+/// Whether the panel should ask the host for its servers now: while a computer is shown, as
+/// soon as it connected, and then every `SYNC_EVERY` while the panel is visible.
+pub fn sync_due(shown: bool, visible: bool, connected_since_sync: bool, since: Duration) -> bool {
+    shown && (connected_since_sync || (visible && since >= SYNC_EVERY))
+}
+
 /// The address a tab shows and an agent reads: a rewritten port is shown as the host's.
 pub fn shown(url: &str) -> String {
     let guard = ACTIVE.lock().unwrap();
     match guard.as_ref() {
-        Some(active) => shown_with(&active.ports, url),
+        Some(active) => {
+            let ports: HashMap<u16, u16> = active
+                .opened
+                .iter()
+                .map(|(port, opened)| (*port, opened.local))
+                .collect();
+            shown_with(&ports, url)
+        }
         None => url.to_owned(),
     }
 }
@@ -151,7 +266,7 @@ fn taken_here(port: u16) -> bool {
 }
 
 /// Listens here for the host's `port`: the same number when this Mac does not use it, else any.
-fn listen(active: &mut Active, port: u16) -> Option<u16> {
+fn listen(active: &mut Active, port: u16, synced: bool) -> Option<u16> {
     let same = (!taken_here(port))
         .then(|| TcpListener::bind((Ipv4Addr::LOCALHOST, port)).ok())
         .flatten();
@@ -167,18 +282,24 @@ fn listen(active: &mut Active, port: u16) -> Option<u16> {
     {
         listeners.push(v6);
     }
+    let stop = Arc::new(AtomicBool::new(false));
+    let mut bound = Vec::new();
     for listener in listeners {
         if let Ok(address) = listener.local_addr() {
-            active.bound.push(address);
+            bound.push(address);
         }
-        let (address, token, stop) = (
-            active.address.clone(),
-            active.token.clone(),
-            active.stop.clone(),
-        );
+        let (address, token, stop) = (active.address.clone(), active.token.clone(), stop.clone());
         std::thread::spawn(move || accept_loop(listener, address, token, port, stop));
     }
-    active.ports.insert(port, local);
+    active.opened.insert(
+        port,
+        Opened {
+            local,
+            stop,
+            bound,
+            synced,
+        },
+    );
     Some(local)
 }
 
@@ -369,6 +490,54 @@ mod tests {
             shown_with(&ports, "https://example.com/"),
             "https://example.com/"
         );
+    }
+
+    #[test]
+    fn the_hosts_servers_become_a_short_list_of_high_ports() {
+        let list = serde_json::json!([
+            { "url": "http://localhost:5173", "port": 5173 },
+            { "url": "http://localhost:5173/x", "port": 5173 },
+            { "url": "http://localhost:80", "port": 80 },
+            { "url": "http://localhost:70000", "port": 70000 },
+            { "url": "nothing" },
+            { "url": "http://localhost:3000", "port": 3000 },
+        ]);
+        assert_eq!(ports_of(&list), vec![5173, 3000]);
+        assert!(ports_of(&serde_json::Value::Null).is_empty());
+        let many: Vec<_> = (0..40)
+            .map(|i| serde_json::json!({ "port": 3000 + i }))
+            .collect();
+        assert_eq!(ports_of(&serde_json::Value::Array(many)).len(), MAX_SYNCED);
+    }
+
+    #[test]
+    fn new_ports_open_and_only_ports_opened_ahead_close_when_gone() {
+        let set = |ports: &[u16]| ports.iter().copied().collect::<HashSet<u16>>();
+        // 3000 was asked for by a page (open, not synced); 5173 was opened ahead of use.
+        let opened = set(&[3000, 5173]);
+        let synced = set(&[5173]);
+        let (open, close) = plan(&opened, &synced, &set(&[3000, 8080, 4000]));
+        assert_eq!((open, close), (vec![4000, 8080], vec![5173]));
+        // Nothing wanted: the page's port stays, the synced one goes.
+        let (open, close) = plan(&opened, &synced, &set(&[]));
+        assert_eq!((open, close), (vec![], vec![5173]));
+        // Steady state does nothing.
+        let (open, close) = plan(&opened, &synced, &set(&[5173]));
+        assert_eq!((open, close), (vec![], vec![]));
+    }
+
+    #[test]
+    fn the_panel_asks_at_once_on_connect_and_then_every_few_seconds_while_visible() {
+        let quick = Duration::from_secs(1);
+        let slow = SYNC_EVERY;
+        assert!(!sync_due(false, true, true, slow), "this Mac is shown");
+        assert!(sync_due(true, false, true, quick), "just connected");
+        assert!(
+            !sync_due(true, false, false, slow),
+            "hidden panel stays quiet"
+        );
+        assert!(!sync_due(true, true, false, quick));
+        assert!(sync_due(true, true, false, slow));
     }
 
     #[test]

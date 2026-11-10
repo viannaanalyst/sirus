@@ -556,6 +556,38 @@ impl Browser {
                 }
             }
         });
+        // On another computer, its listening dev servers get their tunnels ahead of use (ADR-201).
+        cx.spawn(async move |this, cx| {
+            let mut seen = None;
+            let mut last = Instant::now() - crate::tunnel::SYNC_EVERY;
+            loop {
+                cx.background_executor().timer(Duration::from_secs(1)).await;
+                let Ok((backend, session, visible)) = this.update(cx, |this, _| {
+                    (
+                        this.backend.clone(),
+                        this.session_id.clone(),
+                        this.shared.visible.get(),
+                    )
+                }) else {
+                    break;
+                };
+                let generation = crate::tunnel::generation();
+                let new = generation.is_some() && generation != seen;
+                if !crate::tunnel::sync_due(generation.is_some(), visible, new, last.elapsed()) {
+                    continue;
+                }
+                last = Instant::now();
+                let reply = backend.request("local_servers_list", json!({ "sessionId": session }));
+                if let Ok(Ok(list)) = reply.recv().await {
+                    seen = generation;
+                    let ports = crate::tunnel::ports_of(&list);
+                    cx.background_executor()
+                        .spawn(async move { crate::tunnel::sync(&session, &ports) })
+                        .await;
+                }
+            }
+        })
+        .detach();
         Self {
             shared,
             session_id,

@@ -18,7 +18,7 @@ use sha1::Sha1;
 
 use crate::error::{Error, Result as IpcResult};
 
-const APPROVAL_TIMEOUT: Duration = Duration::from_secs(120);
+pub const APPROVAL_TIMEOUT: Duration = Duration::from_secs(120);
 const OFFER_LIFETIME: Duration = Duration::from_secs(10 * 60);
 const MAX_OFFERS: usize = 4;
 const MAX_APPROVALS_PER_SESSION: usize = 2;

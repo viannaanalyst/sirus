@@ -1,6 +1,6 @@
 //! The secret request card (ADR-198): an agent asks for a key and the person types it here, masked,
-//! and picks where it is kept: the linked Infisical project (dev or prod), the workspace's
-//! `.env.local`, or only this conversation. Or "Usar do Infisical…" hands over a key that is
+//! and picks where it is kept: any mix of the linked Infisical project's environments and the
+//! workspace's `.env.local`, or only this conversation. Or "Usar do Infisical…" hands over a key that is
 //! already there. The value is typed in a real field (caret, selection, ⌘A, paste, undo, arrows,
 //! a reveal toggle), sent once to the host, and never logged or shown to the agent.
 
@@ -54,8 +54,8 @@ pub(crate) struct SecretCard {
     redo: Vec<(String, usize)>,
     pub reveal: bool,
     pub focused: bool,
-    /// What the person picked; `None` follows the default.
-    pub chosen: Option<Dest>,
+    /// What the person ticked; `None` follows the default.
+    pub chosen: Option<Vec<Dest>>,
     pub menu: Option<CardMenu>,
     /// The menu a press outside just closed, and when; its button's click then stays closed.
     menu_closed: Option<(CardMenu, Instant)>,
@@ -300,6 +300,106 @@ fn destination_label(dest: &Dest, project: &str) -> String {
     }
 }
 
+/// The ticks after the person toggles `option`. "Só nesta conversa" is exclusive: ticking it
+/// unticks the rest, and ticking anything else unticks it. One option always stays ticked, and
+/// the result follows the order of `options`.
+pub(crate) fn toggle_dest(current: &[Dest], option: &Dest, options: &[Dest]) -> Vec<Dest> {
+    let mut next: Vec<Dest> = if *option == Dest::Conversation {
+        vec![Dest::Conversation]
+    } else {
+        let mut others: Vec<Dest> = current
+            .iter()
+            .filter(|d| **d != Dest::Conversation)
+            .cloned()
+            .collect();
+        match others.iter().position(|d| d == option) {
+            Some(at) => {
+                others.remove(at);
+            }
+            None => others.push(option.clone()),
+        }
+        others
+    };
+    if next.is_empty() {
+        // The last tick cannot be removed.
+        return current.to_vec();
+    }
+    next.sort_by_key(|d| options.iter().position(|o| o == d).unwrap_or(usize::MAX));
+    next
+}
+
+/// What is ticked for a request: the person's picks that still exist (no Infisical without a
+/// link), or the default: Infisical dev when linked, otherwise only this conversation.
+pub(crate) fn effective_dests(chosen: Option<&[Dest]>, linked: bool) -> Vec<Dest> {
+    let kept: Vec<Dest> = chosen
+        .unwrap_or_default()
+        .iter()
+        .filter(|d| linked || !matches!(d, Dest::Infisical(_)))
+        .cloned()
+        .collect();
+    if !kept.is_empty() {
+        kept
+    } else if linked {
+        vec![Dest::Infisical("dev".to_owned())]
+    } else {
+        vec![Dest::Conversation]
+    }
+}
+
+/// The collapsed "Salvar em" text: "Infisical · appmoradah · dev + prod" for Infisical alone,
+/// "dev, prod e .env.local" when `.env.local` joins it.
+pub(crate) fn dest_summary(dests: &[Dest], project: &str) -> String {
+    let envs: Vec<&str> = dests
+        .iter()
+        .filter_map(|d| match d {
+            Dest::Infisical(env) => Some(env.as_str()),
+            _ => None,
+        })
+        .collect();
+    let dotenv = dests.contains(&Dest::DotEnv);
+    match (envs.is_empty(), dotenv) {
+        (true, false) => destination_label(&Dest::Conversation, ""),
+        (true, true) => destination_label(&Dest::DotEnv, ""),
+        (false, false) => format!("Infisical · {project} · {}", envs.join(" + ")),
+        (false, true) => {
+            let head = envs.join(", ");
+            tf("{} e {}", &[&head, &".env.local"])
+        }
+    }
+}
+
+/// The targets of an answer, as the host reads them. `Conversation` writes nowhere.
+pub(crate) fn targets_json(dests: &[Dest]) -> Vec<Value> {
+    dests
+        .iter()
+        .filter_map(|d| match d {
+            Dest::Infisical(env) => Some(json!({"kind": "infisical", "env": env})),
+            Dest::DotEnv => Some(json!({"kind": "dotenv"})),
+            Dest::Conversation => None,
+        })
+        .collect()
+}
+
+/// One failure line from the host, "Could not save to {target}: {reason}", split in two.
+fn split_failure(line: &str) -> Option<(&str, &str)> {
+    line.strip_prefix("Could not save to ")?.split_once(": ")
+}
+
+/// The host's save error in the person's language, one line per target that failed.
+fn save_error_text(message: &str) -> String {
+    message
+        .lines()
+        .map(|line| match split_failure(line) {
+            Some((target, reason)) => tf(
+                "Não salvou em {}: {}",
+                &[&target, &crate::i18n::from_host(reason)],
+            ),
+            None => crate::i18n::from_host(line),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 impl Shell {
     /// The path of the project a secret request belongs to.
     fn secret_project(&self, request: &Value) -> Option<String> {
@@ -344,15 +444,12 @@ impl Shell {
         Some((path, name, env))
     }
 
-    fn card_dest(&self, request: &Value) -> Dest {
+    fn card_dests(&self, request: &Value) -> Vec<Dest> {
         let linked = self.secret_link(request).is_some();
-        match self.secret_card.as_ref().and_then(|c| c.chosen.clone()) {
-            Some(Dest::Infisical(env)) if linked => Dest::Infisical(env),
-            Some(Dest::Infisical(_)) => Dest::Conversation,
-            Some(other) => other,
-            None if linked => Dest::Infisical("dev".to_owned()),
-            None => Dest::Conversation,
-        }
+        effective_dests(
+            self.secret_card.as_ref().and_then(|c| c.chosen.as_deref()),
+            linked,
+        )
     }
 
     /// Typing and pasting go to the card's field while it has the focus.
@@ -465,29 +562,27 @@ impl Shell {
             return;
         }
         let id = card.request.clone();
-        let dest = self.card_dest(request);
+        let dests = self.card_dests(request);
         let link = self.secret_link(request);
         let mut action = json!({"type": "respond", "requestId": id, "value": value});
-        match &dest {
-            Dest::Infisical(env) => action["infisicalEnv"] = json!(env),
-            Dest::DotEnv => action["dotenv"] = json!(true),
-            Dest::Conversation => {}
+        let targets = targets_json(&dests);
+        let conversation_only = targets.is_empty();
+        if !conversation_only {
+            action["targets"] = json!(targets);
         }
         let project = link.map(|(_, name, _)| name).unwrap_or_default();
-        let line = match &dest {
-            Dest::Conversation => {
-                t("Chave guardada só nesta conversa. O agente a recebeu sem ver o valor.")
-                    .to_owned()
-            }
-            other => tf(
-                "Salvo no {}. O agente recebeu a chave sem ver o valor.",
-                &[&destination_label(other, &project)],
-            ),
+        let line = if conversation_only {
+            t("Chave guardada só nesta conversa. O agente a recebeu sem ver o valor.").to_owned()
+        } else {
+            tf(
+                "Salvo em {}. O agente recebeu a chave sem ver o valor.",
+                &[&dest_summary(&dests, &project)],
+            )
         };
         let call = self
             .backend
             .invoke("secret_action", json!({ "action": action }));
-        if dest == Dest::Conversation {
+        if conversation_only {
             // Nothing is written anywhere, so the agent is answered and the card collapses.
             self.waiting.insert(call, Waiting::ScriptAction);
             self.finish_secret(&id, line, cx);
@@ -517,7 +612,7 @@ impl Shell {
         let outcome = if ok {
             Ok(())
         } else {
-            Err(crate::i18n::from_host(
+            Err(save_error_text(
                 value["message"]
                     .as_str()
                     .or(value.as_str())
@@ -739,6 +834,23 @@ impl Shell {
             .when(on, |d| d.child(icon("check", 13.).text_color(content(0.6))))
     }
 
+    /// A tick box in the app's style (the same as the pull request's draft switch).
+    fn card_checkbox(on: bool) -> Div {
+        div()
+            .size(px(15.))
+            .flex_shrink_0()
+            .rounded(px(3.))
+            .border_1()
+            .border_color(if on { accent() } else { content(0.3) })
+            .flex()
+            .items_center()
+            .justify_center()
+            .when(on, |d| {
+                d.bg(accent())
+                    .child(svg().path("check").size(px(11.)).text_color(on_accent()))
+            })
+    }
+
     /// The card that replaces the old one-line request.
     pub(super) fn secret_card_view(&self, request: &Value, cx: &mut Context<Self>) -> AnyElement {
         let id = request["id"].as_str().unwrap_or("").to_owned();
@@ -749,7 +861,7 @@ impl Shell {
             return div().into_any_element();
         };
         let link = self.secret_link(request);
-        let dest = self.card_dest(request);
+        let dests = self.card_dests(request);
         let project = link.as_ref().map(|l| l.1.clone()).unwrap_or_default();
         let chars = card.draft.text.chars().count();
         let focused = card.focused;
@@ -894,7 +1006,14 @@ impl Shell {
                 ),
             ])
             .collect();
-        let where_label = destination_label(&dest, &project);
+        let where_label = dest_summary(&dests, &project);
+        let where_icon = if dests.contains(&Dest::Conversation) {
+            "message-square"
+        } else if dests.iter().any(|d| matches!(d, Dest::Infisical(_))) {
+            "key"
+        } else {
+            "file-text"
+        };
         let where_button = div()
             .id("secret-where")
             .flex()
@@ -913,30 +1032,25 @@ impl Shell {
                 }
                 cx.notify();
             }))
-            .child(
-                icon(
-                    match dest {
-                        Dest::Infisical(_) => "key",
-                        Dest::DotEnv => "file-text",
-                        Dest::Conversation => "message-square",
-                    },
-                    13.,
-                )
-                .text_color(content(0.6)),
-            )
+            .child(icon(where_icon, 13.).text_color(content(0.6)))
             .child(where_label)
             .child(icon("chevron-down", 12.).text_color(content(0.5)));
         let where_menu = (menu == Some(CardMenu::Where)).then(|| {
+            let all: Vec<Dest> = options.iter().map(|(option, _)| option.clone()).collect();
             let rows: Vec<AnyElement> = options
                 .iter()
                 .enumerate()
                 .map(|(at, (option, text))| {
+                    let ticked = dests.contains(option);
                     let option = option.clone();
-                    Self::card_menu_row(("secret-dest", at), text.clone(), dest == option)
+                    let (all, request) = (all.clone(), request.clone());
+                    Self::card_menu_row(("secret-dest", at), text.clone(), false)
+                        .child(Self::card_checkbox(ticked))
                         .on_click(cx.listener(move |this, _, _, cx| {
+                            // The menu stays open so several can be ticked in a row.
+                            let current = this.card_dests(&request);
                             if let Some(card) = this.secret_card.as_mut() {
-                                card.chosen = Some(option.clone());
-                                card.menu = None;
+                                card.chosen = Some(toggle_dest(&current, &option, &all));
                             }
                             cx.notify();
                         }))
@@ -1037,7 +1151,7 @@ impl Shell {
         });
 
         let (save_request, from_request) = (request.clone(), request.clone());
-        let (decline_id, op_id, op_label) = (id.clone(), id.clone(), label.clone());
+        let decline_id = id.clone();
         let ready = chars > 0;
         let bar = div()
             .flex()
@@ -1049,11 +1163,6 @@ impl Shell {
             .border_color(crate::theme::border())
             .bg(content(0.02))
             .rounded_b(px(crate::theme::RADIUS_LG))
-            .child(
-                Self::card_button("secret-save", t("Salvar"), Some("↩"), true, false)
-                    .when(!ready, |d| d.opacity(0.5))
-                    .on_click(cx.listener(move |this, _, _, cx| this.card_save(&save_request, cx))),
-            )
             .children(link.is_some().then(|| {
                 div()
                     .relative()
@@ -1073,19 +1182,17 @@ impl Shell {
                     )
                     .children(from_menu)
             }))
-            .child(
-                Self::card_button("secret-onepassword", "1Password", None, false, false).on_click(
-                    cx.listener(move |this, _, _, cx| {
-                        this.start_op_pick(op_id.clone(), op_label.clone(), cx)
-                    }),
-                ),
-            )
             .child(div().flex_1())
             .child(
                 Self::card_button("secret-decline", t("Cancelar"), Some("esc"), false, true)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.respond_secret(&decline_id, None, cx)
                     })),
+            )
+            .child(
+                Self::card_button("secret-save", t("Salvar"), Some("↩"), true, false)
+                    .when(!ready, |d| d.opacity(0.5))
+                    .on_click(cx.listener(move |this, _, _, cx| this.card_save(&save_request, cx))),
             );
 
         div()
@@ -1224,6 +1331,106 @@ mod tests {
         let mut card = SecretCard::new("r".into());
         card.insert(text);
         card
+    }
+
+    fn all_options() -> Vec<Dest> {
+        vec![
+            Dest::Infisical("dev".into()),
+            Dest::Infisical("prod".into()),
+            Dest::DotEnv,
+            Dest::Conversation,
+        ]
+    }
+
+    #[test]
+    fn ticking_adds_and_unticking_removes_but_one_stays() {
+        let options = all_options();
+        let dev = Dest::Infisical("dev".into());
+        let prod = Dest::Infisical("prod".into());
+        let both = toggle_dest(&[dev.clone()], &prod, &options);
+        assert_eq!(both, vec![dev.clone(), prod.clone()]);
+        // The order follows the list, not the order of the clicks.
+        assert_eq!(
+            toggle_dest(&[prod.clone()], &dev, &options),
+            vec![dev.clone(), prod.clone()]
+        );
+        assert_eq!(toggle_dest(&both, &dev, &options), vec![prod.clone()]);
+        // The last one cannot be unticked.
+        assert_eq!(toggle_dest(&[prod.clone()], &prod, &options), vec![prod]);
+    }
+
+    #[test]
+    fn the_conversation_option_is_exclusive() {
+        let options = all_options();
+        let dev = Dest::Infisical("dev".into());
+        assert_eq!(
+            toggle_dest(&[dev.clone(), Dest::DotEnv], &Dest::Conversation, &options),
+            vec![Dest::Conversation]
+        );
+        // Ticking another one unticks it.
+        assert_eq!(
+            toggle_dest(&[Dest::Conversation], &Dest::DotEnv, &options),
+            vec![Dest::DotEnv]
+        );
+        // And it cannot be unticked while it is the only one.
+        assert_eq!(
+            toggle_dest(&[Dest::Conversation], &Dest::Conversation, &options),
+            vec![Dest::Conversation]
+        );
+    }
+
+    #[test]
+    fn the_default_follows_the_link_and_drops_what_is_gone() {
+        assert_eq!(
+            effective_dests(None, true),
+            vec![Dest::Infisical("dev".into())]
+        );
+        assert_eq!(effective_dests(None, false), vec![Dest::Conversation]);
+        let picked = [Dest::Infisical("prod".into()), Dest::DotEnv];
+        assert_eq!(effective_dests(Some(&picked), true), picked.to_vec());
+        assert_eq!(effective_dests(Some(&picked), false), vec![Dest::DotEnv]);
+    }
+
+    #[test]
+    fn the_summary_lists_the_choices() {
+        let dev = Dest::Infisical("dev".into());
+        let prod = Dest::Infisical("prod".into());
+        assert_eq!(
+            dest_summary(&[dev.clone()], "appmoradah"),
+            "Infisical · appmoradah · dev"
+        );
+        assert_eq!(
+            dest_summary(&[dev.clone(), prod.clone()], "appmoradah"),
+            "Infisical · appmoradah · dev + prod"
+        );
+        assert_eq!(
+            dest_summary(&[dev, prod, Dest::DotEnv], "appmoradah"),
+            "dev, prod e .env.local"
+        );
+        assert_eq!(dest_summary(&[Dest::DotEnv], ""), ".env.local do projeto");
+        assert_eq!(dest_summary(&[Dest::Conversation], ""), "Só nesta conversa");
+    }
+
+    #[test]
+    fn the_answer_lists_its_targets_and_conversation_writes_nowhere() {
+        let targets = targets_json(&[Dest::Infisical("prod".into()), Dest::DotEnv]);
+        assert_eq!(
+            targets,
+            vec![
+                json!({"kind": "infisical", "env": "prod"}),
+                json!({"kind": "dotenv"})
+            ]
+        );
+        assert!(targets_json(&[Dest::Conversation]).is_empty());
+    }
+
+    #[test]
+    fn a_failure_line_splits_into_target_and_reason() {
+        assert_eq!(
+            split_failure("Could not save to Infisical (prod): Infisical refused: no."),
+            Some(("Infisical (prod)", "Infisical refused: no."))
+        );
+        assert_eq!(split_failure("Something else"), None);
     }
 
     #[test]

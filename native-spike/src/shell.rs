@@ -106,9 +106,6 @@ mod issue_chip;
 /// The row of actions under a finished reply: copy, try again, undo, side chat (ADR-187).
 #[path = "message_actions.rs"]
 pub(crate) mod message_actions;
-/// A secret card's 1Password list (onepassword_pick.rs).
-#[path = "onepassword_pick.rs"]
-mod onepassword_pick;
 /// The ⌥Tab switcher's cards (project_switch.rs).
 #[path = "project_switch.rs"]
 mod project_switch;
@@ -1533,8 +1530,6 @@ pub struct Shell {
     secret_done: Option<String>,
     /// The Infisical key being handed to a request.
     secret_picked: Option<String>,
-    /// A secret card's 1Password list while it is open (onepassword_pick.rs).
-    op_pick: Option<onepassword_pick::OpPick>,
     mention_selected: usize,
     /// A token whose completion the person dismissed.
     mention_dismissed: Option<usize>,
@@ -2001,7 +1996,6 @@ impl Shell {
             secret_card: None,
             secret_done: None,
             secret_picked: None,
-            op_pick: None,
             mention_selected: 0,
             mention_dismissed: None,
             switch_anim: None,
@@ -14757,11 +14751,6 @@ impl Shell {
             )
             // A request for a secret: the value is typed here, masked, and the agent never sees it.
             .when_some(secret, |d, request| {
-                let id = request["id"].as_str().unwrap_or("").to_owned();
-                let d = match self.op_pick_view(&id, cx) {
-                    Some(list) => d.child(list),
-                    None => d,
-                };
                 d.child(self.secret_card_view(&request, cx))
             })
             .when_some(

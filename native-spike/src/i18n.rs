@@ -500,7 +500,6 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Abril", "April"),
     ("Abrindo documento…", "Opening document…"),
-    ("Abrindo o 1Password…", "Opening 1Password…"),
     ("Abrindo o chat lateral…", "Opening the side chat…"),
     ("Abrir", "Open"),
     ("Abrir Ajustes do Sistema", "Open System Settings"),
@@ -1565,10 +1564,6 @@ const ENTRIES: &[(&str, &str)] = &[
         "Sign in to the default account using the provider's own CLI.",
     ),
     (
-        "Entre no 1Password e ligue \"Integrar com o 1Password CLI\" nos ajustes dele.",
-        "Sign in to 1Password and turn on \"Integrate with 1Password CLI\" in its settings.",
-    ),
-    (
         "Entre no GitHub CLI em Configurações → Git.",
         "Sign in to the GitHub CLI in Settings → Git.",
     ),
@@ -1790,10 +1785,6 @@ const ENTRIES: &[(&str, &str)] = &[
         "That request is no longer waiting.",
     ),
     (
-        "Esse campo do 1Password não é texto.",
-        "That 1Password field is not text.",
-    ),
-    (
         "Esse computador não reconhece mais este Mac.",
         "That computer no longer recognises this Mac.",
     ),
@@ -1808,10 +1799,6 @@ const ENTRIES: &[(&str, &str)] = &[
     (
         "Esse horário já passou. Escolha um horário futuro ou repita a tarefa.",
         "That time has passed. Pick a future time or repeat the task.",
-    ),
-    (
-        "Esse item do 1Password não é válido.",
-        "That 1Password item is not valid.",
     ),
     (
         "Esse nome de chave não é válido.",
@@ -2338,10 +2325,6 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Instalação", "Installation"),
     (
-        "Instale o 1Password CLI (brew install 1password-cli) e ligue \"Integrar com o 1Password CLI\" no app do 1Password.",
-        "Install the 1Password CLI (brew install 1password-cli) and turn on \"Integrate with 1Password CLI\" in the 1Password app.",
-    ),
-    (
         "Instale o GitHub CLI (gh) para listar pull requests.",
         "Install the GitHub CLI (gh) to list pull requests.",
     ),
@@ -2776,7 +2759,6 @@ const ENTRIES: &[(&str, &str)] = &[
         "Nenhum favorito disponível. Marque um modelo com a estrela.",
         "No available favorites. Mark a model with the star.",
     ),
-    ("Nenhum item no 1Password.", "No items in 1Password."),
     (
         "Nenhum login do GitHub está esperando.",
         "No GitHub sign-in is waiting.",
@@ -2922,10 +2904,6 @@ const ENTRIES: &[(&str, &str)] = &[
     (
         "Não deu para escrever o título. Use /commit seguido da mensagem.",
         "Could not write the title. Use /commit followed by the message.",
-    ),
-    (
-        "Não deu para falar com o 1Password.",
-        "1Password could not be reached.",
     ),
     (
         "Não deu para falar com o Infisical.",
@@ -3183,6 +3161,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Não instalado", "Not installed"),
     ("Não permitir", "Don't allow"),
     ("Não quebrar linhas", "Don't wrap lines"),
+    ("Não salvou em {}: {}", "Could not save to {}: {}"),
     (
         "Não é possível acessar o anexo selecionado.",
         "Cannot access selected attachment.",
@@ -3206,18 +3185,6 @@ const ENTRIES: &[(&str, &str)] = &[
     (
         "Número inválido de agentes a manter prontos.",
         "Invalid number of agents to keep ready.",
-    ),
-    (
-        "O 1Password não respondeu a tempo.",
-        "1Password did not answer in time.",
-    ),
-    (
-        "O 1Password recusou o pedido.",
-        "1Password refused the request.",
-    ),
-    (
-        "O 1Password respondeu algo ilegível.",
-        "1Password answered something unreadable.",
     ),
     (
         "O Bitbucket não devolveu o novo pedido.",
@@ -4604,7 +4571,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Save a project command to run with one click.",
     ),
     (
-        "Salvo no {}. O agente recebeu a chave sem ver o valor.",
+        "Salvo em {}. O agente recebeu a chave sem ver o valor.",
         "Saved to {}. The agent received the key without seeing the value.",
     ),
     (
@@ -5707,6 +5674,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("{} dias", "{} days"),
     ("{} e mais {} arquivos", "{} and {} more files"),
+    ("{} e {}", "{} and {}"),
     ("{} em execução", "{} running"),
     ("{} em segundo plano", "{} in the background"),
     (

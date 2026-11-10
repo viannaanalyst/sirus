@@ -128,8 +128,7 @@ enum Ctl {
     },
 }
 
-/// The height of a page's title bar and the left inset it shares with the page's content.
-const TITLE_BAR_HEIGHT: f32 = 52.;
+/// A page's left inset and the widest its column gets.
 pub const CONTENT_INSET: f32 = 28.;
 pub const CONTENT_WIDTH: f32 = 1040.;
 
@@ -358,17 +357,16 @@ pub fn restore_look_button<V: 'static>(run: Run<V>, cx: &mut Context<V>) -> AnyE
 
 /// The top of a settings page: its title and actions, on a rule that runs the pane's whole width.
 pub fn title_bar(title: impl Into<gpui::SharedString>, actions: Vec<AnyElement>) -> AnyElement {
+    // The page's heading, first in its column: the title big, the page's actions at its end.
     div()
         .flex_shrink_0()
         .w_full()
-        .h(px(TITLE_BAR_HEIGHT))
-        .border_b_1()
-        .border_color(content(0.08))
+        .pt(px(28.))
+        .pb(px(8.))
         .child(
             // The content's own width, so the actions end where the page's cards end.
             div()
                 .w_full()
-                .h_full()
                 .max_w(px(CONTENT_WIDTH))
                 .mx_auto()
                 .px(px(CONTENT_INSET))
@@ -380,8 +378,8 @@ pub fn title_bar(title: impl Into<gpui::SharedString>, actions: Vec<AnyElement>)
                     div()
                         .min_w_0()
                         .truncate()
-                        .text_size(px(15.))
-                        .font_weight(FontWeight::MEDIUM)
+                        .text_size(px(24.))
+                        .font_weight(FontWeight::SEMIBOLD)
                         .text_color(content(1.))
                         .child(title.into()),
                 )

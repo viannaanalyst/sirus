@@ -1474,6 +1474,8 @@ pub struct Shell {
     /// Where the conversation card sat last frame, so the chrome wash can skip it (Monocode paints
     /// its 5% wash on the chrome only; under the clear card the glass shows untouched).
     card_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The settings card's bounds, for the chrome wash painted around it.
+    settings_card: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// When each group of steps last changed between open and closed, and those running now.
     phase_moved: std::cell::RefCell<HashMap<(usize, usize, usize), Instant>>,
     phase_live: std::cell::RefCell<HashSet<(usize, usize, usize)>>,
@@ -1987,6 +1989,7 @@ impl Shell {
             prompt_moved: HashMap::new(),
             prompt_widths: Default::default(),
             card_bounds: Default::default(),
+            settings_card: Default::default(),
             phase_moved: Default::default(),
             phase_live: Default::default(),
             turn_width: Rc::new(Cell::new(px(0.))),
@@ -17785,12 +17788,33 @@ impl Shell {
                         }
                     }),
                 )
-                // Over glass the app underneath fades out instead, so the desktop shows through.
+                // As the window: its own tint (over glass the app underneath fades out instead,
+                // so the desktop shows through) and the chrome wash around the card only, so the
+                // sidebar is the grey of the main one and the card the dark of the conversation's.
                 .bg(if pane_fill().a < 0.5 {
-                    chrome_wash()
+                    gpui::transparent_black()
                 } else {
-                    pane_opaque()
+                    shell_fill()
                 })
+                .child(chrome_wash_outside(self.settings_card.clone()))
+                .child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left(px(self.sidebar_width + 10.))
+                        .h(px(TITLE_BAR))
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .text_size(px(13.5))
+                        .child(div().text_color(content(0.5)).child(t("Configurações")))
+                        .child(div().text_color(content(0.3)).child("/"))
+                        .child(
+                            div()
+                                .text_color(content(0.95))
+                                .child(t(nav_label(self.settings_page))),
+                        ),
+                )
                 .flex()
                 .child(
                     div()
@@ -17806,7 +17830,8 @@ impl Shell {
                     div()
                         .flex_1()
                         .min_w_0()
-                        .my(px(6.))
+                        .mt(px(TITLE_BAR))
+                        .mb(px(6.))
                         .mr(px(6.))
                         .flex()
                         .flex_col()
@@ -17815,7 +17840,17 @@ impl Shell {
                         .border_color(crate::theme::border())
                         .bg(pane_fill())
                         .overflow_hidden()
-                        .child(div().opacity(page_t).child(bar))
+                        .child({
+                            let card = self.settings_card.clone();
+                            gpui::canvas(
+                                move |bounds, _, _| card.set(Some(bounds)),
+                                |_, _, _, _| {},
+                            )
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .size_full()
+                        })
                         .child(
                             div().flex_1().min_h_0().flex().child(
                                 div()
@@ -17831,12 +17866,17 @@ impl Shell {
                                             .top(px((1. - page_t) * 22. * self.settings_direction))
                                             .opacity(page_t)
                                             .w_full()
-                                            .max_w(px(crate::settings_pages::CONTENT_WIDTH))
-                                            .mx_auto()
-                                            .pt(px(16.))
-                                            .pb(px(40.))
-                                            .px(px(crate::settings_pages::CONTENT_INSET))
-                                            .child(body),
+                                            .child(bar)
+                                            .child(
+                                                div()
+                                                    .w_full()
+                                                    .max_w(px(crate::settings_pages::CONTENT_WIDTH))
+                                                    .mx_auto()
+                                                    .pt(px(8.))
+                                                    .pb(px(40.))
+                                                    .px(px(crate::settings_pages::CONTENT_INSET))
+                                                    .child(body),
+                                            ),
                                     ),
                             ),
                         ),

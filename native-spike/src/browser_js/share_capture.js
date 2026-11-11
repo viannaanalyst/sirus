@@ -170,6 +170,39 @@ try {
       copyCanvases[at].replaceWith(picture);
     } catch (e) { /* a tainted canvas stays out */ }
   });
+  // Videos become the frame on screen (or their poster): a page that is mostly a video would
+  // otherwise come out blank once <video> is dropped below.
+  const liveVideos = live("video");
+  const copyVideos = copy("video");
+  await inBatches(liveVideos.map((_, at) => at), async (at) => {
+    const video = liveVideos[at];
+    const target = copyVideos[at];
+    if (!target) return;
+    let data = null;
+    if (video.readyState >= 2 && video.videoWidth > 0) {
+      try {
+        const scale = Math.min(1, 1600 / Math.max(video.videoWidth, video.videoHeight));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+        canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+        canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+        data = canvas.toDataURL("image/jpeg", 0.85);
+      } catch (e) { data = null; }
+    }
+    if (!data && video.poster) data = await fetchData(video.poster, 6 * 1024 * 1024);
+    if (!data || used + data.length > LIMIT) return;
+    used += data.length;
+    const picture = document.createElement("img");
+    picture.setAttribute("src", data);
+    const box = video.getBoundingClientRect();
+    for (const name of ["class", "style", "id", "width", "height"]) {
+      const value = target.getAttribute(name);
+      if (value !== null) picture.setAttribute(name, value);
+    }
+    if (!target.getAttribute("width") && box.width) picture.setAttribute("width", String(Math.round(box.width)));
+    if (!picture.style.objectFit) picture.style.objectFit = getComputedStyle(video).objectFit || "contain";
+    target.replaceWith(picture);
+  });
   // What was typed or chosen stays visible; secrets never leave.
   const liveFields = live("input,textarea,select");
   const copyFields = copy("input,textarea,select");

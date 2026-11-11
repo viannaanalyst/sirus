@@ -385,11 +385,9 @@ impl Shell {
             .as_ref()
             .filter(|(for_key, _)| *for_key == key)
             .map(|(_, text)| text.clone());
-        // Only the latest reply of the transcript, once its turn is done, shows its time.
-        let time = (index + 1 == conv.turns.len()
-            && !turn.live
-            && !conv.working()
-            && !turn.answer.trim().is_empty())
+        // Every finished reply shows its time under the pointer; the latest once its turn is done.
+        let last = index + 1 == conv.turns.len();
+        let time = (!turn.live && !(last && conv.working()) && !turn.answer.trim().is_empty())
         .then(|| turn.replied_ms.and_then(crate::message_time::label))
         .flatten();
         if items.is_empty() && status.is_none() && notice.is_none() && time.is_none() {

@@ -84,8 +84,9 @@ fn link_skills(from: &Path, to: &Path) {
     if let Ok(existing) = std::fs::read_dir(to) {
         for link in existing.flatten() {
             let path = link.path();
-            let dangling = std::fs::read_link(&path)
-                .is_ok_and(|target| target.starts_with(from) && !target.exists());
+            // Any link whose skill is gone, not only ours: a profile copied from another machine
+            // keeps links to that machine's paths, and they would block every skill here.
+            let dangling = std::fs::read_link(&path).is_ok() && !path.exists();
             if dangling {
                 let _ = std::fs::remove_file(&path);
             }
@@ -710,6 +711,16 @@ mod tests {
         link_skills(&from, &to);
         assert!(std::fs::symlink_metadata(to.join("gone")).is_err());
         assert!(is_link("shared"));
+        // A profile copied from another machine links to that machine's paths: the stale link
+        // leaves and the skill here takes its place.
+        std::fs::remove_file(to.join("shared")).unwrap();
+        std::os::unix::fs::symlink("/Users/elsewhere/.claude/skills/shared", to.join("shared"))
+            .unwrap();
+        link_skills(&from, &to);
+        assert_eq!(
+            std::fs::read_link(to.join("shared")).unwrap(),
+            from.join("shared")
+        );
     }
 
     #[test]

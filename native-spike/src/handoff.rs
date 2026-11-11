@@ -492,11 +492,14 @@ impl Shell {
                 .flex()
                 .items_center()
                 .gap(px(8.))
+                .relative()
                 .rounded_t(px(crate::theme::RADIUS_MD))
                 .border_1()
                 .border_b_0()
                 .border_color(crate::theme::border())
-                .bg(content(0.03))
+                .child(crate::theme::composer_ledge_surface(
+                    crate::theme::RADIUS_MD,
+                ))
                 .child(
                     div()
                         .flex_shrink_0()

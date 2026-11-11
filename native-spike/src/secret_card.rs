@@ -941,15 +941,13 @@ impl Shell {
             .gap(px(2.))
             .relative()
             .rounded(px(crate::theme::RADIUS_MD))
-            .bg(crate::theme::black(0.35))
-            .child(super::dashed_frame(
-                crate::theme::RADIUS_MD,
-                if focused {
-                    accent_wash(0.8)
-                } else {
-                    content(0.2)
-                },
-            ))
+            .border_1()
+            .border_color(if focused {
+                accent_wash(0.8)
+            } else {
+                content(0.1)
+            })
+            .bg(content(0.03))
             .font_family("Menlo")
             .text_size(px(13.5))
             .cursor_text()
@@ -1212,11 +1210,10 @@ impl Shell {
             .rounded(px(crate::theme::RADIUS_LG))
             .border_1()
             .border_color(crate::theme::border())
-            .bg(field_fill())
             .flex()
             .flex_col()
-            // The approved "A+" look, as the question card: a pixel glow at the card's foot.
-            .child(super::question_dither(accent(), 0.22, false))
+            // The composer's glass, as every card above it; the pixel lock is its only dither.
+            .child(crate::theme::composer_surface(crate::theme::RADIUS_LG))
             .child(
                 div()
                     .flex()

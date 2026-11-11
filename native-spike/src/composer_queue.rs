@@ -1586,26 +1586,9 @@ impl Shell {
                 .py(px(2.))
                 .text_size(px(12.))
                 .text_color(content(0.55))
-                .child(
-                    gpui::canvas(
-                        |_, _, _| {},
-                        |bounds, _, window, _| {
-                            let corners = gpui::Corners {
-                                top_left: px(10.),
-                                top_right: px(10.),
-                                bottom_left: px(0.),
-                                bottom_right: px(0.),
-                            };
-                            window.paint_quad(
-                                gpui::fill(bounds, content(0.03)).corner_radii(corners),
-                            );
-                        },
-                    )
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .size_full(),
-                )
+                .child(crate::theme::composer_ledge_surface(
+                    crate::theme::RADIUS_MD,
+                ))
                 .children(header)
                 .child(
                     div()

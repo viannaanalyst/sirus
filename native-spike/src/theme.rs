@@ -445,6 +445,14 @@ pub fn opaque_floating() -> Hsla {
 /// A frosted surface: `tint` over a backdrop blur, or `opaque` in light themes. Put it first
 /// inside a card with the same corners; it fills the card and paints under the children.
 fn frosted(radius: f32, tint: Hsla, opaque: Hsla, blur: f32) -> impl IntoElement {
+    frosted_corners(gpui::Corners::all(px(radius)), tint, opaque, blur)
+}
+fn frosted_corners(
+    corners: gpui::Corners<gpui::Pixels>,
+    tint: Hsla,
+    opaque: Hsla,
+    blur: f32,
+) -> impl IntoElement {
     let light = is_light();
     canvas(
         |_, _, _| {},
@@ -455,7 +463,7 @@ fn frosted(radius: f32, tint: Hsla, opaque: Hsla, blur: f32) -> impl IntoElement
                 gpui::fill(bounds, tint)
                     .border_color(gpui::backdrop_blur_marker(blur * window.scale_factor()))
             };
-            window.paint_quad(quad.corner_radii(px(radius)));
+            window.paint_quad(quad.corner_radii(corners));
         },
     )
     .absolute()
@@ -475,6 +483,20 @@ pub fn peek_surface(radius: f32) -> impl IntoElement {
 /// The composer: ink at 3% over a 24 px frost.
 pub fn composer_surface(radius: f32) -> impl IntoElement {
     frosted(radius, content(0.03), field_fill(), 24.)
+}
+/// The composer's glass for a ledge on its top edge: rounded at the top only.
+pub fn composer_ledge_surface(radius: f32) -> impl IntoElement {
+    frosted_corners(
+        gpui::Corners {
+            top_left: px(radius),
+            top_right: px(radius),
+            bottom_left: px(0.),
+            bottom_right: px(0.),
+        },
+        content(0.03),
+        field_fill(),
+        24.,
+    )
 }
 /// 14% ink. Translucent, because the conversation can sit on glass, where
 /// a colour mixed from the opaque pane reads as a black line.

@@ -234,8 +234,21 @@ impl Shell {
                 .rounded_t(px(crate::theme::RADIUS_MD))
                 .border_1()
                 .border_b_0()
+                .relative()
                 .border_color(gpui::Hsla { a: 0.22, ..warm })
-                .bg(gpui::Hsla { a: 0.07, ..warm })
+                // The composer's glass with the warning's warm wash over it.
+                .child(crate::theme::composer_ledge_surface(
+                    crate::theme::RADIUS_MD,
+                ))
+                .child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full()
+                        .rounded_t(px(crate::theme::RADIUS_MD))
+                        .bg(gpui::Hsla { a: 0.07, ..warm }),
+                )
                 .child(icon("alert-circle", 14.).text_color(warm))
                 .child(
                     div()

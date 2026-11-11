@@ -82,9 +82,38 @@ pub(crate) fn model_changed(previous: &Turn, turn: &Turn) -> bool {
     previous.fast.is_some()
         && turn.fast.is_some()
         && previous.provider == turn.provider
-        && (previous.model != turn.model
-            || previous.effort != turn.effort
-            || previous.fast != turn.fast)
+        && (!same_model(previous.model.as_deref(), turn.model.as_deref())
+            || !same_value(previous.effort.as_deref(), turn.effort.as_deref())
+            || previous.fast.unwrap_or(false) != turn.fast.unwrap_or(false))
+}
+
+/// A missing value (the default, or not recorded yet, as in a turn just sent) is not a change.
+fn same_value(a: Option<&str>, b: Option<&str>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
+        _ => true,
+    }
+}
+
+/// The same model, whether named by alias (`opus`) or by the id the provider resolved
+/// (`claude-opus-5-5`); a context suffix such as `[1m]` is ignored.
+fn same_model(a: Option<&str>, b: Option<&str>) -> bool {
+    let (Some(a), Some(b)) = (a, b) else {
+        return true;
+    };
+    let clean = |m: &str| m.split('[').next().unwrap_or(m).trim().to_ascii_lowercase();
+    let (a, b) = (clean(a), clean(b));
+    if a == b {
+        return true;
+    }
+    let (short, long) = if a.len() <= b.len() {
+        (&a, &b)
+    } else {
+        (&b, &a)
+    };
+    !short.contains('-')
+        && !short.chars().any(|c| c.is_ascii_digit())
+        && long.split(['-', '/', ':']).any(|part| part == short)
 }
 
 /// The name of a provider as the menus show it.
@@ -697,6 +726,32 @@ mod tests {
         assert!(model_changed(
             &before,
             &sent("opus", Some("high"), Some(true))
+        ));
+    }
+
+    #[test]
+    fn unrecorded_values_and_aliases_are_not_changes() {
+        let before = sent("claude-opus-5-5", Some("medium"), Some(false));
+        // Alias of the same model, effort not recorded, fast false vs unset default.
+        assert!(!model_changed(
+            &before,
+            &sent("opus", Some("medium"), Some(false))
+        ));
+        assert!(!model_changed(
+            &before,
+            &sent("opus[1m]", None, Some(false))
+        ));
+        let mut none_model = sent("opus", Some("medium"), Some(false));
+        none_model.model = None;
+        assert!(!model_changed(&before, &none_model));
+        assert!(!model_changed(&none_model, &before));
+        assert!(model_changed(
+            &before,
+            &sent("sonnet", Some("medium"), Some(false))
+        ));
+        assert!(model_changed(
+            &before,
+            &sent("claude-sonnet-5-5", Some("medium"), Some(false))
         ));
     }
 

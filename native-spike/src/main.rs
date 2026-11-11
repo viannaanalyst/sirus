@@ -105,6 +105,7 @@ mod terminal_place;
 mod theme;
 mod tool_images;
 mod tunnel;
+mod update_all;
 mod visuals;
 mod window_place;
 mod workspace_choice;

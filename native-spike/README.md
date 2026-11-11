@@ -43,6 +43,7 @@ Quitting with `pkill` leaves the host running. Kill it too after rebuilding it, 
 - `src/toast.rs`: the window's notification column at the top right and its one card shape (ADR-205). `src/activity_cards.rs`: cards and project badges for what other conversations need (ADR-192), drawn in that column.
 - `src/quit_overlay.rs`: the large "Aperte ⌘Q de novo" over the whole window while the second press is awaited (ADR-205 addendum).
 - `src/app_update.rs`: in-app updates. It reads `sirus-latest.json` from the fixed `sirus-channel` release, verifies the archive's minisign signature against the key in `updater.pub` (never changed: installed apps trust it), swaps the bundle and relaunches only when asked, after the running-agents confirmation. Releases: `node scripts/release-sirus.ts` (dry run) or `--publish`.
+- `src/update_all.rs` and `src/update_all_ui.rs`: "Atualizar tudo" (ADR-207). One thread per computer updates the provider CLIs (this Mac through the window's connection, every paired computer through a short-lived one, `computer_move::Oneshot`) and asks each Linux host's updater to run (`host_update_action`), watching it until it settles; the rows live in Settings → Avançado → Atualizações, and the provider toast's "Atualizar tudo" starts the same run.
 - `src/i18n.rs`: English and Portuguese, with the Portuguese text as the key.
 - `src/visuals/`: native visuals, run from a JavaScript program.
 

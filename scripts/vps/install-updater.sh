@@ -1,5 +1,6 @@
 #!/bin/bash
-# Installs the safe host updater on a Linux computer that runs sirus-host (ADR-206).
+# Installs the safe host updater on a Linux computer that runs sirus-host (ADR-206), and the path
+# unit that runs it within seconds of a request from the window's "Atualizar tudo" (ADR-207).
 # Run as root from a checkout: sudo scripts/vps/install-updater.sh
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -20,6 +21,15 @@ OnUnitActiveSec=10min
 [Install]
 WantedBy=timers.target
 UNIT
+cat > /etc/systemd/system/sirus-host-update.path <<'UNIT'
+[Unit]
+Description=Run the sirus-host updater when the window asks for it (ADR-207)
+[Path]
+PathExists=/home/sirus/.sirus-host-update-request
+Unit=sirus-host-update.service
+[Install]
+WantedBy=paths.target
+UNIT
 systemctl daemon-reload
-systemctl enable --now sirus-host-update.timer
+systemctl enable --now sirus-host-update.timer sirus-host-update.path
 echo "Installed. Log: /var/log/sirus-host-update.log"

@@ -100,6 +100,12 @@ enum Ctl {
     Swatches(Vec<(u32, Opt)>),
     /// Read-only text: a value the React page edits with a richer widget, or a hint.
     Read(String),
+    /// The section's main action, filled with the accent; dimmed and inert when not `enabled`.
+    Primary {
+        label: &'static str,
+        act: Act,
+        enabled: bool,
+    },
     /// A button; dimmed and inert when `enabled` is false.
     Button {
         label: &'static str,
@@ -148,6 +154,8 @@ struct Group {
     /// Empty for a card without a heading.
     title: String,
     rows: Vec<Row>,
+    /// A button at the right of the heading: the section's main action.
+    action: Option<Ctl>,
 }
 
 struct Page {
@@ -541,6 +549,7 @@ fn group(title: impl Into<String>, rows: Vec<Row>) -> Group {
     Group {
         title: title.into(),
         rows,
+        action: None,
     }
 }
 
@@ -759,13 +768,22 @@ fn group_view<V: 'static>(group: Group, ui: &mut Ui<'_, V>, cx: &mut Context<V>)
         rows.push(row_view(item, at + 1 == count, ui, cx));
     }
     let mut block = div().mb(px(32.));
-    if !group.title.is_empty() {
+    let action = group.action.map(|ctl| control_view(ctl, ui, cx));
+    if !group.title.is_empty() || action.is_some() {
         block = block.child(
             div()
-                .mb(px(4.))
-                .text_size(px(12.5))
-                .text_color(content(0.5))
-                .child(group.title),
+                .mb(px(if action.is_some() { 8. } else { 4. }))
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(12.))
+                .child(
+                    div()
+                        .text_size(px(12.5))
+                        .text_color(content(0.5))
+                        .child(group.title),
+                )
+                .children(action),
         );
     }
     block
@@ -1343,6 +1361,33 @@ fn control_view<V: 'static>(ctl: Ctl, ui: &mut Ui<'_, V>, cx: &mut Context<V>) -
             width,
             button,
         } => field_view(key, text, width, button, ui, cx),
+        Ctl::Primary {
+            label,
+            act,
+            enabled,
+        } => {
+            let button = div()
+                .id(("setting", next_id(&mut ui.ids)))
+                .h(px(28.))
+                .px(px(12.))
+                .rounded(px(crate::theme::RADIUS_SM))
+                .bg(accent())
+                .flex()
+                .items_center()
+                .text_size(px(12.5))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(crate::theme::on_accent())
+                .child(label);
+            if enabled {
+                button
+                    .cursor_pointer()
+                    .hover(|style| style.opacity(0.88))
+                    .on_click(cx.listener(move |this, _, _, cx| fire(this, &act, save, run, cx)))
+                    .into_any_element()
+            } else {
+                button.opacity(0.45).into_any_element()
+            }
+        }
         Ctl::Button {
             label,
             act,
@@ -2674,7 +2719,83 @@ fn update_row() -> Row {
         Phase::Installed => controls.push(button(t("Reiniciar agora"), "restart", true)),
         _ => {}
     }
-    row(t("Atualizações"), about, controls)
+    row(t("Este Mac"), format!("Sirus · {about}"), controls)
+}
+
+/// Settings → Avançado → Atualizações (ADR-207): this Mac's app, the CLIs on this Mac, and for each
+/// paired computer its Sirus host and its CLIs, each with where it stands; "Atualizar tudo" at the
+/// right of the heading runs them all (update_all.rs).
+fn updates_group(d: &HashMap<&'static str, Value>) -> Group {
+    use crate::update_all::{Board, Step, row_key};
+    let board = Board::from_value(get_data(d, "updates"));
+    let busy = board.running();
+    let step_row = |title: String, key: String, host: Option<(&str, &str)>| {
+        let step = board.step(&key);
+        let mut controls = Vec::new();
+        let button = |label: &'static str, act: Act| Ctl::Button {
+            label,
+            act,
+            enabled: !busy,
+            danger: false,
+        };
+        match (&step, host) {
+            (Step::Waiting(count), Some((id, name))) => controls.push(button(
+                t("Instalar agora"),
+                act_run(
+                    "native_update_host_now",
+                    json!({ "computer": id, "name": name, "count": count }),
+                ),
+            )),
+            (Step::Failed(_) | Step::RolledBack(_), _) => controls.push(button(
+                t("Tentar de novo"),
+                act_run("native_update_retry", json!({ "row": key })),
+            )),
+            (Step::Available(_), None) => controls.push(button(
+                t("Atualizar"),
+                act_run("native_update_retry", json!({ "row": key })),
+            )),
+            _ => {}
+        }
+        row(title, step.text(), controls)
+    };
+    let mut rows = vec![
+        update_row(),
+        step_row(
+            t("Provedores neste Mac").to_owned(),
+            row_key("providers", crate::computers::HOME),
+            None,
+        ),
+    ];
+    for computer in get_data(d, "computers")["list"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        let id = computer["id"].as_str().unwrap_or("");
+        let name = computer["name"].as_str().unwrap_or(id);
+        rows.push(step_row(
+            format!("{name}: Sirus"),
+            row_key("host", id),
+            Some((id, name)),
+        ));
+        rows.push(step_row(
+            tf("{}: provedores", &[&name]),
+            row_key("providers", id),
+            None,
+        ));
+    }
+    Group {
+        action: Some(Ctl::Primary {
+            label: if busy {
+                t("Atualizando…")
+            } else {
+                t("Atualizar tudo")
+            },
+            act: act_run("native_update_all", json!({})),
+            enabled: !busy,
+        }),
+        ..group(t("Atualizações"), rows)
+    }
 }
 
 fn advanced(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
@@ -2704,9 +2825,9 @@ fn advanced(s: &Value, d: &HashMap<&'static str, Value>) -> Vec<Group> {
                     top("appUpdateAutoCheck"),
                 ),
                 download,
-                update_row(),
             ],
         ),
+        updates_group(d),
         group(
             t("Diagnóstico"),
             vec![

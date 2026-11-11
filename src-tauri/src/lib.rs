@@ -52,6 +52,7 @@ mod git_workspace;
 mod github_accounts;
 mod github_inbox;
 mod goals;
+mod host_update;
 mod html_preview;
 mod idle_compaction;
 mod infisical;

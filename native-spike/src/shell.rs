@@ -146,6 +146,9 @@ pub(crate) mod prompt_link;
 /// The changed files under a finished reply, opened in place (turn_review.rs).
 #[path = "turn_review.rs"]
 mod turn_review;
+/// "Atualizar tudo" (update_all_ui.rs, ADR-207).
+#[path = "update_all_ui.rs"]
+mod update_all_ui;
 use std::time::{Duration, Instant};
 
 #[path = "attachment_view.rs"]
@@ -503,6 +506,8 @@ struct ConfirmDialog {
     title: String,
     message: String,
     action_label: String,
+    /// The other button's label; "Cancelar" when None. Either way it only closes.
+    cancel_label: Option<String>,
     action: Box<dyn FnOnce(&mut Shell, &mut Context<Shell>)>,
 }
 
@@ -743,7 +748,7 @@ fn usage_tab_name(provider: &str, tabs: usize) -> &'static str {
     }
 }
 
-fn provider_title(provider: &str) -> &'static str {
+pub(crate) fn provider_title(provider: &str) -> &'static str {
     match provider {
         "claude" => "Claude Code",
         "codex" => "Codex",
@@ -1609,6 +1614,8 @@ pub struct Shell {
     problem_shown: Option<String>,
     /// The toasts' own state: the failure's clock and the provider updates on offer (toast.rs).
     toasts: toast::Toasts,
+    /// "Atualizar tudo": every row's step and the threads at work (update_all_ui.rs).
+    updates: crate::update_all::Board,
     /// Set with the problem when the toast reports instead of warning.
     notice: Option<String>,
     /// Conversations picked with ⌘ or ⇧ in the sidebar (sidebar_pick.rs).
@@ -1751,6 +1758,10 @@ impl Shell {
                     }
                     if key == "computer_move" {
                         this.computer_moved(&value, cx);
+                        return;
+                    }
+                    if key == "update_all" {
+                        this.update_all_event(value, cx);
                         return;
                     }
                     if key == "connectors_logins" {
@@ -2071,6 +2082,7 @@ impl Shell {
             problem: None,
             problem_shown: None,
             toasts: Default::default(),
+            updates: Default::default(),
             notice: None,
             picked: Vec::new(),
             edit_menu: None,
@@ -3024,6 +3036,10 @@ impl Shell {
         if self.settings_page == "Conectores" {
             self.load_infisical();
         }
+        if self.settings_page == "Avançado" {
+            self.publish_updates();
+            self.update_all_probe();
+        }
         for (key, command, args) in crate::settings_pages::loads(self.settings_page) {
             if command == "native_github_list" {
                 self.native_task(key, crate::native_actions::github_list);
@@ -3312,6 +3328,7 @@ impl Shell {
                 self.waiting.insert(id, Waiting::SettingsData("remote"));
             }
             name if name.starts_with("native_computer_") => self.computer_command(name, &args, cx),
+            name if name.starts_with("native_update_") => self.update_all_command(name, &args, cx),
             name if name.starts_with("native_pair_") => {
                 let known = self.settings_data["remote"]["devices"]
                     .as_array()
@@ -9070,9 +9087,26 @@ impl Shell {
             title,
             message,
             action_label: action_label.to_owned(),
+            cancel_label: None,
             action: Box::new(action),
         });
         cx.notify();
+    }
+
+    /// `ask` whose other button says what declining means ("Quando terminar"); it still only closes.
+    fn ask_choice(
+        &mut self,
+        title: String,
+        message: String,
+        action_label: &'static str,
+        cancel_label: &'static str,
+        action: impl FnOnce(&mut Shell, &mut Context<Shell>) + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        self.ask(title, message, action_label, action, cx);
+        if let Some(dialog) = self.confirm.as_mut() {
+            dialog.cancel_label = Some(cancel_label.to_owned());
+        }
     }
 
     /// Settings → Comportamento do chat → "Confirmar ao fechar um terminal" (on unless turned off).
@@ -9262,7 +9296,9 @@ impl Shell {
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.answer_confirm(false, cx)
                                         }))
-                                        .child(crate::i18n::t("Cancelar")),
+                                        .child(dialog.cancel_label.clone().unwrap_or_else(|| {
+                                            crate::i18n::t("Cancelar").to_owned()
+                                        })),
                                 )
                                 .child(
                                     div()

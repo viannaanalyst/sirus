@@ -779,18 +779,31 @@ impl Shell {
         cx.notify();
     }
 
-    /// "Atualizar tudo": every offer still waiting with a one-click update.
+    /// "Atualizar tudo": the same run as Settings → Avançado → Atualizações (ADR-207), with this
+    /// Mac's CLIs limited to the offers still waiting with a one-click update; their rows show the
+    /// progress. While a run is already going, only these offers update.
     fn update_all_offers(&mut self, cx: &mut Context<Self>) {
-        let serials: Vec<u64> = self
+        let waiting: Vec<(u64, String)> = self
             .toasts
             .offers
             .iter()
             .filter(|o| o.progress == Progress::Offered && o.command)
-            .map(|o| o.serial)
+            .map(|o| (o.serial, o.provider.clone()))
             .collect();
-        for serial in serials {
-            self.update_offer(serial, cx);
+        let providers = waiting.iter().map(|(_, p)| p.clone()).collect();
+        if !self.update_all_start(Some(providers), cx) {
+            for (serial, _) in waiting {
+                self.update_offer(serial, cx);
+            }
+            return;
         }
+        for offer in &mut self.toasts.offers {
+            if waiting.iter().any(|(serial, _)| *serial == offer.serial) {
+                offer.progress = Progress::Running;
+                offer.shown = Duration::ZERO;
+            }
+        }
+        cx.notify();
     }
 
     /// "Agora não" lets go of the offers still waiting (and tells the host); ✕ on the list

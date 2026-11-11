@@ -1,6 +1,7 @@
 #!/bin/bash
 # Keeps sirus-host on a Linux computer at the latest main, safely (ADR-206). Run as root by
-# sirus-host-update.timer every 10 minutes; install with scripts/vps/install-updater.sh.
+# sirus-host-update.timer every 10 minutes, and by sirus-host-update.path within seconds of a
+# request from the window (ADR-207); install with scripts/vps/install-updater.sh.
 #
 # 1. Fetch main; rebuild only when the host's code changed. A commit that failed before is skipped
 #    until a newer one lands.
@@ -12,7 +13,10 @@
 # 5. Otherwise: the previous binary and the copied database come back, the service restarts on
 #    them, and the commit is remembered as bad.
 #
-# `sirus-host-update --now` installs a waiting build even while conversations run.
+# `sirus-host-update --now` installs a waiting build even while conversations run. So does a
+# request file (~/.sirus-host-update-request) that says `now`; one that says `check` runs the
+# normal rules at once. Every run writes where it stands to ~/.sirus-host-update-status (JSON, read
+# by the host's `host_update_action`).
 set -u
 LOG=/var/log/sirus-host-update.log
 exec >>"$LOG" 2>&1
@@ -30,47 +34,81 @@ STEADY=20
 BUILT_FILE=$HOME_DIR/.sirus-host-built
 READY_FILE=$HOME_DIR/.sirus-host-ready
 BAD_FILE=$HOME_DIR/.sirus-host-bad
+REQUEST_FILE=$HOME_DIR/.sirus-host-update-request
+STATUS_FILE=$HOME_DIR/.sirus-host-update-status
 FORCE=0
 [ "${1:-}" = "--now" ] && FORCE=1
 
 log() { echo "$(date -Is) $*"; }
 as() { su - "$USER_NAME" -c "$1"; }
 
-as "git -C $SRC fetch -q origin main" || { log "fetch failed"; exit 0; }
+# status PHASE [COMMIT] [WAITING_FOR] [MESSAGE]: written to a new file and renamed over the old
+# one, so the host never reads half of it and a link put in its place is replaced, not followed.
+status() {
+  local running tmp message
+  running=$(cat "$BUILT_FILE" 2>/dev/null | tr -dc '0-9a-f')
+  message=$(printf '%s' "${4:-}" | tr -d '"\\' | tr -c '[:print:]' ' ' | cut -c1-200)
+  tmp=$(mktemp "$HOME_DIR/.sirus-host-update-status.XXXXXX") || return 0
+  printf '{"phase":"%s","commit":"%s","running":"%s","waitingFor":%s,"at":%s,"message":"%s"}\n' \
+    "$1" "${2:-}" "$running" "${3:-0}" "$(date +%s)" "$message" > "$tmp"
+  chmod 644 "$tmp"
+  mv -f "$tmp" "$STATUS_FILE"
+}
+
+# The request goes first, so the path unit never sees it again: `now` or `check`, nothing else.
+# `checking` tells the window that its request was picked up (an older status no longer counts).
+if [ -e "$REQUEST_FILE" ] || [ -L "$REQUEST_FILE" ]; then
+  REQUEST=$(head -c 16 "$REQUEST_FILE" 2>/dev/null | tr -dc 'a-z')
+  rm -f "$REQUEST_FILE"
+  [ "$REQUEST" = now ] && FORCE=1
+  status checking
+fi
+
+as "git -C $SRC fetch -q origin main" || { log "fetch failed"; status failed "" 0 "fetch failed"; exit 0; }
 NEW=$(as "git -C $SRC rev-parse origin/main")
 BUILT=$(cat "$BUILT_FILE" 2>/dev/null || echo none)
-[ "$NEW" = "$BUILT" ] && exit 0
-[ "$NEW" = "$(cat "$BAD_FILE" 2>/dev/null)" ] && exit 0
+[ "$NEW" = "$BUILT" ] && { status upToDate "$NEW"; exit 0; }
+if [ "$NEW" = "$(cat "$BAD_FILE" 2>/dev/null)" ]; then
+  status rolledBack "$NEW" 0 "skipped: this commit failed its health check before"; exit 0
+fi
 if [ "$BUILT" != none ] && [ -z "$(as "git -C $SRC diff --name-only $BUILT $NEW -- src-tauri native-spike/src/visuals/program")" ]; then
-  echo "$NEW" > "$BUILT_FILE"; exit 0
+  echo "$NEW" > "$BUILT_FILE"; status upToDate "$NEW"; exit 0
 fi
 
 # A newer build may already wait for an idle moment.
 if [ "$(cat "$READY_FILE" 2>/dev/null)" != "$NEW" ]; then
   log "building $NEW"
+  status building "$NEW"
   as "git -C $SRC checkout -q --detach $NEW && cd $SRC/src-tauri && . ~/.cargo/env && cargo build -q --release --no-default-features --features host --bin sirus-host" \
-    || { log "build failed"; exit 0; }
+    || { log "build failed"; status failed "$NEW" 0 "build failed"; exit 0; }
   echo "$NEW" > "$READY_FILE"
 fi
 
 if [ "$FORCE" = 0 ]; then
-  as "$BIN busy" >/dev/null
+  ACTIVE=$(as "$BIN busy" 2>/dev/null)
   case $? in
     0|3) ;;  # idle, or no host running at all
     2)  # a host older than `busy`: read the saved statuses instead
       ACTIVE=$(as "sqlite3 -readonly $DATA/state.db \"select count(*) from sessions where json_extract(json, '\$.status') in ('starting', 'running', 'waiting')\"" 2>/dev/null || echo 1)
-      [ "$ACTIVE" = 0 ] || { log "conversations running ($ACTIVE); install later"; exit 0; } ;;
-    *) log "conversations running; install later"; exit 0 ;;
+      if [ "$ACTIVE" != 0 ]; then
+        log "conversations running ($ACTIVE); install later"
+        status waiting "$NEW" "$(printf '%s' "$ACTIVE" | tr -dc '0-9')"; exit 0
+      fi ;;
+    *)
+      log "conversations running ($ACTIVE); install later"
+      ACTIVE=$(printf '%s' "$ACTIVE" | head -n 1 | tr -dc '0-9')
+      status waiting "$NEW" "${ACTIVE:-1}"; exit 0 ;;
   esac
 fi
 
+status installing "$NEW"
 # The copies to come back to.
 STAMP=$(date +%Y%m%d-%H%M%S)
 SNAPSHOT=$BACKUPS/state-$STAMP-${BUILT:0:8}.db
 as "mkdir -p $BACKUPS && chmod 700 $BACKUPS"
 if [ -f "$DATA/state.db" ]; then
   as "sqlite3 $DATA/state.db \".backup '$SNAPSHOT'\" && chmod 600 '$SNAPSHOT'" \
-    || { log "database copy failed; not installing"; exit 0; }
+    || { log "database copy failed; not installing"; status failed "$NEW" 0 "database copy failed"; exit 0; }
 fi
 cp -p "$BIN" "$PREV"
 
@@ -93,6 +131,7 @@ systemctl restart sirus-host
 if healthy; then
   echo "$NEW" > "$BUILT_FILE"
   log "installed $NEW (database copy: $SNAPSHOT)"
+  status installed "$NEW"
   # Only the newest copies stay.
   as "ls -1t $BACKUPS/state-*.db 2>/dev/null | tail -n +$((KEEP + 1)) | xargs -r rm -f"
   exit 0
@@ -108,6 +147,8 @@ systemctl start sirus-host
 echo "$NEW" > "$BAD_FILE"
 if healthy; then
   log "rolled back; $NEW is skipped until a newer commit"
+  status rolledBack "$NEW" 0 "the new host failed its health check"
 else
   log "rollback did not come back healthy either; check: journalctl -u sirus-host"
+  status failed "$NEW" 0 "rollback did not come back healthy; check journalctl -u sirus-host"
 fi

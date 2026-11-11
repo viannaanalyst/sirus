@@ -25,3 +25,9 @@ The VPS keeps `sirus-host` at the latest `main` with a root timer (`sirus-host-u
 - A broken host costs about a minute and a half, then the previous one is back with the database as it was before the update. What was written in between is lost, which is only the failed version's own start.
 - The first install of a host with `busy` has to be done with `--now` (or by hand), since the running host doesn't know the request yet.
 - The Mac app's host is updated with the app (ADR-140) and is not affected.
+
+## Addendum (2026-11-11): requests from the window and a status file (ADR-207)
+
+- **Request file.** The host's `host_update_action { type: "request", now }` writes `~/.sirus-host-update-request` (`check` or `now`) in the host user's home, renamed into place. `sirus-host-update.path` (`PathExists=`, installed by `install-updater.sh`) starts `sirus-host-update.service` within seconds. The updater reads and removes the request first thing and writes `checking`; `now` acts as `--now`, `check` runs the normal rules at once. A request that arrives during a run starts another once it ends.
+- **Status file.** Every run writes `~/.sirus-host-update-status` (JSON, 0644, through a temporary file and a rename): `phase` (`checking`, `upToDate`, `building`, `waiting`, `installing`, `installed`, `rolledBack`, `failed`), `commit` (the one the phase is about), `running` (the installed commit, from `.sirus-host-built`), `waitingFor` (the busy count while waiting), `at` (Unix seconds) and `message`. A skipped bad commit reports `rolledBack`. `host_update_action { type: "status" }` reads it, with the host's version and its own busy count.
+- The copies, the health check, the rollback and the bad-commit skip are unchanged.

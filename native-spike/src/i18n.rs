@@ -859,16 +859,19 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Atividade recente", "Recent activity"),
     ("Ativos {}", "Active {}"),
     ("Atribuídos", "Assignees"),
+    ("Atualizado", "Up to date"),
     ("Atualizado a partir de {}", "Updated from {}"),
     ("Atualizado agora", "Updated now"),
     ("Atualizado há {} h", "Updated {} h ago"),
     ("Atualizado há {} min", "Updated {} min ago"),
+    ("Atualizado · {}", "Up to date · {}"),
     ("Atualizando…", "Updating…"),
     ("Atualizar", "Update"),
     (
         "Atualizar a senha salva de {}?",
         "Update the saved password for {}?",
     ),
+    ("Atualizar agora", "Update now"),
     ("Atualizar dependências", "Update dependencies"),
     (
         "Atualizar o branch padrão automaticamente",
@@ -1157,6 +1160,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Compactar e enviar", "Compact and send"),
     ("Compartilhadas (.agents)", "Shared (.agents)"),
+    ("Compilando a versão nova…", "Building the new version…"),
     ("Componentes UI Arc", "UI Arc components"),
     ("Comportamento", "Behavior"),
     ("Comportamento do agente", "Agent behavior"),
@@ -1765,9 +1769,17 @@ const ENTRIES: &[(&str, &str)] = &[
         "Commit title temporary workspace unavailable",
     ),
     ("Espaçosa", "Spacious"),
+    (
+        "Esperando 1 conversa terminar",
+        "Waiting for 1 conversation to finish",
+    ),
     ("Esperando o primeiro passo…", "Waiting for its first step…"),
     ("Esperando sua aprovação", "Waiting for your approval"),
     ("Esperando sua resposta", "Waiting for your answer"),
+    (
+        "Esperando {} conversas terminarem",
+        "Waiting for {} conversations to finish",
+    ),
     (
         "Espere o turno atual terminar",
         "Wait for the current turn to finish",
@@ -1987,6 +1999,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "This branch is the repository's default branch.",
     ),
     (
+        "Este computador ainda não sabe atualizar pelo app.",
+        "This computer can't be updated from the app yet.",
+    ),
+    (
         "Este computador ainda não tem endereço. Defina a rota pública dele em remote-public.json.",
         "This computer has no address yet. Set its public route in remote-public.json.",
     ),
@@ -2147,6 +2163,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Falha no ditado.", "Dictation failed."),
     ("Falha no processo de login.", "Sign-in process failed."),
     ("Falhou", "Failed"),
+    ("Falhou: {}", "Failed: {}"),
     ("Fase {}", "Phase {}"),
     (
         "Faturas, pedidos e pagamentos",
@@ -2333,10 +2350,12 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Instalados, desligados {}", "Installed, off {}"),
     ("Instalando…", "Installing…"),
     ("Instalar", "Install"),
+    ("Instalar agora", "Install now"),
     (
         "Instalar as ferramentas do aparelho",
         "Install the device tools",
     ),
+    ("Instalar o Sirus em {} agora?", "Install Sirus on {} now?"),
     ("Instalação", "Installation"),
     (
         "Instale o GitHub CLI (gh) para listar pull requests.",
@@ -3375,6 +3394,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "O Sirus abre o login do serviço no seu navegador; você entra uma vez.",
         "Sirus opens the service's sign-in in your browser; you sign in once.",
     ),
+    (
+        "O Sirus deste computador atualiza junto com o app.",
+        "Sirus on this computer updates along with the app.",
+    ),
     ("O Sirus está sendo fechado", "Sirus is closing"),
     (
         "O Sirus precisa de Acesso Total ao Disco para ler os cookies do Safari.",
@@ -3449,6 +3472,10 @@ const ENTRIES: &[(&str, &str)] = &[
     (
         "O arquivo mudou fora do editor. O salvamento automático parou; ⌘S substitui.",
         "The file changed outside the editor. Autosave stopped; ⌘S overwrites it.",
+    ),
+    (
+        "O atualizador não está instalado neste computador.",
+        "The updater isn't installed on this computer.",
     ),
     (
         "O branch desta conversa não tem um pull request aberto no GitHub.",
@@ -4297,6 +4324,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Provedor não reconhecido", "Unknown provider"),
     ("Provedor padrão", "Default provider"),
     ("Provedores", "Providers"),
+    ("Provedores neste Mac", "Providers on this Mac"),
     ("Prévia em HTML", "HTML preview"),
     ("Próxima execução {} às {}", "Next run {} at {}"),
     ("Próxima fonte de entrada", "Next input source"),
@@ -4346,6 +4374,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Quando outra pessoa abre um pull request ou pede sua revisão no repositório de um projeto salvo. Verificado ao abrir o Sirus e quando você volta para ele.",
         "When someone else opens a pull request or asks for your review in a saved project's repository. Checked when Sirus opens and when you come back to it.",
     ),
+    ("Quando terminar", "When they finish"),
     (
         "Quando um agente pede uma escolha ou resposta.",
         "When an agent asks you to choose or answer.",
@@ -5024,6 +5053,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "A conversation that is running or waiting cannot be snoozed.",
     ),
     (
+        "Uma conversa está em andamento em {}. Instalar agora corta essa conversa; ela fica salva e pode continuar depois. Ou o Sirus instala sozinho quando ela terminar.",
+        "A conversation is in progress on {}. Installing now cuts it off; it stays saved and can continue later. Or Sirus installs by itself once it finishes.",
+    ),
+    (
         "Uma conversa está trabalhando nesta pasta. Puxe quando ela terminar.",
         "A conversation is working in this folder. Pull when it finishes.",
     ),
@@ -5222,6 +5255,14 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Voltar ao app", "Back to app"),
     ("Voltar ao último projeto", "Back to the last project"),
     ("Voltou", "Went back"),
+    (
+        "Voltou para a versão anterior",
+        "Back on the previous version",
+    ),
+    (
+        "Voltou para a versão anterior: {}",
+        "Back on the previous version: {}",
+    ),
     (
         "Vários agentes trabalhando juntos",
         "Several agents working together",
@@ -5683,6 +5724,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("{} concluída", "{} done"),
     ("{} concluídas", "{} done"),
     ("{} contas", "{} accounts"),
+    (
+        "{} conversas estão em andamento em {}. Instalar agora corta essas conversas; elas ficam salvas e podem continuar depois. Ou o Sirus instala sozinho quando elas terminarem.",
+        "{} conversations are in progress on {}. Installing now cuts them off; they stay saved and can continue later. Or Sirus installs by itself once they finish.",
+    ),
     ("{} conversas paradas", "{} settled conversations"),
     ("{} de {}", "{} of {}"),
     ("{} de {} checks falharam", "{} of {} checks failed"),
@@ -5751,6 +5796,10 @@ const ENTRIES: &[(&str, &str)] = &[
     ("{} trabalhou por {}m {}s", "{} worked for {}m {}s"),
     ("{} trabalhou por {}s", "{} worked for {}s"),
     ("{} usado", "{} used"),
+    (
+        "{} {} (atualize por fora do Sirus)",
+        "{} {} (update it outside Sirus)",
+    ),
     ("{} {} disponível", "{} {} available"),
     ("{} · Encontrada em: {}", "{} · Found in: {}"),
     (
@@ -5765,6 +5814,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "{}, de qualquer app, abre um campo para começar uma conversa sem abrir a janela. O atalho muda em Atalhos.",
         "{}, from any app, opens a field to start a conversation without opening the window. Change the shortcut in Shortcuts.",
     ),
+    ("{}: provedores", "{}: providers"),
     ("À direita", "On the right"),
     ("À esquerda", "On the left"),
     ("À frente de {} (sem upstream)", "Ahead of {} (no upstream)"),

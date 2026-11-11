@@ -16246,7 +16246,14 @@ impl Shell {
             .gap(px(8.))
             .child(
                 gpui::canvas(
-                    move |bounds, _, _| width_store.set(bounds.size.width),
+                    // Items are laid out before this is measured: a width that moved (the dock
+                    // divider dragged, a window resize) draws one more frame with the new one.
+                    move |bounds, window, _| {
+                        if (width_store.get() - bounds.size.width).abs() > px(0.5) {
+                            width_store.set(bounds.size.width);
+                            window.refresh();
+                        }
+                    },
                     |_, _, _, _| {},
                 )
                 .absolute()
@@ -16297,7 +16304,12 @@ impl Shell {
                                         gpui::canvas(
                                             |_, _, _| {},
                                             move |bounds, _, window, _| {
-                                                width_cell.set(bounds.size.width);
+                                                if (width_cell.get() - bounds.size.width).abs()
+                                                    > px(0.5)
+                                                {
+                                                    width_cell.set(bounds.size.width);
+                                                    window.refresh();
+                                                }
                                                 let radius = if bounds.size.height <= px(37.) {
                                                     f32::from(bounds.size.height) * 0.5
                                                 } else {

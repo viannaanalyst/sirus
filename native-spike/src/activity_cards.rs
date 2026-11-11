@@ -1,7 +1,8 @@
 //! Cards for other conversations: when a
 //! conversation the window is not showing finishes, fails, asks to run something or asks a
-//! question, a card slides in at the top right, under the title bar. Newest on top, three at
-//! most and then a "+N avisos" line. A permission card approves or denies right there with the
+//! question, a card slides in at the top right, under the title bar, in the one notification
+//! column it shares with the window's toasts (toast.rs draws the cards, after the toasts).
+//! Newest on top, three at most and then a "+N avisos" line. A permission card approves or denies right there with the
 //! command the transcript uses; a question card opens the conversation (Responder also puts
 //! the cursor in its composer); a result card opens it. Results stay until they are clicked,
 //! closed or their conversation is opened; permission and question cards stay until answered, and
@@ -26,7 +27,6 @@ const MAX_KEPT: usize = 24;
 pub(crate) const GRACE: Duration = Duration::from_millis(3200);
 /// Event ids remembered, so a repeated event does not stack a second card.
 const REMEMBERED: usize = 64;
-const WIDTH: f32 = 330.;
 const SLIDE: f32 = 26.;
 const SLIDE_TIME: f32 = 0.26;
 
@@ -522,269 +522,115 @@ impl Shell {
         cx.notify();
     }
 
-    /// The stack under the title bar, or nothing.
-    pub(super) fn cards_view(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// The cards for the column at the top right (toast.rs), newest first, and a "+N avisos" line
+    /// for the rest.
+    pub(super) fn activity_card_views(
+        &self,
+        reduced: bool,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
         let (shown, more) = self.cards.stack(|session| {
             self.card_conversation(session)
                 .is_some_and(|ix| self.project_of(ix).is_some())
         });
-        if shown.is_empty() {
-            return None;
-        }
-        let reduced = cx.reduce_motion();
-        let mut stack = div()
-            .absolute()
-            .top(px(crate::theme::TITLE_BAR + 6.))
-            .right(px(14.))
-            .w(px(WIDTH))
-            .flex()
-            .flex_col()
-            .gap(px(8.))
-            // The browser's page is a native view over everything: it cuts this stack out of
-            // itself (browser_holes.rs) rather than hiding.
-            .child(
-                gpui::canvas(
-                    |bounds, window, _| {
-                        let zoom = f64::from(window.content_zoom());
-                        let b = bounds.map(|v| f64::from(f32::from(v)) * zoom);
-                        crate::browser_holes::report((
-                            b.origin.x,
-                            b.origin.y,
-                            b.size.width,
-                            b.size.height,
-                        ));
-                    },
-                    |_, _, _, _| {},
-                )
-                .absolute()
-                .top_0()
-                .left_0()
-                .size_full(),
-            );
-        for card in shown {
-            if let Some(view) = self.card_view(card, reduced, cx) {
-                stack = stack.child(view);
-            }
-        }
+        let mut views: Vec<AnyElement> = shown
+            .into_iter()
+            .filter_map(|card| self.card_view(card, reduced, cx))
+            .collect();
         if more > 0 {
-            stack = stack.child(
+            views.push(
                 div()
                     .text_center()
-                    .text_size(px(12.5))
+                    .text_size(px(11.))
                     .text_color(content(0.6))
                     .child(if more == 1 {
                         tf("+{} aviso", &[&more])
                     } else {
                         tf("+{} avisos", &[&more])
-                    }),
+                    })
+                    .into_any_element(),
             );
         }
-        Some(stack.into_any_element())
+        views
     }
 
     fn card_view(&self, card: &Card, reduced: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
+        use super::toast::{button, close_button, compose, named};
         let event = &card.event;
         let ix = self.card_conversation(&event.session)?;
         let conversation = &self.conversations[ix];
         let project = &self.projects[self.project_of(ix)?];
         let kind = event.kind;
         let key = card.serial as usize * 4;
-        let tone = kind.color();
-        // The main button's fill: amber for a permission, the accent for the rest.
-        let (fill, ink): (gpui::Hsla, gpui::Hsla) = match kind {
-            Kind::Permission => (rgb(AMBER).into(), rgb(0x1a1204).into()),
-            _ => (accent(), on_accent()),
+        // The kind is the title; the line under it names the project and the conversation, or
+        // the question itself. A permission's command follows in a monospaced line.
+        let place = match kind {
+            Kind::Question if !event.detail.is_empty() => &event.detail,
+            _ => &conversation.title,
         };
-        let button = move |n: usize, label: &'static str, main: bool| {
-            let base = div()
-                .id(("activity-card-button", key + n))
-                .relative()
-                .overflow_hidden()
-                .h(px(24.))
-                .px(px(11.))
-                .flex_none()
-                .rounded(px(crate::theme::RADIUS_SM))
-                .flex()
-                .items_center()
-                .text_size(px(12.))
-                .font_weight(FontWeight::MEDIUM)
-                .cursor_pointer()
-                .hover(|s| s.opacity(0.88));
-            if main {
-                base.text_color(ink)
-                    .bg(fill)
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(super::pixel_stripes(gpui::Hsla {
-                        a: 0.18,
-                        ..gpui::white()
-                    }))
-                    .child(div().relative().child(label))
-            } else {
-                base.text_color(content(0.85))
-                    .bg(content(0.09))
-                    .child(label)
-            }
-        };
+        let mut spec = super::toast::Card::new(
+            named(format!("activity-card-{}", card.serial)),
+            kind.color(),
+            kind.label().to_owned(),
+        );
+        spec.detail = Some(if place.is_empty() {
+            project.name.clone()
+        } else {
+            format!("{} · {}", project.name, place)
+        });
+        if kind == Kind::Permission && !event.detail.is_empty() {
+            spec.mono.push(event.detail.clone());
+        }
         let id = event.id.clone();
         let (a, b, d, o) = (id.clone(), id.clone(), id.clone(), id.clone());
-        // One row: the action sits beside the words, as in Monocode's and T3 Code's toasts.
-        let actions = match kind {
-            Kind::Permission => div()
-                .flex_none()
-                .flex()
-                .items_center()
-                .gap(px(6.))
-                .child(
-                    button(0, t("Negar"), false)
-                        .bg(gpui::transparent_black())
-                        .text_color(content(0.6))
-                        .on_click(
-                            cx.listener(move |this, _, _, cx| this.card_decide(&a, "decline", cx)),
-                        ),
-                )
-                .child(button(1, t("Aprovar"), true).on_click(
-                    cx.listener(move |this, _, _, cx| this.card_decide(&b, "accept", cx)),
-                )),
-            Kind::Question => div()
-                .flex_none()
-                .child(button(1, t("Responder"), true).on_click(
-                    cx.listener(move |this, _, window, cx| this.card_open(&b, true, window, cx)),
-                )),
-            Kind::Finished | Kind::Failed => {
-                div()
-                    .flex_none()
-                    .child(button(0, t("Abrir"), false).on_click(cx.listener(
-                        move |this, _, window, cx| this.card_open(&a, false, window, cx),
-                    )))
+        match kind {
+            Kind::Permission => {
+                spec.buttons.push((
+                    t("Negar"),
+                    button(("activity-card-button", key), t("Negar"), false).on_click(
+                        cx.listener(move |this, _, _, cx| this.card_decide(&a, "decline", cx)),
+                    ),
+                ));
+                spec.buttons.push((
+                    t("Aprovar"),
+                    button(("activity-card-button", key + 1), t("Aprovar"), true).on_click(
+                        cx.listener(move |this, _, _, cx| this.card_decide(&b, "accept", cx)),
+                    ),
+                ));
             }
-        };
-        let border = match kind {
-            Kind::Permission => gpui::Hsla {
-                a: 0.4,
-                ..rgb(AMBER).into()
-            },
-            Kind::Question => accent_wash(0.45),
-            _ => crate::theme::border(),
-        };
-        // A question's words are the question itself; the others name the conversation.
-        let title = match kind {
-            Kind::Question if !event.detail.is_empty() => event.detail.clone(),
-            _ => conversation.title.clone(),
-        };
-        let words = div()
-            .flex_1()
-            .min_w_0()
-            .flex()
-            .flex_col()
-            .child(
-                div()
-                    .truncate()
-                    .text_size(px(13.))
-                    .line_height(px(17.))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(content(0.97))
-                    .child(title),
-            )
-            .child(
-                div()
-                    .flex()
-                    .gap(px(4.))
-                    .text_size(px(11.5))
-                    .line_height(px(15.))
-                    .text_color(content(0.5))
-                    .child(div().flex_shrink_0().text_color(tone).child(kind.label()))
-                    .child(div().child("·"))
-                    .child(div().truncate().child(project.name.clone())),
-            );
-        let card_el = div()
-            .id(("activity-card", key))
-            .group("activity-card")
-            .relative()
-            .overflow_hidden()
-            .w_full()
-            .px(px(10.))
-            .py(px(9.))
-            .rounded(px(crate::theme::RADIUS_LG))
-            .border_1()
-            .border_color(border)
-            .child(crate::theme::floating_surface(crate::theme::RADIUS_LG))
-            // The approved look: a pixel glow at the foot, in the card's own tone.
-            .child(super::question_dither(tone, 0.22, false))
-            .shadow_lg()
-            .occlude()
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            // The ✕ waits for the pointer to be over the toast.
-            .child(
-                div()
-                    .id(("activity-card-close", key))
-                    .absolute()
-                    .top(px(3.))
-                    .right(px(3.))
-                    .size(px(16.))
-                    .rounded_full()
-                    .opacity(0.)
-                    .group_hover("activity-card", |s| s.opacity(1.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .cursor_pointer()
-                    .hover(|s| s.bg(content(0.1)))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.cards.dismiss(&d);
-                        cx.notify();
-                    }))
-                    .child(icon("close", 10.).text_color(content(0.5))),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(9.))
-                    .child(
-                        div()
-                            .flex_shrink_0()
-                            .child(crate::project_avatar::project_avatar(
-                                &project.name,
-                                &project.appearance,
-                                22.,
-                            )),
-                    )
-                    // A question's words open its conversation without answering.
-                    .child(if kind == Kind::Question {
-                        words
-                            .id(("activity-card-words", key))
-                            .cursor_pointer()
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.card_open(&o, false, window, cx)
-                            }))
-                            .into_any_element()
-                    } else {
-                        words.into_any_element()
-                    })
-                    .child(actions),
-            )
-            // A permission shows what it asks to run, on one line in a dashed box.
-            .when(kind == Kind::Permission && !event.detail.is_empty(), |d| {
-                d.child(
-                    div()
-                        .relative()
-                        .mt(px(8.))
-                        .px(px(8.))
-                        .py(px(5.))
-                        .rounded(px(crate::theme::RADIUS_MD))
-                        .bg(crate::theme::black(0.4))
-                        .child(super::dashed_frame(crate::theme::RADIUS_MD, content(0.2)))
-                        .child(
-                            div()
-                                .relative()
-                                .truncate()
-                                .font_family("Menlo")
-                                .text_size(px(11.5))
-                                .text_color(content(0.85))
-                                .child(event.detail.clone()),
-                        ),
-                )
-            });
+            Kind::Question => {
+                spec.buttons.push((
+                    t("Responder"),
+                    button(("activity-card-button", key + 1), t("Responder"), true).on_click(
+                        cx.listener(move |this, _, window, cx| {
+                            this.card_open(&b, true, window, cx)
+                        }),
+                    ),
+                ));
+                // A question's words open its conversation without answering.
+                spec.words_click =
+                    Some(Box::new(cx.listener(move |this, _, window, cx| {
+                        this.card_open(&o, false, window, cx)
+                    })));
+            }
+            Kind::Finished | Kind::Failed => {
+                spec.buttons.push((
+                    t("Abrir"),
+                    button(("activity-card-button", key), t("Abrir"), false).on_click(cx.listener(
+                        move |this, _, window, cx| this.card_open(&a, false, window, cx),
+                    )),
+                ));
+            }
+        }
+        spec.close = Some(
+            close_button(("activity-card-close", key)).on_click(cx.listener(
+                move |this, _, _, cx| {
+                    this.cards.dismiss(&d);
+                    cx.notify();
+                },
+            )),
+        );
+        let card_el = compose(spec);
         Some(if reduced {
             card_el.into_any_element()
         } else {

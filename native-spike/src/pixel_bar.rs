@@ -109,6 +109,30 @@ pub fn pixel_bar(share: f32, color: Hsla) -> impl IntoElement {
     .h(px(HEIGHT))
 }
 
+/// Only the fill of a bar: the inked cells of `pixel_bar` at `share`, no track, `height` tall. A
+/// toast's clock and its running stripe are this, two pixels high.
+pub fn pixel_fill(share: f32, color: Hsla, height: f32) -> impl IntoElement {
+    canvas(
+        |_, _: &mut Window, _: &mut App| {},
+        move |bounds, _, window: &mut Window, _: &mut App| {
+            let (width, tall) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
+            for cell in cells(width, tall, share) {
+                if cell.dot == Dot::Ink {
+                    window.paint_quad(fill(
+                        Bounds::new(
+                            bounds.origin + point(px(cell.x), px(cell.y)),
+                            size(px(CELL), px(CELL)),
+                        ),
+                        color,
+                    ));
+                }
+            }
+        },
+    )
+    .w_full()
+    .h(px(height))
+}
+
 /// The cells of a bar split into `parts` (shares of the whole, in order), one empty column between
 /// parts. Each part gets at least one column when its share is above zero, and is dithered on its
 /// own: half-inked at its start, solid at its end. The index is the part a cell belongs to.

@@ -3099,44 +3099,6 @@ impl Shell {
         }
     }
 
-    /// The small notice in the footer: a version on offer, its download, or the restart it waits for.
-    fn update_notice(&self, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
-        use crate::app_update::{Phase, status};
-        let u = status();
-        let version = u.version.clone().unwrap_or_default();
-        let (text, kind): (String, Option<&'static str>) = match u.phase {
-            Phase::Available => (
-                tf("Sirus {} disponível · Instalar", &[&version]),
-                Some("install"),
-            ),
-            Phase::Downloading => (tf("Baixando o Sirus {}…", &[&version]), None),
-            Phase::Installed => (
-                t("Atualização pronta · Reiniciar").to_owned(),
-                Some("restart"),
-            ),
-            _ => return None,
-        };
-        let notice = div()
-            .id("app-update-notice")
-            .h(px(22.))
-            .px(px(6.))
-            .rounded(px(crate::theme::RADIUS_SM))
-            .flex()
-            .items_center()
-            .text_size(px(12.))
-            .text_color(accent())
-            .child(text);
-        Some(match kind {
-            Some(kind) => notice
-                .cursor_pointer()
-                .hover(|s| s.bg(content(0.08)))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.run_setting("native_app_update", json!({ "type": kind }), cx)
-                })),
-            None => notice,
-        })
-    }
-
     fn native_task(&self, key: &'static str, work: impl FnOnce() -> Value + Send + 'static) {
         let (tx, rx) = async_channel::bounded(1);
         std::thread::spawn(move || {
@@ -3713,7 +3675,8 @@ impl Shell {
         false
     }
 
-    /// The small notice asking for `press` again, while that's what is awaited.
+    /// The small notice above the composer asking for `press` again, while that's what is
+    /// awaited. ⌘Q's notice is a card in the notification column instead (toast.rs).
     fn press_notice(&self, press: Press, cx: &gpui::App) -> Option<AnyElement> {
         let (key, at) = self.press_again.filter(|(key, _)| *key == press)?;
         let since = at.elapsed().as_secs_f32();
@@ -15484,7 +15447,6 @@ impl Shell {
             )
             .children(agents)
             .child(div().flex_1())
-            .when_some(self.update_notice(cx), |d, notice| d.child(notice))
             .when_some(self.resources_gauge(cx), |d, gauge| d.child(gauge))
             .children(self.computer_chip(cx))
             .children(self.actions_button(cx))
@@ -20012,34 +19974,6 @@ pub(crate) fn dotted_rule() -> impl IntoElement {
     .h(px(1.))
 }
 
-/// The time left on a toast as a row of 2 px cells along its foot, one in four left out, `share`
-/// of the width still lit.
-pub(crate) fn pixel_timer(share: f32) -> impl IntoElement {
-    gpui::canvas(
-        |_, _, _| {},
-        move |bounds, _, window, _| {
-            let cols = (f32::from(bounds.size.width) / 2.).floor() as u32;
-            let lit = (cols as f32 * share.clamp(0., 1.)).round() as u32;
-            for x in 0..lit {
-                if (x + 1) % 4 != 0 {
-                    window.paint_quad(gpui::fill(
-                        Bounds::new(
-                            bounds.origin + gpui::point(px(x as f32 * 2.), px(0.)),
-                            gpui::size(px(2.), px(2.)),
-                        ),
-                        content(0.5),
-                    ));
-                }
-            }
-        },
-    )
-    .absolute()
-    .bottom_0()
-    .left_0()
-    .right_0()
-    .h(px(2.))
-}
-
 /// Thin vertical stripes every 2 px, a pixel weave over a button.
 pub(crate) fn pixel_stripes(color: gpui::Hsla) -> impl IntoElement {
     gpui::canvas(
@@ -20516,8 +20450,8 @@ impl Render for Shell {
         let resources_popup = self.resources_popup_view(now, &mut moving, cx);
         let context_popup = self.context_popup_view(now, &mut moving, cx);
         let sidebar_card = self.sidebar_card_view(now, &mut moving, cx);
-        let activity_cards = self.cards_view(cx);
-        let toasts = self.toast_stack(cx);
+        // Every notification of the window, in one column at the top right (toast.rs).
+        let notices = self.notice_column(cx);
         let edit_menu = self.edit_menu.map(|open| {
             let (pick, dismiss) = (cx.entity(), cx.entity());
             crate::edit_menu::view(
@@ -20557,14 +20491,6 @@ impl Render for Shell {
         };
         let trail_card = self.trail_card();
         let project_switch = self.project_switch_view(cx);
-        let quit_notice = self.press_notice(Press::Quit, cx).map(|notice| {
-            div()
-                .absolute()
-                .top(px(TITLE_BAR + 10.))
-                .left_0()
-                .right_0()
-                .child(notice)
-        });
         let add_menu = self.add_menu_view(now, &mut moving, cx);
         let header_more = self.header_more_view(now, &mut moving, cx);
         let git_menu = self.git_menu(now, &mut moving, size, cx);
@@ -20819,7 +20745,6 @@ impl Render for Shell {
             .children(handoff_popup)
             .children(trail_card)
             .children(project_switch)
-            .children(quit_notice)
             .children(actions_menu)
             .children(action_dialog)
             .children(remote_project)
@@ -20839,8 +20764,7 @@ impl Render for Shell {
             .children(tasks_overlays)
             // Over Settings and Usage too, whose pages would cover them.
             .children(confirm_dialog)
-            .children(activity_cards)
-            .children(toasts)
+            .children(notices)
             .children(edit_menu)
             .children(palette_view)
             .children(first_run)

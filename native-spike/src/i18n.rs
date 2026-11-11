@@ -880,7 +880,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Atualizar skills", "Refresh skills"),
     ("Atualizar tudo", "Update all"),
-    ("Atualização pronta · Reiniciar", "Update ready · Restart"),
+    ("Atualização pronta", "Update ready"),
     ("Atualizações", "Updates"),
     ("Atualizações disponíveis", "Updates available"),
     (
@@ -4415,9 +4415,11 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Recusar", "Decline"),
     ("Reduzir movimento", "Reduce motion"),
     ("Regra", "Rule"),
+    ("Reiniciar", "Restart"),
     ("Reiniciar agora", "Restart now"),
     ("Reiniciar e interromper", "Restart and interrupt"),
     ("Reiniciar para atualizar?", "Restart to update?"),
+    ("Reinicie para usar o Sirus {}", "Restart to use Sirus {}"),
     (
         "Remove sessões encerradas e seus worktrees isolados. Worktrees com alterações são preservados.",
         "Removes isolated worktrees for completed, failed, or stopped sessions. Dirty trees are refused without --force.",
@@ -4706,10 +4708,6 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Sincronizado", "Synced"),
     ("Sincronizando…", "Syncing…"),
     ("Sincronizar", "Sync"),
-    (
-        "Sirus {} disponível · Instalar",
-        "Sirus {} available · Install",
-    ),
     ("Sistema", "System"),
     ("Sistema segue o macOS.", "System follows macOS."),
     ("Site do Sirus", "Sirus Website"),
@@ -5215,6 +5213,7 @@ const ENTRIES: &[(&str, &str)] = &[
         "Você pode recuperar pela Lixeira no Finder. Tudo que estiver dentro da pasta vai junto.",
         "You can restore it from the Trash in Finder. Anything inside a folder goes with it.",
     ),
+    ("Você tem a {}", "You have {}"),
     (
         "Volta a mensagem para o composer e apaga a resposta",
         "Takes the message back to the composer and drops the reply",

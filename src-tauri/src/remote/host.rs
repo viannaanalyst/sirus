@@ -147,6 +147,9 @@ enum ControlRequest {
     /// A code for the window's own pairing: no address, and it works with other devices off.
     PairWindow,
     Status,
+    /// How many conversations are in a turn or wait on the person: the updater installs a new
+    /// host only at zero, since a restart stops them (ADR-206).
+    Busy,
     #[serde(rename_all = "camelCase")]
     Revoke {
         device_id: String,
@@ -200,6 +203,11 @@ async fn control(app: AppHandle, request: ControlRequest) -> Result<Value> {
         ControlRequest::Pair => serde_json::to_value(remote_pair().await?)?,
         ControlRequest::PairWindow => json!({ "code": window_code()? }),
         ControlRequest::Status => serde_json::to_value(remote_action(app, Action::Status).await?)?,
+        ControlRequest::Busy => {
+            let state = app.state::<std::sync::Arc<crate::commands::AppState>>();
+            let data = state.data.lock();
+            json!({ "turns": busy_turns(data.sessions.iter().map(|session| &session.status)) })
+        }
         ControlRequest::Revoke { device_id } => {
             let known = remote()?
                 .config
@@ -213,6 +221,11 @@ async fn control(app: AppHandle, request: ControlRequest) -> Result<Value> {
             serde_json::to_value(remote_action(app, Action::Revoke { device_id }).await?)?
         }
     })
+}
+
+/// Conversations a restart would cut: in a turn, or waiting on an approval or a question.
+fn busy_turns<'a>(statuses: impl Iterator<Item = &'a crate::models::SessionStatus>) -> usize {
+    statuses.filter(|status| status.is_active()).count()
 }
 
 /// A one-time code for the window's own device.
@@ -324,6 +337,14 @@ impl DeviceInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_turn_or_a_wait_on_the_person_keeps_the_host_busy() {
+        use crate::models::SessionStatus::*;
+        let statuses = [Idle, Running, Waiting, Completed, Starting, Failed, Stopped];
+        assert_eq!(busy_turns(statuses.iter()), 3);
+        assert_eq!(busy_turns([Idle, Completed, Stopped].iter()), 0);
+    }
 
     #[test]
     fn assets_stay_inside_the_assets_folder() {

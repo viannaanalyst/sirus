@@ -26,6 +26,8 @@ Usage:
   sirus-host pair [--data-dir DIR]      one-time six-digit code and QR for a new device
   sirus-host devices [--data-dir DIR]   paired devices
   sirus-host revoke <device-id> [--data-dir DIR]
+  sirus-host busy [--data-dir DIR]      conversations a restart would cut; exit 0 when none,
+                                        1 when some, 3 when no host is running
 
 Options:
   --data-dir DIR  state folder (default $SIRUS_DATA_DIR, else $XDG_DATA_HOME/sirus-code,
@@ -232,6 +234,7 @@ pub fn main() -> i32 {
         "pair" => pair(&cli),
         "devices" => devices(&cli),
         "revoke" => revoke(&cli),
+        "busy" => busy(&cli),
         "version" => {
             println!("sirus-host {}", env!("CARGO_PKG_VERSION"));
             0
@@ -514,6 +517,25 @@ fn devices(cli: &Cli) -> i32 {
         println!("{device}");
     }
     0
+}
+
+/// For the updater (ADR-206): how many conversations are in a turn or waiting on the person.
+fn busy(cli: &Cli) -> i32 {
+    match remote_host::control_request(&data_dir(cli), &json!({ "type": "busy" })) {
+        Some(Ok(reply)) => {
+            let turns = reply["turns"].as_u64().unwrap_or(0);
+            println!("{turns}");
+            i32::from(turns > 0)
+        }
+        Some(Err(error)) => {
+            eprintln!("sirus-host: {}", error_message(&error));
+            1
+        }
+        None => {
+            println!("no host running");
+            3
+        }
+    }
 }
 
 fn revoke(cli: &Cli) -> i32 {

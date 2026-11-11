@@ -1,0 +1,113 @@
+#!/bin/bash
+# Keeps sirus-host on a Linux computer at the latest main, safely (ADR-206). Run as root by
+# sirus-host-update.timer every 10 minutes; install with scripts/vps/install-updater.sh.
+#
+# 1. Fetch main; rebuild only when the host's code changed. A commit that failed before is skipped
+#    until a newer one lands.
+# 2. Install only when no conversation is in a turn or waiting on the person (`sirus-host busy`),
+#    since a restart stops them. Idle agent processes kept between turns don't count.
+# 3. Before installing: an online copy of state.db (sqlite3 .backup) and of the current binary.
+# 4. After restarting: the health route must answer within HEALTH_WAIT seconds and the service
+#    must stay up, without systemd restarting it, for STEADY seconds.
+# 5. Otherwise: the previous binary and the copied database come back, the service restarts on
+#    them, and the commit is remembered as bad.
+#
+# `sirus-host-update --now` installs a waiting build even while conversations run.
+set -u
+LOG=/var/log/sirus-host-update.log
+exec >>"$LOG" 2>&1
+USER_NAME=sirus
+HOME_DIR=/home/$USER_NAME
+SRC=$HOME_DIR/sirus-src
+DATA=$HOME_DIR/.local/share/sirus-code
+BIN=/usr/local/bin/sirus-host
+PREV=/usr/local/bin/sirus-host.prev
+BACKUPS=$DATA/update-backups
+KEEP=3
+HEALTH=http://127.0.0.1:7710/api/health
+HEALTH_WAIT=60
+STEADY=20
+BUILT_FILE=$HOME_DIR/.sirus-host-built
+READY_FILE=$HOME_DIR/.sirus-host-ready
+BAD_FILE=$HOME_DIR/.sirus-host-bad
+FORCE=0
+[ "${1:-}" = "--now" ] && FORCE=1
+
+log() { echo "$(date -Is) $*"; }
+as() { su - "$USER_NAME" -c "$1"; }
+
+as "git -C $SRC fetch -q origin main" || { log "fetch failed"; exit 0; }
+NEW=$(as "git -C $SRC rev-parse origin/main")
+BUILT=$(cat "$BUILT_FILE" 2>/dev/null || echo none)
+[ "$NEW" = "$BUILT" ] && exit 0
+[ "$NEW" = "$(cat "$BAD_FILE" 2>/dev/null)" ] && exit 0
+if [ "$BUILT" != none ] && [ -z "$(as "git -C $SRC diff --name-only $BUILT $NEW -- src-tauri native-spike/src/visuals/program")" ]; then
+  echo "$NEW" > "$BUILT_FILE"; exit 0
+fi
+
+# A newer build may already wait for an idle moment.
+if [ "$(cat "$READY_FILE" 2>/dev/null)" != "$NEW" ]; then
+  log "building $NEW"
+  as "git -C $SRC checkout -q --detach $NEW && cd $SRC/src-tauri && . ~/.cargo/env && cargo build -q --release --no-default-features --features host --bin sirus-host" \
+    || { log "build failed"; exit 0; }
+  echo "$NEW" > "$READY_FILE"
+fi
+
+if [ "$FORCE" = 0 ]; then
+  as "$BIN busy" >/dev/null
+  case $? in
+    0|3) ;;  # idle, or no host running at all
+    2)  # a host older than `busy`: read the saved statuses instead
+      ACTIVE=$(as "sqlite3 -readonly $DATA/state.db \"select count(*) from sessions where json_extract(json, '\$.status') in ('starting', 'running', 'waiting')\"" 2>/dev/null || echo 1)
+      [ "$ACTIVE" = 0 ] || { log "conversations running ($ACTIVE); install later"; exit 0; } ;;
+    *) log "conversations running; install later"; exit 0 ;;
+  esac
+fi
+
+# The copies to come back to.
+STAMP=$(date +%Y%m%d-%H%M%S)
+SNAPSHOT=$BACKUPS/state-$STAMP-${BUILT:0:8}.db
+as "mkdir -p $BACKUPS && chmod 700 $BACKUPS"
+if [ -f "$DATA/state.db" ]; then
+  as "sqlite3 $DATA/state.db \".backup '$SNAPSHOT'\" && chmod 600 '$SNAPSHOT'" \
+    || { log "database copy failed; not installing"; exit 0; }
+fi
+cp -p "$BIN" "$PREV"
+
+healthy() {
+  local waited=0 before
+  while [ "$waited" -lt "$HEALTH_WAIT" ]; do
+    curl -fsS --max-time 3 "$HEALTH" 2>/dev/null | grep -q '"app":"sirus"' && break
+    sleep 2; waited=$((waited + 2))
+  done
+  [ "$waited" -lt "$HEALTH_WAIT" ] || return 1
+  before=$(systemctl show -p NRestarts --value sirus-host)
+  sleep "$STEADY"
+  systemctl is-active -q sirus-host || return 1
+  [ "$(systemctl show -p NRestarts --value sirus-host)" = "$before" ] || return 1
+  curl -fsS --max-time 3 "$HEALTH" 2>/dev/null | grep -q '"app":"sirus"'
+}
+
+install -m 755 "$SRC/src-tauri/target/release/sirus-host" "$BIN"
+systemctl restart sirus-host
+if healthy; then
+  echo "$NEW" > "$BUILT_FILE"
+  log "installed $NEW (database copy: $SNAPSHOT)"
+  # Only the newest copies stay.
+  as "ls -1t $BACKUPS/state-*.db 2>/dev/null | tail -n +$((KEEP + 1)) | xargs -r rm -f"
+  exit 0
+fi
+
+log "new host $NEW failed its health check; rolling back to ${BUILT:0:8}"
+systemctl stop sirus-host
+install -m 755 "$PREV" "$BIN"
+if [ -f "$SNAPSHOT" ]; then
+  as "cp '$SNAPSHOT' $DATA/state.db && rm -f $DATA/state.db-wal $DATA/state.db-shm"
+fi
+systemctl start sirus-host
+echo "$NEW" > "$BAD_FILE"
+if healthy; then
+  log "rolled back; $NEW is skipped until a newer commit"
+else
+  log "rollback did not come back healthy either; check: journalctl -u sirus-host"
+fi

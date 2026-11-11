@@ -723,8 +723,9 @@ pub struct AppSettings {
     #[serde(default = "default_true")]
     pub skills_by_project: bool,
     /// Claude's `autoCompactWindow`: compact at about this many tokens (100,000 to 1,000,000).
-    /// Empty leaves it to Claude Code.
-    #[serde(default)]
+    /// Empty leaves it to Claude Code, which lets a 1M window fill before compacting; the
+    /// default of 200,000 keeps each request's re-read prefix bounded.
+    #[serde(default = "default_auto_compact_window")]
     pub claude_auto_compact_window: String,
     /// Chat behavior (off by default): when a Claude or Codex conversation's reported context
     /// reaches 80% of its window, the next send starts a fresh provider session seeded with a
@@ -984,6 +985,10 @@ pub(crate) fn is_zero(value: &u32) -> bool {
     *value == 0
 }
 
+pub fn default_auto_compact_window() -> String {
+    "200000".into()
+}
+
 fn default_true() -> bool {
     true
 }
@@ -1014,7 +1019,7 @@ impl Default for AppSettings {
             continue_interrupted_sessions: true,
             compact_idle_before_cache_expiry: false,
             skills_by_project: true,
-            claude_auto_compact_window: String::new(),
+            claude_auto_compact_window: default_auto_compact_window(),
             rotate_at_context_limit: false,
             agent_sounds: false,
             keep_idle_agents: 16,
@@ -1523,15 +1528,17 @@ mod settings_tests {
         };
         let parsed = serde_json::from_str::<AppSettings>("{}").unwrap();
         assert!(parsed.github_seen.is_empty() && parsed.github_seen_floor.is_none());
-        assert!(with(
-            &[
-                ("owner/repo#1", "2026-10-17T12:00:00Z"),
-                ("my-org/a.b_c#9", "2026-10-17T12:00:00.123+02:00"),
-            ],
-            Some("2026-10-01T00:00:00.000Z"),
-        )
-        .validate_controls()
-        .is_ok());
+        assert!(
+            with(
+                &[
+                    ("owner/repo#1", "2026-10-17T12:00:00Z"),
+                    ("my-org/a.b_c#9", "2026-10-17T12:00:00.123+02:00"),
+                ],
+                Some("2026-10-01T00:00:00.000Z"),
+            )
+            .validate_controls()
+            .is_ok()
+        );
         for (key, at) in [
             ("owner/repo", "2026-10-17T12:00:00Z"),
             ("o/../x#1", "2026-10-17T12:00:00Z"),
@@ -1562,16 +1569,20 @@ mod settings_tests {
             github_notified: entries,
             ..AppSettings::default()
         };
-        assert!(serde_json::from_str::<AppSettings>("{}")
-            .unwrap()
-            .github_notified
-            .is_empty());
-        assert!(with(vec![
-            "opened:owner/repo#1".into(),
-            "review:owner/repo#1".into()
-        ])
-        .validate_controls()
-        .is_ok());
+        assert!(
+            serde_json::from_str::<AppSettings>("{}")
+                .unwrap()
+                .github_notified
+                .is_empty()
+        );
+        assert!(
+            with(vec![
+                "opened:owner/repo#1".into(),
+                "review:owner/repo#1".into()
+            ])
+            .validate_controls()
+            .is_ok()
+        );
         for bad in [
             "owner/repo#1",
             "merged:owner/repo#1",
@@ -1581,9 +1592,11 @@ mod settings_tests {
         ] {
             assert!(with(vec![bad.into()]).validate_controls().is_err(), "{bad}");
         }
-        assert!(with(vec!["opened:owner/repo#1".into(); 2])
-            .validate_controls()
-            .is_err());
+        assert!(
+            with(vec!["opened:owner/repo#1".into(); 2])
+                .validate_controls()
+                .is_err()
+        );
         let many: Vec<String> = (1..=GITHUB_NOTIFIED_LIMIT + 1)
             .map(|n| format!("opened:owner/repo#{n}"))
             .collect();
@@ -1597,26 +1610,36 @@ mod settings_tests {
             sidebar_usage_providers: ids,
             ..AppSettings::default()
         };
-        assert!(serde_json::from_str::<AppSettings>("{}")
-            .unwrap()
-            .sidebar_usage_providers
-            .is_empty());
-        assert!(with(vec![AgentProviderId::Codex, AgentProviderId::Claude])
+        assert!(
+            serde_json::from_str::<AppSettings>("{}")
+                .unwrap()
+                .sidebar_usage_providers
+                .is_empty()
+        );
+        assert!(
+            with(vec![AgentProviderId::Codex, AgentProviderId::Claude])
+                .validate_controls()
+                .is_ok()
+        );
+        assert!(
+            with(vec![
+                AgentProviderId::Codex,
+                AgentProviderId::Claude,
+                AgentProviderId::Cursor
+            ])
             .validate_controls()
-            .is_ok());
-        assert!(with(vec![
-            AgentProviderId::Codex,
-            AgentProviderId::Claude,
-            AgentProviderId::Cursor
-        ])
-        .validate_controls()
-        .is_err());
-        assert!(with(vec![AgentProviderId::Codex, AgentProviderId::Codex])
-            .validate_controls()
-            .is_err());
-        assert!(with(vec![AgentProviderId::Grok])
-            .validate_controls()
-            .is_err());
+            .is_err()
+        );
+        assert!(
+            with(vec![AgentProviderId::Codex, AgentProviderId::Codex])
+                .validate_controls()
+                .is_err()
+        );
+        assert!(
+            with(vec![AgentProviderId::Grok])
+                .validate_controls()
+                .is_err()
+        );
     }
 
     #[test]
@@ -1708,10 +1731,12 @@ mod settings_tests {
                 );
             }
         }
-        assert!(serde_json::from_value::<AppSettings>(
-            serde_json::json!({"sidebarThreadSortOrder": "manual"})
-        )
-        .is_err());
+        assert!(
+            serde_json::from_value::<AppSettings>(
+                serde_json::json!({"sidebarThreadSortOrder": "manual"})
+            )
+            .is_err()
+        );
         for field in [
             "showEnvironmentUsage",
             "showEnvironmentRepository",
@@ -1746,10 +1771,12 @@ mod settings_tests {
             serde_json::json!(100),
             serde_json::Value::Null,
         ] {
-            assert!(serde_json::from_value::<AppSettings>(serde_json::json!({
-                "composerLineSpeed": invalid
-            }))
-            .is_err());
+            assert!(
+                serde_json::from_value::<AppSettings>(serde_json::json!({
+                    "composerLineSpeed": invalid
+                }))
+                .is_err()
+            );
         }
     }
     #[test]
@@ -1778,10 +1805,10 @@ mod settings_tests {
                 serde_json::json!(1),
                 serde_json::Value::Null,
             ] {
-                assert!(serde_json::from_value::<AppSettings>(
-                    serde_json::json!({ field: invalid })
-                )
-                .is_err());
+                assert!(
+                    serde_json::from_value::<AppSettings>(serde_json::json!({ field: invalid }))
+                        .is_err()
+                );
             }
         }
     }
@@ -1801,10 +1828,12 @@ mod settings_tests {
         assert_eq!(value["defaultApproval"], "auto");
         assert_eq!(value["responseStreaming"], "paragraph");
         assert!(saved.validate_controls().is_ok());
-        assert!(serde_json::from_value::<AppSettings>(
-            serde_json::json!({ "responseStreaming": "fast" })
-        )
-        .is_err());
+        assert!(
+            serde_json::from_value::<AppSettings>(
+                serde_json::json!({ "responseStreaming": "fast" })
+            )
+            .is_err()
+        );
     }
     #[test]
     fn settings_cannot_store_global_approval_grants() {

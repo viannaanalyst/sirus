@@ -1822,7 +1822,7 @@ fn chat(s: &Value) -> Vec<Group> {
     conversation.push(row(
         t("Auto-compactar depois de"),
         t(
-            "O Claude resume a conversa ao chegar perto deste total de tokens, de 100000 a 1000000. Vazio segue o padrão do Claude Code. Muda quando compacta, não o tamanho da janela do modelo.",
+            "O Claude resume a conversa ao chegar perto deste total de tokens, de 100000 a 1000000. O padrão é 200000; vazio deixa o Claude Code encher a janela inteira antes, e cada passo relê tudo. Muda quando compacta, não o tamanho da janela do modelo.",
         ),
         vec![Ctl::Field {
             key: "claudeAutoCompactWindow",

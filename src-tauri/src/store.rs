@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use parking_lot::Mutex;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Map, Value};
 
 use crate::error::{Error, Result};
@@ -89,6 +89,13 @@ DROP TABLE IF EXISTS scheduled_tasks;
 
 /// Scheduled prompts, "Tarefas" (ADR-200): one row per task. A new name, since the old
 /// `scheduled_tasks` of ADR-142 was dropped by version 7 and held another shape.
+/// Version 9: Claude compacts at 200,000 tokens unless the person chose otherwise; an empty
+/// value let a 1M window fill, so every request re-read up to a million tokens.
+const SCHEMA_V9: &str = r#"
+UPDATE settings SET json = json_set(json, '$.claudeAutoCompactWindow', '200000')
+WHERE coalesce(json_extract(json, '$.claudeAutoCompactWindow'), '') = '';
+"#;
+
 const SCHEMA_V8: &str = r#"
 CREATE TABLE IF NOT EXISTS scheduled_prompts (id TEXT PRIMARY KEY, position INTEGER NOT NULL, json TEXT NOT NULL);
 "#;
@@ -326,7 +333,7 @@ fn migrate(conn: &Connection, state_path: &Path) -> Result<()> {
             .map_err(sql)?;
         versions
     };
-    let steps: [(i64, Step); 8] = [
+    let steps: [(i64, Step); 9] = [
         (1, Step::Sql(SCHEMA_V1)),
         (2, Step::Sql(SCHEMA_V2)),
         (3, Step::Code(restore_project_astros)),
@@ -335,6 +342,7 @@ fn migrate(conn: &Connection, state_path: &Path) -> Result<()> {
         (6, Step::Code(split_tool_outputs)),
         (7, Step::Sql(SCHEMA_V7)),
         (8, Step::Sql(SCHEMA_V8)),
+        (9, Step::Sql(SCHEMA_V9)),
     ];
     for (version, step) in steps {
         if applied.contains(&version) {
@@ -1389,6 +1397,29 @@ mod reclaim_tests {
         conn.execute_batch("DELETE FROM gone; PRAGMA wal_checkpoint(TRUNCATE);")
             .unwrap();
         assert_eq!(auto_vacuum(&conn), Some(0));
+    }
+
+    #[test]
+    fn migration_nine_fills_only_an_empty_auto_compact_window() {
+        let read = |stored: &str| {
+            let conn = Connection::open_in_memory().unwrap();
+            conn.execute_batch(
+                "CREATE TABLE settings (id INTEGER PRIMARY KEY CHECK (id = 1), json TEXT NOT NULL);",
+            )
+            .unwrap();
+            conn.execute("INSERT INTO settings (id, json) VALUES (1, ?1)", [stored])
+                .unwrap();
+            conn.execute_batch(SCHEMA_V9).unwrap();
+            conn.query_row(
+                "SELECT json_extract(json, '$.claudeAutoCompactWindow') FROM settings",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(read(r#"{"claudeAutoCompactWindow":""}"#), "200000");
+        assert_eq!(read(r#"{"theme":"dark"}"#), "200000");
+        assert_eq!(read(r#"{"claudeAutoCompactWindow":"500000"}"#), "500000");
     }
 
     #[test]

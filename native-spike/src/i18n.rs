@@ -3307,8 +3307,8 @@ const ENTRIES: &[(&str, &str)] = &[
         "Claude did not take the message in time.",
     ),
     (
-        "O Claude resume a conversa ao chegar perto deste total de tokens, de 100000 a 1000000. Vazio segue o padrão do Claude Code. Muda quando compacta, não o tamanho da janela do modelo.",
-        "Claude summarizes the conversation near this many tokens, from 100000 to 1000000. Empty follows Claude Code's default. This changes when it compacts, not the model's window.",
+        "O Claude resume a conversa ao chegar perto deste total de tokens, de 100000 a 1000000. O padrão é 200000; vazio deixa o Claude Code encher a janela inteira antes, e cada passo relê tudo. Muda quando compacta, não o tamanho da janela do modelo.",
+        "Claude summarizes the conversation near this many tokens, from 100000 to 1000000. The default is 200000; empty lets Claude Code fill the whole window first, and every step re-reads it all. This changes when it compacts, not the model's window.",
     ),
     (
         "O Git não conseguiu juntar as alterações.",

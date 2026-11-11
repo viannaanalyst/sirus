@@ -226,7 +226,7 @@ pub(crate) fn context(state: &AppState, owner: &Owner) -> Result<Context> {
         (
             Some(crate::paths::ensure_dir(Path::new(&project.path))?),
             Some(provider.clone()),
-            Some(crate::provider_accounts::selected(&data, &provider)),
+            Some(crate::provider_accounts::selected_for(&data, id, &provider)),
         )
     } else {
         (None, None, None)

@@ -983,6 +983,10 @@ fn encode_checkpoint_index(data: &AppData) -> Result<serde_json::Value> {
         serde_json::to_value(&data.selected_provider_accounts)?,
     );
     index.insert(
+        "defaultAccountLabels".into(),
+        serde_json::to_value(&data.default_account_labels)?,
+    );
+    index.insert(
         "composerDrafts".into(),
         serde_json::to_value(&data.composer_drafts)?,
     );

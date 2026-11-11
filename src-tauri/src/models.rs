@@ -106,6 +106,11 @@ pub struct Project {
         skip_serializing_if = "crate::project_scripts::ProjectScripts::is_empty"
     )]
     pub scripts: crate::project_scripts::ProjectScripts,
+    /// The provider account the owner last chose for this project, per provider (Claude, Codex).
+    /// New conversations here start on it; a provider with no entry uses the terminal login
+    /// (`default`). Omitted when empty.
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub provider_accounts: std::collections::HashMap<AgentProviderId, String>,
 }
 
 /// A project's avatar choices (ADR-175, v2). Colour is `#rrggbb`; `eyes` and `accessory` are names
@@ -1936,6 +1941,10 @@ pub struct AppData {
     pub provider_accounts: Vec<ProviderAccount>,
     #[serde(default)]
     pub selected_provider_accounts: std::collections::HashMap<AgentProviderId, String>,
+    /// The owner's name for each provider's terminal login (the `default` account); absent means
+    /// the window shows its e-mail. Added accounts keep their name in `ProviderAccount::label`.
+    #[serde(default)]
+    pub default_account_labels: std::collections::HashMap<AgentProviderId, String>,
     #[serde(default)]
     pub composer_drafts: std::collections::HashMap<String, String>,
     #[serde(default)]

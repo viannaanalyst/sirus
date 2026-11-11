@@ -56,6 +56,90 @@ pub fn selected(data: &AppData, provider: &AgentProviderId) -> String {
         .cloned()
         .unwrap_or_else(crate::models::default_account_id)
 }
+/// Whether `id` names an account of `provider` that still exists (`default` always does).
+fn exists(data: &AppData, provider: &AgentProviderId, id: &str) -> bool {
+    id == crate::models::default_account_id()
+        || data
+            .provider_accounts
+            .iter()
+            .any(|a| a.id == id && &a.provider == provider)
+}
+/// The account a conversation in `project_id` starts on: the project's own choice while that
+/// account exists, else the terminal login. The global choice (`selected`) is only for callers
+/// with no project.
+pub fn selected_for(data: &AppData, project_id: &str, provider: &AgentProviderId) -> String {
+    data.projects
+        .iter()
+        .find(|p| p.id == project_id)
+        .and_then(|p| p.provider_accounts.get(provider))
+        .filter(|id| exists(data, provider, id))
+        .cloned()
+        .unwrap_or_else(crate::models::default_account_id)
+}
+/// Forgets a removed account everywhere it was chosen: the global choice and every project's.
+fn forget_choices(data: &mut AppData, provider: &AgentProviderId, id: &str) {
+    if data
+        .selected_provider_accounts
+        .get(provider)
+        .map(String::as_str)
+        == Some(id)
+    {
+        data.selected_provider_accounts.remove(provider);
+    }
+    for project in &mut data.projects {
+        if project.provider_accounts.get(provider).map(String::as_str) == Some(id) {
+            project.provider_accounts.remove(provider);
+        }
+    }
+}
+type Choices = (
+    HashMap<AgentProviderId, String>,
+    Vec<HashMap<AgentProviderId, String>>,
+);
+/// The global and per-project account choices, to put back when a save fails.
+fn choices(data: &AppData) -> Choices {
+    (
+        data.selected_provider_accounts.clone(),
+        data.projects
+            .iter()
+            .map(|p| p.provider_accounts.clone())
+            .collect(),
+    )
+}
+fn restore_choices(data: &mut AppData, (global, projects): Choices) {
+    data.selected_provider_accounts = global;
+    for (project, choice) in data.projects.iter_mut().zip(projects) {
+        project.provider_accounts = choice;
+    }
+}
+/// Sets the name the owner gave an account. The terminal login's name lives in
+/// `default_account_labels`, where an empty name clears it back to the e-mail; an added account's
+/// is its label, which cannot be empty.
+fn set_name(
+    data: &mut AppData,
+    provider: &AgentProviderId,
+    id: &str,
+    name: &str,
+) -> Result<String> {
+    if id == crate::models::default_account_id() {
+        if name.trim().is_empty() {
+            data.default_account_labels.remove(provider);
+            return Ok(String::new());
+        }
+        let name = label(name)?;
+        data.default_account_labels
+            .insert(provider.clone(), name.clone());
+        return Ok(name);
+    }
+    let name = label(name)?;
+    let account = data
+        .provider_accounts
+        .iter_mut()
+        .find(|a| a.id == id && &a.provider == provider)
+        .ok_or_else(|| Error::agent("This provider account is unknown or unsupported."))?;
+    account.label = name.clone();
+    Ok(name)
+}
 pub(crate) fn bound_account(
     session: &mut crate::models::Session,
     provider: &AgentProviderId,
@@ -233,25 +317,39 @@ pub async fn create_provider_account(
         Ok(account)
     }).await.map_err(|_| Error::agent("Cannot create account profile"))?
 }
+/// Chooses the account new conversations use. With a project, the choice is that project's only
+/// (other projects keep theirs, or the terminal login); without one it is the global fallback for
+/// callers that have no project.
 pub async fn select_provider_account(
     state: State<'_, Arc<AppState>>,
     provider: AgentProviderId,
     account_id: String,
+    project_id: Option<String>,
 ) -> Result<()> {
     let state = state.inner().clone();
     tokio::task::spawn_blocking(move || {
         scope(&state, &provider, &account_id)?;
         let mut data = state.data.lock();
         state.ensure_running()?;
-        let previous = data
-            .selected_provider_accounts
-            .insert(provider.clone(), account_id);
-        if let Err(error) = crate::persist::save(&state.data_path, &data) {
-            if let Some(previous) = previous {
-                data.selected_provider_accounts.insert(provider, previous);
-            } else {
-                data.selected_provider_accounts.remove(&provider);
+        let before = choices(&data);
+        match &project_id {
+            Some(project_id) => {
+                let project = data
+                    .projects
+                    .iter_mut()
+                    .find(|p| &p.id == project_id)
+                    .ok_or_else(|| Error::not_found("project not found"))?;
+                project
+                    .provider_accounts
+                    .insert(provider.clone(), account_id);
             }
+            None => {
+                data.selected_provider_accounts
+                    .insert(provider.clone(), account_id);
+            }
+        }
+        if let Err(error) = crate::persist::save(&state.data_path, &data) {
+            restore_choices(&mut data, before);
             return Err(error);
         }
         Ok(())
@@ -289,17 +387,13 @@ pub async fn remove_provider_account(
             )));
         }
         let before = data.provider_accounts.clone();
+        let chosen = choices(&data);
         data.provider_accounts
             .retain(|account| !(account.id == account_id && account.provider == provider));
-        let selected = data.selected_provider_accounts.get(&provider).cloned();
-        if selected.as_deref() == Some(account_id.as_str()) {
-            data.selected_provider_accounts.remove(&provider);
-        }
+        forget_choices(&mut data, &provider, &account_id);
         if let Err(error) = crate::persist::save(&state.data_path, &data) {
             data.provider_accounts = before;
-            if let Some(selected) = selected {
-                data.selected_provider_accounts.insert(provider, selected);
-            }
+            restore_choices(&mut data, chosen);
             return Err(error);
         }
         let root = state
@@ -315,6 +409,7 @@ pub async fn remove_provider_account(
     .map_err(|_| Error::agent("Cannot remove account profile"))?
 }
 
+/// Names an account; the terminal login (`default`) included, where an empty name clears it.
 pub async fn rename_provider_account(
     state: State<'_, Arc<AppState>>,
     provider: AgentProviderId,
@@ -326,23 +421,19 @@ pub async fn rename_provider_account(
         let mut data = state.data.lock();
         state.ensure_running()?;
         validate(&data, &provider, &account_id)?;
-        let account = data
-            .provider_accounts
-            .iter_mut()
-            .find(|a| a.id == account_id && a.provider == provider)
-            .ok_or_else(|| Error::agent("The default account cannot be renamed here."))?;
-        let previous = account.label.clone();
-        account.label = label(&name)?;
-        let result = account.clone();
+        let accounts = data.provider_accounts.clone();
+        let defaults = data.default_account_labels.clone();
+        let label = set_name(&mut data, &provider, &account_id, &name)?;
         if let Err(error) = crate::persist::save(&state.data_path, &data) {
-            data.provider_accounts
-                .iter_mut()
-                .find(|a| a.id == account_id)
-                .unwrap()
-                .label = previous;
+            data.provider_accounts = accounts;
+            data.default_account_labels = defaults;
             return Err(error);
         }
-        Ok(result)
+        Ok(ProviderAccount {
+            id: account_id,
+            provider,
+            label,
+        })
     })
     .await
     .map_err(|_| Error::agent("Cannot rename account profile"))?
@@ -673,6 +764,83 @@ time.sleep(60)
         assert_eq!(selected(&data, &AgentProviderId::Codex), "default");
         assert!(label("\n").is_err());
         assert!(label(&"a".repeat(49)).is_err());
+    }
+    fn with_projects() -> (AppData, String) {
+        let mut data = AppData::default();
+        let id = uuid::Uuid::new_v4().to_string();
+        data.provider_accounts.push(ProviderAccount {
+            id: id.clone(),
+            provider: AgentProviderId::Claude,
+            label: "Claude 2".into(),
+        });
+        for project in ["a", "b"] {
+            data.projects.push(
+                serde_json::from_value(serde_json::json!({
+                    "id": project, "name": project, "path": "/unused",
+                    "addedAt": "time", "lastOpenedAt": "time"
+                }))
+                .unwrap(),
+            );
+        }
+        (data, id)
+    }
+    #[test]
+    fn a_project_without_a_choice_uses_the_terminal_login_not_the_global_choice() {
+        let (mut data, id) = with_projects();
+        let claude = AgentProviderId::Claude;
+        data.selected_provider_accounts
+            .insert(claude.clone(), id.clone());
+        data.projects[1]
+            .provider_accounts
+            .insert(claude.clone(), id.clone());
+        assert_eq!(selected_for(&data, "b", &claude), id);
+        assert_eq!(selected_for(&data, "a", &claude), "default");
+        assert_eq!(selected_for(&data, "missing", &claude), "default");
+        assert_eq!(selected_for(&data, "b", &AgentProviderId::Codex), "default");
+        // A choice whose account is gone falls back too.
+        data.provider_accounts.clear();
+        assert_eq!(selected_for(&data, "b", &claude), "default");
+    }
+    #[test]
+    fn removing_an_account_clears_it_from_every_project_and_the_global_choice() {
+        let (mut data, id) = with_projects();
+        let claude = AgentProviderId::Claude;
+        data.selected_provider_accounts
+            .insert(claude.clone(), id.clone());
+        data.projects[0]
+            .provider_accounts
+            .insert(claude.clone(), id.clone());
+        data.projects[1]
+            .provider_accounts
+            .insert(claude.clone(), "default".into());
+        let before = choices(&data);
+        forget_choices(&mut data, &claude, &id);
+        assert!(data.selected_provider_accounts.is_empty());
+        assert!(data.projects[0].provider_accounts.is_empty());
+        assert_eq!(data.projects[1].provider_accounts[&claude], "default");
+        restore_choices(&mut data, before);
+        assert_eq!(data.projects[0].provider_accounts[&claude], id);
+        assert_eq!(data.selected_provider_accounts[&claude], id);
+    }
+    #[test]
+    fn the_terminal_login_can_be_named_and_cleared_back_to_its_email() {
+        let (mut data, id) = with_projects();
+        let claude = AgentProviderId::Claude;
+        assert_eq!(
+            set_name(&mut data, &claude, "default", "  Claude 1 ").unwrap(),
+            "Claude 1"
+        );
+        assert_eq!(data.default_account_labels[&claude], "Claude 1");
+        assert_eq!(set_name(&mut data, &claude, "default", " ").unwrap(), "");
+        assert!(data.default_account_labels.is_empty());
+        assert!(set_name(&mut data, &claude, "default", &"a".repeat(49)).is_err());
+        // An added account's name is its label, which cannot be emptied.
+        assert_eq!(set_name(&mut data, &claude, &id, "Work").unwrap(), "Work");
+        assert_eq!(data.provider_accounts[0].label, "Work");
+        assert!(set_name(&mut data, &claude, &id, "").is_err());
+        assert!(set_name(&mut data, &AgentProviderId::Codex, &id, "X").is_err());
+        let saved: AppData = serde_json::from_value(serde_json::to_value(&data).unwrap()).unwrap();
+        assert!(saved.default_account_labels.is_empty());
     }
     #[test]
     fn switching_providers_preserves_original_account_even_after_defaults_change() {

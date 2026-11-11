@@ -149,6 +149,7 @@ impl Shell {
             path: value["path"].as_str().unwrap_or("").to_owned(),
             appearance: value["appearance"].clone(),
             scripts: crate::project_scripts::Saved::of(&value["scripts"]),
+            provider_accounts: value["providerAccounts"].clone(),
             open: true,
             conversations: Vec::new(),
         });

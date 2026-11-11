@@ -501,6 +501,7 @@ mod tests {
             look: Default::default(),
             appearance: None,
             scripts: Default::default(),
+            provider_accounts: Default::default(),
         }
     }
 

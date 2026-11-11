@@ -854,6 +854,7 @@ mod tests {
             look: Default::default(),
             appearance: None,
             scripts: Default::default(),
+            provider_accounts: Default::default(),
         });
         let mut session = session();
         session.status = SessionStatus::Completed;
@@ -902,6 +903,7 @@ mod tests {
             look: Default::default(),
             appearance: None,
             scripts: Default::default(),
+            provider_accounts: Default::default(),
         });
         let mut session = session();
         session.status = SessionStatus::Completed;

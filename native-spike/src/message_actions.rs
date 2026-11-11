@@ -385,19 +385,40 @@ impl Shell {
             .as_ref()
             .filter(|(for_key, _)| *for_key == key)
             .map(|(_, text)| text.clone());
-        if items.is_empty() && status.is_none() && notice.is_none() {
+        // Only the latest reply of the transcript, once its turn is done, shows its time.
+        let time = (index + 1 == conv.turns.len()
+            && !turn.live
+            && !conv.working()
+            && !turn.answer.trim().is_empty())
+        .then(|| turn.replied_ms.and_then(crate::message_time::label))
+        .flatten();
+        if items.is_empty() && status.is_none() && notice.is_none() && time.is_none() {
             return None;
         }
         let group: SharedString = format!("turn-actions-{index}").into();
-        let row = (!items.is_empty()).then(|| {
+        let row = (!items.is_empty() || time.is_some()).then(|| {
             div()
                 .flex()
                 .items_center()
-                .gap(px(2.))
+                .gap(px(6.))
                 .mt(px(4.))
-                .opacity(0.)
-                .group_hover(group, |s| s.opacity(1.))
-                .children(items)
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(2.))
+                        .opacity(0.)
+                        .group_hover(group, |s| s.opacity(1.))
+                        .children(items),
+                )
+                .when_some(time, |d, text| {
+                    d.child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(content(0.45))
+                            .child(text),
+                    )
+                })
                 .into_any_element()
         });
         Some(

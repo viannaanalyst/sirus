@@ -54,6 +54,7 @@ mod markdown;
 mod marks;
 mod media_copy;
 mod memory_trim;
+mod message_time;
 mod motion;
 mod native_actions;
 mod native_notify;

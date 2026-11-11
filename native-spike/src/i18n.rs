@@ -2928,6 +2928,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("Nome", "Name"),
     ("Nome da ação", "Action name"),
+    ("Nome da conta", "Account name"),
     (
         "Nome da conta, Enter para entrar",
         "Account name, Enter to sign in",

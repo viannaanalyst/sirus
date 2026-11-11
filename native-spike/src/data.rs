@@ -69,6 +69,10 @@ pub struct Turn {
     /// When the turn began (Unix ms) and its paused time, for the running clock.
     pub started_ms: Option<u64>,
     pub paused_ms: u64,
+    /// When the message was sent and when the last reply finished (Unix ms), for the times
+    /// under them (message_time.rs).
+    pub sent_ms: Option<i64>,
+    pub replied_ms: Option<i64>,
     pub model: Option<String>,
     /// The effort and Fast mode the turn was sent with; `fast` is `None` for turns saved
     /// before they were recorded, which never get a model-change divider (ADR-198).
@@ -162,6 +166,9 @@ pub struct Project {
     pub conversations: Vec<usize>,
     /// Setup and On finish scripts and the preview address (project_scripts.rs).
     pub scripts: crate::project_scripts::Saved,
+    /// The provider account chosen for this project, per provider (`providerAccounts`); a
+    /// provider with no entry uses the terminal login.
+    pub provider_accounts: Value,
 }
 
 pub(crate) fn provider_id(agent: &str) -> &'static str {
@@ -434,6 +441,8 @@ pub(crate) fn blank(user: &str) -> Turn {
         seconds: None,
         started_ms: None,
         paused_ms: 0,
+        sent_ms: None,
+        replied_ms: None,
         model: None,
         effort: None,
         fast: None,
@@ -487,6 +496,9 @@ fn turns_of(messages: &[Value]) -> Vec<Turn> {
                 .flatten()
                 .map(crate::attachment_doc::Info::from_message)
                 .collect();
+            turn.sent_ms = message["createdAt"]
+                .as_str()
+                .and_then(crate::message_time::parse_iso);
             turns.push(turn);
             phaser = crate::subagent_team::Phaser::default();
         } else if role == "agent" {
@@ -545,6 +557,14 @@ fn turns_of(messages: &[Value]) -> Vec<Turn> {
                 let paused = activity["pausedMs"].as_u64().unwrap_or(0);
                 turn.seconds = Some(end.saturating_sub(start).saturating_sub(paused) / 1000);
             }
+            turn.replied_ms = activity["endedAt"]
+                .as_i64()
+                .or_else(|| {
+                    message["createdAt"]
+                        .as_str()
+                        .and_then(crate::message_time::parse_iso)
+                })
+                .or(turn.replied_ms);
             turn.live = message["streaming"].as_bool().unwrap_or(false);
             let content = message["content"].as_str().unwrap_or("");
             for item in activity["items"].as_array().into_iter().flatten() {

@@ -151,7 +151,9 @@ fn owner(state: &AppState, session_id: &str) -> Result<Owner> {
                 .account_bindings
                 .get(&provider)
                 .cloned()
-                .unwrap_or_else(|| crate::provider_accounts::selected(&data, &provider))
+                .unwrap_or_else(|| {
+                    crate::provider_accounts::selected_for(&data, &session.project_id, &provider)
+                })
         };
         return Ok(Owner {
             cwd: crate::commands::session_cwd(&data, session)?,
@@ -707,6 +709,7 @@ mod tests {
                 .is_err(),
             "missing bound profile must fail rather than fall back"
         );
+        let other = uuid::Uuid::new_v4().to_string();
         {
             let mut data = state.data.lock();
             data.settings
@@ -715,8 +718,14 @@ mod tests {
             data.sessions[0]
                 .account_bindings
                 .insert(AgentProviderId::Claude, "default".into());
-            data.selected_provider_accounts
-                .insert(AgentProviderId::Claude, "selected-other".into());
+            data.provider_accounts.push(crate::models::ProviderAccount {
+                id: other.clone(),
+                provider: AgentProviderId::Claude,
+                label: "Other".into(),
+            });
+            data.projects[0]
+                .provider_accounts
+                .insert(AgentProviderId::Claude, other.clone());
         }
         let retained = owner(&state, "s").unwrap();
         assert_eq!(retained.provider, AgentProviderId::Claude);
@@ -728,7 +737,7 @@ mod tests {
             .account_bindings
             .remove(&AgentProviderId::Claude);
         let selected = owner(&state, "s").unwrap();
-        assert_eq!(selected.account, "selected-other");
+        assert_eq!(selected.account, other, "the project's account");
         assert_ne!(
             selected, retained,
             "account changes must invalidate captured owner"

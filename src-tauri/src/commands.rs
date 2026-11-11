@@ -445,6 +445,7 @@ fn add_project_native(
         look: Default::default(),
         appearance: None,
         scripts: Default::default(),
+        provider_accounts: Default::default(),
     };
     data.projects.insert(0, project.clone());
     drop(data);
@@ -1334,7 +1335,8 @@ pub(crate) fn create_session_locked(
         }
     };
 
-    let account_id = crate::provider_accounts::selected(data, &request.agent);
+    let account_id =
+        crate::provider_accounts::selected_for(data, &request.project_id, &request.agent);
     let session = Session {
         context_usage: None,
         delegated_by: None,
@@ -1539,7 +1541,8 @@ fn handoff_session_native(
             ));
         }
     }
-    let provider_account_id = crate::provider_accounts::selected(&data, &agent);
+    let provider_account_id =
+        crate::provider_accounts::selected_for(&data, &source.project_id, &agent);
     let id = Uuid::new_v4().to_string();
     // A handoff continues in the source workspace, or in a new isolated worktree
     // seeded from it; uncommitted work is kept either way.
@@ -1676,7 +1679,8 @@ pub fn set_session_agent(
     agent: AgentProviderId,
 ) -> Result<Session> {
     let mut data = state.data.lock();
-    let account_id = crate::provider_accounts::selected(&data, &agent);
+    let project_id = find_session_mut(&mut data, &session_id)?.project_id.clone();
+    let account_id = crate::provider_accounts::selected_for(&data, &project_id, &agent);
     let session = find_session_mut(&mut data, &session_id)?;
     if session.status.is_active() {
         return Err(Error::agent(
@@ -3182,7 +3186,8 @@ pub fn set_session_model(
     model: Option<String>,
 ) -> Result<serde_json::Value> {
     let mut data = state.data.lock();
-    let account_id = crate::provider_accounts::selected(&data, &agent);
+    let project_id = find_session_mut(&mut data, &session_id)?.project_id.clone();
+    let account_id = crate::provider_accounts::selected_for(&data, &project_id, &agent);
     let session = find_session_mut(&mut data, &session_id)?;
     if session.status.is_active() {
         return Err(Error::agent(

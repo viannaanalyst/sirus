@@ -433,6 +433,15 @@ enum LookTab {
     Eyes,
 }
 
+/// An account being named in place in the usage popup's account list.
+struct AccountRename {
+    provider: &'static str,
+    id: String,
+    name: String,
+    /// The name is selected (⌘A) and the next key replaces it.
+    all: bool,
+}
+
 /// The usage popup's accounts page, after Sirus's `ProviderAccountsPanel`.
 #[derive(Default)]
 struct AccountsPage {
@@ -1109,6 +1118,8 @@ enum Waiting {
     /// `move_session_account` from the usage popup's account list: the session and the account
     /// its conversation now uses, with nothing sent after.
     AccountSwitched(String, String),
+    /// An account was named in the usage popup; only a failure needs telling.
+    AccountRenamed,
     /// `send_prompt` that carries on after a failure.
     FailureContinue,
     /// `provider_updates` on connect: the offers it lists.
@@ -1369,6 +1380,10 @@ pub struct Shell {
     settings: Value,
     provider_accounts: Value,
     selected_accounts: Value,
+    /// The owner's name for each provider's terminal login (`defaultAccountLabels`).
+    default_account_labels: Value,
+    /// The account being named in the usage popup's list.
+    account_rename: Option<AccountRename>,
     new_tab_fx: crate::new_tab_field::State,
     /// The composer's width, as the robot walking over it last measured it.
     runner_width: Rc<Cell<f32>>,
@@ -1937,6 +1952,8 @@ impl Shell {
             settings: Value::Null,
             provider_accounts: Value::Null,
             selected_accounts: json!({}),
+            default_account_labels: json!({}),
+            account_rename: None,
             new_tab_fx: Default::default(),
             runner_width: Rc::new(Cell::new(600.)),
             dock_width: 470.,
@@ -2342,6 +2359,13 @@ impl Shell {
                     if self.selected_accounts[provider].as_str() == Some(id.as_str()) {
                         self.selected_accounts[provider] = json!("default");
                     }
+                    for project in &mut self.projects {
+                        if project.provider_accounts[provider].as_str() == Some(id.as_str())
+                            && let Some(chosen) = project.provider_accounts.as_object_mut()
+                        {
+                            chosen.remove(provider);
+                        }
+                    }
                     if self.usage_page.open.is_some() {
                         self.usage_load_limits(false, cx);
                     }
@@ -2484,6 +2508,7 @@ impl Shell {
                     cx.notify();
                 }
                 Some(Waiting::AccountSwitched(..)) => self.problem = Some(error_text(&value)),
+                Some(Waiting::AccountRenamed) if !ok => self.problem = Some(error_text(&value)),
                 Some(
                     Waiting::AccountMoved(..)
                     | Waiting::FailureContinue
@@ -2730,6 +2755,11 @@ impl Shell {
         } else {
             json!({})
         };
+        self.default_account_labels = if state["defaultAccountLabels"].is_object() {
+            state["defaultAccountLabels"].clone()
+        } else {
+            json!({})
+        };
         // Drafts are keyed by conversation index, which the rebuild renumbers: carry each by session.
         let sessions: Vec<String> = self
             .conversations
@@ -2764,6 +2794,7 @@ impl Shell {
                 path: p["path"].as_str().unwrap_or("").to_owned(),
                 appearance: p["appearance"].clone(),
                 scripts: crate::project_scripts::Saved::of(&p["scripts"]),
+                provider_accounts: p["providerAccounts"].clone(),
                 open: false,
                 conversations: Vec::new(),
             })
@@ -3712,7 +3743,10 @@ impl Shell {
     }
 
     fn accounts_of(&self, provider: &str) -> Vec<(String, String)> {
-        let mut list = vec![("default".to_owned(), t("Conta do Terminal").to_owned())];
+        let terminal = self
+            .account_name(provider, "default")
+            .unwrap_or_else(|| t("Conta do Terminal").to_owned());
+        let mut list = vec![("default".to_owned(), terminal)];
         for account in self.provider_accounts.as_array().into_iter().flatten() {
             if account["provider"].as_str() == Some(provider) {
                 list.push((
@@ -3722,6 +3756,122 @@ impl Shell {
             }
         }
         list
+    }
+
+    /// The name the owner gave an account, if any: the terminal login's from
+    /// `defaultAccountLabels`, an added account's from its label.
+    fn account_name(&self, provider: &str, id: &str) -> Option<String> {
+        let name = if id == "default" {
+            self.default_account_labels[provider].as_str()
+        } else {
+            self.provider_accounts
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|a| a["id"].as_str() == Some(id) && a["provider"].as_str() == Some(provider))
+                .and_then(|a| a["label"].as_str())
+        };
+        name.map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_owned)
+    }
+
+    /// The project whose account choice the usage popup shows and sets: the open conversation's,
+    /// else the sidebar's current one.
+    fn account_project(&self) -> Option<usize> {
+        self.project_of(self.active_conversation())
+            .or(self.current_project)
+    }
+
+    /// The account the usage popup shows as chosen for `provider`: the open conversation's own
+    /// when it runs on that provider, else its project's choice, else the terminal login. With no
+    /// project at all, the global choice.
+    fn chosen_account(&self, provider: &str) -> String {
+        let accounts = self.accounts_of(provider);
+        let known = |id: &&str| accounts.iter().any(|(account, _)| account == id);
+        if let Some(conversation) = self.conversations.get(self.active_conversation())
+            && conversation.provider == provider
+            && !conversation.session_id.is_empty()
+            && known(&conversation.account.as_str())
+        {
+            return conversation.account.clone();
+        }
+        let chosen = match self.account_project() {
+            Some(project) => self.projects[project].provider_accounts[provider].as_str(),
+            None => self.selected_accounts[provider].as_str(),
+        };
+        chosen.filter(known).unwrap_or("default").to_owned()
+    }
+
+    /// The `accountId` a usage request names: the chosen account for the providers that have
+    /// several, none for the rest.
+    fn usage_account_arg(&self, provider: &str) -> Value {
+        if matches!(provider, "claude" | "codex") {
+            json!(self.chosen_account(provider))
+        } else {
+            Value::Null
+        }
+    }
+
+    /// Whether an account is being named in the open usage popup's list.
+    fn account_renaming(&self) -> bool {
+        self.account_rename.as_ref().is_some_and(|edit| {
+            self.usage_popup.is_some() && self.usage_picker == Some(edit.provider)
+        })
+    }
+
+    /// Starts naming an account in place, its current name selected so typing replaces it.
+    fn start_account_rename(&mut self, provider: &'static str, id: String) {
+        let name = self.account_name(provider, &id).unwrap_or_default();
+        self.account_rename = Some(AccountRename {
+            provider,
+            all: !name.is_empty(),
+            id,
+            name,
+        });
+    }
+
+    /// Enter saves the typed name, Esc drops it. An empty name clears the terminal login's back
+    /// to its e-mail; an added account always keeps one.
+    fn finish_account_rename(&mut self, save: bool) {
+        let Some(edit) = self.account_rename.take() else {
+            return;
+        };
+        let name = edit.name.trim().to_owned();
+        let unchanged = self
+            .account_name(edit.provider, &edit.id)
+            .is_some_and(|old| old == name)
+            || (name.is_empty() && self.account_name(edit.provider, &edit.id).is_none());
+        if !save || unchanged {
+            return;
+        }
+        if edit.id == "default" {
+            if !self.default_account_labels.is_object() {
+                self.default_account_labels = json!({});
+            }
+            if name.is_empty() {
+                if let Some(map) = self.default_account_labels.as_object_mut() {
+                    map.remove(edit.provider);
+                }
+            } else {
+                self.default_account_labels[edit.provider] = json!(name);
+            }
+        } else if name.is_empty() {
+            return;
+        } else if let Some(account) = self
+            .provider_accounts
+            .as_array_mut()
+            .into_iter()
+            .flatten()
+            .find(|a| a["id"].as_str() == Some(edit.id.as_str()))
+        {
+            account["label"] = json!(name);
+        }
+        let call = self.backend.invoke(
+            "rename_provider_account",
+            json!({ "provider": edit.provider, "accountId": edit.id, "name": name }),
+        );
+        self.waiting.insert(call, Waiting::AccountRenamed);
     }
 
     fn load_account_usage(&mut self, provider: &'static str) {
@@ -3895,17 +4045,31 @@ impl Shell {
         }
     }
 
+    /// Chooses the account for the open conversation's project (new conversations there start on
+    /// it); with no project, the global choice.
     fn select_account(&mut self, provider: &'static str, id: String) {
+        let project = self.account_project();
+        let project_id = project.map(|ix| self.projects[ix].id.clone());
         self.backend.invoke(
             "select_provider_account",
-            json!({ "provider": provider, "accountId": id }),
+            json!({ "provider": provider, "accountId": id, "projectId": project_id }),
         );
-        self.selected_accounts[provider] = json!(id);
+        match project {
+            Some(ix) => {
+                let chosen = &mut self.projects[ix].provider_accounts;
+                if !chosen.is_object() {
+                    *chosen = json!({});
+                }
+                chosen[provider] = json!(id);
+            }
+            None => self.selected_accounts[provider] = json!(id),
+        }
     }
 
     /// Opens or closes the usage popup's inline account list, reading each account's usage once
     /// for the e-mail and plan its row shows.
     fn toggle_usage_picker(&mut self, provider: &'static str, cx: &mut Context<Self>) {
+        self.account_rename = None;
         if self.usage_picker == Some(provider) {
             self.usage_picker = None;
             cx.notify();
@@ -3985,21 +4149,37 @@ impl Shell {
                             first.to_uppercase().chain(letters).collect()
                         })
                     });
-                let main = email.clone().unwrap_or_else(|| label.clone());
-                let sub = if email.is_some() && !label.is_empty() {
-                    plan.as_ref()
-                        .map_or(label.clone(), |plan| format!("{label} · {plan}"))
-                } else {
-                    plan.clone().unwrap_or_default()
+                // A name the owner gave leads, the e-mail moving under it; unnamed, the e-mail
+                // leads with the account's kind ("Conta do Terminal") under it.
+                let named = self.account_name(provider, id);
+                let main = named
+                    .clone()
+                    .or_else(|| email.clone())
+                    .unwrap_or_else(|| label.clone());
+                let first = match &named {
+                    Some(_) => email.clone(),
+                    None => email.as_ref().map(|_| label.clone()),
                 };
+                let sub = [first.filter(|s| !s.is_empty()), plan.clone()]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>()
+                    .join(" · ");
                 let initial = main
                     .chars()
                     .next()
                     .map_or(String::new(), |c| c.to_uppercase().collect());
                 let (from, to) = avatars[index % avatars.len()];
                 let target = id.clone();
+                let editing = self
+                    .account_rename
+                    .as_ref()
+                    .filter(|edit| edit.provider == provider && &edit.id == id);
+                let group: SharedString = format!("usage-picker-row-{index}").into();
+                let rename_id = id.clone();
                 div()
                     .id(("usage-picker-row", index))
+                    .group(group.clone())
                     .px(px(7.))
                     .py(px(6.))
                     .rounded(px(crate::theme::RADIUS_SM))
@@ -4010,6 +4190,9 @@ impl Shell {
                     .gap(px(9.))
                     .cursor_pointer()
                     .on_click(cx.listener(move |this, _, _, cx| {
+                        if this.account_renaming() {
+                            return;
+                        }
                         if !current {
                             this.select_account(provider, target.clone());
                             this.switch_conversation_account(provider, target.clone());
@@ -4043,13 +4226,40 @@ impl Shell {
                             .flex()
                             .flex_col()
                             .gap(px(1.))
-                            .child(
-                                div()
+                            .child(match editing {
+                                Some(edit) => div()
+                                    .h(px(20.))
+                                    .px(px(5.))
+                                    .rounded(px(crate::theme::RADIUS_SM))
+                                    .border_1()
+                                    .border_color(content(0.3))
+                                    .bg(crate::theme::field_fill())
+                                    .flex()
+                                    .items_center()
+                                    .text_size(px(12.5))
+                                    .map(|d| {
+                                        if edit.name.is_empty() {
+                                            d.child(typed_text(
+                                                &edit.name,
+                                                t("Nome da conta"),
+                                                self.popup_caret(),
+                                            ))
+                                        } else {
+                                            d.child(inline_name_field(
+                                                &edit.name,
+                                                edit.all,
+                                                self.popup_caret(),
+                                            ))
+                                        }
+                                    })
+                                    .into_any_element(),
+                                None => div()
                                     .truncate()
                                     .text_size(px(12.5))
                                     .text_color(content(0.9))
-                                    .child(main),
-                            )
+                                    .child(main)
+                                    .into_any_element(),
+                            })
                             .when(!sub.is_empty(), |d| {
                                 d.child(
                                     div()
@@ -4060,6 +4270,30 @@ impl Shell {
                                 )
                             }),
                     )
+                    .when(editing.is_none(), |d| {
+                        d.child(
+                            div()
+                                .id(("usage-picker-rename", index))
+                                .size(px(20.))
+                                .flex_shrink_0()
+                                .rounded(px(crate::theme::RADIUS_SM))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .cursor_pointer()
+                                .opacity(0.)
+                                .group_hover(group.clone(), |s| s.opacity(1.))
+                                .hover(|s| s.bg(content(0.08)))
+                                .tooltip(message_actions::name_tip(t("Renomear conta")))
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    this.start_account_rename(provider, rename_id.clone());
+                                    cx.notify();
+                                }))
+                                .child(icon("pencil", 12.).text_color(content(0.55))),
+                        )
+                    })
                     .when(current, |d| {
                         d.child(icon("check", 13.).flex_shrink_0().text_color(accent()))
                     })
@@ -4115,10 +4349,7 @@ impl Shell {
 
     fn accounts_page_view(&self, provider: &'static str, cx: &mut Context<Self>) -> AnyElement {
         let page = self.usage_accounts.as_ref();
-        let chosen = self.selected_accounts[provider]
-            .as_str()
-            .unwrap_or("default")
-            .to_owned();
+        let chosen = self.chosen_account(provider);
         let signing = page.and_then(|p| p.signing_in.clone());
         let rows: Vec<AnyElement> = self
             .accounts_of(provider)
@@ -4350,7 +4581,8 @@ impl Shell {
         let provider = self.conversations[self.active_conversation()].provider;
         let id = self.backend.invoke(
             "provider_usage",
-            json!({ "provider": provider, "refresh": refresh }),
+            json!({ "provider": provider, "refresh": refresh,
+                    "accountId": self.usage_account_arg(provider) }),
         );
         self.waiting.insert(id, Waiting::Usage);
         if refresh {
@@ -4380,7 +4612,8 @@ impl Shell {
         for provider in self.bar_providers() {
             let id = self.backend.invoke(
                 "provider_usage",
-                json!({ "provider": provider, "refresh": refresh }),
+                json!({ "provider": provider, "refresh": refresh,
+                        "accountId": self.usage_account_arg(provider) }),
             );
             self.waiting.insert(id, Waiting::BarUsage(provider));
             if refresh {
@@ -4509,6 +4742,7 @@ impl Shell {
         crate::segment_pill::forget("usage-tabs");
         self.usage_accounts = None;
         self.usage_picker = None;
+        self.account_rename = None;
         self.usage_tab = None;
         self.context_menu = None;
         self.usage_popup = match self.usage_popup {
@@ -4656,10 +4890,7 @@ impl Shell {
             self.bar_values.get(provider).unwrap_or(&Value::Null)
         };
         let accounts = self.accounts_of(provider);
-        let chosen = self.selected_accounts[provider]
-            .as_str()
-            .unwrap_or("default")
-            .to_owned();
+        let chosen = self.chosen_account(provider);
         let account = value["account"]["email"]
             .as_str()
             .or(value["account"]["name"].as_str())
@@ -4676,6 +4907,15 @@ impl Shell {
                     .map(|(_, label)| label.clone())
                     .filter(|label| !label.is_empty())
             });
+        // A name the owner gave the account leads; its e-mail stays beside it, smaller.
+        let named = self.account_name(provider, &chosen);
+        let (account, email) = match named {
+            Some(name) => {
+                let email = account.filter(|shown| *shown != name);
+                (Some(name), email)
+            }
+            None => (account, None),
+        };
         let several = accounts.len() > 1;
         let plan = value["account"]["plan"]
             .as_str()
@@ -4948,10 +5188,26 @@ impl Shell {
                                 div()
                                     .flex_1()
                                     .min_w_0()
-                                    .truncate()
-                                    .text_size(px(12.5))
-                                    .text_color(content(0.72))
-                                    .child(account),
+                                    .flex()
+                                    .items_baseline()
+                                    .gap(px(6.))
+                                    .child(
+                                        div()
+                                            .flex_shrink_0()
+                                            .max_w(gpui::relative(0.6))
+                                            .truncate()
+                                            .text_size(px(12.5))
+                                            .text_color(content(0.72))
+                                            .child(account),
+                                    )
+                                    .children(email.clone().map(|email| {
+                                        div()
+                                            .min_w_0()
+                                            .truncate()
+                                            .text_size(px(11.))
+                                            .text_color(content(0.42))
+                                            .child(email)
+                                    })),
                             )
                             .children(plan.map(|p| {
                                 div()
@@ -5749,6 +6005,15 @@ impl Shell {
         if let Some(name) = self.context_menu.as_mut().and_then(|m| m.renaming.as_mut()) {
             return Some(name);
         }
+        // Field by field, as above: `account_renaming()` would borrow all of `self`.
+        if self.usage_popup.is_some()
+            && let Some(edit) = self
+                .account_rename
+                .as_mut()
+                .filter(|edit| self.usage_picker == Some(edit.provider))
+        {
+            return Some(&mut edit.name);
+        }
         if let Some(menu) = self.project_menu.as_ref()
             && menu.sub.is_some()
         {
@@ -5784,31 +6049,41 @@ impl Shell {
                 .usage_accounts
                 .as_ref()
                 .is_some_and(|p| p.adding.is_some())
+            || self.account_renaming()
     }
 
     /// The name being typed in a rename: ⌘A, ⌘C, ⌘X and ⌘V, and a selection the next key replaces.
     fn rename_keys(&mut self, keys: &gpui::Keystroke, cx: &mut Context<Self>) -> bool {
-        let Some(menu) = self.context_menu.as_mut() else {
-            return false;
-        };
-        let Some(name) = menu.renaming.as_mut() else {
-            return false;
+        // The usage popup's account name takes the same keys as a sidebar rename.
+        let (name, all) = if self.account_renaming() {
+            let Some(edit) = self.account_rename.as_mut() else {
+                return false;
+            };
+            (&mut edit.name, &mut edit.all)
+        } else {
+            let Some(menu) = self.context_menu.as_mut() else {
+                return false;
+            };
+            let Some(name) = menu.renaming.as_mut() else {
+                return false;
+            };
+            (name, &mut menu.renaming_all)
         };
         let key = keys.key.as_str();
         if keys.modifiers.platform {
             match key {
-                "a" => menu.renaming_all = true,
-                "c" | "x" if menu.renaming_all => {
+                "a" => *all = true,
+                "c" | "x" if *all => {
                     cx.write_to_clipboard(gpui::ClipboardItem::new_string(name.clone()));
                     if key == "x" {
                         name.clear();
-                        menu.renaming_all = false;
+                        *all = false;
                     }
                 }
                 "v" => {
                     let pasted = cx.read_from_clipboard().and_then(|item| item.text());
                     if let Some(text) = pasted {
-                        if std::mem::take(&mut menu.renaming_all) {
+                        if std::mem::take(all) {
                             name.clear();
                         }
                         name.push_str(text.replace(['\n', '\r'], " ").trim());
@@ -5819,13 +6094,13 @@ impl Shell {
             return true;
         }
         match key {
-            "backspace" | "delete" if menu.renaming_all => {
+            "backspace" | "delete" if *all => {
                 name.clear();
-                menu.renaming_all = false;
+                *all = false;
                 true
             }
             "left" | "right" | "up" | "down" | "home" | "end" => {
-                menu.renaming_all = false;
+                *all = false;
                 false
             }
             _ => false,
@@ -5834,6 +6109,12 @@ impl Shell {
 
     /// Typing over a name selected with ⌘A starts it anew.
     fn replace_selected_name(&mut self) {
+        if self.account_renaming()
+            && let Some(edit) = self.account_rename.as_mut()
+            && std::mem::take(&mut edit.all)
+        {
+            edit.name.clear();
+        }
         if let Some(menu) = self.context_menu.as_mut()
             && std::mem::take(&mut menu.renaming_all)
             && let Some(name) = menu.renaming.as_mut()
@@ -7004,6 +7285,21 @@ impl Shell {
             return;
         }
         if self.project_menu_key(key, cx) {
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
+        if self.account_renaming() {
+            match key {
+                "escape" => self.finish_account_rename(false),
+                "enter" => self.finish_account_rename(true),
+                "backspace" => {
+                    if let Some(edit) = self.account_rename.as_mut() {
+                        edit.name.pop();
+                    }
+                }
+                _ => return,
+            }
             cx.stop_propagation();
             cx.notify();
             return;
@@ -16431,6 +16727,19 @@ impl Shell {
                                 .flex()
                                 .items_center()
                                 .gap(px(2.))
+                                // Always visible, unlike the icons beside it.
+                                .when_some(
+                                    turn.sent_ms.and_then(crate::message_time::label),
+                                    |d, text| {
+                                        d.child(
+                                            div()
+                                                .mr(px(4.))
+                                                .text_size(px(11.))
+                                                .text_color(content(0.45))
+                                                .child(text),
+                                        )
+                                    },
+                                )
                                 .child(self.user_copy_button(index, turn.user.clone(), cx))
                                 .when(failed_here, |d| {
                                     d.child(self.retry_button(

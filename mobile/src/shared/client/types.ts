@@ -29,6 +29,8 @@ export interface Project {
   appearance?: ProjectAppearance;
   /** Owner-saved Setup and On finish shell scripts (ADR-078). */
   scripts?: ProjectScripts;
+  /** The account chosen for this project, per provider; a provider with no entry uses the terminal login (`default`). */
+  providerAccounts?: Partial<Record<AgentProviderId, string>>;
 }
 
 /** Avatar choices (ADR-175, v2): `#rrggbb` colour, eye style and accessory names. `accessory` is absent on appearances saved before v2 (the name-based default applies). Validated in Rust (`sidebar.rs`). */
@@ -577,6 +579,8 @@ export interface AppData {
   contextTexts?: Record<string, string>;
   providerAccounts?: ProviderAccount[];
   selectedProviderAccounts?: Partial<Record<AgentProviderId, string>>;
+  /** The owner's name for each provider's terminal login (`default`); absent means its e-mail. */
+  defaultAccountLabels?: Partial<Record<AgentProviderId, string>>;
   projects: Project[];
   sessions: Session[];
   settings: AppSettings;

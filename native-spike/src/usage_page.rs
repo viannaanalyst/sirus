@@ -491,6 +491,35 @@ pub(crate) fn stack_weighted(
     (layers, max)
 }
 
+/// Each bucket's own values stacked in provider order, not added up over time: the columns of the
+/// per-day (or per-hour) chart. Weights work as in `stack_weighted`.
+pub(crate) fn stack_daily(
+    buckets: &[Bucket],
+    metric: Metric,
+    weights: [f64; 4],
+) -> (Vec<Layer>, f64) {
+    let mut below = vec![0.; buckets.len()];
+    let mut layers = Vec::new();
+    for (p, prov) in PROVS.iter().enumerate() {
+        if weights[p] <= 0.0005 || buckets.iter().all(|b| b.value(metric, p) <= 0.) {
+            continue;
+        }
+        let top: Vec<f64> = buckets
+            .iter()
+            .enumerate()
+            .map(|(i, b)| below[i] + b.value(metric, p) * weights[p])
+            .collect();
+        layers.push(Layer {
+            prov: *prov,
+            bottom: below.clone(),
+            top: top.clone(),
+        });
+        below = top;
+    }
+    let max = below.iter().copied().fold(0., f64::max);
+    (layers, max)
+}
+
 fn frac(part: f64, whole: f64) -> f32 {
     if whole > 0. {
         (part / whole).clamp(0., 1.) as f32
@@ -1738,25 +1767,17 @@ impl Shell {
                                         .gap(px(7.))
                                         .text_size(px(13.))
                                         .text_color(content(0.9))
-                                        .child(div().size(px(9.)).rounded_full().bg(prov.color()))
+                                        .child(div().size(px(8.)).bg(prov.color()))
                                         .child(div().flex_1().truncate().child(prov.name())),
                                 )
                                 // Its own line, so the full figure has the card's whole width.
                                 .child(value_text(amount(number)))
                                 .child(div().text_size(px(11.)).text_color(content(0.5)).child(sub))
                                 .child(
-                                    div()
-                                        .h(px(4.))
-                                        .rounded_full()
-                                        .bg(content(0.08))
-                                        .overflow_hidden()
-                                        .child(
-                                            div()
-                                                .h_full()
-                                                .rounded_full()
-                                                .bg(prov.color())
-                                                .w(gpui::relative(frac(value, whole))),
-                                        ),
+                                    div().h(px(pixel_bar::HEIGHT)).child(pixel_bar::pixel_bar(
+                                        frac(value, whole),
+                                        prov.color(),
+                                    )),
                                 ),
                             row,
                             false,
@@ -1772,7 +1793,16 @@ impl Shell {
         };
         column = column
             .child(heading(title))
-            .child(self.area_chart(&summary, metric, en, now, moving));
+            .child(self.area_chart(&summary, metric, en, now, moving, false));
+        let per = match (metric == Metric::Cost, summary.hourly) {
+            (true, false) => t("Custo por dia"),
+            (true, true) => t("Custo por hora"),
+            (false, false) => t("Tokens por dia"),
+            (false, true) => t("Tokens por hora"),
+        };
+        column = column
+            .child(heading(per))
+            .child(self.area_chart(&summary, metric, en, now, moving, true));
         column = column.child(legend(page, &summary, now, cx));
         // Stat tiles.
         let tiles = [
@@ -1852,21 +1882,14 @@ impl Shell {
                 } else {
                     t("Tokens por tipo")
                 }))
-                .child(
-                    div()
-                        .flex()
-                        .h(px(8.))
-                        .gap(px(2.))
-                        .rounded_full()
-                        .overflow_hidden()
-                        .children(parts.iter().enumerate().map(|(i, (_, v))| {
-                            div()
-                                .h_full()
-                                .bg(tone(i))
-                                .w(gpui::relative(frac(*v, sum)))
-                                .flex_shrink_0()
-                        })),
-                )
+                .child(pixel_bar::pixel_segments(
+                    parts
+                        .iter()
+                        .enumerate()
+                        .map(|(i, (_, v))| (frac(*v, sum), tone(i)))
+                        .collect(),
+                    8.,
+                ))
                 .child(
                     div()
                         .flex()
@@ -1880,7 +1903,7 @@ impl Shell {
                                 .gap(px(6.))
                                 .text_size(px(12.))
                                 .text_color(content(0.6))
-                                .child(div().size(px(8.)).rounded_full().bg(tone(i)))
+                                .child(div().size(px(8.)).bg(tone(i)))
                                 .child(*label)
                                 .child(div().text_color(content(0.9)).child(amount(*v)))
                         })),
@@ -1967,11 +1990,7 @@ impl Shell {
                                     .items_center()
                                     .gap(px(6.))
                                     .child(
-                                        div()
-                                            .size(px(8.))
-                                            .flex_shrink_0()
-                                            .rounded_full()
-                                            .bg(row.provider.color()),
+                                        div().size(px(8.)).flex_shrink_0().bg(row.provider.color()),
                                     )
                                     .child(
                                         div()
@@ -1981,13 +2000,10 @@ impl Shell {
                                             .child(row.model.clone()),
                                     ),
                             )
-                            .child(
-                                div()
-                                    .h(px(2.))
-                                    .rounded_full()
-                                    .bg(row.provider.color())
-                                    .w(gpui::relative(frac(part, whole).max(0.015))),
-                            )
+                            .child(div().h(px(pixel_bar::HEIGHT)).child(pixel_bar::pixel_bar(
+                                frac(part, whole).max(0.015),
+                                row.provider.color(),
+                            )))
                             .into_any_element();
                         list.row(
                             div()
@@ -2009,7 +2025,8 @@ impl Shell {
     }
 
     /// The stacked cumulative area chart, drawn by hand: a 2 px gap between bands, a recessive
-    /// grid, a crosshair and a card with the day's values per provider and the total.
+    /// grid, a crosshair and a card with the day's values per provider and the total. With
+    /// `daily`, each bucket is its own dithered column of that bucket's values instead.
     fn area_chart(
         &self,
         summary: &Summary,
@@ -2017,6 +2034,7 @@ impl Shell {
         en: bool,
         now: Instant,
         moving: &mut bool,
+        daily: bool,
     ) -> AnyElement {
         let page = &self.usage_page;
         // Hiding or showing a provider slides the stack; the area grows in from the left.
@@ -2025,7 +2043,11 @@ impl Shell {
         if page.vis.iter().any(|tween| !tween.done(now)) || !page.grow.done(now) {
             *moving = true;
         }
-        let (layers, max) = stack_weighted(&summary.buckets, metric, weights);
+        let (layers, max) = if daily {
+            stack_daily(&summary.buckets, metric, weights)
+        } else {
+            stack_weighted(&summary.buckets, metric, weights)
+        };
         let n = summary.buckets.len();
         let scale = Scale::nice([max], true);
         let y_ticks: Vec<(f64, String)> = scale
@@ -2062,7 +2084,9 @@ impl Shell {
                 }
                 running += day;
                 rows.push((content(0.9), t("Total").to_owned(), fmt(day)));
-                rows.push((content(0.45), t("Acumulado").to_owned(), fmt(running)));
+                if !daily {
+                    rows.push((content(0.45), t("Acumulado").to_owned(), fmt(running)));
+                }
                 (bucket_title(b.at, hourly, en), rows)
             })
             .collect();
@@ -2070,24 +2094,31 @@ impl Shell {
             .iter()
             .map(|l| (l.prov.color(), l.bottom.clone(), l.top.clone()))
             .collect();
-        hoverable("usage-chart".into())
-            .w_full()
-            .h(px(230.))
-            .child(
-                gpui::canvas(
-                    |_, _, _| {},
-                    move |bounds, _, window, cx| {
-                        window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
-                            paint_area(
-                                bounds, &scale, &y_ticks, &x_ticks, &bands, &tips, n, grow, window,
-                                cx,
-                            )
-                        })
-                    },
-                )
-                .size_full(),
+        hoverable(
+            if daily {
+                "usage-chart-daily"
+            } else {
+                "usage-chart"
+            }
+            .into(),
+        )
+        .w_full()
+        .h(px(230.))
+        .child(
+            gpui::canvas(
+                |_, _, _| {},
+                move |bounds, _, window, cx| {
+                    window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
+                        paint_area(
+                            bounds, &scale, &y_ticks, &x_ticks, &bands, &tips, n, grow, daily,
+                            window, cx,
+                        )
+                    })
+                },
             )
-            .into_any_element()
+            .size_full(),
+        )
+        .into_any_element()
     }
 
     fn limits_view(&self, at: Instant, moving: &mut bool, cx: &mut Context<Shell>) -> AnyElement {
@@ -2595,6 +2626,7 @@ fn paint_area(
     tips: &[(String, Vec<(gpui::Hsla, String, String)>)],
     n: usize,
     grow: f32,
+    columns: bool,
     window: &mut gpui::Window,
     cx: &mut gpui::App,
 ) {
@@ -2605,7 +2637,9 @@ fn paint_area(
     let (plot_w, plot_h) = ((w - left - right).max(1.), (h - top - bottom).max(1.));
     let x_of = |i: usize| {
         ox + left
-            + if n > 1 {
+            + if columns {
+                plot_w * (i as f32 + 0.5) / n.max(1) as f32
+            } else if n > 1 {
                 plot_w * i as f32 / (n - 1) as f32
             } else {
                 plot_w / 2.
@@ -2648,7 +2682,7 @@ fn paint_area(
     // Each band is dithered in cells, dense at its top edge and thinning toward its bottom, as the
     // chart's other areas are. Each band is inset by 1 px on both edges, so neighbours show a thin
     // gap of the surface. The area is revealed from the left edge of the plot by `grow`.
-    if n > 1 {
+    if n > 1 || (columns && n > 0) {
         let reveal = plot_w * grow.clamp(0., 1.);
         let rel = |v: f64| plot_h * scale.depth(v).clamp(0., 1.);
         // Each band's top and bottom edge at every bucket, in plot px.
@@ -2673,8 +2707,23 @@ fn paint_area(
             if x > reveal {
                 return None;
             }
+            // Columns: one per bucket, a cell of surface between neighbours when there is room.
+            let bucket = if columns {
+                let width = plot_w / n as f32;
+                let i = ((x / width) as usize).min(n - 1);
+                let cell = crate::visuals::dither::CELL;
+                if width >= 3. * cell && x - i as f32 * width > width - cell {
+                    return None;
+                }
+                Some(i)
+            } else {
+                None
+            };
             let (hue, upper) = edges.iter().find_map(|(hue, tops, bottoms)| {
-                let (upper, lower) = (edge_at(tops, x, plot_w), edge_at(bottoms, x, plot_w));
+                let (upper, lower) = match bucket {
+                    Some(i) => (tops[i], bottoms[i]),
+                    None => (edge_at(tops, x, plot_w), edge_at(bottoms, x, plot_w)),
+                };
                 (y >= upper && y < lower).then_some((*hue, upper))
             })?;
             let tone = area_tone((y - upper) / plot_h.max(1.), plot_h);
@@ -2689,7 +2738,9 @@ fn paint_area(
     if let Some((x, _)) = pointer(plot, window)
         && n > 0
     {
-        let i = if n > 1 {
+        let i = if columns {
+            ((x / plot_w) * n as f32) as usize
+        } else if n > 1 {
             ((x / plot_w) * (n - 1) as f32).round() as usize
         } else {
             0
@@ -2724,6 +2775,28 @@ mod tests {
     }
 
     const WEEK: i64 = 7 * DAY;
+
+    #[test]
+    fn the_daily_stack_holds_each_buckets_own_values() {
+        let buckets = vec![
+            Bucket {
+                at: 0,
+                cost: [1., 2., 0., 0.],
+                tokens: [0.; 4],
+            },
+            Bucket {
+                at: 1,
+                cost: [3., 0., 0., 0.],
+                tokens: [0.; 4],
+            },
+        ];
+        let (layers, max) = stack_daily(&buckets, Metric::Cost, [1.; 4]);
+        assert_eq!(layers.len(), 2);
+        assert_eq!(layers[0].top, vec![1., 3.]);
+        assert_eq!(layers[1].bottom, vec![1., 3.]);
+        assert_eq!(layers[1].top, vec![3., 3.]);
+        assert_eq!(max, 3.);
+    }
 
     #[test]
     fn days_left_counts_today_through_the_reset_day() {

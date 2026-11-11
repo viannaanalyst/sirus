@@ -109,9 +109,107 @@ pub fn pixel_bar(share: f32, color: Hsla) -> impl IntoElement {
     .h(px(HEIGHT))
 }
 
+/// The cells of a bar split into `parts` (shares of the whole, in order), one empty column between
+/// parts. Each part gets at least one column when its share is above zero, and is dithered on its
+/// own: half-inked at its start, solid at its end. The index is the part a cell belongs to.
+fn segment_cells(width: f32, height: f32, parts: &[f32]) -> Vec<(Cell, usize)> {
+    let pitch = CELL + GAP;
+    let rows = fit(height);
+    let columns = fit(width);
+    let top = (height - (rows as f32 * pitch - GAP)) / 2.;
+    let shown: Vec<usize> = (0..parts.len()).filter(|&i| parts[i] > 0.).collect();
+    let sum: f32 = shown.iter().map(|&i| parts[i]).sum();
+    if sum <= 0. || columns == 0 {
+        return Vec::new();
+    }
+    let free = columns.saturating_sub(shown.len().saturating_sub(1));
+    // Each part's column count: its share, at least one, the last taking what is left.
+    let mut spans = Vec::with_capacity(shown.len());
+    let mut used = 0;
+    for (k, &i) in shown.iter().enumerate() {
+        let left = shown.len() - k - 1;
+        let room = free.saturating_sub(used + left);
+        let n = if left == 0 {
+            room
+        } else {
+            ((parts[i] / sum * free as f32).round() as usize).clamp(1, room.max(1))
+        };
+        spans.push((i, n));
+        used += n;
+    }
+    let mut out = Vec::new();
+    let mut start = 0;
+    for (i, n) in spans {
+        let filled = n as f32 * pitch;
+        for row in 0..rows {
+            let y = top + row as f32 * pitch;
+            for k in 0..n {
+                let col = start + k;
+                if lit(col, row, density(k as f32 * pitch, filled)) {
+                    out.push((
+                        Cell {
+                            x: col as f32 * pitch,
+                            y,
+                            dot: Dot::Ink,
+                        },
+                        i,
+                    ));
+                }
+            }
+        }
+        start += n + 1;
+    }
+    out
+}
+
+/// A bar split into parts, each `(share, colour)`, dithered like `pixel_bar` and `height` tall.
+pub fn pixel_segments(parts: Vec<(f32, Hsla)>, height: f32) -> impl IntoElement {
+    canvas(
+        |_, _: &mut Window, _: &mut App| {},
+        move |bounds, _, window: &mut Window, _: &mut App| {
+            let (width, tall) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
+            let shares: Vec<f32> = parts.iter().map(|(share, _)| *share).collect();
+            for (cell, i) in segment_cells(width, tall, &shares) {
+                window.paint_quad(fill(
+                    Bounds::new(
+                        bounds.origin + point(px(cell.x), px(cell.y)),
+                        size(px(CELL), px(CELL)),
+                    ),
+                    parts[i].1,
+                ));
+            }
+        },
+    )
+    .w_full()
+    .h(px(height))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn segments_keep_a_column_apart_and_a_tiny_part_still_shows() {
+        // 41 columns; parts of 1%, 59% and 40%, two gap columns between them.
+        let drawn = segment_cells(100., HEIGHT, &[0.01, 0.59, 0.4]);
+        let col = |c: &Cell| (c.x / (CELL + GAP)).round() as usize;
+        let span = |i: usize| {
+            let cols: Vec<usize> = drawn
+                .iter()
+                .filter(|(_, p)| *p == i)
+                .map(|(c, _)| col(c))
+                .collect();
+            (*cols.iter().min().unwrap(), *cols.iter().max().unwrap())
+        };
+        let (a, b, c) = (span(0), span(1), span(2));
+        assert_eq!(a, (0, 0), "the 1% part keeps one column");
+        assert!(
+            b.0 >= a.1 + 2 && c.0 >= b.1 + 2,
+            "one empty column between parts"
+        );
+        assert_eq!(c.1, 40, "the last part reaches the end");
+        assert!(segment_cells(100., HEIGHT, &[0., 0.]).is_empty());
+    }
 
     #[test]
     fn six_pixels_hold_two_rows_centred() {

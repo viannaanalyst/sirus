@@ -1330,6 +1330,8 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Criação", "Created"),
     ("Custo", "Cost"),
     ("Custo acumulado", "Cumulative cost"),
+    ("Custo por dia", "Cost per day"),
+    ("Custo por hora", "Cost per hour"),
     ("Custo por tipo", "Cost by type"),
     ("Código", "Code"),
     ("Código de confirmação", "Confirmation code"),
@@ -4886,6 +4888,8 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Todos os projetos", "All projects"),
     ("Token guardado no Keychain.", "Token kept in the Keychain."),
     ("Tokens acumulados", "Cumulative tokens"),
+    ("Tokens por dia", "Tokens per day"),
+    ("Tokens por hora", "Tokens per hour"),
     ("Tokens por tipo", "Tokens by type"),
     (
         "Toque o som escolhido. Usa o volume de saída do sistema.",

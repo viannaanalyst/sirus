@@ -137,6 +137,9 @@ fn ttl_of(settings: &Value) -> Option<&'static str> {
     }
 }
 
+/// How long the CLI waits for a connector's MCP server to connect at start, in milliseconds.
+const CONNECTOR_STARTUP_MS: &str = "10000";
+
 pub async fn start(
     session: Session,
     cwd: String,
@@ -145,6 +148,7 @@ pub async fn start(
     account_home: Option<std::path::PathBuf>,
     choices: LaunchChoices,
 ) -> Result<(crate::agent::AgentProcess, crate::agent::StartedAgent)> {
+    let mut clock = crate::timing::Clock::new("claude-start");
     validate_binding(&session, &cwd)?;
     if (session.provider_account_id == "default") != account_home.is_none() {
         return Err(Error::agent("Account profile does not match this session."));
@@ -155,8 +159,11 @@ pub async fn start(
         return Err(Error::agent("Claude Code is not installed"));
     }
     let binary = install.path.unwrap_or(install.binary);
+    clock.mark("resolve-binary");
     let connectors = crate::connectors::for_session(&session).await;
+    clock.mark("connectors");
     let skills = skill_overrides(&choices, account_home.as_deref(), &cwd);
+    clock.mark("skills");
     // Everything fixed when the CLI starts is part of the key a kept process must match.
     let key = format!(
         "{binary}\u{0}{}\u{0}{}\u{0}{cwd}\u{0}{}\u{0}{}\u{0}{:?}\u{0}{:?}\u{0}{}\u{0}{}\u{0}{}\u{0}{}",
@@ -174,9 +181,14 @@ pub async fn start(
         choices.auto_compact_window,
         Value::Object(skills.clone()),
     );
-    if let Some((child, wire)) =
-        crate::agent_pool::take(&session.id, &crate::agent_pool::with_thread(&key, &session))
-    {
+    let kept =
+        crate::agent_pool::take(&session.id, &crate::agent_pool::with_thread(&key, &session));
+    clock.mark(if kept.is_some() {
+        "pool-hit"
+    } else {
+        "pool-miss"
+    });
+    if let Some((child, wire)) = kept {
         let generation = uuid::Uuid::new_v4().to_string();
         let (cancel, receiver) = watch::channel(false);
         let (sender, replies) = mpsc::channel(16);
@@ -207,6 +219,12 @@ pub async fn start(
     }
     let mut command = crate::detect::command(binary);
     crate::provider_accounts::apply(&mut command, &session.agent, account_home.as_deref());
+    // The CLI sends nothing to the model until every MCP server connected or gave up, and it
+    // waits 30 s for one that hangs; a remote connector that does not answer in time is
+    // skipped for the conversation (ADR-211). The person's own MCP_TIMEOUT wins.
+    if !connectors.is_empty() && std::env::var_os("MCP_TIMEOUT").is_none() {
+        command.env("MCP_TIMEOUT", CONNECTOR_STARTUP_MS);
+    }
     if let Some(config) = crate::browser_mcp::claude_mcp_config(
         &session.id,
         crate::connectors::claude_servers(&connectors),
@@ -282,9 +300,11 @@ pub async fn start(
     #[cfg(unix)]
     command.process_group(0);
     crate::process_priority::lower_async(&mut command);
+    clock.mark("build-command");
     let child = command
         .spawn()
         .map_err(|_| Error::agent("Cannot start Claude native protocol"))?;
+    clock.mark("spawn");
     let generation = uuid::Uuid::new_v4().to_string();
     let (cancel, receiver) = watch::channel(false);
     let (sender, replies) = mpsc::channel(16);

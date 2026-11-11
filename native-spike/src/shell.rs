@@ -112,6 +112,9 @@ pub(crate) mod message_actions;
 /// The ⌥Tab switcher's cards (project_switch.rs).
 #[path = "project_switch.rs"]
 mod project_switch;
+/// The large "Aperte ⌘Q de novo" over the whole window (quit_overlay.rs).
+#[path = "quit_overlay.rs"]
+mod quit_overlay;
 /// The secret request card and its field (secret_card.rs).
 #[path = "secret_card.rs"]
 mod secret_card;
@@ -121,9 +124,6 @@ mod sidebar_pick;
 /// The toasts: failures and provider updates as cards at the top centre (toast.rs).
 #[path = "toast.rs"]
 mod toast;
-/// The large "Aperte ⌘Q de novo" over the whole window (quit_overlay.rs).
-#[path = "quit_overlay.rs"]
-mod quit_overlay;
 /// ⌘F: the find bar over the open conversation (transcript_find.rs).
 #[path = "transcript_find.rs"]
 pub(crate) mod transcript_find;
@@ -9843,8 +9843,19 @@ impl Shell {
         );
         state.set_follow_mode(gpui::FollowMode::Tail);
         let shell = cx.entity().downgrade();
-        state.set_scroll_handler(move |_, _, cx| {
-            let _ = shell.update(cx, |_, cx| cx.notify());
+        state.set_scroll_handler(move |event, _, cx| {
+            let _ = shell.update(cx, |this, cx| {
+                // Reaching the top brings the older page by itself, as the button would.
+                let at_top = event.is_scrolled && event.visible_range.start == 0;
+                let asked = this
+                    .waiting
+                    .values()
+                    .any(|w| matches!(w, Waiting::Older(ix) if *ix == conversation));
+                if at_top && !asked && this.conversations[conversation].base > 0 {
+                    this.load_older(conversation, cx);
+                }
+                cx.notify();
+            });
         });
         self.lists.insert(conversation, state.clone());
         state

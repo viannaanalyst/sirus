@@ -1278,6 +1278,7 @@ const ENTRIES: &[(&str, &str)] = &[
     ("Conta padrão", "Default account"),
     ("Contas do GitHub", "GitHub accounts"),
     ("Contas do {}", "{} accounts"),
+    ("Contexto", "Context"),
     ("Contexto compactado", "Context compacted"),
     (
         "Contexto do título do commit indisponível",

@@ -126,6 +126,8 @@ pub struct Conversation {
     pub approval: String,
     pub effort: Option<String>,
     pub fast: bool,
+    /// Claude's context window for the session, when it chose one.
+    pub context_window: Option<u32>,
     /// The add menu's modes for the next message.
     pub planning: bool,
     pub debugging: bool,
@@ -196,6 +198,7 @@ impl Conversation {
             approval: "full".into(),
             effort: None,
             fast: false,
+            context_window: None,
             planning: false,
             debugging: false,
             team: false,
@@ -259,6 +262,7 @@ impl Conversation {
         }
         self.effort = session["execution"]["effort"].as_str().map(str::to_owned);
         self.fast = session["execution"]["fast"].as_bool().unwrap_or(false);
+        self.context_window = session["execution"]["contextWindow"].as_u64().map(|v| v as u32);
         self.planning = session["execution"]["planning"].as_bool().unwrap_or(false);
         self.goal = session["goal"].as_str().map(str::to_owned);
         self.context = crate::shell::context_meter::Reading::of(session);

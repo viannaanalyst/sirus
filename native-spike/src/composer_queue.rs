@@ -645,7 +645,7 @@ impl Shell {
                 .as_deref()
                 .and_then(|id| self.models.get("cursor")?.iter().find(|m| m.id == id))
                 .is_some_and(|m| !m.parameterized);
-        let execution = json!({ "approval": conversation.approval, "effort": if plain_cursor { None } else { chosen.effort }, "fast": chosen.fast && !plain_cursor, "planning": conversation.planning });
+        let execution = json!({ "approval": conversation.approval, "effort": if plain_cursor { None } else { chosen.effort }, "fast": chosen.fast && !plain_cursor, "planning": conversation.planning, "contextWindow": chosen.context });
         let draft = self
             .drafts
             .get(&ix)

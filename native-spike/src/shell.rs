@@ -552,6 +552,8 @@ struct Execution {
     effort: Option<String>,
     fast: bool,
     fast_ok: bool,
+    /// Claude's context window (200000 or 1000000); None where the provider has no such choice.
+    context: Option<u32>,
 }
 
 impl Execution {
@@ -13062,6 +13064,7 @@ impl Shell {
                 effort: effort.map(str::to_owned),
                 fast,
                 fast_ok,
+                context: None,
             };
         }
         let preference = model.map_or(Value::Null, |id| {
@@ -13087,11 +13090,19 @@ impl Shell {
             && preference["fast"]
                 .as_bool()
                 .unwrap_or_else(|| info.is_some_and(|m| m.default_fast));
+        // Only Claude's Opus and Sonnet have a 1M window to choose.
+        let context = (provider == "claude"
+            && model.is_some_and(|id| id.contains("opus") || id.contains("sonnet")))
+        .then(|| match preference["contextWindow"].as_u64() {
+            Some(1_000_000) => 1_000_000,
+            _ => 200_000,
+        });
         Execution {
             levels,
             effort,
             fast,
             fast_ok,
+            context,
         }
     }
 
@@ -13664,6 +13675,8 @@ impl Shell {
         let fast_ok = execution.fast_ok;
         let thumb_tint = effort_energy::blend(gpui::white(), tone, 0.13);
         let model = self.model_display(provider, conversation.model.as_deref());
+        let context = execution.context;
+        let context_label = |tokens: u32| if tokens >= 1_000_000 { "1M" } else { "200k" };
         let first = execution.levels.first().map(|l| effort_label(l));
         let last = execution.levels.last().map(|l| effort_label(l));
         div()
@@ -13689,6 +13702,7 @@ impl Shell {
                                 div().id("effort-model").max_w_full().px(px(8.)).py(px(2.)).rounded(px(crate::theme::RADIUS_SM)).flex().items_center().gap(px(4.)).text_size(px(13.)).text_color(content(0.65)).cursor_pointer().hover(|s| s.text_color(content(0.95)))
                                     .on_click(cx.listener(|this, _, _, cx| this.set_model_page(ComposerMenu::Catalog, cx)))
                                     .child(div().min_w_0().truncate().child(model))
+                                    .children(context.map(|c| div().flex_shrink_0().text_color(content(0.45)).child(format!("· {}", context_label(c)))))
                                     .child(icon("chevron-right", 14.).text_color(content(0.55))),
                             ),
                     )
@@ -13756,6 +13770,24 @@ impl Shell {
                 (_, Some(last), 1) => div().mt(px(8.)).flex().justify_between().text_size(px(11.5)).text_color(content(0.45)).child(t("Fixo")).child(last),
                 (first, last, _) => div().mt(px(8.)).flex().justify_between().text_size(px(11.5)).text_color(content(0.45)).children(first).children(last),
             })
+            .children(context.map(|current| {
+                div().mt(px(12.)).pt(px(12.)).border_t_1().border_color(content(0.08)).flex().items_center().justify_between().px(px(2.))
+                    .child(div().text_size(px(13.)).text_color(content(0.8)).child(t("Contexto")))
+                    .child(
+                        div().flex().p(px(3.)).rounded(px(14.)).border_1().border_color(crate::theme::border()).bg(content(0.06))
+                            .children([200_000u32, 1_000_000].map(|value| {
+                                let on = current == value;
+                                div().id(format!("effort-context-{value}")).min_w(px(50.)).py(px(4.)).rounded(px(11.)).flex().justify_center().text_size(px(12.5)).cursor_pointer()
+                                    .when(on, |d| d.bg(gpui::white()).text_color(gpui::rgb(0x1a1c22)).font_weight(FontWeight::SEMIBOLD))
+                                    .when(!on, |d| d.text_color(content(0.55)))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.set_execution("contextWindow", json!(value));
+                                        cx.notify();
+                                    }))
+                                    .child(context_label(value))
+                            })),
+                    )
+            }))
             .into_any_element()
     }
 
@@ -15444,6 +15476,12 @@ impl Shell {
                                                     .flex_shrink_0()
                                                     .text_color(content(0.4))
                                                     .child(e)
+                                            }))
+                                            .children(chosen.context.map(|c| {
+                                                div()
+                                                    .flex_shrink_0()
+                                                    .text_color(content(0.4))
+                                                    .child(if c >= 1_000_000 { "· 1M" } else { "· 200k" })
                                             }))
                                             .when(chosen.fast, |d| {
                                                 d.child(

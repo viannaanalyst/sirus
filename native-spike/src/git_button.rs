@@ -569,6 +569,7 @@ impl Shell {
             "effort": conversation.effort,
             "fast": conversation.fast,
             "planning": conversation.planning,
+            "contextWindow": conversation.context_window,
         });
         self.backend.invoke(
             "send_prompt",

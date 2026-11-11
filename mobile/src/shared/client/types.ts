@@ -663,7 +663,7 @@ export interface Connector {
   auth: ConnectorAuth;
 }
 
-export interface ExecutionOptions { effort?: string | null; fast?: boolean; planning?: boolean; approval?: ApprovalMode | null }
+export interface ExecutionOptions { effort?: string | null; fast?: boolean; planning?: boolean; approval?: ApprovalMode | null; contextWindow?: number | null }
 
 export interface SkillOwner { projectId: string | null; sessionId: string | null }
 export interface WorkspaceFileSuggestion { path: string; isDir: boolean }

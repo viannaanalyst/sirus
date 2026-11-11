@@ -2296,6 +2296,10 @@ pub struct ExecutionOptions {
     pub fast: bool,
     pub planning: bool,
     pub approval: Option<ApprovalMode>,
+    /// Claude's context window for this conversation (200000 or 1000000); it wins over the
+    /// global auto-compact setting.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

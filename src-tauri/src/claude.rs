@@ -62,6 +62,13 @@ fn launch_settings(
     settings
 }
 
+/// The compaction window a conversation starts with: its own choice, else the global setting.
+fn effective_window(session_choice: Option<u32>, global: &str) -> String {
+    session_choice
+        .map(|tokens| tokens.clamp(100_000, 1_000_000).to_string())
+        .unwrap_or_else(|| global.to_string())
+}
+
 /// What a Claude conversation takes from the app's settings when it starts.
 #[derive(Clone, Default)]
 pub struct LaunchChoices {
@@ -164,6 +171,10 @@ pub async fn start(
     clock.mark("connectors");
     let skills = skill_overrides(&choices, account_home.as_deref(), &cwd);
     clock.mark("skills");
+    let window = effective_window(
+        session.execution.context_window,
+        &choices.auto_compact_window,
+    );
     // Everything fixed when the CLI starts is part of the key a kept process must match.
     let key = format!(
         "{binary}\u{0}{}\u{0}{}\u{0}{cwd}\u{0}{}\u{0}{}\u{0}{:?}\u{0}{:?}\u{0}{}\u{0}{}\u{0}{}\u{0}{}",
@@ -178,7 +189,7 @@ pub async fn start(
         session.model,
         crate::computer_mcp::endpoint(&session.id).is_some(),
         crate::connectors::fingerprint(&connectors),
-        choices.auto_compact_window,
+        window,
         Value::Object(skills.clone()),
     );
     let kept =
@@ -272,7 +283,7 @@ pub async fn start(
     ]);
     command.args([
         "--settings",
-        &launch_settings(session.execution.fast, &choices.auto_compact_window, skills).to_string(),
+        &launch_settings(session.execution.fast, &window, skills).to_string(),
     ]);
     // A delegated task is its own Claude session, so it would get the main conversation's cache
     // lifetime; the person's setting for subagents applies to it, as to a native subagent.
@@ -1626,6 +1637,16 @@ mod tests {
                 "skillOverrides": {"n8n": "off"}
             })
         );
+    }
+
+    #[test]
+    fn the_conversations_context_window_wins_over_the_global_one() {
+        assert_eq!(effective_window(None, "200000"), "200000");
+        assert_eq!(effective_window(Some(1_000_000), "200000"), "1000000");
+        assert_eq!(effective_window(Some(200_000), ""), "200000");
+        let window = effective_window(Some(1_000_000), "200000");
+        let settings = launch_settings(false, &window, Default::default());
+        assert_eq!(settings["autoCompactWindow"], 1_000_000);
     }
 
     #[test]

@@ -521,7 +521,7 @@ impl Shell {
         }
         let session_id = conversation.session_id.clone();
         // The session's own choices: a compaction changes none of them.
-        let execution = json!({ "approval": conversation.approval, "effort": conversation.effort, "fast": conversation.fast, "planning": conversation.planning });
+        let execution = json!({ "approval": conversation.approval, "effort": conversation.effort, "fast": conversation.fast, "planning": conversation.planning, "contextWindow": conversation.context_window });
         let call = self.backend.invoke(
             "send_prompt",
             json!({ "request": { "sessionId": session_id, "prompt": COMPACT_COMMAND, "clientRequestId": uuid(), "execution": execution, "attachmentIds": [], "attachmentOwner": format!("session:{session_id}") } }),

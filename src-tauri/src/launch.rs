@@ -117,6 +117,7 @@ pub async fn launch(
                     planning: request.planning,
                     effort: request.effort,
                     fast: request.fast,
+                    context_window: None,
                 },
                 team: false,
                 client_request_id: None,

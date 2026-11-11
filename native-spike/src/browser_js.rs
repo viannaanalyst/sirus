@@ -26,6 +26,8 @@ script!(SELECT, "select.js");
 script!(DRAG, "drag.js");
 script!(UPLOAD, "upload.js");
 script!(NETWORK_READ, "network_read.js");
+// The window's own: the open page as one self-contained HTML for a guest link (ADR-210).
+script!(SHARE_CAPTURE, "share_capture.js");
 // Runs first in the pointed tools: draws the agent's pointer (ADR-198) and never throws.
 script!(POINTER, "pointer.js");
 

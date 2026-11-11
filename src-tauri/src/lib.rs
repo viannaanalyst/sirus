@@ -103,6 +103,7 @@ mod rotation;
 mod scheduled_prompts;
 mod secrets;
 mod session_export;
+mod share_links;
 mod session_move;
 mod side_chat;
 mod sidebar;

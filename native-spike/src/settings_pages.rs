@@ -199,6 +199,11 @@ pub fn loads(page: &str) -> Vec<(&'static str, &'static str, Value)> {
                 "mcp_token_action",
                 json!({"action": {"type": "list"}}),
             ),
+            (
+                "share",
+                "share_link_action",
+                json!({"action": {"type": "list"}}),
+            ),
         ],
         "Git" => vec![
             ("host", "host_info", json!({})),
@@ -3785,6 +3790,59 @@ fn mcp_groups(d: &HashMap<&'static str, Value>, address: Option<&str>) -> Vec<Gr
     out
 }
 
+/// Links ativos (ADR-210): the read-only guest links to conversations and previews that have not
+/// expired, each with when it expires and how often it was opened, and a button that turns it
+/// off at once. A link's address is only known when it is made (the host keeps a hash), so the
+/// list has no "copy".
+fn share_groups(d: &HashMap<&'static str, Value>) -> Vec<Group> {
+    let s = get_data(d, "share");
+    let links = s["links"].as_array().cloned().unwrap_or_default();
+    let mut rows = vec![row(
+        "",
+        t(
+            "Links só de leitura para conversas e prévias. Cada um vence sozinho e pode ser desligado aqui.",
+        ),
+        Vec::new(),
+    )];
+    for link in &links {
+        let id = link["id"].as_str().unwrap_or_default();
+        let what = if link["kind"] == "preview" {
+            t("Prévia").to_string()
+        } else {
+            link["project"]
+                .as_str()
+                .filter(|project| !project.is_empty())
+                .map_or_else(|| t("Conversa").to_string(), str::to_string)
+        };
+        let expires = local_when(
+            link["expiresAt"].as_str().unwrap_or_default(),
+            t("%d/%m/%Y %H:%M"),
+        );
+        let views = crate::share_link::views_text(link["views"].as_u64().unwrap_or(0));
+        rows.push(row(
+            link["title"].as_str().unwrap_or_default(),
+            tf("{} · vence {} · {}", &[&what, &expires, &views]),
+            vec![Ctl::Button {
+                label: t("Desligar"),
+                act: act_run(
+                    "share_link_action",
+                    json!({"action": {"type": "revoke", "id": id}}),
+                ),
+                enabled: true,
+                danger: true,
+            }],
+        ));
+    }
+    if links.is_empty() {
+        rows.push(row("", t("Nenhum link ativo."), Vec::new()));
+    }
+    let mut out = vec![group(t("Links ativos"), rows)];
+    if let Some(text) = s["error"].as_str().filter(|text| !text.is_empty()) {
+        out.push(note(text));
+    }
+    out
+}
+
 fn connections(d: &HashMap<&'static str, Value>) -> Vec<Group> {
     let r = get_data(d, "remote");
     let enabled = yes(&r["enabled"]);
@@ -3917,6 +3975,7 @@ fn connections(d: &HashMap<&'static str, Value>) -> Vec<Group> {
         device_rows.push(row("", t("Nenhum aparelho conectado ainda."), Vec::new()));
     }
     out.push(group(t("Aparelhos"), device_rows));
+    out.extend(share_groups(d));
     out.extend(mcp_groups(d, address));
     out.push(group(
         t("O que um aparelho pode fazer"),

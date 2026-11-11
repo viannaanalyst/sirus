@@ -717,6 +717,9 @@ fn start_kind(
             remote: remote.clone(),
             shutdown: shutdown.subscribe(),
         };
+        if let Some(dir) = app_data_dir(&shared) {
+            start_share_cleanup(dir);
+        }
         let router = Router::new()
             .route("/api/health", get(health))
             .route("/api/pair", post(pair))
@@ -735,6 +738,9 @@ fn start_kind(
                         crate::mcp_external::MAX_BODY + 1024,
                     )),
             )
+            // Guest links (ADR-210): public, read-only, the token in the path is the only key.
+            .route("/s/{token}", get(share_page))
+            .route("/s/{token}/a/{id}", get(share_asset))
             .route("/api/socket", get(socket))
             .route("/api/tunnel", get(tunnel))
             .route("/api/thumbnail/{id}", get(thumbnail))
@@ -955,6 +961,144 @@ fn same_origin(headers: &HeaderMap, https_host: Option<&str>) -> bool {
 fn app_data_dir(shared: &Shared) -> Option<PathBuf> {
     let state = shared.app.try_state::<Arc<crate::commands::AppState>>()?;
     state.data_path.parent().map(Path::to_path_buf)
+}
+
+/// The address a guest link starts with: the public route when there is one, else the address
+/// this host advertises, else its own loopback port (ADR-210).
+pub(crate) fn share_base_url(dir: &Path) -> String {
+    let route_of = |path: &Path| public_route(path).map(|route| route.url);
+    let Some(remote) = REMOTE.get() else {
+        return route_of(&dir.join("remote.json"))
+            .unwrap_or_else(|| format!("http://127.0.0.1:{DEFAULT_PORT}"));
+    };
+    if let Some(url) = route_of(&remote.path) {
+        return url;
+    }
+    let listen = remote.listen.lock().clone();
+    if let Some(url) = listen.url {
+        return url.trim_end_matches('/').to_string();
+    }
+    let port = listen
+        .local_port
+        .unwrap_or_else(|| port(&remote.config.lock()));
+    format!("http://127.0.0.1:{port}")
+}
+
+/// Expired guest links are removed every ten minutes, once per process.
+fn start_share_cleanup(dir: PathBuf) {
+    static STARTED: std::sync::Once = std::sync::Once::new();
+    STARTED.call_once(|| {
+        crate::runtime::async_runtime::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(600)).await;
+                let dir = dir.clone();
+                let _ = crate::runtime::async_runtime::spawn_blocking(move || {
+                    crate::share_links::prune(&dir, Utc::now())
+                })
+                .await;
+            }
+        });
+    });
+}
+
+/// A guest link's answer with the headers every public answer carries.
+fn share_response(reply: crate::share_links::Reply) -> Response {
+    let status = StatusCode::from_u16(reply.status).unwrap_or(StatusCode::NOT_FOUND);
+    let mut response = (status, reply.body).into_response();
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static(reply.content_type),
+    );
+    for (name, value) in crate::share_links::SECURITY_HEADERS {
+        headers.insert(
+            header::HeaderName::from_static(name),
+            HeaderValue::from_static(value),
+        );
+    }
+    response
+}
+
+/// Who is asking, for the rate limit: Cloudflare's header when the request came through the
+/// public route (it reaches this host from loopback), else the peer.
+fn share_client(peer: SocketAddr, headers: &HeaderMap) -> String {
+    let text = |name: &str| {
+        headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(|value| value.split(',').next().unwrap_or("").trim().to_string())
+            .filter(|value| !value.is_empty())
+    };
+    text("cf-connecting-ip")
+        .or_else(|| text("x-forwarded-for"))
+        .unwrap_or_else(|| peer.ip().to_string())
+}
+
+/// What a guest link answers when it is asked too often.
+fn share_too_many() -> Response {
+    let mut response = share_response(crate::share_links::Reply {
+        status: 429,
+        content_type: "text/plain; charset=utf-8",
+        body: b"Too many requests.\n".to_vec(),
+    });
+    response
+        .headers_mut()
+        .insert(header::RETRY_AFTER, HeaderValue::from_static("60"));
+    response
+}
+
+/// `GET /s/{token}`: a shared conversation or preview.
+async fn share_page(
+    AxumState(shared): AxumState<Shared>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    axum::extract::Path(token): axum::extract::Path<String>,
+) -> Response {
+    if !crate::share_links::allow(&share_client(peer, &headers), Instant::now()) {
+        return share_too_many();
+    }
+    let portuguese = crate::share_links::visitor_portuguese(
+        headers
+            .get(header::ACCEPT_LANGUAGE)
+            .and_then(|value| value.to_str().ok()),
+    );
+    let Some(state) = shared.app.try_state::<Arc<crate::commands::AppState>>() else {
+        return share_response(crate::share_links::gone(portuguese));
+    };
+    let state = state.inner().clone();
+    let reply = crate::runtime::async_runtime::spawn_blocking(move || {
+        crate::share_links::serve_page(&state, &token, portuguese, Utc::now())
+    })
+    .await
+    .unwrap_or_else(|_| crate::share_links::gone(portuguese));
+    share_response(reply)
+}
+
+/// `GET /s/{token}/a/{id}`: an image of a shared conversation.
+async fn share_asset(
+    AxumState(shared): AxumState<Shared>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    axum::extract::Path((token, id)): axum::extract::Path<(String, String)>,
+) -> Response {
+    if !crate::share_links::allow(&share_client(peer, &headers), Instant::now()) {
+        return share_too_many();
+    }
+    let portuguese = crate::share_links::visitor_portuguese(
+        headers
+            .get(header::ACCEPT_LANGUAGE)
+            .and_then(|value| value.to_str().ok()),
+    );
+    let Some(state) = shared.app.try_state::<Arc<crate::commands::AppState>>() else {
+        return share_response(crate::share_links::gone(portuguese));
+    };
+    let state = state.inner().clone();
+    let reply = crate::runtime::async_runtime::spawn_blocking(move || {
+        crate::share_links::serve_attachment(&state, &token, &id, portuguese, Utc::now())
+    })
+    .await
+    .unwrap_or_else(|_| crate::share_links::gone(portuguese));
+    share_response(reply)
 }
 
 /// `POST /mcp`: one JSON-RPC message of an outside MCP client (`mcp_external.rs`).

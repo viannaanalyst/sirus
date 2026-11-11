@@ -440,6 +440,8 @@ enum Menu {
     LoginForm,
     /// Custom browser profiles: add, rename, delete, and the one new tabs open in.
     Profiles,
+    /// The share card: a guest link to a snapshot of this page (share_link.rs).
+    Share,
 }
 
 /// The two size fields of the device bar.
@@ -546,6 +548,8 @@ pub struct Browser {
     menu: Option<Menu>,
     menu_since: Instant,
     menu_pressed_shut: Option<(Menu, Instant)>,
+    /// The share card's state while it is open or being worked on (ADR-210).
+    share: Option<crate::share_link::Share>,
     /// The page as it looked when a menu opened: the web view hides under menus, this stays.
     frozen: Option<std::sync::Arc<gpui::Image>>,
     notice: Option<(String, Instant)>,
@@ -707,6 +711,7 @@ impl Browser {
             menu: None,
             menu_since: Instant::now(),
             menu_pressed_shut: None,
+            share: None,
             frozen: None,
             notice: None,
             annotating: false,
@@ -1562,6 +1567,147 @@ impl Browser {
         self.say(t("Link copiado"), cx);
     }
 
+    /// Opens the share card for the page in the active tab (ADR-210).
+    fn open_share(&mut self, cx: &mut Context<Self>) {
+        let shareable = self
+            .active_tab()
+            .is_some_and(|t| browser_tab::allowed_url(&t.url) && !blank_url(&t.url));
+        if !shareable {
+            return;
+        }
+        crate::segment_pill::forget("browser-share-validity");
+        self.share = Some(crate::share_link::Share::new(
+            crate::share_link::Target::Preview,
+        ));
+        self.open_menu_fresh(Menu::Share, cx);
+    }
+
+    /// What a press in the share card asks for.
+    fn share_event(
+        &mut self,
+        event: crate::share_link::Event,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::share_link::Event;
+        match event {
+            Event::Validity(validity) => {
+                if let Some(share) = self.share.as_mut() {
+                    share.validity = validity;
+                }
+            }
+            Event::Hide | Event::Attachments => {}
+            Event::Cancel | Event::Close => {
+                self.share = None;
+                self.close_menu(cx);
+            }
+            Event::Copy => {
+                if let Some(done) = self.share.as_ref().and_then(|share| share.done.as_ref()) {
+                    cx.write_to_clipboard(ClipboardItem::new_string(done.url.clone()));
+                    self.say(t("Link copiado"), cx);
+                }
+            }
+            Event::Revoke => {
+                if let Some(done) = self.share.take().and_then(|share| share.done) {
+                    self.backend.invoke(
+                        "share_link_action",
+                        json!({ "action": { "type": "revoke", "id": done.id } }),
+                    );
+                }
+                self.close_menu(cx);
+            }
+            Event::Create => self.share_capture(window, cx),
+        }
+        cx.notify();
+    }
+
+    /// Captures the page as one self-contained HTML (`browser_js/share_capture.js`) and sends it
+    /// to the host, which keeps it behind a link of its own.
+    fn share_capture(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.share.as_ref().is_none_or(|share| share.working) {
+            return;
+        }
+        let web = self.active_tab().map(|tab| tab.web.clone());
+        let (Some(mtm), Some(web)) = (MainThreadMarker::new(), web) else {
+            self.share_failed(t("Abra uma página para compartilhar.").to_owned(), cx);
+            return;
+        };
+        let answer = browser_tab::call_page(
+            &web,
+            crate::browser_js::SHARE_CAPTURE,
+            &json!({ "limit": crate::share_link::MAX_PREVIEW }),
+            mtm,
+        );
+        if let Some(share) = self.share.as_mut() {
+            share.working = true;
+            share.error = None;
+        }
+        cx.spawn_in(window, async move |this, cx| {
+            let captured = match answer.recv().await {
+                Ok(Ok(text)) => crate::share_link::parse_capture(&text),
+                _ => Err(t("Não foi possível capturar a página.").to_owned()),
+            };
+            let (title, html) = match captured {
+                Ok(page) => page,
+                Err(message) => {
+                    let _ = this.update(cx, |this, cx| this.share_failed(message, cx));
+                    return;
+                }
+            };
+            let reply = this
+                .update(cx, |this, _| {
+                    let share = this.share.as_ref()?;
+                    Some(
+                        this.backend
+                            .request("share_link_action", share.preview_args(&title, &html)),
+                    )
+                })
+                .ok()
+                .flatten();
+            let Some(reply) = reply else {
+                return;
+            };
+            let result = reply.recv().await.ok();
+            let _ = this.update(cx, |this, cx| this.share_finished(result, cx));
+        })
+        .detach();
+    }
+
+    fn share_failed(&mut self, message: String, cx: &mut Context<Self>) {
+        if let Some(share) = self.share.as_mut() {
+            share.working = false;
+            share.error = Some(message);
+        }
+        cx.notify();
+    }
+
+    /// The host's answer to the preview: the link, copied at once, or why not.
+    fn share_finished(&mut self, reply: Option<Result<Value, Value>>, cx: &mut Context<Self>) {
+        match reply {
+            Some(Ok(value)) => match crate::share_link::parse_created(&value) {
+                Some(done) => {
+                    cx.write_to_clipboard(ClipboardItem::new_string(done.url.clone()));
+                    if let Some(share) = self.share.as_mut() {
+                        share.working = false;
+                        share.done = Some(done);
+                    }
+                    if self.menu != Some(Menu::Share) {
+                        self.say(t("Link copiado"), cx);
+                    }
+                }
+                None => self.share_failed(t("Não foi possível criar o link.").to_owned(), cx),
+            },
+            Some(Err(error)) => {
+                let message = error["message"].as_str().or(error.as_str()).map_or_else(
+                    || t("Não foi possível criar o link.").to_owned(),
+                    crate::i18n::from_host,
+                );
+                self.share_failed(message, cx);
+            }
+            None => self.share_failed(t("Não foi possível criar o link.").to_owned(), cx),
+        }
+    }
+
     /// The camera: the visible page as a PNG, attached to the composer.
     fn capture_to_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(tab) = self.active_tab() else {
@@ -2041,6 +2187,15 @@ impl Browser {
                     },
                 ));
                 rows.push(self.iconed_item(
+                    Some("upload"),
+                    "m-share",
+                    t("Compartilhar prévia").into(),
+                    false,
+                    page,
+                    cx,
+                    |this, _, cx| this.open_share(cx),
+                ));
+                rows.push(self.iconed_item(
                     Some("globe"),
                     "m-system",
                     t("Abrir no navegador padrão").into(),
@@ -2195,6 +2350,27 @@ impl Browser {
             Menu::LoginForm => {
                 width = 320.;
                 rows.extend(self.login_form_rows(cx));
+            }
+            Menu::Share => {
+                width = 340.;
+                if let Some(share) = self.share.as_ref() {
+                    let on: crate::share_link::Handler<Self> = Rc::new(
+                        |this: &mut Self, event, window: &mut Window, cx: &mut Context<Self>| {
+                            this.share_event(event, window, cx)
+                        },
+                    );
+                    rows.push(
+                        div()
+                            .p(px(8.))
+                            .child(crate::share_link::body(
+                                share,
+                                "browser-share-validity",
+                                cx,
+                                on,
+                            ))
+                            .into_any_element(),
+                    );
+                }
             }
             Menu::Presets => {
                 right = None;

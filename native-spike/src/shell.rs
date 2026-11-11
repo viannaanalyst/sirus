@@ -1119,6 +1119,8 @@ enum Waiting {
     Skills,
     Secrets,
     Agents,
+    /// `share_link_action` that makes the guest link of the open share card (share_link.rs).
+    Share,
     /// `git_incoming` for a conversation generation (git_sync.rs).
     Incoming(u64),
     /// `git_sync_pull` for a conversation generation; true when a push follows (git_button.rs).
@@ -1391,6 +1393,8 @@ pub struct Shell {
     agent_versions: HashMap<&'static str, String>,
     /// The header's Puxar button and its popover (git_sync.rs).
     incoming: IncomingState,
+    /// The title bar's share card: a read-only guest link to this conversation (share_link.rs).
+    share: Option<crate::share_link::Share>,
     /// Where the Git split button was last painted, for its menu to sit under (git_button.rs).
     git_bounds: Rc<Cell<Option<gpui::Bounds<gpui::Pixels>>>>,
     env_editors: Vec<(String, String)>,
@@ -1944,6 +1948,7 @@ impl Shell {
             native_tx,
             agent_versions: HashMap::new(),
             incoming: IncomingState::default(),
+            share: None,
             git_bounds: Rc::new(Cell::new(None)),
             env_editors: Vec::new(),
             setting_edit: None,
@@ -2373,6 +2378,26 @@ impl Shell {
                     self.note_settings(cx);
                     self.load_settings_page();
                 }
+                Some(Waiting::Share) => {
+                    if let Some(share) = self.share.as_mut() {
+                        share.working = false;
+                        match crate::share_link::parse_created(&value).filter(|_| ok) {
+                            Some(done) => {
+                                // The link is on the clipboard before the card says so.
+                                cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                    done.url.clone(),
+                                ));
+                                share.done = Some(done);
+                                self.settings_data.insert("share", value);
+                            }
+                            None if ok => {
+                                share.error = Some(t("Não foi possível criar o link.").to_owned());
+                            }
+                            None => share.error = Some(error_text(&value)),
+                        }
+                    }
+                    cx.notify();
+                }
                 Some(Waiting::SettingsData(key)) if ok => {
                     if key == "connectors" {
                         crate::settings_connectors::finish();
@@ -2394,6 +2419,11 @@ impl Shell {
                 }
                 Some(Waiting::SettingsData("forges")) => {
                     self.problem = Some(error_text(&value));
+                }
+                Some(Waiting::SettingsData("share")) => {
+                    // An older host has no link command: the page still opens, with the reason.
+                    self.settings_data
+                        .insert("share", json!({ "links": [], "error": error_text(&value) }));
                 }
                 Some(Waiting::SettingsData("mcp")) => {
                     // An older host has no token command: the page still opens, with the reason.
@@ -3355,6 +3385,11 @@ impl Shell {
             "mcp_token_action" => {
                 let id = self.backend.invoke(command, args);
                 self.waiting.insert(id, Waiting::SettingsData("mcp"));
+            }
+            // Guest links (ADR-210): the reply is the whole list of active links.
+            "share_link_action" => {
+                let id = self.backend.invoke(command, args);
+                self.waiting.insert(id, Waiting::SettingsData("share"));
             }
             "native_mcp_field" => self.mcp_form()["name"] = json!(text("text").trim()),
             "native_mcp_scope" => self.mcp_form()["scope"] = json!(text("scope")),
@@ -7198,11 +7233,13 @@ impl Shell {
         }
         if key == "escape"
             && (self.header_more.is_some()
+                || self.share.is_some()
                 || self.appearance.is_some()
                 || self.usage_page_open()
                 || self.menu.is_some())
         {
             self.header_more = None;
+            self.share = None;
             self.appearance = None;
             self.close_usage_page(cx);
             self.menu = None;
@@ -8503,6 +8540,14 @@ impl Shell {
                 .child(
                     icon_button("top-search", "search", 16.)
                         .on_click(cx.listener(|this, _, _, cx| this.toggle_palette(true, cx))),
+                )
+                .child(
+                    toggled(
+                        icon_button("top-share", "upload", 16.),
+                        self.share.is_some(),
+                    )
+                    .tooltip(message_actions::name_tip(t("Compartilhar conversa")))
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_share(cx))),
                 );
             if overflow {
                 row = row.child(
@@ -17379,6 +17424,94 @@ impl Shell {
     }
 
     /// Opens or closes the panel header's "⋯" menu.
+    /// Opens or closes the share card for the active conversation (share_link.rs).
+    fn toggle_share(&mut self, cx: &mut Context<Self>) {
+        if self.share.take().is_some() {
+            cx.notify();
+            return;
+        }
+        let session = self.active_session_id();
+        if session.is_empty() {
+            return;
+        }
+        self.header_more = None;
+        self.menu = None;
+        crate::segment_pill::forget("share-validity");
+        self.share = Some(crate::share_link::Share::new(
+            crate::share_link::Target::Conversation(session),
+        ));
+        cx.notify();
+    }
+
+    /// What a press in the share card asks for.
+    fn share_event(&mut self, event: crate::share_link::Event, cx: &mut Context<Self>) {
+        use crate::share_link::Event;
+        let Some(share) = self.share.as_mut() else {
+            return;
+        };
+        match event {
+            Event::Validity(validity) => share.validity = validity,
+            Event::Hide => share.hide_output = !share.hide_output,
+            Event::Attachments => share.show_attachments = !share.show_attachments,
+            Event::Cancel | Event::Close => self.share = None,
+            Event::Create => {
+                if share.working {
+                    return;
+                }
+                if let Some(args) = share.conversation_args() {
+                    share.working = true;
+                    share.error = None;
+                    let id = self.backend.invoke("share_link_action", args);
+                    self.waiting.insert(id, Waiting::Share);
+                }
+            }
+            Event::Copy => {
+                if let Some(done) = &share.done {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(done.url.clone()));
+                }
+            }
+            Event::Revoke => {
+                if let Some(done) = share.done.take() {
+                    let id = self.backend.invoke(
+                        "share_link_action",
+                        json!({ "action": { "type": "revoke", "id": done.id } }),
+                    );
+                    self.waiting.insert(id, Waiting::SettingsData("share"));
+                }
+                self.share = None;
+            }
+        }
+        cx.notify();
+    }
+
+    /// The share card under the title bar's share icon.
+    fn share_view(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let share = self.share.as_ref()?;
+        let on: crate::share_link::Handler<Self> = Rc::new(
+            |this: &mut Self, event, _: &mut Window, cx: &mut Context<Self>| {
+                this.share_event(event, cx)
+            },
+        );
+        Some(
+            div()
+                .id("share-card")
+                .occlude()
+                .absolute()
+                .right(px(10.))
+                .top(px(TITLE_BAR + 10.))
+                .w(px(344.))
+                .p(px(14.))
+                .rounded(px(crate::theme::RADIUS_LG))
+                .border_1()
+                .border_color(crate::theme::border())
+                .child(crate::theme::floating_surface(crate::theme::RADIUS_LG))
+                .shadow_lg()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(crate::share_link::body(share, "share-validity", cx, on))
+                .into_any_element(),
+        )
+    }
+
     fn toggle_header_more(&mut self, cx: &mut Context<Self>) {
         let duration = if cx.reduce_motion() { 0. } else { MENU };
         self.header_more = match self.header_more {
@@ -19666,10 +19799,10 @@ impl HeaderNeeds {
         match tier {
             HeaderTier::Full | HeaderTier::CompactGit => {
                 items.push(self.diff);
-                items.extend([self.icon; 3]);
+                items.extend([self.icon; 4]);
             }
-            HeaderTier::CompactTabs => items.extend([self.icon; 3]),
-            HeaderTier::Overflow => items.extend([self.icon; 3]),
+            HeaderTier::CompactTabs => items.extend([self.icon; 4]),
+            HeaderTier::Overflow => items.extend([self.icon; 4]),
         }
         Self::row(&items)
     }
@@ -20562,6 +20695,7 @@ impl Render for Shell {
                 || self.tasks_page.popover.is_some()
                 || self.palette_ui.is_some()
                 || self.header_more.is_some()
+                || self.share.is_some()
                 || self.menu.is_some()
                 || self.peek.is_some()
                 || self.project_menu.is_some()
@@ -20633,6 +20767,7 @@ impl Render for Shell {
         let project_switch = self.project_switch_view(cx);
         let add_menu = self.add_menu_view(now, &mut moving, cx);
         let header_more = self.header_more_view(now, &mut moving, cx);
+        let share_card = self.share_view(cx);
         let git_menu = self.git_menu(now, &mut moving, size, cx);
         // Watches the pointer over the whole window, even above opaque panels.
         let view = cx.entity();
@@ -20777,7 +20912,7 @@ impl Render for Shell {
                     cx.notify();
                 }
                 let fade = if cx.reduce_motion() { 0. } else { MENU };
-                let closed = [this.incoming.close_at(Instant::now(), fade), this.menu.take().is_some(), this.header_more.take().is_some(),this.composer_menu.take().is_some(), this.add_menu.take().is_some(), this.usage_popup.take().is_some(), this.usage_picker.take().is_some(), this.resources.close(), this.context.close(), this.close_project_menu(), this.session_filter.open.take().is_some(), this.context_menu.take().is_some(), this.term.close_menu(), this.close_sidebar_options(cx)];
+                let closed = [this.incoming.close_at(Instant::now(), fade), this.menu.take().is_some(), this.header_more.take().is_some(),this.share.take().is_some(),this.composer_menu.take().is_some(), this.add_menu.take().is_some(), this.usage_popup.take().is_some(), this.usage_picker.take().is_some(), this.resources.close(), this.context.close(), this.close_project_menu(), this.session_filter.open.take().is_some(), this.context_menu.take().is_some(), this.term.close_menu(), this.close_sidebar_options(cx)];
                 this.goal_input = None;
                 if closed.contains(&true) {
                     cx.notify();
@@ -20898,6 +21033,7 @@ impl Render for Shell {
             .children(sidebar_card)
             .children(add_menu)
             .children(header_more)
+            .children(share_card)
             .children(git_menu)
             .children(panel)
             .children(usage_page)
@@ -21695,10 +21831,10 @@ mod prompt_fold_tests {
     #[test]
     fn the_narrowest_tier_keeps_search_and_the_sidebar_toggle() {
         let needs = header_needs();
-        // The Git icon, search, the "⋯" menu and the sidebar toggle, with three 4 px gaps.
+        // The Git icon, search, share, the "⋯" menu and the sidebar toggle, with four 4 px gaps.
         assert_eq!(
             needs.controls(HeaderTier::Overflow),
-            needs.git_icon + 3. * needs.icon + 12.
+            needs.git_icon + 4. * needs.icon + 16.
         );
     }
 }

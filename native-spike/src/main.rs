@@ -90,6 +90,7 @@ mod settings_infisical;
 mod settings_pages;
 mod settings_pair;
 mod settings_search;
+mod share_link;
 mod shell;
 mod sidebar_items;
 mod simulator;

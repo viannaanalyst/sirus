@@ -3195,6 +3195,9 @@ impl Shell {
             self.commit_setting_edit(cx);
         }
         self.setting_edit = Some((key, text));
+        // Typing and Enter reach the field only through the window's own focus, which a web view
+        // taking the keys (it blurs GPUI) or the settings search may hold instead.
+        self.refocus = true;
         cx.notify();
     }
 
@@ -20574,6 +20577,7 @@ impl Render for Shell {
         }
         if let Some(field) = crate::settings_connectors::take_autofocus() {
             self.setting_edit = Some(field);
+            self.refocus = true;
         }
         // A field whose page closed must not keep the typing, or the composer stops taking it.
         if self.appearance.is_none() {

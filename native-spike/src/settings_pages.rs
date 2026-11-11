@@ -1772,9 +1772,9 @@ fn chat(s: &Value) -> Vec<Group> {
             top("compactIdleBeforeCacheExpiry"),
         ),
         (
-            t("Iniciar uma sessão nova quando o contexto estiver quase cheio"),
+            t("Iniciar uma sessão nova quando o contexto passar de 250 mil tokens"),
             t(
-                "Quando uma conversa do Claude ou do Codex chega a 80% da janela de contexto, a próxima mensagem inicia uma sessão nova do provedor com um resumo curto montado pelo próprio app: as duas últimas trocas palavra por palavra e uma linha para cada anterior. Nenhuma chamada ao modelo é gasta com isso, e a conversa completa continua aqui.",
+                "Quando o contexto de uma conversa do Claude ou do Codex passa de 250 mil tokens (ou de 80% da janela, se ela for menor), a próxima mensagem inicia uma sessão nova do provedor com um resumo curto montado pelo próprio app: as duas últimas trocas palavra por palavra e uma linha para cada anterior. Nenhuma chamada ao modelo é gasta com isso, e a conversa completa continua aqui.",
             ),
             top("rotateAtContextLimit"),
         ),

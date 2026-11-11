@@ -727,10 +727,11 @@ pub struct AppSettings {
     /// default of 200,000 keeps each request's re-read prefix bounded.
     #[serde(default = "default_auto_compact_window")]
     pub claude_auto_compact_window: String,
-    /// Chat behavior (off by default): when a Claude or Codex conversation's reported context
-    /// reaches 80% of its window, the next send starts a fresh provider session seeded with a
+    /// Chat behavior (on by default): when a Claude or Codex conversation's reported context
+    /// reaches 250,000 tokens or 80% of its window, whichever is lower, the next send starts a
+    /// fresh provider session seeded with a
     /// brief built by code, with no model call (ADR-181).
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub rotate_at_context_limit: bool,
     /// Sounds (off by default): a soft chime when an agent finishes a turn or needs approval or an answer.
     /// The window plays it, and never for the conversation in view while the window is focused.
@@ -1020,7 +1021,7 @@ impl Default for AppSettings {
             compact_idle_before_cache_expiry: false,
             skills_by_project: true,
             claude_auto_compact_window: default_auto_compact_window(),
-            rotate_at_context_limit: false,
+            rotate_at_context_limit: true,
             agent_sounds: false,
             keep_idle_agents: 16,
             browser_recording_fps: 30,

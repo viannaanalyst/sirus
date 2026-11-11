@@ -100,6 +100,11 @@ const SCHEMA_V8: &str = r#"
 CREATE TABLE IF NOT EXISTS scheduled_prompts (id TEXT PRIMARY KEY, position INTEGER NOT NULL, json TEXT NOT NULL);
 "#;
 
+/// Rotation at 250,000 tokens is on by default; a database that predates it gets it once.
+const SCHEMA_V10: &str = r#"
+UPDATE settings SET json = json_set(json, '$.rotateAtContextLimit', json('true')) WHERE id = 1;
+"#;
+
 /// Large command output stored apart from its message (ADR-147). Rows written before it are
 /// split once by [`split_tool_outputs`].
 const SCHEMA_V6: &str = r#"
@@ -333,7 +338,7 @@ fn migrate(conn: &Connection, state_path: &Path) -> Result<()> {
             .map_err(sql)?;
         versions
     };
-    let steps: [(i64, Step); 9] = [
+    let steps: [(i64, Step); 10] = [
         (1, Step::Sql(SCHEMA_V1)),
         (2, Step::Sql(SCHEMA_V2)),
         (3, Step::Code(restore_project_astros)),
@@ -343,6 +348,7 @@ fn migrate(conn: &Connection, state_path: &Path) -> Result<()> {
         (7, Step::Sql(SCHEMA_V7)),
         (8, Step::Sql(SCHEMA_V8)),
         (9, Step::Sql(SCHEMA_V9)),
+        (10, Step::Sql(SCHEMA_V10)),
     ];
     for (version, step) in steps {
         if applied.contains(&version) {
@@ -1360,6 +1366,29 @@ pub fn message_count(state_path: &Path, session_id: &str) -> Result<usize> {
             .map(|count| count as usize)
             .map_err(sql)
     })
+}
+
+#[cfg(test)]
+mod rotation_migration_tests {
+    use super::*;
+
+    #[test]
+    fn version_10_turns_rotation_on_once() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA_V1).unwrap();
+        conn.execute(
+            "INSERT INTO settings (id, json) VALUES (1, ?1)",
+            [r#"{"rotateAtContextLimit":false,"locale":"en"}"#],
+        )
+        .unwrap();
+        conn.execute_batch(SCHEMA_V10).unwrap();
+        let json: String = conn
+            .query_row("SELECT json FROM settings WHERE id = 1", [], |row| row.get(0))
+            .unwrap();
+        let value: Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["rotateAtContextLimit"], true);
+        assert_eq!(value["locale"], "en");
+    }
 }
 
 #[cfg(test)]

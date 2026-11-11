@@ -1,7 +1,7 @@
 //! Context rotation without a model call (ADR-181).
 //!
 //! Every turn of a native Claude or Codex conversation resends its whole context. With the
-//! setting on, once the reported context reaches 80% of the window, the next send starts a
+//! setting on, once the reported context reaches 250,000 tokens or 80% of the window (the lower), the next send starts a
 //! fresh provider session instead. The new session is seeded with a brief that code builds
 //! from the transcript (nothing is summarized by a model): the last two exchanges word for
 //! word, then one short line per earlier exchange. It rides the handoff plumbing (ADR-028,
@@ -13,6 +13,13 @@ use crate::models::{
 
 /// Rotate at this share of the reported window, leaving room for the next turn.
 pub const ROTATE_RATIO: f64 = 0.8;
+/// A fixed ceiling: a 1M window still rotates here, since every step rereads the whole context.
+pub const ROTATE_AT_TOKENS: u64 = 250_000;
+
+/// The context size that triggers a rotation for a window: the lower of 250,000 tokens and 80%.
+pub fn threshold(window: u64) -> u64 {
+    ROTATE_AT_TOKENS.min((window as f64 * ROTATE_RATIO) as u64)
+}
 /// Recent exchanges carried word for word.
 const VERBATIM_EXCHANGES: usize = 2;
 const VERBATIM_USER_CHARS: usize = 2_000;
@@ -156,7 +163,7 @@ pub fn due(session: &Session, enabled: bool) -> Option<ContextRotation> {
     }
     let usage = session.context_usage.as_ref()?;
     let window = usage.window.filter(|window| *window > 0)?;
-    (usage.used as f64 >= window as f64 * ROTATE_RATIO).then_some(ContextRotation {
+    (usage.used >= threshold(window)).then_some(ContextRotation {
         used: usage.used,
         window,
     })
@@ -309,6 +316,14 @@ mod tests {
         let text = brief(&messages);
         assert!(!text.contains("noise") && !text.contains("half an answ"));
         assert!(text.contains("answer 0"));
+    }
+
+    #[test]
+    fn a_big_window_rotates_at_250k() {
+        assert_eq!(threshold(200_000), 160_000);
+        assert_eq!(threshold(1_000_000), 250_000);
+        assert!(due(&session(250_000, Some(1_000_000)), true).is_some());
+        assert!(due(&session(249_999, Some(1_000_000)), true).is_none());
     }
 
     #[test]

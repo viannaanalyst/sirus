@@ -2385,8 +2385,8 @@ const ENTRIES: &[(&str, &str)] = &[
         "Start new worktrees from origin",
     ),
     (
-        "Iniciar uma sessão nova quando o contexto estiver quase cheio",
-        "Start a fresh session when the context is nearly full",
+        "Iniciar uma sessão nova quando o contexto passar de 250 mil tokens",
+        "Start a fresh session when the context passes 250k tokens",
     ),
     ("Iniciou", "Started"),
     ("Inspetor da web", "Web Inspector"),
@@ -4430,6 +4430,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "Quando o agente da conversa aberta abre ou navega uma página, o painel do navegador abre para mostrá-la. Desligado, o painel fica como está.",
         "When the open conversation's agent opens or navigates a page, the browser pane opens to show it. Off, the pane stays as it is.",
     ),
+    (
+        "Quando o contexto de uma conversa do Claude ou do Codex passa de 250 mil tokens (ou de 80% da janela, se ela for menor), a próxima mensagem inicia uma sessão nova do provedor com um resumo curto montado pelo próprio app: as duas últimas trocas palavra por palavra e uma linha para cada anterior. Nenhuma chamada ao modelo é gasta com isso, e a conversa completa continua aqui.",
+        "When a Claude or Codex conversation's context passes 250,000 tokens (or 80% of its window, if that is lower), the next message starts a fresh provider session seeded with a short brief the app builds itself: the last two exchanges word for word and a line for each earlier one. No model call is spent on it, and the full transcript stays here.",
+    ),
     ("Quando o limite acabar", "When the limit runs out"),
     (
         "Quando os checks do PR aberto de uma sessão falham, o agente dela recebe os erros e corrige; depois o Sirus faz commit e push do branch da sessão (nunca forçado). Até 3 tentativas por falha; senão pausa e avisa.",
@@ -4455,10 +4459,6 @@ const ENTRIES: &[(&str, &str)] = &[
     (
         "Quando um turno para no limite de uso, a conversa continua com o contexto no primeiro provedor da ordem abaixo que não esteja no limite. Desligado, a conversa mostra um aviso com o botão para trocar.",
         "When a turn stops on the usage limit, the conversation carries on with its context in the first provider of the order below that is not at its limit. Off, the conversation shows a notice with a button to switch.",
-    ),
-    (
-        "Quando uma conversa do Claude ou do Codex chega a 80% da janela de contexto, a próxima mensagem inicia uma sessão nova do provedor com um resumo curto montado pelo próprio app: as duas últimas trocas palavra por palavra e uma linha para cada anterior. Nenhuma chamada ao modelo é gasta com isso, e a conversa completa continua aqui.",
-        "When a Claude or Codex conversation reaches 80% of its context window, the next message starts a fresh provider session seeded with a short brief the app builds itself: the last two exchanges word for word and a line for each earlier one. No model call is spent on it, and the full transcript stays here.",
     ),
     (
         "Quando uma resposta termina, os passos dela se recolhem na linha \"Trabalhou por\". Desligue para manter todos os passos visíveis.",

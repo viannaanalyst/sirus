@@ -27,3 +27,5 @@ The reference app, another open-source client, another open-source client and Ze
 - **Rotating on idle time or at startup.** Rejected: only a full context justifies losing the native thread.
 - **Asking a model to write the brief.** Rejected: it costs a call, and a summary of a summary drifts.
 - **A cold-session dialog in addition to "Compact and send".** Rejected as a duplicate (see above).
+
+**Rotation switched on, at 250,000 tokens.** `rotateAtContextLimit` now defaults to on, and a database from before gets it once (store migration 9). The trigger is `min(250_000, 80% of the reported window)` (`rotation::threshold`), so a conversation on the 1M window still rotates at 250k instead of 800k.

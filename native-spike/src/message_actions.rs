@@ -481,19 +481,18 @@ impl Shell {
     ) -> AnyElement {
         div()
             .id(("turn-retry", index))
-            .h(px(24.))
-            .px(px(8.))
+            .size(px(24.))
             .rounded(px(crate::theme::RADIUS_SM))
             .flex()
             .items_center()
-            .gap(px(6.))
+            .justify_center()
             .text_size(px(12.))
             .text_color(content(0.6))
             .cursor_pointer()
             .sinks()
             .hover(|s| s.bg(content(0.07)).text_color(content(0.9)))
+            .tooltip(name_tip(t("Tentar de novo")))
             .child(icon("refresh", 12.))
-            .child(t("Tentar de novo"))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.run_action(
                     Act::Retry {
@@ -516,12 +515,11 @@ impl Shell {
         let copied = self.message_actions.copied.as_deref() == Some(key.as_str());
         div()
             .id(("turn-user-copy", index))
-            .h(px(24.))
-            .px(px(8.))
+            .size(px(24.))
             .rounded(px(crate::theme::RADIUS_SM))
             .flex()
             .items_center()
-            .gap(px(6.))
+            .justify_center()
             .text_size(px(12.))
             .text_color(content(0.6))
             .when(!copied, |d| {
@@ -533,7 +531,6 @@ impl Shell {
             .hover(|s| s.bg(content(0.07)).text_color(content(0.9)))
             .tooltip(name_tip(t("Copiar a mensagem")))
             .child(icon(if copied { "check" } else { "copy" }, 12.))
-            .child(if copied { t("Copiado") } else { t("Copiar") })
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.run_action(
                     Act::Copy {
@@ -556,12 +553,11 @@ impl Shell {
     ) -> AnyElement {
         div()
             .id(("turn-edit", index))
-            .h(px(24.))
-            .px(px(8.))
+            .size(px(24.))
             .rounded(px(crate::theme::RADIUS_SM))
             .flex()
             .items_center()
-            .gap(px(6.))
+            .justify_center()
             .text_size(px(12.))
             .text_color(content(0.6))
             .invisible()
@@ -573,7 +569,6 @@ impl Shell {
                 "Volta a mensagem para o composer e apaga a resposta",
             )))
             .child(icon("pencil", 12.))
-            .child(t("Editar"))
             .on_click(cx.listener(move |this, _, _, cx| this.edit_last(conversation, cx)))
             .into_any_element()
     }

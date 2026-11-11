@@ -17792,7 +17792,15 @@ impl Shell {
                         .rounded(px(crate::theme::RADIUS_LG))
                         .border_1()
                         .border_color(crate::theme::border())
-                        .bg(pane_fill())
+                        // The conversation card's near black, which its wallpaper paints over
+                        // glass in a dark theme; elsewhere the pane's own fill.
+                        .bg(
+                            if pane_fill().a < 0.5 && crate::theme::content(1.).l >= 0.5 {
+                                rgb(0x060607).into()
+                            } else {
+                                pane_fill()
+                            },
+                        )
                         .overflow_hidden()
                         .child({
                             let card = self.settings_card.clone();

@@ -29,6 +29,8 @@ pub(crate) const GRACE: Duration = Duration::from_millis(3200);
 const REMEMBERED: usize = 64;
 const SLIDE: f32 = 26.;
 const SLIDE_TIME: f32 = 0.26;
+/// The project's avatar on a card, in the pixel square's place.
+const AVATAR: f32 = 20.;
 
 pub(super) const AMBER: u32 = 0xf0a35e;
 pub(super) const GREEN: u32 = 0x5fce8c;
@@ -573,6 +575,10 @@ impl Shell {
             kind.color(),
             kind.label().to_owned(),
         );
+        spec.icon = Some((
+            crate::project_avatar::project_avatar(&project.name, &project.appearance, AVATAR),
+            AVATAR,
+        ));
         spec.detail = Some(if place.is_empty() {
             project.name.clone()
         } else {
@@ -616,7 +622,7 @@ impl Shell {
             Kind::Finished | Kind::Failed => {
                 spec.buttons.push((
                     t("Abrir"),
-                    button(("activity-card-button", key), t("Abrir"), false).on_click(cx.listener(
+                    button(("activity-card-button", key), t("Abrir"), true).on_click(cx.listener(
                         move |this, _, window, cx| this.card_open(&a, false, window, cx),
                     )),
                 ));

@@ -895,6 +895,8 @@ pub(super) struct Card {
     pub id: gpui::ElementId,
     pub tone: gpui::Hsla,
     pub title: String,
+    /// What stands in the pixel square's place, and its side: a project's avatar.
+    pub icon: Option<(AnyElement, f32)>,
     pub detail: Option<String>,
     pub detail_color: gpui::Hsla,
     /// Lines in a monospaced face under the detail: file paths, a command.
@@ -915,6 +917,7 @@ impl Card {
             id: id.into(),
             tone,
             title,
+            icon: None,
             detail: None,
             detail_color: content(0.55),
             mono: Vec::new(),
@@ -938,6 +941,7 @@ pub(super) fn compose(card: Card) -> gpui::Stateful<gpui::Div> {
         id,
         tone,
         title,
+        icon,
         detail,
         detail_color,
         mono,
@@ -968,11 +972,15 @@ pub(super) fn compose(card: Card) -> gpui::Stateful<gpui::Div> {
         .items_center()
         .gap(px(BUTTON_GAP))
         .children(buttons.into_iter().map(|(_, button)| button));
+    let (icon, side) = match icon {
+        Some((element, side)) => (div().flex_none().child(element).into_any_element(), side),
+        None => (pixel_icon(tone).into_any_element(), ICON),
+    };
     let mut main = div()
         .flex()
         .items_start()
         .gap(px(ICON_GAP))
-        .child(pixel_icon(tone))
+        .child(icon)
         .child(words);
     let mut row = None;
     if beside {
@@ -982,7 +990,7 @@ pub(super) fn compose(card: Card) -> gpui::Stateful<gpui::Div> {
         row = Some(
             div()
                 .mt(px(6.))
-                .pl(px(ICON + ICON_GAP))
+                .pl(px(side + ICON_GAP))
                 .flex()
                 .items_center()
                 .gap(px(BUTTON_GAP))

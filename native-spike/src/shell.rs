@@ -2377,6 +2377,12 @@ impl Shell {
                     if key == "connectors" {
                         crate::settings_connectors::finish();
                     }
+                    // A token was made: the name field is free for the next one.
+                    if key == "mcp" && value.get("created").is_some() {
+                        if let Some(form) = self.settings_data.get_mut("mcp_form") {
+                            form["name"] = json!("");
+                        }
+                    }
                     if key == "remote" {
                         self.settings_data.remove("remote_error");
                     }
@@ -2388,6 +2394,16 @@ impl Shell {
                 }
                 Some(Waiting::SettingsData("forges")) => {
                     self.problem = Some(error_text(&value));
+                }
+                Some(Waiting::SettingsData("mcp")) => {
+                    // An older host has no token command: the page still opens, with the reason.
+                    let known = self.settings_data.get("mcp").cloned().unwrap_or(json!({}));
+                    let mut shown = json!({ "tokens": known["tokens"].clone() });
+                    if shown["tokens"].is_null() {
+                        shown["tokens"] = json!([]);
+                    }
+                    shown["error"] = json!(error_text(&value));
+                    self.settings_data.insert("mcp", shown);
                 }
                 Some(Waiting::SettingsData("remote")) => {
                     // Shown under the Remote access group, where the change was made.
@@ -2907,6 +2923,13 @@ impl Shell {
         cx.notify();
     }
 
+    /// The new token's name and scope on Settings → Conexões (the page's `mcp_form` data).
+    fn mcp_form(&mut self) -> &mut Value {
+        self.settings_data
+            .entry("mcp_form")
+            .or_insert_with(|| json!({}))
+    }
+
     fn cli_reply(&mut self, key: &'static str, id: String, reply: Value) {
         let slot = self.settings_data.entry(key).or_insert_with(|| json!({}));
         slot[id] = reply;
@@ -3326,6 +3349,51 @@ impl Shell {
                 // would race the change.
                 let id = self.backend.invoke(command, args);
                 self.waiting.insert(id, Waiting::SettingsData("remote"));
+            }
+            // Outside agents' tokens (ADR-209): the reply is the whole list, and the new secret
+            // once; it lands in the page and is gone the next time the page loads.
+            "mcp_token_action" => {
+                let id = self.backend.invoke(command, args);
+                self.waiting.insert(id, Waiting::SettingsData("mcp"));
+            }
+            "native_mcp_field" => self.mcp_form()["name"] = json!(text("text").trim()),
+            "native_mcp_scope" => self.mcp_form()["scope"] = json!(text("scope")),
+            "native_mcp_hide" => {
+                if let Some(mcp) = self
+                    .settings_data
+                    .get_mut("mcp")
+                    .and_then(Value::as_object_mut)
+                {
+                    mcp.remove("created");
+                }
+            }
+            "native_mcp_create" => {
+                // A name still being typed counts: the click on Criar leaves the field.
+                if let Some((key, typed)) = self.setting_edit.take() {
+                    if key == crate::settings_pages::MCP_NAME {
+                        self.mcp_form()["name"] = json!(typed.trim());
+                    } else {
+                        self.setting_edit = Some((key, typed));
+                    }
+                }
+                let form = self.mcp_form().clone();
+                let name = form["name"].as_str().unwrap_or("").to_owned();
+                let scope = if form["scope"] == "write" {
+                    "write"
+                } else {
+                    "read"
+                };
+                if name.is_empty() {
+                    let mut shown = self.settings_data.get("mcp").cloned().unwrap_or(json!({}));
+                    shown["error"] = json!(t("Dê um nome ao token."));
+                    self.settings_data.insert("mcp", shown);
+                } else {
+                    let action = json!({"type": "create", "name": name, "scope": scope});
+                    let id = self
+                        .backend
+                        .invoke("mcp_token_action", json!({ "action": action }));
+                    self.waiting.insert(id, Waiting::SettingsData("mcp"));
+                }
             }
             name if name.starts_with("native_computer_") => self.computer_command(name, &args, cx),
             name if name.starts_with("native_update_") => self.update_all_command(name, &args, cx),

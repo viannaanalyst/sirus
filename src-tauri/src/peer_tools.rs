@@ -150,14 +150,25 @@ fn stand_in(request: &PeerRequest) -> Result<Session> {
 }
 
 /// A first prompt or message that says where it came from, so the agent does not take another
-/// computer's agent for the person.
-fn headed(request: &PeerRequest, prompt: &str, portuguese: bool) -> String {
+/// computer's agent, or an outside MCP client, for the person.
+fn headed(request: &PeerRequest, prompt: &str, portuguese: bool, source: Source) -> String {
     let title = crate::launch::bounded(request.from.trim(), 80);
+    if source == Source::Mcp {
+        return if portuguese {
+            format!("↪ Via MCP: {title}. Tarefa de um agente de fora, não da pessoa:\n\n{prompt}")
+        } else {
+            format!(
+                "↪ Via MCP: {title}. A task from an outside agent, not from the person:\n\n{prompt}"
+            )
+        };
+    }
     let place = crate::launch::bounded(request.from_computer.trim(), 48);
     if portuguese {
         format!("↪ Tarefa da sessão “{title}” no computador {place}, não da pessoa:\n\n{prompt}")
     } else {
-        format!("↪ Task from the session “{title}” on the computer {place}, not from the person:\n\n{prompt}")
+        format!(
+            "↪ Task from the session “{title}” on the computer {place}, not from the person:\n\n{prompt}"
+        )
     }
 }
 
@@ -190,6 +201,23 @@ pub async fn peer_tool(
             "that tool cannot run here for another computer",
         ));
     }
+    run(app, state, request, Source::Computer).await
+}
+
+/// Who a caller without a session of its own is: an agent on a paired computer, or an outside
+/// agent that came in through a token of the host's MCP endpoint (ADR-209).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Source {
+    Computer,
+    Mcp,
+}
+
+async fn run(
+    app: AppHandle,
+    state: Arc<AppState>,
+    request: PeerRequest,
+    source: Source,
+) -> Result<Value> {
     let args = request.args.clone();
     let tool = request.tool.clone();
     let caller = stand_in(&request)?;
@@ -246,9 +274,16 @@ pub async fn peer_tool(
                 return Err(invalid("a prompt of up to 32,000 characters is required"));
             }
             // `send_from` heads the message with the stand-in's title and provider.
-            crate::runtime::async_runtime::spawn_blocking(move || {
-                let _ = portuguese;
-                crate::launch::send_from(&app, &caller, &id, prompt)
+            let text = headed(&request, &prompt, portuguese, source);
+            crate::runtime::async_runtime::spawn_blocking(move || match source {
+                Source::Computer => crate::launch::send_from(&app, &caller, &id, prompt),
+                Source::Mcp => crate::launch::send_labeled(
+                    &app,
+                    None,
+                    crate::launch::inherited_approval(&caller),
+                    &id,
+                    text,
+                ),
             })
             .await
             .map_err(|_| Error::new("native", "the send could not complete"))?
@@ -305,7 +340,7 @@ pub async fn peer_tool(
                     .and_then(Value::as_bool)
                     .unwrap_or(true),
                 fast: false,
-                prompt: headed(&request, &prompt, portuguese),
+                prompt: headed(&request, &prompt, portuguese, source),
                 approval: crate::launch::inherited_approval(&caller),
                 planning: false,
                 delegated_by: None,
@@ -326,6 +361,78 @@ pub async fn peer_tool(
             }
         }
     }
+}
+
+/// The approval an outside agent's sessions start with: the person's default for new
+/// conversations, but never full access on its own account (ADR-209).
+pub(crate) fn external_approval(default: ApprovalMode) -> ApprovalMode {
+    match default {
+        ApprovalMode::Full => ApprovalMode::Ask,
+        other => other,
+    }
+}
+
+/// One tool call of an outside MCP client (`mcp_external.rs`) with no session of its own. The
+/// token's name heads what it starts or sends. A `computer` goes to the paired host as for
+/// an agent here; the rest runs as `peer_tool` does, without the "agents manage sessions" switch:
+/// the token is the person's consent.
+pub(crate) async fn external(
+    app: &AppHandle,
+    tool: &str,
+    args: Value,
+    name: &str,
+) -> std::result::Result<Value, String> {
+    let state = app.state::<Arc<AppState>>().inner().clone();
+    let (approval, provider) = {
+        let data = state.data.lock();
+        (
+            external_approval(data.settings.default_approval),
+            data.settings.default_agent.key().to_owned(),
+        )
+    };
+    let from = crate::launch::bounded(name, 80);
+    if let Some(wanted) = crate::peers::requested(&args)? {
+        let dir = state
+            .data_path
+            .parent()
+            .ok_or("the data folder is unknown")?
+            .to_path_buf();
+        crate::peers::resolve(&crate::peers::load(&dir), &wanted)?;
+        let mut forwarded = args.clone();
+        if let Some(object) = forwarded.as_object_mut() {
+            object.remove("computer");
+        }
+        let request = json!({
+            "tool": tool,
+            "args": forwarded,
+            "approval": approval,
+            "provider": provider,
+            "model": null,
+            "from": format!("MCP: {from}"),
+            "fromComputer": crate::commands::machine_host_name(),
+        });
+        return crate::runtime::async_runtime::spawn_blocking(move || {
+            crate::peers::forward(&dir, &wanted, request)
+        })
+        .await
+        .map_err(|_| "the call to the other computer did not complete".to_string())?;
+    }
+    let request: PeerRequest = serde_json::from_value(json!({
+        "tool": tool,
+        "args": args,
+        "approval": approval,
+        "provider": provider,
+        "from": from,
+    }))
+    .map_err(|error| error.to_string())?;
+    let mut reply = run(app.clone(), state, request, Source::Mcp)
+        .await
+        .map_err(|error| error.to_string())?;
+    // "Yours" is the calling agent's own model; an outside client has none.
+    if let Some(object) = reply.as_object_mut() {
+        object.remove("yours");
+    }
+    Ok(reply)
 }
 
 #[cfg(test)]
@@ -407,8 +514,10 @@ mod tests {
             "tool": "sirus_delegate", "from": "Run the suite", "fromComputer": "mac"
         }))
         .unwrap();
-        assert!(headed(&request, "Do it.", false).starts_with(
-            "↪ Task from the session “Run the suite” on the computer mac, not from the person:"
-        ));
+        assert!(
+            headed(&request, "Do it.", false, Source::Computer).starts_with(
+                "↪ Task from the session “Run the suite” on the computer mac, not from the person:"
+            )
+        );
     }
 }

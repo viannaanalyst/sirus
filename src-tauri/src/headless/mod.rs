@@ -29,6 +29,12 @@ Usage:
   sirus-host peer add <https://address> <code> [--data-dir DIR]
                                         pair this computer's agents with another host (ADR-208)
   sirus-host peer list|remove <id> [--data-dir DIR]
+  sirus-host mcp-token create <name> [--scope read|write] [--data-dir DIR]
+                                        a token for an agent outside Sirus (ADR-209); shown once
+  sirus-host mcp-token list|revoke <id> [--data-dir DIR]
+  sirus-host mcp [--token T] [--url URL]  MCP over stdin/stdout for a local client, forwarding to
+                                        the running host (token from SIRUS_MCP_TOKEN if not given);
+                                        e.g. `claude mcp add sirus -- sirus-host mcp`
   sirus-host busy [--data-dir DIR]      conversations a restart would cut; exit 0 when none,
                                         1 when some, 3 when no host is running
 
@@ -97,6 +103,9 @@ struct Cli {
     url: Option<String>,
     local_port: Option<u16>,
     label: Option<String>,
+    /// `mcp-token create --scope` and `mcp --token` (ADR-209).
+    scope: Option<String>,
+    token: Option<String>,
 }
 
 fn parse(arguments: &[String]) -> Result<Cli, String> {
@@ -110,6 +119,8 @@ fn parse(arguments: &[String]) -> Result<Cli, String> {
         url: None,
         local_port: None,
         label: None,
+        scope: None,
+        token: None,
     };
     let mut iter = arguments.iter();
     while let Some(argument) = iter.next() {
@@ -160,6 +171,8 @@ fn parse(arguments: &[String]) -> Result<Cli, String> {
                 }
                 cli.url = Some(url.trim_end_matches('/').to_string());
             }
+            "--scope" => cli.scope = Some(value("--scope")?),
+            "--token" => cli.token = Some(value("--token")?),
             "-h" | "--help" | "help" => cli.command = "help".into(),
             "-V" | "--version" => cli.command = "version".into(),
             flag if flag.starts_with('-') => return Err(format!("unknown option {flag}")),
@@ -239,6 +252,8 @@ pub fn main() -> i32 {
         "revoke" => revoke(&cli),
         "busy" => busy(&cli),
         "peer" => peer(&cli),
+        "mcp-token" => mcp_token(&cli),
+        "mcp" => mcp(&cli),
         "version" => {
             println!("sirus-host {}", env!("CARGO_PKG_VERSION"));
             0
@@ -313,6 +328,7 @@ fn serve(cli: &Cli) -> i32 {
             eprintln!("sirus-host: cannot open the control socket: {error}");
             return 1;
         }
+        crate::mcp_external::write_endpoint(&dir, cli.local_port.unwrap_or(cli.port));
         if let Some(local) = cli.local_port {
             println!("Sirus host: window on 127.0.0.1:{local}");
             if urls.is_empty() {
@@ -595,6 +611,92 @@ fn peer(cli: &Cli) -> i32 {
             2
         }
     }
+}
+
+fn mcp_token(cli: &Cli) -> i32 {
+    use crate::mcp_external as external;
+    let dir = data_dir(cli);
+    let words: Vec<&str> = cli.positional.iter().map(String::as_str).collect();
+    let fail = |message: String| {
+        eprintln!("sirus-host: {message}");
+        1
+    };
+    match words.as_slice() {
+        ["create", name] => {
+            let scope = match cli.scope.as_deref().unwrap_or("read") {
+                "read" => external::Scope::Read,
+                "write" => external::Scope::Write,
+                _ => return fail("--scope is read or write".into()),
+            };
+            if let Err(error) = private_dir(&dir) {
+                return fail(format!("cannot use {}: {error}", dir.display()));
+            }
+            match external::create(&dir, name, scope) {
+                Ok(created) => {
+                    println!("{}", created.token);
+                    eprintln!(
+                        "Token \"{}\" ({}). Shown only now: it is kept as a hash. Revoke it with `sirus-host mcp-token revoke {}`.",
+                        created.name,
+                        if scope == external::Scope::Write {
+                            "read and write"
+                        } else {
+                            "read-only"
+                        },
+                        created.id
+                    );
+                    0
+                }
+                Err(error) => fail(error.to_string()),
+            }
+        }
+        ["list"] => {
+            let tokens = external::list(&dir);
+            if tokens.is_empty() {
+                println!("No MCP tokens.");
+            }
+            for token in tokens {
+                println!("{}", token.line());
+            }
+            0
+        }
+        ["revoke", id] => match external::revoke(&dir, id) {
+            Ok(true) => {
+                println!("Revoked {id}; its next request is refused.");
+                0
+            }
+            Ok(false) => fail("no token has this id (see `sirus-host mcp-token list`)".into()),
+            Err(error) => fail(error.to_string()),
+        },
+        _ => {
+            eprintln!(
+                "sirus-host: usage: mcp-token create <name> [--scope read|write] | mcp-token list | mcp-token revoke <id>"
+            );
+            2
+        }
+    }
+}
+
+/// `sirus-host mcp`: MCP over stdio, forwarded to the running host's `/mcp`.
+fn mcp(cli: &Cli) -> i32 {
+    let token = cli
+        .token
+        .clone()
+        .or_else(|| std::env::var("SIRUS_MCP_TOKEN").ok())
+        .map(|token| token.trim().to_owned())
+        .filter(|token| !token.is_empty());
+    let Some(token) = token else {
+        eprintln!(
+            "sirus-host: mcp needs a token: --token <t> or SIRUS_MCP_TOKEN (make one with `sirus-host mcp-token create <name>`)"
+        );
+        return 2;
+    };
+    let endpoint = crate::mcp_external::endpoint(
+        cli.url.as_deref(),
+        std::env::var("SIRUS_MCP_URL").ok().as_deref(),
+        &data_dir(cli),
+        cli.port,
+    );
+    crate::mcp_external::run_stdio(&endpoint, &token)
 }
 
 fn revoke(cli: &Cli) -> i32 {

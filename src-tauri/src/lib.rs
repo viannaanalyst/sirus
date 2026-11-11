@@ -65,6 +65,7 @@ mod launch;
 mod local_servers;
 mod login_vault;
 mod mcp_config;
+mod mcp_external;
 #[cfg(unix)]
 mod mcp_http;
 mod mcp_stdio;

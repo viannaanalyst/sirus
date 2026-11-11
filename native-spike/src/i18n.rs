@@ -117,6 +117,32 @@ pub fn tf(template: &'static str, values: &[&dyn Display]) -> String {
 /// Portuguese (the source text) and its English, sorted by the Portuguese; keep that order when
 /// adding.
 const ENTRIES: &[(&str, &str)] = &[
+    ("Agentes de fora (MCP)", "Outside agents (MCP)"),
+    (
+        "Claude Code, no computador onde o sirus-host está instalado",
+        "Claude Code, on the computer where sirus-host is installed",
+    ),
+    ("Claude Code, por endereço", "Claude Code, by address"),
+    ("Copiar comando", "Copy command"),
+    ("Copiar token", "Copy token"),
+    ("Copie o token", "Copy the token"),
+    ("Criar token", "Create token"),
+    ("Dar acesso a um agente", "Give an agent access"),
+    (
+        "Dê um nome ao token (por exemplo, Claude Code no Mac) e escolha o que ele pode fazer. Ele nunca aprova ações nem vê segredos, e as conversas que criar seguem seu modo de aprovação padrão.",
+        "Name the token (for example, Claude Code on the Mac) and choose what it may do. It never approves actions or sees secrets, and the conversations it creates follow your default approval mode.",
+    ),
+    ("Dê um nome ao token.", "Give the token a name."),
+    (
+        "Ele só aparece agora: o Sirus guarda apenas uma impressão digital dele. Se perder, revogue e crie outro.",
+        "It only shows now: Sirus keeps just a fingerprint of it. If you lose it, revoke it and make another.",
+    ),
+    ("Endereço do servidor MCP", "MCP server address"),
+    ("Leitura e escrita", "Read and write"),
+    ("Nenhum token criado ainda.", "No tokens yet."),
+    ("Ocultar token", "Hide token"),
+    ("Só leitura", "Read only"),
+    ("Token “{}” criado", "Token “{}” created"),
     ("\n… diff truncado.", "\n… diff truncated."),
     (" Liberam {}.", " Frees {}."),
     (" · alertas ligados", " · alerts on"),
@@ -5802,6 +5828,14 @@ const ENTRIES: &[(&str, &str)] = &[
     ),
     ("{} {} disponível", "{} {} available"),
     ("{} · Encontrada em: {}", "{} · Found in: {}"),
+    (
+        "{} · criado em {} · nunca usado",
+        "{} · created {} · never used",
+    ),
+    (
+        "{} · criado em {} · último uso {}",
+        "{} · created {} · last used {}",
+    ),
     (
         "{} · este modelo tem {} níveis.",
         "{} · this model has {} levels.",

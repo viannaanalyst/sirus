@@ -24,6 +24,7 @@ use std::time::{Duration, Instant};
 
 use crate::runtime::{AppHandle, Emitter, Listener, Manager};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::body::Bytes;
 use axum::extract::{ConnectInfo, Request, State as AxumState};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode, Uri};
 use axum::middleware::{self, Next};
@@ -724,6 +725,16 @@ fn start_kind(
                 "/api/app-update/file/{platform}/{runtime}/{*path}",
                 get(app_update_file),
             )
+            // MCP for agents outside Sirus (ADR-209): a bearer token of its own, not a device's.
+            .route(
+                "/mcp",
+                post(mcp)
+                    .get(mcp_unsupported)
+                    .delete(mcp_unsupported)
+                    .layer(axum::extract::DefaultBodyLimit::max(
+                        crate::mcp_external::MAX_BODY + 1024,
+                    )),
+            )
             .route("/api/socket", get(socket))
             .route("/api/tunnel", get(tunnel))
             .route("/api/thumbnail/{id}", get(thumbnail))
@@ -944,6 +955,40 @@ fn same_origin(headers: &HeaderMap, https_host: Option<&str>) -> bool {
 fn app_data_dir(shared: &Shared) -> Option<PathBuf> {
     let state = shared.app.try_state::<Arc<crate::commands::AppState>>()?;
     state.data_path.parent().map(Path::to_path_buf)
+}
+
+/// `POST /mcp`: one JSON-RPC message of an outside MCP client (`mcp_external.rs`).
+async fn mcp(AxumState(shared): AxumState<Shared>, headers: HeaderMap, body: Bytes) -> Response {
+    let Some(dir) = app_data_dir(&shared) else {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    };
+    let bearer = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "));
+    match crate::mcp_external::handle(&shared.app, &dir, bearer, &body).await {
+        crate::mcp_external::Reply::Json(value) => Json(value).into_response(),
+        crate::mcp_external::Reply::Status(code) => {
+            let status = StatusCode::from_u16(code).unwrap_or(StatusCode::BAD_REQUEST);
+            let mut response = status.into_response();
+            if status == StatusCode::UNAUTHORIZED {
+                response.headers_mut().insert(
+                    header::WWW_AUTHENTICATE,
+                    HeaderValue::from_static("Bearer realm=\"sirus\""),
+                );
+            }
+            response
+        }
+    }
+}
+
+/// The endpoint answers with JSON only: no server-sent stream and no session to end.
+async fn mcp_unsupported() -> Response {
+    let mut response = StatusCode::METHOD_NOT_ALLOWED.into_response();
+    response
+        .headers_mut()
+        .insert(header::ALLOW, HeaderValue::from_static("POST"));
+    response
 }
 
 /// The native app's update for its runtime version, in the Expo Updates protocol (ADR-135).

@@ -188,11 +188,18 @@ pub fn loads(page: &str) -> Vec<(&'static str, &'static str, Value)> {
             "computer_action",
             json!({"action": {"type": "status"}}),
         )],
-        "Conexões" => vec![(
-            "remote",
-            "remote_action",
-            json!({"action": {"type": "status"}}),
-        )],
+        "Conexões" => vec![
+            (
+                "remote",
+                "remote_action",
+                json!({"action": {"type": "status"}}),
+            ),
+            (
+                "mcp",
+                "mcp_token_action",
+                json!({"action": {"type": "list"}}),
+            ),
+        ],
         "Git" => vec![
             ("host", "host_info", json!({})),
             ("github", "native_github_list", json!({})),
@@ -3643,6 +3650,141 @@ fn computers_groups(d: &HashMap<&'static str, Value>) -> Vec<Group> {
     vec![group(t("Computadores"), rows)]
 }
 
+/// The key of the new token's name field on Conexões.
+pub const MCP_NAME: &str = "mcp-name";
+
+/// Agentes de fora (MCP) (ADR-209): tokens that let Claude Code in a terminal, Claude Desktop or
+/// another MCP client read and start conversations, with a scope each, revoked here. A token
+/// just made shows once, with what to paste into the client.
+fn mcp_groups(d: &HashMap<&'static str, Value>, address: Option<&str>) -> Vec<Group> {
+    let m = get_data(d, "mcp");
+    let form = get_data(d, "mcp_form");
+    let write = form["scope"] == "write";
+    let scope_option = |label: &'static str, scope: &'static str, chosen: bool| Opt {
+        label,
+        chosen,
+        change: act_run("native_mcp_scope", json!({"scope": scope})),
+    };
+    let mut rows = vec![row(
+        t("Dar acesso a um agente"),
+        t(
+            "Dê um nome ao token (por exemplo, Claude Code no Mac) e escolha o que ele pode fazer. Ele nunca aprova ações nem vê segredos, e as conversas que criar seguem seu modo de aprovação padrão.",
+        ),
+        vec![
+            Ctl::Field {
+                key: MCP_NAME,
+                text: form["name"].as_str().unwrap_or("").to_string(),
+                width: 180.,
+                button: None,
+            },
+            Ctl::Pick(vec![
+                scope_option(t("Só leitura"), "read", !write),
+                scope_option(t("Leitura e escrita"), "write", write),
+            ]),
+            Ctl::Primary {
+                label: t("Criar token"),
+                act: act_run("native_mcp_create", json!({})),
+                enabled: true,
+            },
+        ],
+    )];
+    let tokens = m["tokens"].as_array().cloned().unwrap_or_default();
+    for token in &tokens {
+        let id = token["id"].as_str().unwrap_or_default();
+        let scope = if token["scope"] == "write" {
+            t("Leitura e escrita")
+        } else {
+            t("Só leitura")
+        };
+        let created = local_when(
+            token["createdAt"].as_str().unwrap_or_default(),
+            t("%d/%m/%Y"),
+        );
+        let about = match token["lastUsed"].as_str() {
+            Some(seen) => tf(
+                "{} · criado em {} · último uso {}",
+                &[&scope, &created, &local_when(seen, t("%d/%m/%Y %H:%M"))],
+            ),
+            None => tf("{} · criado em {} · nunca usado", &[&scope, &created]),
+        };
+        rows.push(row(
+            token["name"].as_str().unwrap_or_default(),
+            about,
+            vec![Ctl::Button {
+                label: t("Revogar"),
+                act: act_run(
+                    "mcp_token_action",
+                    json!({"action": {"type": "revoke", "id": id}}),
+                ),
+                enabled: true,
+                danger: true,
+            }],
+        ));
+    }
+    if tokens.is_empty() {
+        rows.push(row("", t("Nenhum token criado ainda."), Vec::new()));
+    }
+    let mut out = vec![group(t("Agentes de fora (MCP)"), rows)];
+    if let Some(text) = m["error"].as_str().filter(|text| !text.is_empty()) {
+        out.push(note(text));
+    }
+    let created = &m["created"];
+    if let Some(secret) = created["token"].as_str() {
+        let name = created["name"].as_str().unwrap_or_default();
+        let copy = |label: &'static str, text: &str| Ctl::Button {
+            label,
+            act: act_run("native_copy", json!({"text": text})),
+            enabled: true,
+            danger: false,
+        };
+        let mut shown = vec![
+            row(
+                t("Copie o token"),
+                secret.to_string(),
+                vec![copy(t("Copiar token"), secret)],
+            ),
+            row(
+                "",
+                t(
+                    "Ele só aparece agora: o Sirus guarda apenas uma impressão digital dele. Se perder, revogue e crie outro.",
+                ),
+                Vec::new(),
+            ),
+        ];
+        if let Some(address) = address {
+            let url = format!("{}/mcp", address.trim_end_matches('/'));
+            let command = format!(
+                "claude mcp add --transport http sirus {url} --header \"Authorization: Bearer {secret}\""
+            );
+            shown.push(row(
+                t("Endereço do servidor MCP"),
+                url.clone(),
+                vec![copy(t("Copiar endereço"), &url)],
+            ));
+            shown.push(row(
+                t("Claude Code, por endereço"),
+                command.clone(),
+                vec![copy(t("Copiar comando"), &command)],
+            ));
+        }
+        let local = format!("claude mcp add sirus -e SIRUS_MCP_TOKEN={secret} -- sirus-host mcp");
+        shown.push(row(
+            t("Claude Code, no computador onde o sirus-host está instalado"),
+            local.clone(),
+            vec![copy(t("Copiar comando"), &local)],
+        ));
+        let mut card = group(tf("Token “{}” criado", &[&name]), shown);
+        card.action = Some(Ctl::Button {
+            label: t("Ocultar token"),
+            act: act_run("native_mcp_hide", json!({})),
+            enabled: true,
+            danger: false,
+        });
+        out.push(card);
+    }
+    out
+}
+
 fn connections(d: &HashMap<&'static str, Value>) -> Vec<Group> {
     let r = get_data(d, "remote");
     let enabled = yes(&r["enabled"]);
@@ -3775,6 +3917,7 @@ fn connections(d: &HashMap<&'static str, Value>) -> Vec<Group> {
         device_rows.push(row("", t("Nenhum aparelho conectado ainda."), Vec::new()));
     }
     out.push(group(t("Aparelhos"), device_rows));
+    out.extend(mcp_groups(d, address));
     out.push(group(
         t("O que um aparelho pode fazer"),
         vec![row(
@@ -3851,6 +3994,12 @@ pub fn commit(settings: &Value, key: &str, text: &str) -> Option<Commit> {
         return Some(Commit::Run {
             cmd: "native_computer_field",
             args: json!({"key": key, "text": text}),
+        });
+    }
+    if key == MCP_NAME {
+        return Some(Commit::Run {
+            cmd: "native_mcp_field",
+            args: json!({"text": text}),
         });
     }
     if let Some(device) = key.strip_prefix("device-rename:") {

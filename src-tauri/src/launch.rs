@@ -330,9 +330,27 @@ pub(crate) fn send_from(
     if prompt.trim().is_empty() {
         return Err("prompt is required".into());
     }
+    let portuguese = app.state::<Arc<AppState>>().data.lock().settings.locale == "pt-BR";
+    let text = relayed(caller, &prompt, portuguese);
+    send_labeled(
+        app,
+        Some(&caller.id),
+        inherited_approval(caller),
+        target,
+        text,
+    )
+}
+
+/// Sends `text`, already headed with where it came from, to an idle session under `approval`.
+/// `caller_id` is the session whose Stop should reach it, when a session sent it.
+pub(crate) fn send_labeled(
+    app: &AppHandle,
+    caller_id: Option<&str>,
+    approval: crate::models::ApprovalMode,
+    target: &str,
+    text: String,
+) -> std::result::Result<Value, String> {
     let state = app.state::<Arc<AppState>>();
-    let portuguese = state.data.lock().settings.locale == "pt-BR";
-    let prompt = relayed(caller, &prompt, portuguese);
     let request = crate::models::SendPromptRequest {
         queued_after: None,
         debugging: false,
@@ -340,9 +358,9 @@ pub(crate) fn send_from(
         session_id: target.to_string(),
         attachment_ids: vec![],
         attachment_owner: String::new(),
-        prompt,
+        prompt: text,
         execution: crate::models::ExecutionOptions {
-            approval: Some(inherited_approval(caller)),
+            approval: Some(approval),
             ..Default::default()
         },
         team: false,
@@ -354,7 +372,9 @@ pub(crate) fn send_from(
         request,
     ))
     .map(|_| {
-        remember_launch(&state.data.lock(), &caller.id, target);
+        if let Some(caller_id) = caller_id {
+            remember_launch(&state.data.lock(), caller_id, target);
+        }
         json!({ "sent": true, "sessionId": target })
     })
     .map_err(|error| error.to_string())

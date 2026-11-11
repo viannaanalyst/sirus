@@ -150,3 +150,4 @@ issue_ref::issue_reference
 turn_edit::rewind_last_turn
 infisical::infisical_action
 peer_tools::peer_tool
+mcp_external::mcp_token_action

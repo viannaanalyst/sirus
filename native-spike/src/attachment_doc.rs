@@ -109,6 +109,8 @@ pub enum Viewer {
     /// DOC, XLS and PPT: Sirus asks to convert them; the host says so.
     Legacy,
     Image,
+    /// A video, played by the web view from a copy the host grants (`attachment_media`).
+    Video,
     Html,
     Text,
     None,
@@ -139,6 +141,8 @@ pub fn classify(name: &str, mime: &str, folder: bool, has_text: bool) -> Viewer 
         "pptx" => return Viewer::Pptx,
         "doc" | "xls" | "ppt" => return Viewer::Legacy,
         "html" | "htm" => return Viewer::Html,
+        // The host's own list (`media_preview::video_mime`); it grants no other.
+        "mp4" | "m4v" | "mov" | "webm" | "mkv" | "ogv" => return Viewer::Video,
         _ => {}
     }
     match mime.as_str() {
@@ -550,6 +554,12 @@ mod tests {
         assert_eq!(of("shot.png", "image/png"), Viewer::Image);
         assert_eq!(of("page.html", "text/html"), Viewer::Html);
         assert_eq!(of("a.bin", "application/octet-stream"), Viewer::None);
+        assert_eq!(
+            of("WhatsApp Video 2026-11-09.MP4", "application/octet-stream"),
+            Viewer::Video
+        );
+        assert_eq!(of("clip.mov", ""), Viewer::Video);
+        assert_eq!(of("clip.avi", "video/x-msvideo"), Viewer::None);
         assert_eq!(classify("a.rs", "text/plain", false, true), Viewer::Text);
         assert_eq!(classify("src", "", true, false), Viewer::None);
     }

@@ -460,8 +460,37 @@ fn load(backend: &Backend, info: &Info, owner: &str) -> Content {
             slides: 0,
             ..Default::default()
         })),
+        Viewer::Video => load_video(backend, info, owner),
         Viewer::Text => Content::Text(text_body(&info.name, &info.content)),
         Viewer::None => failed(t("Não foi possível abrir este documento.")),
+    }
+}
+
+/// An attached video: the host grants its snapshot (`attachment_media`) and the window plays a
+/// copy of it, here or on another computer alike (`media_copy`, at most 10 MiB as any
+/// attachment).
+fn load_video(backend: &Backend, info: &Info, owner: &str) -> Content {
+    let reply = backend
+        .request("attachment_media", json!({ "owner": owner, "id": info.id }))
+        .recv_blocking();
+    let grant = match reply {
+        Ok(Ok(grant)) => grant,
+        Ok(Err(error)) => return failed(doc::error_message(&error)),
+        Err(_) => return failed(t("Não foi possível abrir este documento.")),
+    };
+    let Some(token) = grant["token"].as_str() else {
+        return failed(t("Não foi possível abrir este documento."));
+    };
+    let size = grant["size"].as_u64().unwrap_or(0);
+    let key = format!("attachment:{owner}:{}", info.id);
+    let copy = crate::media_copy::fetch(backend, token, size, &key, &info.name);
+    backend.invoke("media_release", json!({ "token": token }));
+    match copy {
+        Some(file) => Content::Web(Arc::new(WebDoc {
+            video: Some(file),
+            ..Default::default()
+        })),
+        None => failed(t("Não foi possível abrir este documento.")),
     }
 }
 
@@ -520,11 +549,20 @@ fn fetch_asset(backend: &Backend, want: &Want) -> Asset {
             let Ok(Ok(grant)) = reply else {
                 return Asset::Failed;
             };
-            // The host's grant is all that is needed; the player reads the file itself.
-            if let Some(token) = grant["token"].as_str() {
+            let token = grant["token"].as_str().unwrap_or_default();
+            let file = if backend.active_remote().is_some() {
+                // The video is on the other computer's disk: the player gets a copy of it.
+                let size = grant["size"].as_u64().unwrap_or(0);
+                let key = format!("reply:{session}:{path}:{size}");
+                crate::media_copy::fetch(backend, token, size, &key, path)
+            } else {
+                // Here the host's grant is all that is needed; the player reads the file itself.
+                reply_rich::video_file(cwd, path)
+            };
+            if !token.is_empty() {
                 backend.invoke("media_release", json!({ "token": token }));
             }
-            let Some(file) = reply_rich::video_file(cwd, path) else {
+            let Some(file) = file else {
                 return Asset::Failed;
             };
             let poster = poster_of(&file);

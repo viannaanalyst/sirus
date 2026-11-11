@@ -129,6 +129,83 @@ pub async fn reply_media(
     .await
 }
 
+/// A token for a video the person attached to a message (a composer draft or a sent message),
+/// so the window can play it: only the host's own snapshot of an attachment with a video
+/// extension, under the same owner check as `attachment_preview` (ADR-202 addendum).
+pub async fn attachment_media(
+    state: State<'_, Arc<AppState>>,
+    owner: String,
+    id: String,
+) -> Result<MediaPreview> {
+    let snapshot = {
+        let data = state.data.lock();
+        if !crate::attachments::owner_exists(&data, &owner) {
+            return Err(Error::new(
+                "document_unavailable",
+                "Attachment owner no longer exists.",
+            ));
+        }
+        state.attachments.preview_snapshot(&owner, &id)?
+    };
+    let mime =
+        video_mime(&snapshot.view.name).ok_or_else(|| Error::invalid_path("not a video file"))?;
+    let path = snapshot
+        .path()
+        .ok_or_else(|| Error::new("document_unavailable", "Attachment is unavailable."))?;
+    Ok(register(
+        path.to_path_buf(),
+        mime,
+        snapshot.view.size as u64,
+    ))
+}
+
+/// A piece of a granted file, base64 in `data`, with the file's whole size.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaChunk {
+    pub size: u64,
+    pub data: String,
+}
+
+/// Up to MAX_CHUNK bytes of a file a token grants, from `offset`. A window on another computer
+/// has no `sirus-media` scheme and no access to this disk, so it copies a granted video piece by
+/// piece over the socket and plays its copy (ADR-202 addendum). Only files a token was given for
+/// are read; the grant rules stay those of `media_preview`, `reply_media` and `attachment_media`.
+pub async fn media_chunk(token: String, offset: u64) -> Result<MediaChunk> {
+    native_task(move || {
+        let path = TOKENS
+            .lock()
+            .iter()
+            .find(|(known, _, _)| *known == token)
+            .map(|(_, path, _)| path.clone())
+            .ok_or_else(|| Error::not_found("The media is no longer shared."))?;
+        let (size, bytes) = read_chunk(&path, offset)?;
+        use base64::Engine as _;
+        Ok(MediaChunk {
+            size,
+            data: base64::engine::general_purpose::STANDARD.encode(bytes),
+        })
+    })
+    .await
+}
+
+/// The file's size and up to MAX_CHUNK bytes from `offset` (none at or past the end).
+fn read_chunk(path: &Path, offset: u64) -> Result<(u64, Vec<u8>)> {
+    let mut file = std::fs::File::open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Err(Error::invalid_path("preview supports regular files only"));
+    }
+    let size = metadata.len();
+    if offset >= size {
+        return Ok((size, Vec::new()));
+    }
+    let mut bytes = Vec::with_capacity((size - offset).min(MAX_CHUNK) as usize);
+    file.seek(SeekFrom::Start(offset))?;
+    file.take(MAX_CHUNK).read_to_end(&mut bytes)?;
+    Ok((size, bytes))
+}
+
 /// Forgets a token when its preview closes.
 pub fn media_release(token: String) {
     TOKENS.lock().retain(|(known, _, _)| *known != token);
@@ -246,6 +323,29 @@ mod tests {
         assert_eq!(video_mime("x.mkv"), Some("video/x-matroska"));
         assert_eq!(video_mime("notes.txt"), None);
         assert_eq!(video_mime("mp4"), None);
+    }
+
+    #[test]
+    fn chunks_are_bounded_and_end_empty() {
+        let dir = std::env::temp_dir().join(format!("sirus-chunk-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("clip.mp4");
+        let body: Vec<u8> = (0..MAX_CHUNK + 10).map(|i| (i % 251) as u8).collect();
+        std::fs::write(&file, &body).unwrap();
+        let (size, first) = read_chunk(&file, 0).unwrap();
+        assert_eq!(size, MAX_CHUNK + 10);
+        assert_eq!(first.len() as u64, MAX_CHUNK);
+        let (_, rest) = read_chunk(&file, MAX_CHUNK).unwrap();
+        assert_eq!(rest, body[MAX_CHUNK as usize..]);
+        assert!(read_chunk(&file, size).unwrap().1.is_empty());
+        assert!(read_chunk(&dir, 0).is_err());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_chunk_needs_a_known_token() {
+        let missing = crate::runtime::async_runtime::block_on(media_chunk("nobody".into(), 0));
+        assert!(missing.is_err());
     }
 
     #[test]

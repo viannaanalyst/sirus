@@ -29,6 +29,8 @@ project_look::pick_look_image
 media_preview::media_preview
 media_preview::media_release
 media_preview::reply_media
+media_preview::attachment_media
+media_preview::media_chunk
 workspace_watch::workspace_watch
 project_scripts::project_scripts_action
 worktree_cleanup::worktree_cleanup_action

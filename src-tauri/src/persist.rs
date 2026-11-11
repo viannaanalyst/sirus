@@ -474,7 +474,7 @@ fn read_transcript(file: &Path, session_id: &str) -> Result<Option<(Vec<Message>
             return Err(Error::new(
                 "persist",
                 format!("cannot read a session transcript: {error}"),
-            ))
+            ));
         }
     };
     match serde_json::from_slice::<Transcript>(&bytes) {
@@ -1004,6 +1004,23 @@ const CHECKPOINT_DELAY: Duration = Duration::from_secs(1);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `SIRUS_BENCH_DB=<copy of state.db> cargo test --lib bench_save -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn bench_save() {
+        let path = PathBuf::from(std::env::var("SIRUS_BENCH_DB").unwrap());
+        let data = load_or_create(&path).unwrap();
+        for round in 0..4 {
+            let started = std::time::Instant::now();
+            save(&path, &data).unwrap();
+            eprintln!(
+                "save #{round}: {:?} ({} sessions)",
+                started.elapsed(),
+                data.sessions.len()
+            );
+        }
+    }
 
     thread_local! {
         static JSON_ONLY: std::cell::RefCell<HashSet<PathBuf>> = std::cell::RefCell::new(HashSet::new());

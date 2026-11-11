@@ -1893,6 +1893,7 @@ pub async fn send_prompt(
     state: State<'_, Arc<AppState>>,
     request: SendPromptRequest,
 ) -> Result<serde_json::Value> {
+    let mut clock = crate::timing::Clock::new("send");
     let mut request = request;
     if request.team {
         // A team plan is always a read-only planning turn (ADR-043).
@@ -2229,7 +2230,10 @@ pub async fn send_prompt(
             attachments,
         )
     };
-    if let Err(error) = state.persist() {
+    clock.mark("admission");
+    let persisted = state.persist();
+    clock.mark("persist-1");
+    if let Err(error) = persisted {
         let mut data = state.data.lock();
         if let Some(session) = find_session_mut(&mut data, &session_snapshot.id)
             .ok()
@@ -2266,17 +2270,30 @@ pub async fn send_prompt(
     // A new worktree's Setup script (and any script still running) goes first;
     // its failure is shown but never blocks the turn (ADR-078).
     crate::project_scripts::before_turn(&app, state.inner(), &session_snapshot.id).await;
+    clock.mark("before-turn");
     // Armed while the turn is still Starting: capture, spawn and the provider handshake.
     watch_start(app.clone(), state.inner().clone(), session_snapshot.clone());
     let review_root = PathBuf::from(&cwd);
     let review_session = session_snapshot.clone();
-    let capture = native_task(move || {
-        Ok(crate::turn_review::Capture::begin(
-            review_root,
-            &review_session,
-        ))
-    })
-    .await;
+    // The baseline of the workspace (up to 3 s on a large repository) must exist before the
+    // CLI gets the prompt, not before it starts. Claude's `start` only spawns the process
+    // (the prompt goes out in `run_turn`), so its boot overlaps the capture.
+    let capture_task = crate::runtime::async_runtime::spawn_blocking(move || {
+        crate::turn_review::Capture::begin(review_root, &review_session)
+    });
+    let overlap = provider == AgentProviderId::Claude;
+    let mut capture_task = Some(capture_task);
+    let capture_result =
+        |task: crate::runtime::async_runtime::JoinHandle<crate::turn_review::Capture>| async move {
+            task.await
+                .map_err(|_| Error::new("native", "Native operation could not complete."))
+        };
+    let capture = if overlap {
+        Ok(None)
+    } else {
+        capture_result(capture_task.take().unwrap()).await.map(Some)
+    };
+    clock.mark("capture-start");
     // Every post-admission error travels through the startup failure settlement below.
     let admission = (|| -> Result<()> {
         let data = state.data.lock();
@@ -2297,7 +2314,7 @@ pub async fn send_prompt(
     })();
     let (review, scope) = match capture {
         Ok(review) => (
-            Some(review),
+            review,
             admission.and_then(|()| {
                 crate::provider_accounts::scope(
                     &state,
@@ -2345,6 +2362,15 @@ pub async fn send_prompt(
         )
         .await
     };
+    clock.mark("spawn");
+    let (review, process) = match capture_task {
+        Some(task) => match capture_result(task).await {
+            Ok(review) => (Some(review), process),
+            Err(error) => (None, process.and_then(|_| Err(error))),
+        },
+        None => (review, process),
+    };
+    clock.mark("capture-done");
 
     match process {
         Ok((process, mut started)) => {
@@ -2388,6 +2414,7 @@ pub async fn send_prompt(
             );
             // A disk failure must not orphan an already-spawned process.
             state.persist()?;
+            clock.mark("persist-2");
             let data = state.data.lock();
             let session = data
                 .sessions

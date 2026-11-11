@@ -765,6 +765,22 @@ fn keep_native(state: &AppState, session_id: &str, message_id: &str) -> Result<T
 mod tests {
     use super::*;
 
+    /// `SIRUS_BENCH_ROOT=<repo> cargo test --lib bench_snapshot -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn bench_snapshot() {
+        let root = std::env::var("SIRUS_BENCH_ROOT").unwrap();
+        for _ in 0..3 {
+            let started = Instant::now();
+            let snapshot = snapshot(Path::new(&root));
+            eprintln!(
+                "snapshot {} files in {:?}",
+                snapshot.files.len(),
+                started.elapsed()
+            );
+        }
+    }
+
     #[test]
     fn committed_files_leave_reviews_of_sessions_in_that_workspace_only() {
         let review = serde_json::json!({"files":[{"path":"a.ts","kind":"modified","additions":1,"deletions":0,"binary":false,"diff":null},{"path":"b.ts","kind":"added","additions":2,"deletions":0,"binary":false,"diff":null}],"partial":false,"sharedWorkspace":false,"keptAt":null});

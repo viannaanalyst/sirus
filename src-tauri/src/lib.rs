@@ -117,6 +117,7 @@ mod subagent_feed;
 mod team;
 mod text_search;
 mod thumbnails;
+mod timing;
 mod token_budget;
 mod tool_images;
 mod tool_output;

@@ -153,7 +153,14 @@ fn mask_quoted(value: &str) -> String {
 static URL_PASSWORD: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"([a-zA-Z][a-zA-Z0-9+.-]*://[^\s:/@]+:)([^\s@/]+)@").unwrap());
 static PREFIXED: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\b(sk-(?:proj-|ant-(?:api\d\d-)?|svcacct-)?|gh[pousr]_|github_pat_|xox[abposr]-|glpat-|npm_|[sr]k_(?:live|test)_|AIza)([A-Za-z0-9_\-]{12,})").unwrap()
+    Regex::new(r"\b(sk-(?:proj-|ant-(?:api\d\d-)?|svcacct-)?|gh[pousr]_|github_pat_|xox[abposr]-|glpat-|npm_|[sr]k_(?:live|test)_|AIza|cf(?:ast|at|ut|k)_|hf_|ya29\.)([A-Za-z0-9_\-]{12,})").unwrap()
+});
+static JWT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\b(eyJ)([A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}(?:\.[A-Za-z0-9_\-]*)?)").unwrap()
+});
+/// A private key block, or (when a bounded output kept only its tail) the body before the END line.
+static PEM: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|\z)|(?:[A-Za-z0-9+/=]{16,}\s+)+-----END [A-Z0-9 ]*PRIVATE KEY-----").unwrap()
 });
 static AWS: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\b(AKIA|ASIA)([0-9A-Z]{16})\b").unwrap());
@@ -180,6 +187,14 @@ pub fn mask(text: &str) -> Cow<'_, str> {
         .replace_all(&text, |c: &Captures| {
             format!("{}{}", &c[1], mask_value(&c[2]))
         })
+        .into_owned();
+    let text = JWT
+        .replace_all(&text, |c: &Captures| {
+            format!("{}{}", &c[1], mask_value(&c[2]))
+        })
+        .into_owned();
+    let text = PEM
+        .replace_all(&text, "-----PRIVATE KEY ••••-----")
         .into_owned();
     let text = AWS
         .replace_all(&text, |c: &Captures| {
@@ -246,6 +261,26 @@ mod tests {
         assert_eq!(
             mask("sk-ant-api03-aaaaaaaaaaaaaaaa9999"),
             "sk-ant-api03-••••9999"
+        );
+        assert_eq!(mask("cfast_0123456789abcdefghij"), "cfast_••••ghij");
+        assert_eq!(
+            mask("t=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghij"),
+            "t=eyJ••••ghij"
+        );
+        assert_eq!(
+            mask(
+                "a\n-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXk\n-----END OPENSSH PRIVATE KEY-----\nb"
+            ),
+            "a\n-----PRIVATE KEY ••••-----\nb"
+        );
+        assert!(
+            !mask("-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEF").contains("MIIEvQ")
+        );
+        assert!(
+            !mask(
+                "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC\nKcwggSjAgEAAoIBAQC7\n-----END PRIVATE KEY-----"
+            )
+            .contains("KcwggSj")
         );
         // Words that only contain a prefix stay.
         assert_eq!(

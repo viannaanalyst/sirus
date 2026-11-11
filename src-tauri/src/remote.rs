@@ -23,10 +23,10 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use crate::runtime::{AppHandle, Emitter, Listener, Manager};
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::body::Bytes;
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, Request, State as AxumState};
-use axum::http::{header, HeaderMap, HeaderValue, StatusCode, Uri};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -34,7 +34,7 @@ use axum::{Json, Router};
 use base64::Engine;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tokio::sync::{broadcast, mpsc, watch};
 
@@ -1029,6 +1029,11 @@ fn share_client(peer: SocketAddr, headers: &HeaderMap) -> String {
             .map(|value| value.split(',').next().unwrap_or("").trim().to_string())
             .filter(|value| !value.is_empty())
     };
+    // Only a request that reached this host from loopback (the tunnel) can name its own
+    // address; from anywhere else the headers are the visitor's to forge.
+    if !peer.ip().is_loopback() {
+        return peer.ip().to_string();
+    }
     text("cf-connecting-ip")
         .or_else(|| text("x-forwarded-for"))
         .unwrap_or_else(|| peer.ip().to_string())
@@ -2240,9 +2245,11 @@ mod tests {
     fn tokens_are_url_safe_and_distinct() {
         let first = random_token(32);
         assert_eq!(first.len(), 43);
-        assert!(first
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_')));
+        assert!(
+            first.chars().all(
+                |character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
+            )
+        );
         assert_ne!(first, random_token(32));
         assert_eq!(device_name("   "), "Device");
         let code = pairing_code();

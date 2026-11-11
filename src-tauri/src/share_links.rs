@@ -727,8 +727,13 @@ fn clean_text(text: &str, strip: &[(String, String)]) -> String {
         text = text.replace(&format!("{path}/"), with_slash);
         text = text.replace(path.as_str(), replacement);
     }
+    // Other computers' home folders (a peer's `/Users/ana/…`) lose the user name too.
+    let text = OTHER_HOME.replace_all(&text, "~");
     crate::redact::mask(&text).into_owned()
 }
+
+static OTHER_HOME: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"/(?:Users|home)/[^/\s:"'`)\]]+"#).unwrap());
 
 pub fn escape(text: &str) -> String {
     let mut out = String::with_capacity(text.len() + text.len() / 8);
@@ -1252,7 +1257,24 @@ static JAVASCRIPT_URL: LazyLock<Regex> =
 /// content-security policy and `sandbox` stop all of that anyway; this keeps the stored file
 /// clean too.)
 pub fn sanitize_preview(html: &str) -> String {
-    let html = SCRIPT_BLOCK.replace_all(html, "");
+    // Removing one tag can join its neighbours into a new one (`<scr<script></script>ipt>`),
+    // so go on until nothing changes.
+    let mut current = sanitize_once(html);
+    for _ in 0..8 {
+        let next = sanitize_once(&current);
+        if next == current {
+            break;
+        }
+        current = next;
+    }
+    current
+}
+
+static COMMENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)<!--.*?(?:-->|\z)").unwrap());
+
+fn sanitize_once(html: &str) -> String {
+    let html = COMMENT.replace_all(html, "");
+    let html = SCRIPT_BLOCK.replace_all(&html, "");
     let html = ACTIVE_BLOCK.replace_all(&html, "");
     let html = ACTIVE_TAG.replace_all(&html, "");
     let html = EVENT_ATTRIBUTE.replace_all(&html, "");
@@ -1740,5 +1762,26 @@ mod tests {
         assert_eq!(remaining(Duration::minutes(20), true), "vence em 20 min");
         assert_eq!(remaining(Duration::hours(23), false), "expires in 23 h");
         assert_eq!(remaining(Duration::days(7), true), "vence em 7 d");
+    }
+
+    #[test]
+    fn sanitizer_survives_tags_that_rejoin_and_drops_comments() {
+        let clean = sanitize_preview(
+            "<p>a</p><scr<script></script>ipt>alert(1)</scr<script></script>ipt><img on<b onx=1>error=x><!-- key sk-abc --><scr<!-- -->ipt>x</script>",
+        );
+        let lower = clean.to_ascii_lowercase();
+        assert!(!lower.contains("<script"), "{clean}");
+        assert!(!lower.contains("onerror"), "{clean}");
+        assert!(
+            !clean.contains("sk-abc") && !clean.contains("<!--"),
+            "{clean}"
+        );
+        assert!(clean.contains("<p>a</p>"));
+    }
+
+    #[test]
+    fn other_computers_home_folders_lose_the_user_name() {
+        let text = clean_text("see /Users/ana/proj/a.rs and (/home/bob/.ssh/id)", &[]);
+        assert_eq!(text, "see ~/proj/a.rs and (~/.ssh/id)");
     }
 }

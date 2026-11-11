@@ -218,6 +218,8 @@ try {
       return;
     }
     const type = (field.type || "").toLowerCase();
+    const hint = [field.name, field.id, field.autocomplete, field.getAttribute("aria-label")].join(" ");
+    if (/(pass(word|wd)?|secret|token|api.?key|otp|one-time|cc-|card|cvv|cvc|ssn|private)/i.test(hint)) { target.removeAttribute("value"); return; }
     if (type === "password" || type === "hidden" || type === "file") { target.removeAttribute("value"); return; }
     if (type === "checkbox" || type === "radio") {
       if (field.checked) target.setAttribute("checked", ""); else target.removeAttribute("checked");
@@ -230,7 +232,16 @@ try {
     node.setAttribute("style", await inlineUrls(node.getAttribute("style") || "", document.baseURI));
   });
 
-  // Nothing active.
+  // Nothing active. Also out: templates, meta tags other than layout ones, and comments.
+  copy("template").forEach((node) => node.remove());
+  copy("meta[name]").forEach((node) => {
+    if (!/^(viewport|theme-color|color-scheme|description)$/i.test(node.getAttribute("name") || "")) node.remove();
+  });
+  copy("meta[property],meta[itemprop]").forEach((node) => node.remove());
+  const walker = document.createTreeWalker(clone, NodeFilter.SHOW_COMMENT);
+  const comments = [];
+  while (walker.nextNode()) comments.push(walker.currentNode);
+  comments.forEach((node) => node.remove());
   copy("script,noscript,iframe,frame,frameset,object,embed,applet,base,link,style,meta[http-equiv],meta[charset],audio,video,source,track").forEach((node) => node.remove());
   for (const node of [clone, ...copy("*")]) {
     for (const attribute of Array.from(node.attributes)) {
@@ -248,7 +259,22 @@ try {
     if (value.startsWith("#")) return;
     const full = absolute(value);
     if (full && /^https?:/i.test(full)) {
-      link.setAttribute("href", full);
+      // Credentials in an address (user:pass@, ?token=…, #access_token=…) are not copied.
+      try {
+        const url = new URL(full);
+        url.username = "";
+        url.password = "";
+        for (const params of [url.searchParams]) {
+          for (const key of Array.from(params.keys())) {
+            if (/(token|key|secret|sig|auth|code|pass|session|jwt|otp)/i.test(key)) params.set(key, "");
+          }
+        }
+        if (/(token|key|secret|sig|auth|code|pass|session|jwt|otp)/i.test(url.hash)) url.hash = "";
+        link.setAttribute("href", url.href);
+      } catch (e) {
+        link.removeAttribute("href");
+        return;
+      }
       link.setAttribute("rel", "noopener noreferrer nofollow");
     } else {
       link.removeAttribute("href");

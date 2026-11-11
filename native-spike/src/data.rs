@@ -73,6 +73,9 @@ pub struct Turn {
     /// under them (message_time.rs).
     pub sent_ms: Option<i64>,
     pub replied_ms: Option<i64>,
+    /// This send started a fresh provider session because the context was nearly full
+    /// (ADR-181): the tokens it had used and its window.
+    pub rotation: Option<(u64, u64)>,
     pub model: Option<String>,
     /// The effort and Fast mode the turn was sent with; `fast` is `None` for turns saved
     /// before they were recorded, which never get a model-change divider (ADR-198).
@@ -442,6 +445,7 @@ pub(crate) fn blank(user: &str) -> Turn {
         started_ms: None,
         paused_ms: 0,
         sent_ms: None,
+        rotation: None,
         replied_ms: None,
         model: None,
         effort: None,
@@ -499,6 +503,8 @@ fn turns_of(messages: &[Value]) -> Vec<Turn> {
             turn.sent_ms = message["createdAt"]
                 .as_str()
                 .and_then(crate::message_time::parse_iso);
+            let rotation = &message["rotation"];
+            turn.rotation = rotation["used"].as_u64().zip(rotation["window"].as_u64());
             turns.push(turn);
             phaser = crate::subagent_team::Phaser::default();
         } else if role == "agent" {

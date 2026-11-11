@@ -1289,6 +1289,10 @@ const ENTRIES: &[(&str, &str)] = &[
         "Context cleared · new session",
     ),
     ("Contexto não compactado", "Context not compacted"),
+    (
+        "Contexto renovado · nova sessão ({} de {})",
+        "Context renewed · new session ({} of {})",
+    ),
     ("Conteúdo não exibido", "Content not shown"),
     ("Continuar", "Continue"),
     ("Continuar com {}", "Continue with {}"),

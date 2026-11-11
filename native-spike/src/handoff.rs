@@ -592,6 +592,15 @@ impl Shell {
         }));
         let body = self.turn_body(conversation, index, turn, now, moving, cx);
         crate::markdown::set_search(None);
+        let body = match turn.rotation {
+            Some((used, window)) => div()
+                .flex()
+                .flex_col()
+                .child(rotation_divider(used, window))
+                .child(body)
+                .into_any_element(),
+            None => body,
+        };
         let conv = &self.conversations[conversation];
         let previous = match index {
             0 => conv.handoff.as_ref().map(|handoff| handoff.from),
@@ -656,6 +665,41 @@ fn model_divider(provider: &'static str, name: &str, turn: &Turn) -> AnyElement 
                 .gap(px(6.))
                 .child(crate::tab_tile::provider_mark(provider, 13.))
                 .child(tf("Mudou para {}", &[&label])),
+        )
+        .child(rule())
+        .into_any_element()
+}
+
+/// The thin divider above the message that continued in a fresh provider session because the
+/// context was nearly full (ADR-181): "Contexto renovado · nova sessão (162k de 200k)".
+fn rotation_divider(used: u64, window: u64) -> AnyElement {
+    let short = |tokens: u64| {
+        if tokens >= 1_000_000 {
+            format!("{}M", tokens / 1_000_000)
+        } else {
+            format!("{}k", tokens / 1_000)
+        }
+    };
+    let rule = || div().h(px(1.)).flex_1().bg(content(0.08));
+    div()
+        .flex()
+        .items_center()
+        .gap(px(12.))
+        .py(px(4.))
+        .text_size(px(12.))
+        .text_color(content(0.5))
+        .child(rule())
+        .child(
+            div()
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .gap(px(5.))
+                .child(icon("check", 12.).text_color(content(0.5)))
+                .child(tf(
+                    "Contexto renovado · nova sessão ({} de {})",
+                    &[&short(used), &short(window)],
+                )),
         )
         .child(rule())
         .into_any_element()

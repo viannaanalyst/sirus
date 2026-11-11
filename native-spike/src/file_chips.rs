@@ -176,7 +176,10 @@ pub fn target(root: &str, word: &str) -> Option<Target> {
         // the conversation's folder that reads as a file (an extension) or a folder (a trailing
         // slash) opens; the Files pane asks the host and reports what is missing.
         let bare = without_position(word.trim());
-        if !bare.is_empty() && !bare.contains('/') && !bare.starts_with('~') {
+        if !plausible_path(bare) {
+            return None;
+        }
+        if !bare.contains('/') && !bare.starts_with('~') {
             return host_known(root, bare);
         }
         return resolve(root, word, None, None, |path| {
@@ -193,6 +196,27 @@ pub fn target(root: &str, word: &str) -> Option<Target> {
     resolve(root, word, home.as_deref(), index.as_deref(), |path| {
         std::fs::metadata(path).ok().map(|meta| meta.is_dir())
     })
+}
+
+/// Whether `word` can be a path written in a reply, judged by its shape alone (another computer's
+/// disk can't be checked): no quotes, brackets, parentheses or other code punctuation, and a file
+/// name's extension is a short run of letters and digits. `require('x').path` is not a file.
+fn plausible_path(word: &str) -> bool {
+    const CODE: &[char] = &[
+        '\'', '"', '`', '(', ')', '[', ']', '{', '}', '<', '>', ',', ';', '=', '$', '|', '*', '?',
+        '!', '&',
+    ];
+    if word.is_empty() || word.contains(CODE) {
+        return false;
+    }
+    let name = word.trim_end_matches('/').rsplit('/').next().unwrap_or("");
+    if word.ends_with('/') || !name.contains('.') {
+        return !name.is_empty() || word.ends_with('/');
+    }
+    let extension = name.rsplit('.').next().unwrap_or("");
+    !extension.is_empty()
+        && extension.len() <= 10
+        && extension.chars().all(|c| c.is_ascii_alphanumeric())
 }
 
 /// What the host said about a bare name in a folder: `None` asked and still unanswered,
@@ -304,6 +328,20 @@ pub fn plain_click(event: &gpui::ClickEvent) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn code_is_not_a_path_on_another_computer() {
+        assert!(!plausible_path("ffprobe-static').path"));
+        assert!(!plausible_path("require('ffprobe-static').path"));
+        assert!(!plausible_path("src/a.rs,"));
+        assert!(!plausible_path("x.done()"));
+        assert!(plausible_path("src/a.rs"));
+        assert!(plausible_path("scripts/build.sh"));
+        assert!(plausible_path("docs/"));
+        assert!(plausible_path("README.md"));
+        assert!(plausible_path("Makefile"));
+        assert!(!plausible_path("a.b-c"));
+    }
 
     fn found(word: &str, index: &Index) -> Option<Target> {
         resolve(

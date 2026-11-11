@@ -121,6 +121,9 @@ mod sidebar_pick;
 /// The toasts: failures and provider updates as cards at the top centre (toast.rs).
 #[path = "toast.rs"]
 mod toast;
+/// The large "Aperte ⌘Q de novo" over the whole window (quit_overlay.rs).
+#[path = "quit_overlay.rs"]
+mod quit_overlay;
 /// ⌘F: the find bar over the open conversation (transcript_find.rs).
 #[path = "transcript_find.rs"]
 pub(crate) mod transcript_find;
@@ -20461,6 +20464,7 @@ impl Render for Shell {
         let sidebar_card = self.sidebar_card_view(now, &mut moving, cx);
         // Every notification of the window, in one column at the top right (toast.rs).
         let notices = self.notice_column(cx);
+        let quit_overlay = self.quit_overlay(cx);
         let edit_menu = self.edit_menu.map(|open| {
             let (pick, dismiss) = (cx.entity(), cx.entity());
             crate::edit_menu::view(
@@ -20774,6 +20778,7 @@ impl Render for Shell {
             // Over Settings and Usage too, whose pages would cover them.
             .children(confirm_dialog)
             .children(notices)
+            .children(quit_overlay)
             .children(edit_menu)
             .children(palette_view)
             .children(first_run)

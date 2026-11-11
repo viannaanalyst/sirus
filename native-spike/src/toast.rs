@@ -1,5 +1,5 @@
 //! The window's notifications: every one of them sits in one column at the top right, under the
-//! title bar (ADR-205). From the top: the "press ⌘Q again" notice, a failure or a Git result (the
+//! title bar (ADR-205). From the top: a failure or a Git result (the
 //! window's `problem`), the Sirus app update, provider CLI updates (on offer, running, or just run;
 //! one card listing them all when several are on offer), then the cards for other conversations
 //! (activity_cards.rs). Every card is the same compact shape: 320 px wide, growing downward with its
@@ -170,13 +170,12 @@ fn answer_entry(value: &Value, provider: &str) -> Option<(String, String, String
 }
 
 impl Shell {
-    /// The column of notifications at the top right, or nothing: the ⌘Q notice, the failure, the
+    /// The column of notifications at the top right, or nothing: the failure, the
     /// app update, the provider updates, then the cards for other conversations.
     pub(super) fn notice_column(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         self.problem_clock(cx);
         let reduced = cx.reduce_motion();
         let mut cards: Vec<AnyElement> = Vec::new();
-        cards.extend(self.quit_card(cx));
         if let Some(problem) = self.problem.clone() {
             cards.push(self.problem_card(&problem, reduced, cx));
         }
@@ -277,26 +276,6 @@ impl Shell {
             return false;
         }
         true
-    }
-
-    /// "Aperte ⌘Q de novo", while the second press is awaited; it fades in and out, and its clock
-    /// runs out with the time left for the second press.
-    fn quit_card(&self, cx: &gpui::App) -> Option<AnyElement> {
-        let (_, at) = self.press_again.filter(|(key, _)| *key == Press::Quit)?;
-        let since = at.elapsed().as_secs_f32();
-        let (shown, left) = if cx.reduce_motion() {
-            (1., 1.)
-        } else {
-            self.send_moving.set(true);
-            (press_notice_shown(since), 1. - since / PRESS_WINDOW)
-        };
-        let mut card = Card::new(
-            "quit-notice",
-            crate::theme::accent(),
-            t("Aperte ⌘Q de novo para fechar o Sirus").to_owned(),
-        );
-        card.foot = Foot::Clock(left);
-        Some(compose(card).opacity(shown).into_any_element())
     }
 
     fn problem_card(&self, problem: &str, reduced: bool, cx: &mut Context<Self>) -> AnyElement {

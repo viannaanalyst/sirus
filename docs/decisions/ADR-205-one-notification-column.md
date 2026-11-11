@@ -24,3 +24,7 @@ The window had notifications in four places: failures and Git results at the top
 - Nothing overlaps at the top right any more, and every notification reads in full.
 - The heuristic can misjudge a title made of very wide or very narrow letters; at worst short words get their buttons on a row below, or a title beside the buttons wraps to a second line.
 - An activity card no longer shows the project's avatar; the project's name leads the line under the title.
+
+## Addendum (2026-11-10): ⌘Q in the middle of the window
+
+"Aperte ⌘Q de novo para fechar o Sirus" left the column. While the second press is awaited the whole window dims (black at up to 55%), a dithered glow in the accent colour rises from its edges, and the ⌘ and Q keys sit large in the middle with the words and a pixel bar that empties over the two-second window (`quit_overlay.rs`). It passes clicks through and fades in and out like the old notice; reduced motion shows it without fading.

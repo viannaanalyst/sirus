@@ -109,14 +109,17 @@ async fn answer(request: Value, backend: Backend, cx: &mut AsyncApp) {
     let keys_home = on_window(cx, panel_browser::keyboard_home).unwrap_or(false);
     // Sign-ins and computer use run here only for another computer's host: this Mac's own
     // host runs them itself.
+    panel_browser::agent_acting(true);
     let result = if local_command(&tool).is_some() && !from_remote(&request) {
         Err("this Mac runs that itself".to_owned())
     } else {
         run(&session, &tool, &request["args"], &backend, cx).await
     };
+    // The keys go back first, then the frames judge them again; GPUI's focus was never touched.
     if keys_home {
         on_window(cx, panel_browser::reclaim_keyboard);
     }
+    panel_browser::agent_acting(false);
     let _ = cx.update(|cx| cx.refresh_windows());
     if from_remote(&request) {
         backend.invoke_remote("browser_tool_result", result_args(&id, result));

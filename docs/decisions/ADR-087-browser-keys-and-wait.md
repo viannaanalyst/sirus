@@ -18,3 +18,7 @@ There is still no tool that runs arbitrary JavaScript. The phone app has no brow
 
 - Agents can drive keyboard-only flows (menus, dialogs, search boxes) and wait for slow pages instead of guessing with retries.
 - Keys outside the list are refused with the list of accepted keys.
+
+## Addendum: one keyboard owner
+
+When the owner clicks into the page the web view becomes the first responder while GPUI keeps its focus, so the composer kept blinking and received the letters the page ignored, while space scrolled the page. Each frame now judges it (`panel_browser::keys_decision`): keys moving from GPUI's view to a page with no agent acting means the owner clicked, and GPUI blurs; GPUI focus with the page holding the keys and no such move hands the keys back. An agent action never moves either (`agent_acting`; the bridge returns the keys when they were home).

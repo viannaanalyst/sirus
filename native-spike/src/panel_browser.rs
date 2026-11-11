@@ -106,6 +106,10 @@ thread_local! {
     /// The floating cards over the window this frame, cut out of the pages (browser_holes.rs).
     static HOLES: RefCell<Vec<browser_holes::Rect>> = const { RefCell::new(Vec::new()) };
     static LIVE: RefCell<Vec<Weak<Shared>>> = const { RefCell::new(Vec::new()) };
+    /// Agent browser actions running now (`agent_acting`); the keys are not judged meanwhile.
+    static AGENT_BUSY: Cell<u32> = const { Cell::new(0) };
+    /// The keys were with GPUI's view in the last frame judged (`keys_decision`).
+    static KEYS_WERE_HOME: Cell<bool> = const { Cell::new(true) };
     static SESSIONS: RefCell<HashMap<String, Entity<Browser>>> = RefCell::new(HashMap::new());
     /// The custom profiles and the profile new tabs open in, from the settings.
     static PROFILES: RefCell<(Vec<Profile>, String)> =
@@ -263,7 +267,8 @@ impl Shared {
 pub fn frame_end() -> impl IntoElement {
     canvas(
         |_, _, _| {},
-        |_, _, _, _| {
+        |_, _, window, cx| {
+            settle_keys(window, cx);
             // The cards report themselves while the frame is laid out; a frame without them
             // clears the holes.
             let reported = browser_holes::take_reported();
@@ -289,6 +294,82 @@ pub fn frame_end() -> impl IntoElement {
     )
     .absolute()
     .size_0()
+}
+
+/// What a frame does about who holds the keys.
+#[derive(Debug, PartialEq)]
+enum Keys {
+    Leave,
+    /// The owner clicked into the page: GPUI lets go of its focus (the composer stops blinking
+    /// and stops receiving what bubbles up from the page).
+    Blur,
+    /// The page holds the keys although GPUI has a focused field and nobody clicked the page.
+    Reclaim,
+}
+
+/// One keyboard owner at a time. `was_home`: the keys were with GPUI's view in the previous
+/// judged frame; `page`: a web view holds them now; `focused`: a GPUI element has focus.
+fn keys_decision(was_home: bool, page: bool, focused: bool, agent_busy: bool) -> Keys {
+    if agent_busy || !page || !focused {
+        return Keys::Leave;
+    }
+    // Home to page between two frames with no agent acting is the owner's click (or the page
+    // taking focus on its own, which is the same to the person typing).
+    if was_home { Keys::Blur } else { Keys::Reclaim }
+}
+
+/// A browser action by an agent starts (`true`) or ends. It never takes the keys from the app:
+/// `browser_bridge::answer` hands them back, and these frames keep out of the way meanwhile.
+pub fn agent_acting(acting: bool) {
+    AGENT_BUSY.with(|busy| {
+        busy.set(if acting {
+            busy.get() + 1
+        } else {
+            busy.get().saturating_sub(1)
+        })
+    });
+}
+
+/// Whether a web view holds the keys.
+fn page_holds_keys(window: &Window) -> bool {
+    let Some(ns_window) = parent_of(window).and_then(|view| view.window()) else {
+        return false;
+    };
+    let Some(current) = ns_window
+        .firstResponder()
+        .and_then(|responder| responder.downcast::<NSView>().ok())
+    else {
+        return false;
+    };
+    LIVE.with(|live| {
+        live.borrow()
+            .iter()
+            .filter_map(Weak::upgrade)
+            .any(|shared| {
+                shared
+                    .web
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|web| current.isDescendantOf(web))
+            })
+    })
+}
+
+/// Runs each frame (the composer's blinking cursor keeps frames coming while it has focus).
+fn settle_keys(window: &mut Window, cx: &mut App) {
+    let busy = AGENT_BUSY.with(Cell::get) > 0;
+    if busy {
+        // `KEYS_WERE_HOME` stays: an owner click during the action still shows as a change after.
+        return;
+    }
+    let page = page_holds_keys(window);
+    let focused = window.focused(cx).is_some();
+    let was_home = KEYS_WERE_HOME.with(|home| home.replace(!page));
+    match keys_decision(was_home, page, focused, busy) {
+        Keys::Leave => {}
+        Keys::Blur => window.blur(cx),
+        Keys::Reclaim => reclaim_keyboard(window),
+    }
 }
 
 #[derive(Clone, PartialEq)]
@@ -4707,6 +4788,20 @@ mod tests {
         // Never scaled up, never below a tenth.
         assert_eq!(fit_device((2000., 2000.), (390., 844.)).2, 1.);
         assert_eq!(fit_device((10., 10.), (1000., 1000.)).2, 0.1);
+    }
+
+    #[test]
+    fn one_owner_holds_the_keys() {
+        // The owner clicks into the page: GPUI lets go.
+        assert_eq!(keys_decision(true, true, true, false), Keys::Blur);
+        // An agent acting never moves anything.
+        assert_eq!(keys_decision(true, true, true, true), Keys::Leave);
+        // The page was already the owner's and nothing in GPUI has focus: leave it.
+        assert_eq!(keys_decision(false, true, false, false), Keys::Leave);
+        // GPUI got focus while the page held the keys: the keys go back.
+        assert_eq!(keys_decision(false, true, true, false), Keys::Reclaim);
+        // Keys at home: nothing to do.
+        assert_eq!(keys_decision(true, false, true, false), Keys::Leave);
     }
 
     #[test]

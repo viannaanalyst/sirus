@@ -919,6 +919,9 @@ pub(crate) struct Login {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     pub tokens: Tokens,
+    /// The connector itself, so a computer that does not have it yet adds it with the sign-in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connector: Option<Connector>,
 }
 
 /// Every signed-in connector of this computer with its tokens. Only the Sirus window on this
@@ -935,6 +938,7 @@ pub(crate) fn export_logins() -> Vec<Login> {
                 url: connector.url.clone(),
                 label: connector.label.clone(),
                 tokens: load_tokens(&connector.id)?,
+                connector: Some(connector.clone()),
             })
         })
         .collect()
@@ -959,6 +963,40 @@ fn login_target<'a>(list: &'a [Connector], login: &Login) -> Option<&'a Connecto
             let first = same.next()?;
             same.next().is_none().then_some(first)
         })
+}
+
+/// The connectors a carried login brings that this computer does not have yet. A project it was
+/// limited to that does not exist here makes it reach every project.
+fn missing_connectors(
+    list: &[Connector],
+    logins: &[Login],
+    projects: &HashSet<&str>,
+) -> Vec<Connector> {
+    let mut added: Vec<Connector> = Vec::new();
+    for login in logins {
+        let Some(connector) = login.connector.as_ref() else {
+            continue;
+        };
+        let known = |c: &Connector| c.id == connector.id;
+        if connector.id != login.id
+            || connector.auth == ConnectorAuth::None
+            || login_target(list, login).is_some()
+            || list.iter().any(known)
+            || added.iter().any(known)
+        {
+            continue;
+        }
+        let mut connector = connector.clone();
+        if connector
+            .project_id
+            .as_deref()
+            .is_some_and(|id| !projects.contains(id))
+        {
+            connector.project_id = None;
+        }
+        added.push(connector);
+    }
+    added
 }
 
 fn status_of(connector: &Connector) -> ConnectorStatus {
@@ -1109,7 +1147,26 @@ pub async fn connector_action(
             if logins.len() > MAX_CONNECTORS {
                 return Err(invalid("Too many sign-ins."));
             }
-            let list = state.data.lock().settings.connectors.clone();
+            let list = {
+                let mut data = state.data.lock();
+                let added = {
+                    let projects: HashSet<&str> =
+                        data.projects.iter().map(|p| p.id.as_str()).collect();
+                    missing_connectors(&data.settings.connectors, &logins, &projects)
+                };
+                if !added.is_empty() {
+                    let mut list = data.settings.connectors.clone();
+                    list.extend(added);
+                    validate(&list)?;
+                    let previous = std::mem::replace(&mut data.settings.connectors, list);
+                    if let Err(error) = crate::persist::save(&state.data_path, &data) {
+                        data.settings.connectors = previous;
+                        return Err(error);
+                    }
+                    set(&data.settings.connectors);
+                }
+                data.settings.connectors.clone()
+            };
             for login in &logins {
                 let tokens = &login.tokens;
                 if tokens.access_token.is_empty()
@@ -1371,7 +1428,31 @@ mod tests {
                 resource: None,
                 account: None,
             },
+            connector: Some(connector.clone()),
         }
+    }
+
+    #[test]
+    fn a_carried_login_adds_the_connector_this_computer_lacks() {
+        let here = connector("a-1", "Supabase");
+        let mut newlex = connector("a-2", "Supabase");
+        newlex.label = Some("newlex".into());
+        newlex.project_id = Some("p-gone".into());
+        let projects = HashSet::from(["p-1"]);
+        let added = missing_connectors(
+            std::slice::from_ref(&here),
+            &[login_of(&here), login_of(&newlex), login_of(&newlex)],
+            &projects,
+        );
+        assert_eq!(added.len(), 1);
+        assert_eq!(added[0].id, "a-2");
+        assert_eq!(added[0].label.as_deref(), Some("newlex"));
+        // Limited to a project this computer does not have: it reaches every project.
+        assert_eq!(added[0].project_id, None);
+        // A login from an older Mac carries no connector: nothing is invented.
+        let mut bare = login_of(&newlex);
+        bare.connector = None;
+        assert!(missing_connectors(&[here], &[bare], &projects).is_empty());
     }
 
     #[test]

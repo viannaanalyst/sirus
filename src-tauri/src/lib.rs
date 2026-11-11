@@ -76,6 +76,8 @@ mod notifications;
 mod opencode;
 mod output_batch;
 mod paths;
+mod peer_tools;
+mod peers;
 mod persist;
 mod pr_watch;
 mod process_priority;

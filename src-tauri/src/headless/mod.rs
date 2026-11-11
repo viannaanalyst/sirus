@@ -26,6 +26,9 @@ Usage:
   sirus-host pair [--data-dir DIR]      one-time six-digit code and QR for a new device
   sirus-host devices [--data-dir DIR]   paired devices
   sirus-host revoke <device-id> [--data-dir DIR]
+  sirus-host peer add <https://address> <code> [--data-dir DIR]
+                                        pair this computer's agents with another host (ADR-208)
+  sirus-host peer list|remove <id> [--data-dir DIR]
   sirus-host busy [--data-dir DIR]      conversations a restart would cut; exit 0 when none,
                                         1 when some, 3 when no host is running
 
@@ -235,6 +238,7 @@ pub fn main() -> i32 {
         "devices" => devices(&cli),
         "revoke" => revoke(&cli),
         "busy" => busy(&cli),
+        "peer" => peer(&cli),
         "version" => {
             println!("sirus-host {}", env!("CARGO_PKG_VERSION"));
             0
@@ -534,6 +538,61 @@ fn busy(cli: &Cli) -> i32 {
         None => {
             println!("no host running");
             3
+        }
+    }
+}
+
+/// Computers whose hosts this host's agents may work on (ADR-208). The running host reads the
+/// file on each call, so nothing needs a restart.
+fn peer(cli: &Cli) -> i32 {
+    let dir = data_dir(cli);
+    let words: Vec<&str> = cli.positional.iter().map(String::as_str).collect();
+    match words.as_slice() {
+        ["add", address, code] => {
+            let result = crate::peers::Address::parse(address).and_then(|address| {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|e| e.to_string())?
+                    .block_on(crate::peers::pair(&dir, &address, code))
+            });
+            match result {
+                Ok(peer) => {
+                    println!(
+                        "Paired with {} ({}); agents here can now use computer \"{}\".",
+                        peer.name, peer.address, peer.name
+                    );
+                    0
+                }
+                Err(error) => {
+                    eprintln!("sirus-host: {error}");
+                    1
+                }
+            }
+        }
+        ["list"] => {
+            let peers = crate::peers::load(&dir);
+            if peers.is_empty() {
+                println!("No paired computers.");
+            }
+            for peer in peers {
+                println!("{}  {}  {}", peer.id, peer.name, peer.address);
+            }
+            0
+        }
+        ["remove", id] => match crate::peers::remove(&dir, id) {
+            Ok(peer) => {
+                println!("Removed {}; revoke this host in its own `sirus-host devices` to end the pairing there.", peer.name);
+                0
+            }
+            Err(error) => {
+                eprintln!("sirus-host: {error}");
+                1
+            }
+        },
+        _ => {
+            eprintln!("sirus-host: usage: peer add <https://address> <code> | peer list | peer remove <id>");
+            2
         }
     }
 }

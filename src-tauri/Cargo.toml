@@ -56,6 +56,10 @@ toml_edit = "0.25"
 regex = "1"
 axum = { version = "0.8.9", default-features = false, features = ["ws", "http1", "tokio", "json", "query"] }
 qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
+# Paired computers (ADR-208): the host's own wss:// client to another host, rustls with ring and the system's roots.
+tungstenite = { version = "0.29", default-features = false, features = ["handshake"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-native-certs = "0.8"
 tower-http = { version = "0.6", default-features = false, features = ["compression-gzip", "compression-br"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]

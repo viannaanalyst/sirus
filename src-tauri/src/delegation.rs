@@ -17,7 +17,8 @@ use serde_json::{json, Value};
 use crate::commands::AppState;
 use crate::models::{AppData, MessageRole, Session, SessionStatus};
 
-pub const TOOLS: [&str; 4] = [
+pub const TOOLS: [&str; 5] = [
+    "sirus_list_computers",
     "sirus_models",
     "sirus_delegate",
     "sirus_delegation_status",
@@ -56,6 +57,7 @@ pub struct DelegatedBy {
 
 pub fn tool_definitions() -> Vec<Value> {
     vec![
+        json!({ "name": "sirus_list_computers", "description": "Sirus: the other computers paired with this one (for example the Mac and the VPS), by name. Pass a name as `computer` to sirus_delegate, sirus_create_session, sirus_send_to_session, sirus_read_session, sirus_session_status, sirus_delegation_status, sirus_delegation_cancel, sirus_list_sessions or sirus_models to work on that computer, for example to run tests or a build there and read the result. Without `computer` everything stays here.", "inputSchema": { "type": "object", "properties": {} } }),
         json!({ "name": "sirus_models", "description": "Sirus: the providers and models you can delegate to (installed and enabled in the app), with yours marked. Use it to pick a target for sirus_delegate.", "inputSchema": { "type": "object", "properties": {} } }),
         json!({ "name": "sirus_delegate", "description": "Sirus: delegate one self-contained task to a child agent on any provider and model (for example Claude handing work to Codex/GPT, or the reverse), from this conversation. The child runs only the task prompt, without your conversation history, so include the objective, context, constraints, what it may change and the result you expect. It is a visible session linked to yours, works in your folder (newWorktree for an isolated copy) and uses your approval mode, so it may wait for the person's approval. Prefer your native subagents for same-model work; use this for another provider or model. mode \"async\" (default) returns at once: end your turn instead of polling, a message wakes you when it finishes and sirus_delegation_status reads the result. mode \"wait\" blocks until it finishes or timeoutSeconds (default 120, at most 300) passes; on timeout keep the taskId, it keeps running and wakes you later. At most 4 per turn.", "inputSchema": { "type": "object", "properties": {
             "task": { "type": "string", "description": "The self-contained task for the child agent." },
@@ -214,7 +216,7 @@ fn final_reply(child: &Session) -> String {
     format!("{marker}\n\n{tail}")
 }
 
-fn task_view(child: &Session) -> Value {
+pub(crate) fn task_view(child: &Session) -> Value {
     let active = child.status.is_active();
     let result = (!active)
         .then(|| {
@@ -288,6 +290,13 @@ pub fn execute(
             .unwrap_or_default()
             .to_string()
     };
+    if tool == "sirus_list_computers" {
+        let dir = state
+            .data_path
+            .parent()
+            .ok_or("the data folder is unknown")?;
+        return Ok(crate::peers::public_list(&crate::peers::load(dir)));
+    }
     let caller = state
         .data
         .lock()
@@ -296,6 +305,9 @@ pub fn execute(
         .find(|session| session.id == session_id)
         .cloned()
         .ok_or("session not found")?;
+    if let Some(computer) = crate::peers::requested(args)? {
+        return crate::peer_tools::route(app, &caller, tool, args, &computer);
+    }
     match tool {
         "sirus_models" => Ok(models(&state, &caller)),
         "sirus_delegation_status" => {
@@ -432,7 +444,7 @@ fn delegate(
 }
 
 /// Installed, enabled providers with their known models.
-fn models(state: &Arc<AppState>, caller: &Session) -> Value {
+pub(crate) fn models(state: &Arc<AppState>, caller: &Session) -> Value {
     let overrides = state.data.lock().settings.provider_paths.clone();
     let installs: Vec<_> = {
         let found = crate::detect::detect_with_overrides(&overrides);

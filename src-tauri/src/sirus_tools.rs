@@ -70,6 +70,7 @@ fn definitions(enabled: bool) -> Vec<Value> {
     // Guided reviews only store a guide, never change code, so they are always on too (ADR-125).
     tools.extend(crate::review_guides::tool_definitions());
     if !enabled {
+        crate::peer_tools::with_computer(&mut tools);
         return tools;
     }
     let id = || json!({ "type": "object", "properties": { "sessionId": { "type": "string" } }, "required": ["sessionId"] });
@@ -82,6 +83,7 @@ fn definitions(enabled: bool) -> Vec<Value> {
         json!({ "name": "sirus_answer_approval", "description": "Sirus: answer an approval waiting in a session you started (its requestId is in sirus_session_status's pendingApprovals). decline is always allowed; accept only when you yourself run with full access. Questions are left to the person.", "inputSchema": { "type": "object", "properties": { "sessionId": { "type": "string" }, "requestId": { "type": "string" }, "decision": { "type": "string", "enum": ["accept", "decline"] } }, "required": ["sessionId", "requestId", "decision"] } }),
         json!({ "name": "sirus_send_to_session", "description": "Sirus: continue another idle session with a message, using your approval mode. Returns at once.", "inputSchema": { "type": "object", "properties": { "sessionId": { "type": "string" }, "prompt": { "type": "string" } }, "required": ["sessionId", "prompt"] } }),
     ]);
+    crate::peer_tools::with_computer(&mut tools);
     tools
 }
 
@@ -97,7 +99,7 @@ fn project_name(data: &AppData, id: &str) -> Option<String> {
         .map(|project| project.name.clone())
 }
 
-fn list(data: &AppData, caller: &str, filter: &str) -> Value {
+pub(crate) fn list(data: &AppData, caller: &str, filter: &str) -> Value {
     let project = |session: &Session| {
         filter.is_empty()
             || session.project_id == filter
@@ -128,14 +130,14 @@ fn list(data: &AppData, caller: &str, filter: &str) -> Value {
     })
 }
 
-fn find<'a>(data: &'a AppData, id: &str) -> Result<&'a Session, String> {
+pub(crate) fn find<'a>(data: &'a AppData, id: &str) -> Result<&'a Session, String> {
     data.sessions
         .iter()
         .find(|session| session.id == id && visible(session))
         .ok_or_else(|| "no session with that id".to_string())
 }
 
-fn status(data: &AppData, session: &Session) -> Value {
+pub(crate) fn status(data: &AppData, session: &Session) -> Value {
     let mut row = crate::launch::session_row(data, session);
     row["lastError"] = json!(session.last_error);
     row["waitingForPerson"] = json!(session.status == crate::models::SessionStatus::Waiting);
@@ -259,7 +261,7 @@ fn session_diff(cwd: &std::path::Path, path: &str) -> Result<Value, String> {
 
 /// What `sirus_read_session` was asked for; `None` fields take their defaults.
 #[derive(Default, Clone, Copy)]
-struct ReadPage {
+pub(crate) struct ReadPage {
     limit: Option<usize>,
     /// Index just past the page's newest message; `None` is the end of the transcript.
     cursor: Option<usize>,
@@ -268,7 +270,7 @@ struct ReadPage {
 }
 
 impl ReadPage {
-    fn from_args(args: &Value) -> Self {
+    pub(crate) fn from_args(args: &Value) -> Self {
         let number = |key: &str| {
             args.get(key)
                 .and_then(Value::as_u64)
@@ -305,7 +307,7 @@ fn message_slice(
     (format!("{slice}\n\n{marker}"), Some((next, total)))
 }
 
-fn read(data: &AppData, session: &Session, page: ReadPage) -> Value {
+pub(crate) fn read(data: &AppData, session: &Session, page: ReadPage) -> Value {
     let limit = page.limit.unwrap_or(READ_DEFAULT).clamp(1, READ_LIMIT);
     let max_chars = page
         .max_chars
@@ -349,7 +351,7 @@ fn read(data: &AppData, session: &Session, page: ReadPage) -> Value {
     row
 }
 
-fn resolve_project(data: &AppData, wanted: &str) -> Result<String, String> {
+pub(crate) fn resolve_project(data: &AppData, wanted: &str) -> Result<String, String> {
     data.projects
         .iter()
         .find(|project| project.id == wanted || project.name.eq_ignore_ascii_case(wanted))
@@ -455,6 +457,9 @@ pub fn execute(
             .cloned()
             .ok_or("session not found")?
     };
+    if let Some(computer) = crate::peers::requested(args)? {
+        return crate::peer_tools::route(app, &caller, tool, args, &computer);
+    }
     let mutating = matches!(
         tool,
         "sirus_create_session" | "sirus_send_to_session" | "sirus_answer_approval"
@@ -680,13 +685,13 @@ mod tests {
     #[test]
     fn tools_are_listed_only_with_the_child_flag() {
         std::env::remove_var(ENV);
-        // Delegation (4), inline visuals (1), native visuals (3) and review guides (2) are always on.
-        assert_eq!(tool_definitions().len(), 10);
+        // Delegation (5), inline visuals (1), native visuals (3) and review guides (2) are always on.
+        assert_eq!(tool_definitions().len(), 11);
         std::env::set_var(ENV, "1");
         let tools = tool_definitions();
         std::env::remove_var(ENV);
-        // Delegation (4), inline visuals (1), native visuals (3), review guides (2) and sessions (7).
-        assert_eq!(tools.len(), 17);
+        // Delegation (5), inline visuals (1), native visuals (3), review guides (2) and sessions (7).
+        assert_eq!(tools.len(), 18);
         assert!(tools.iter().all(|tool| {
             let name = tool["name"].as_str().unwrap();
             name.starts_with("sirus_") || name.starts_with("visual_")

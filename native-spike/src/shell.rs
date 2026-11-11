@@ -16727,12 +16727,17 @@ impl Shell {
                                 .flex()
                                 .items_center()
                                 .gap(px(2.))
-                                // Always visible, unlike the icons beside it.
+                                // Shows, like the icons beside it, only under the pointer.
                                 .when_some(
                                     turn.sent_ms.and_then(crate::message_time::label),
                                     |d, text| {
                                         d.child(
                                             div()
+                                                .invisible()
+                                                .group_hover(
+                                                    format!("turn-actions-{index}"),
+                                                    |s| s.visible(),
+                                                )
                                                 .mr(px(4.))
                                                 .text_size(px(11.))
                                                 .text_color(content(0.45))

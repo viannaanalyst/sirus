@@ -402,15 +402,10 @@ impl Shell {
                 .items_center()
                 .gap(px(6.))
                 .mt(px(4.))
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(2.))
-                        .opacity(0.)
-                        .group_hover(group, |s| s.opacity(1.))
-                        .children(items),
-                )
+                // The icons and the time show only while the pointer is over the reply.
+                .opacity(0.)
+                .group_hover(group, |s| s.opacity(1.))
+                .child(div().flex().items_center().gap(px(2.)).children(items))
                 .when_some(time, |d, text| {
                     d.child(
                         div()

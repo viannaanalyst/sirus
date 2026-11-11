@@ -2957,6 +2957,45 @@ extern "C" fn reset_cursor_rects(this: &Object, _: Sel) {
     }
 }
 
+/// Sends ⌘C, ⌘X, ⌘V, ⌘A, ⌘Z and ⇧⌘Z to the first responder when it is a native view inside this
+/// one (not this view itself). `None` when the key is not one of those or GPUI owns the keys.
+unsafe fn forward_edit_shortcut(this: &Object, keystroke: &gpui::Keystroke) -> Option<BOOL> {
+    let m = &keystroke.modifiers;
+    if !m.platform || m.control || m.alt || m.function {
+        return None;
+    }
+    let action = match (keystroke.key.as_str(), m.shift) {
+        ("c", false) => sel!(copy:),
+        ("x", false) => sel!(cut:),
+        ("v", false) => sel!(paste:),
+        ("a", false) => sel!(selectAll:),
+        ("z", false) => sel!(undo:),
+        ("z", true) => sel!(redo:),
+        _ => return None,
+    };
+    unsafe {
+        let window: id = msg_send![this, window];
+        if window == nil {
+            return None;
+        }
+        let responder: id = msg_send![window, firstResponder];
+        if responder == nil || std::ptr::eq(responder as *const Object, this) {
+            return None;
+        }
+        let is_view: BOOL = msg_send![responder, isKindOfClass: class!(NSView)];
+        if is_view == NO {
+            return None;
+        }
+        let inside: BOOL = msg_send![responder, isDescendantOf: this as *const Object as id];
+        if inside == NO {
+            return None;
+        }
+        let app = NSApplication::sharedApplication(nil);
+        let handled: BOOL = msg_send![app, sendAction: action to: nil from: nil];
+        Some(handled)
+    }
+}
+
 extern "C" fn handle_key_equivalent(this: &Object, _: Sel, native_event: id) -> BOOL {
     handle_key_event(this, native_event, true)
 }
@@ -3068,6 +3107,16 @@ extern "C" fn handle_key_event(this: &Object, native_event: id, key_equivalent: 
             }
 
             drop(lock);
+
+            // A native child view (the embedded browser's WKWebView) holds the keys: its editing
+            // shortcuts go down the responder chain from it. The app has no Edit menu to send
+            // them, and this view answers key equivalents first without asking its subviews.
+            if key_equivalent
+                && let Some(handled) =
+                    unsafe { forward_edit_shortcut(this, &key_down_event.keystroke) }
+            {
+                return handled;
+            }
 
             let is_composing =
                 with_input_handler(this, |input_handler| input_handler.marked_text_range())

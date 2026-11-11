@@ -5159,8 +5159,8 @@ impl Shell {
         let command = kind["type"] == "command";
         let reason = kind["reason"].as_str().map(str::to_owned);
         let (accept, decline) = (request.clone(), request.clone());
-        // The approved "A+" look, as the question card: a pixel glow at the card's foot, the
-        // command in a dashed box, Recusar and Aprovar at the right.
+        // As the question card: the composer's glass, the command in a dashed box, Recusar and
+        // Aprovar at the right.
         div()
             .relative()
             .overflow_hidden()
@@ -5168,10 +5168,9 @@ impl Shell {
             .rounded(px(crate::theme::RADIUS_LG))
             .border_1()
             .border_color(content(0.1))
-            .bg(field_fill())
             .flex()
             .flex_col()
-            .child(question_dither(accent(), 0.22, false))
+            .child(crate::theme::composer_surface(crate::theme::RADIUS_LG))
             .child(
                 div()
                     .text_size(px(11.))
@@ -5370,10 +5369,11 @@ impl Shell {
             .rounded(px(crate::theme::RADIUS_LG))
             .border_1()
             .border_color(content(0.1))
-            .bg(field_fill())
             .flex()
             .flex_col()
-            .child(question_dither(tone, 0.22, false))
+            // The composer's own glass, so the card under it reads as the same material; the
+            // dither stays on the picked option alone.
+            .child(crate::theme::composer_surface(crate::theme::RADIUS_LG))
             .child(
                 div()
                     .text_size(px(11.))
@@ -5397,10 +5397,11 @@ impl Shell {
                     .h(px(36.))
                     .px(px(11.))
                     .rounded(px(crate::theme::RADIUS_MD))
-                    .bg(crate::theme::black(0.35))
+                    .border_1()
+                    .border_color(content(0.1))
+                    .bg(content(0.03))
                     .flex()
                     .items_center()
-                    .child(dashed_frame(crate::theme::RADIUS_MD, content(0.18)))
                     .child(div().flex_1().min_w_0().child(field)),
             )
             .child(
